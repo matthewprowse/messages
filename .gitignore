@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+dist
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+__pycache__
+.venv
+.turbo
+*.tsbuildinfo
+backup-*.sql
+*.dump

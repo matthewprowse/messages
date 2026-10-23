@@ -1,0 +1,201 @@
+"""Learning from your sent mail. Learning from edits needs drafts you changed, so a new user has no
+rules for a long time. This reads your own latest sent emails and writes down how you write
+(greetings, sign-offs, length, formality) as global style rules, so drafts sound like you from the
+start. It runs again every time you have sent VOICE_STEP more emails, typed replies and edited
+drafts alike, so the rules follow how you write now.
+
+Rules already known gain support instead of being added twice. A rule from your sent mail that the
+newest learning no longer finds is turned off (never deleted) and comes back if your mail shows it
+again. A rule you turned off yourself stays off."""
+
+from __future__ import annotations
+
+import difflib
+import re
+import time
+from datetime import datetime, timezone
+from typing import Any
+
+from . import log
+from .fields import BODY, HTML
+from .gemini import Gemini, GeminiError, UsageContext
+from .supabase import Supabase, in_list
+from .text import clean
+from .vault import Vault
+
+MIN_EMAILS = 10  # fewer than this says too little about how someone writes
+VOICE_STEP = 10  # learn again once this many more emails have been sent
+MAX_EMAILS = 40
+EMAIL_CHARS = 800
+PROMPT_CHARS = 24000
+MAX_RULES = 8
+SAME_RULE = 0.88  # wording this close to an existing rule is that rule
+RETRY_S = 3600  # after a failed or skipped attempt, try that user again an hour later
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rules": {
+            "type": "array",
+            "maxItems": MAX_RULES,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "rule": {"type": "string", "description": "One short, concrete instruction, e.g. 'Signs off with Matt, never Best'."},
+                },
+                "required": ["rule"],
+            },
+        }
+    },
+    "required": ["rules"],
+}
+
+SYSTEM = f"""You read emails one person wrote and sent, and write down how they write, so an assistant can
+write new emails in their voice. Write up to {MAX_RULES} rules. Each rule is one short, concrete, reusable
+instruction about their greetings, sign-offs, typical length, formality, phrases they use or avoid, or
+punctuation and capitalisation habits. Only write a rule that most of the emails support.
+Ignore what the emails are about (facts, dates, names of projects, decisions); describe style only.
+If an existing rule still holds, repeat its wording exactly so it gains support. Leave out an existing
+rule the emails no longer support or contradict; it will be turned off.
+Never write a rule they turned off, or one that means the same.
+Never use em dashes."""
+
+
+def build_prompt(emails: list[str], existing: list[str], turned_off: list[str] | None = None) -> str:
+    """Existing rules first, then the emails newest first, kept within PROMPT_CHARS."""
+    lines = ["Existing rules:"] + ([f"- {r}" for r in existing] or ["(none)"])
+    if turned_off:
+        lines += ["", "Rules they turned off:"] + [f"- {r}" for r in turned_off]
+    lines += ["", "Emails they sent, newest first:"]
+    used = sum(len(line) + 1 for line in lines)
+    for i, email in enumerate(emails, 1):
+        block = f"--- Email {i}:\n{email}"
+        if used + len(block) > PROMPT_CHARS:
+            break
+        lines.append(block)
+        used += len(block) + 1
+    return "\n".join(lines)
+
+
+def rule_key(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower()).rstrip(".")
+
+
+def tidy_rule(text: str) -> str:
+    """The app never shows dashes; the model sometimes writes them anyway."""
+    text = re.sub(r"\s*\u2014\s*", ", ", text or "").replace("\u2013", "-")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def same_rule(a: str, b: str) -> bool:
+    ka, kb = rule_key(a), rule_key(b)
+    return ka == kb or difflib.SequenceMatcher(None, ka, kb, autojunk=False).ratio() >= SAME_RULE
+
+
+def voice_due(outbound: int, learned_outbound: int, learned_at: str | None) -> bool:
+    """At first run once there is enough sent mail, then each time VOICE_STEP more have been sent."""
+    if outbound < MIN_EMAILS:
+        return False
+    return learned_at is None or outbound - learned_outbound >= VOICE_STEP
+
+
+def plan_voice(existing: list[dict[str, Any]], learned: list[str]) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
+    """Returns (updates as (id, patch), new rule texts).
+
+    A learned rule matching an existing global rule supports it, whichever source it came from, and
+    turns it back on if the AI had turned it off. Rules you turned off stay off. Global rules from sent
+    mail that the newest learning did not repeat are turned off as unsupported."""
+    globals_ = [r for r in existing if r.get("scope") == "global" and not r.get("contact_id")]
+    updates: dict[str, dict[str, Any]] = {}
+    inserts: list[str] = []
+    matched: set[str] = set()
+    seen: list[str] = []
+    for raw in learned[:MAX_RULES]:
+        text = tidy_rule(raw)
+        if not rule_key(text) or len(text) > 200 or any(same_rule(text, s) for s in seen):
+            continue
+        seen.append(text)
+        r = next((r for r in globals_ if r["id"] not in matched and rule_key(r["rule"]) == rule_key(text)), None)
+        r = r or next((r for r in globals_ if r["id"] not in matched and same_rule(r["rule"], text)), None)
+        if r is None:
+            inserts.append(text)
+            continue
+        matched.add(r["id"])
+        patch: dict[str, Any] = {"support_count": int(r.get("support_count") or 1) + 1}
+        if not r.get("enabled", True) and r.get("disabled_reason") == "unsupported":
+            patch["enabled"] = True
+        updates[r["id"]] = patch
+    for r in globals_:
+        if r["id"] not in matched and r.get("source") == "sent_mail" and r.get("enabled", True):
+            updates[r["id"]] = {"enabled": False, "disabled_reason": "unsupported"}
+    return list(updates.items()), inserts
+
+
+class Voice:
+    def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
+        self.db = db
+        self.gemini = gemini
+        self.model = model
+        self.vault = vault or Vault(db)  # without one, plaintext passes through
+        self._next: dict[str, float] = {}  # user_id -> monotonic time this process may try them again
+
+    def run_once(self) -> int:
+        accounts = self.db.select("accounts", {"select": "id,user_id", "provider": "in.(icloud,gmail)", "status": "neq.disconnected"})
+        by_user: dict[str, list[str]] = {}
+        for a in accounts:
+            by_user.setdefault(a["user_id"], []).append(a["id"])
+        done = 0
+        for user_id, account_ids in by_user.items():
+            if time.monotonic() < self._next.get(user_id, 0.0):
+                continue
+            if self._learn(user_id, account_ids):
+                done += 1
+        return done
+
+    def _learn(self, user_id: str, account_ids: list[str]) -> bool:
+        profile = self.db.first("profiles", {"select": "voice_learned_at,voice_learned_outbound", "user_id": f"eq.{user_id}"})
+        if not profile:
+            self._next[user_id] = time.monotonic() + RETRY_S
+            return False
+        sent_filter = {"user_id": f"eq.{user_id}", "account_id": in_list(account_ids), "direction": "eq.outbound"}
+        outbound = self.db.count("messages", sent_filter)
+        if not voice_due(outbound, int(profile.get("voice_learned_outbound") or 0), profile.get("voice_learned_at")):
+            return False
+
+        self._next[user_id] = time.monotonic() + RETRY_S
+        sent = self.db.select("messages", {"select": "body_text,body_html", **sent_filter, "order": "sent_at.desc", "limit": str(MAX_EMAILS)})
+        sent = [self.vault.open_row(user_id, m, [("body_text", BODY), ("body_html", HTML)]) for m in sent]
+        emails = [t for t in (clean(m.get("body_text"), m.get("body_html"), limit=EMAIL_CHARS) for m in sent) if t]
+        if len(emails) < MIN_EMAILS:
+            return False
+
+        existing = self.db.select(
+            "style_rules",
+            {"select": "id,rule,scope,contact_id,source,support_count,enabled,disabled_reason", "user_id": f"eq.{user_id}", "limit": "200"},
+        )
+        global_rules = [r for r in existing if r["scope"] == "global"]
+        prompt = build_prompt(
+            emails,
+            [r["rule"] for r in global_rules if r["enabled"]],
+            [r["rule"] for r in global_rules if not r["enabled"] and r.get("disabled_reason") == "user"],
+        )
+        try:
+            result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"))
+        except GeminiError as err:
+            log.warn("voice learning failed", user=user_id, status=err.status)
+            return False
+
+        learned = [item.get("rule") or "" for item in (result.get("rules") or []) if isinstance(item, dict)]
+        updates, inserts = plan_voice(existing, learned)
+        now = datetime.now(timezone.utc).isoformat()
+        for rule_id, patch in updates:
+            self.db.update("style_rules", {"id": f"eq.{rule_id}", "user_id": f"eq.{user_id}"}, {**patch, "updated_at": now}, minimal=True)
+        if inserts:
+            self.db.insert(
+                "style_rules",
+                [{"user_id": user_id, "scope": "global", "contact_id": None, "rule": text, "source": "sent_mail"} for text in inserts],
+            )
+        self.db.update("profiles", {"user_id": f"eq.{user_id}"}, {"voice_learned_at": now, "voice_learned_outbound": outbound}, minimal=True)
+        turned_off = sum(1 for _, p in updates if p.get("enabled") is False)
+        log.info("voice learned", user=user_id, emails=len(emails), added=len(inserts), supported=len(updates) - turned_off, turned_off=turned_off)
+        return True

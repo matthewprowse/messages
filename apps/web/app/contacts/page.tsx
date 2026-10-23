@@ -1,0 +1,25 @@
+"use client";
+
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { Building2, Users } from "lucide-react";
+import { EmptyState } from "@/components/primitives";
+
+function Placeholder() {
+  const companies = useSearchParams().get("view") === "companies";
+  return companies ? (
+    <EmptyState icon={Building2} title="Pick a Company" description="People who write from the same work domain, with every conversation from them." />
+  ) : (
+    <EmptyState icon={Users} title="Pick a Contact" description="Everyone you have emailed or messaged, most recent first." />
+  );
+}
+
+export default function ContactsIndex() {
+  return (
+    <div className="hidden h-full items-center justify-center md:flex">
+      <Suspense fallback={null}>
+        <Placeholder />
+      </Suspense>
+    </div>
+  );
+}

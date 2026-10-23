@@ -1,0 +1,90 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { CalendarPlus, Mail, MessageCircle, SquarePen } from "lucide-react";
+import { useApp } from "@/lib/store";
+import { whatsappLinked } from "@/lib/new-items";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+
+type Item = "email" | "whatsapp" | "event";
+
+// Each dialog's code (the event one pulls in the date picker) loads the first time it is opened.
+const ComposeDialog = dynamic(() => import("@/components/compose-dialog").then((m) => m.ComposeDialog), { ssr: false });
+const NewWhatsAppDialog = dynamic(() => import("@/components/new-whatsapp-dialog").then((m) => m.NewWhatsAppDialog), { ssr: false });
+const NewEventDialog = dynamic(() => import("@/components/new-event-dialog").then((m) => m.NewEventDialog), { ssr: false });
+
+/**
+ * True when a key press belongs to a field, menu or dialog rather than to the page, including while an
+ * input method is composing a character. Page shortcuts (C here, E and U in a conversation) skip these.
+ */
+export function isTypingKey(e: KeyboardEvent) {
+  const el = e.target as HTMLElement | null;
+  if (e.isComposing || el?.isContentEditable) return true;
+  return !!el?.closest?.("input, textarea, select, [role=menu], [role=dialog], [role=listbox], [role=combobox]");
+}
+
+/** The rail's New button: a menu of new things to start, opened with C anywhere outside a field. */
+export function NewMenu() {
+  const { accounts } = useApp();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [open, setOpen] = useState<Item | null>(null);
+  // A dialog stays mounted once opened, so closing it still animates.
+  const [used, setUsed] = useState<Set<Item>>(() => new Set());
+  useEffect(() => {
+    if (open && !used.has(open)) setUsed((prev) => new Set(prev).add(open));
+  }, [open, used]);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const linked = whatsappLinked(accounts);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key.toLowerCase() !== "c" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat) return;
+      if (isTypingKey(e) || open) return;
+      // On phones the rail steps aside in a conversation, and a menu with nothing to hang from is no use.
+      if (!trigger.current || trigger.current.offsetParent === null) return;
+      e.preventDefault();
+      setMenuOpen(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const set = (item: Item) => (value: boolean) => setOpen(value ? item : null);
+
+  return (
+    <>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button ref={trigger} variant={menuOpen || open ? "secondary" : "ghost"} size="icon" aria-label="New">
+                <SquarePen />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="right">New</TooltipContent>
+        </Tooltip>
+        {/* When an item opens a dialog, focus must go to the dialog, not back to this button, or Esc and Tab miss it. */}
+        <DropdownMenuContent side="right" align="start" className="w-max min-w-48" onCloseAutoFocus={(e) => { if (open) e.preventDefault(); }}>
+          <DropdownMenuItem onSelect={() => setOpen("email")}><Mail />New Email</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setOpen("whatsapp")} className={linked ? undefined : "items-start"}>
+            <MessageCircle className={linked ? undefined : "mt-0.5"} />
+            {linked ? "New WhatsApp Message" : (
+              <span className="flex flex-col">
+                <span>New WhatsApp Message</span>
+                <span className="text-xs text-muted-foreground">Link WhatsApp first</span>
+              </span>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setOpen("event")}><CalendarPlus />New Event</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {(used.has("email") || open === "email") && <ComposeDialog open={open === "email"} onOpenChange={set("email")} />}
+      {(used.has("whatsapp") || open === "whatsapp") && <NewWhatsAppDialog open={open === "whatsapp"} onOpenChange={set("whatsapp")} />}
+      {(used.has("event") || open === "event") && <NewEventDialog open={open === "event"} onOpenChange={set("event")} />}
+    </>
+  );
+}

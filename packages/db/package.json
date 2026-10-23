@@ -1,0 +1,15 @@
+{
+  "name": "@messages/db",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "gen:types": "supabase gen types typescript --project-id bbfahndgnmdlehicmphe --schema public > src/database.types.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}

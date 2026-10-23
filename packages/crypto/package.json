@@ -1,0 +1,21 @@
+{
+  "name": "@messages/crypto",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fields": "./src/fields.ts",
+    "./addresses": "./src/addresses.ts",
+    "./wrap": "./src/wrap.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts",
+    "vectors": "tsx scripts/make-vectors.ts > vectors.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,41 @@
+// Which contacts are a company rather than a person. Companies write from role addresses
+// (noreply@, info@) or under their own brand name, so they belong on the Companies tab, not in People.
+// Pure, so it can be unit tested.
+
+const ROLE_LOCAL =
+  /^(no-?reply|do-?not-?reply|donotreply|noreply[\w.-]*|info|information|hello|hi|hey|support|help|helpdesk|news|newsletters?|marketing|promo(tions)?|offers|deals|team|notifications?|notify|alerts?|updates?|mail|mailer|mailer-daemon|postmaster|bounces?|accounts?|billing|invoices?|orders?|receipts?|service|customer-?service|customercare|care|admin|contact|enquiries|inquiries|sales|members(hip)?|community|digest|events|jobs|careers|recruiting|talent|security|privacy|feedback|reply|automated|system|bot|verify|verification|welcome|rewards|loyalty|store|shop|hr|press|media|legal|reservations|bookings?|travel|statements?|e-?statements?)([._+-].*)?$/i;
+
+const BRAND_WORDS = /\b(team|support|newsletter|notifications?|news|customer|service|rewards|store|shop|official|alerts?|updates?|careers|billing|accounts?|hq|club|app|online|digital|group|inc|ltd|llc|pty|university|college|school|academy|admissions|festival|raceway|services|contracting|subsystem|delivery|notice|notes|dispensary|pharmacy|clinic|hospital|bank|insurance|foundation|restaurant|hotel|lodge|estate|agency|consulting|solutions|studio|labs|technologies|systems|international|data|tickets)\b/i;
+
+// Mail system senders are never people, with or without a company on file.
+const SYSTEM_LOCAL = /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply|donotreply)$/i;
+
+// Words that only appear in automated senders' names, even run together ("Capitec Jobnotification").
+const AUTOMATED_PARTS = ["notification", "newsletter", "noreply", "donotreply", "careers", "recruit", "marketing", "customerservice", "customercare", "mailer"];
+
+const squash = (s: string) => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+export function isRoleAddress(address: string): boolean {
+  return ROLE_LOCAL.test(address.split("@")[0] ?? "");
+}
+
+export function isCompanySender(c: { name: string; emails: string[]; phones: string[]; organizationName: string | null }): boolean {
+  // Anyone with a phone number is a person. Otherwise only contacts filed under a company move there.
+  if (c.phones.length > 0) return false;
+  if (c.emails.length > 0 && c.emails.every((e) => SYSTEM_LOCAL.test(e.split("@")[0] ?? ""))) return true;
+  if (!c.organizationName) return false;
+  if (c.emails.length > 0 && c.emails.every(isRoleAddress)) return true;
+  const name = squash(c.name);
+  const org = squash(c.organizationName);
+  if (!name || !org) return false;
+  // "Emirates" or "Emirates Skywards" from emirates.com, but not "Andrew Stegmann | Relocation Africa".
+  if (name === org || name.startsWith(org)) return true;
+  // "Adam from UX Pilot" or "Kate at Notion": a person's name used by the company's own sender.
+  const from = c.name.match(/\s(?:from|at|@)\s+(.+)$/i);
+  if (from && squash(from[1]).startsWith(org)) return true;
+  // No display name, so the name was made from a run-together address ("Customerenquiries").
+  if (!/\s/.test(c.name.trim()) && name.length >= 8 && c.emails.some((e) => squash(e.split("@")[0] ?? "") === name)) return true;
+  // A name that is itself a role word ("Information", "Support"), or carries an automated word.
+  if (ROLE_LOCAL.test(name) || AUTOMATED_PARTS.some((w) => name.includes(w))) return true;
+  return BRAND_WORDS.test(c.name);
+}

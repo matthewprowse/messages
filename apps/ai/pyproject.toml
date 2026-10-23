@@ -1,0 +1,6 @@
+[project]
+name = "messages-ai"
+version = "0.1.0"
+description = "AI worker for Messages: triage, junk, drafts in your voice, and learning from your edits."
+requires-python = ">=3.11"
+dependencies = ["cryptography>=42"]  # AES-GCM and HKDF for field encryption; otherwise the standard library

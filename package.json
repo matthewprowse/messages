@@ -1,0 +1,19 @@
+{
+  "name": "messages",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "worker": "pnpm --filter worker dev",
+    "connect:icloud": "pnpm --filter worker connect:icloud",
+    "connect:google": "pnpm --filter worker connect:google",
+    "connect:whatsapp": "pnpm --filter worker connect:whatsapp",
+    "test": "pnpm -r test",
+    "set-password": "pnpm --filter worker set-password",
+    "ai": "cd apps/ai && python3 -m ai",
+    "test:ai": "cd apps/ai && python3 -m unittest discover -s tests -t ."
+  }
+}

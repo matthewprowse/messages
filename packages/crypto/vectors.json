@@ -1,0 +1,144 @@
+{
+  "dataKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "fields": [
+    {
+      "field": "messages.body_text",
+      "plaintext": "Hi Sam,\n\nThe plans are attached.\n\nThanks",
+      "nonce": [
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111
+      ],
+      "ciphertext": "e1:ZGVmZ2hpamtsbW5vNkYlwqR8M31bOXxim79+skAR4oSeKoDPp/ZXnu8Y75ZU4qlSQnuSu2zc0xzjzAg6pxbwuiM+V4E="
+    },
+    {
+      "field": "threads.subject",
+      "plaintext": "Caf\u00e9 \u2615 \u2013 r\u00e9sum\u00e9",
+      "nonce": [
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211
+      ],
+      "ciphertext": "e1:yMnKy8zNzs/Q0dLTe4WXx53aPxadqtwFEx4+CYFnM8/HpjQjlglR2gtjGGvweZY5tZE="
+    },
+    {
+      "field": "messages.subject",
+      "plaintext": "",
+      "nonce": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "ciphertext": "e1:BwcHBwcHBwcHBwcHJTes0RxnKV+jNeS6cTZQGg=="
+    }
+  ],
+  "blindIndexes": [
+    {
+      "value": "sam@example.com",
+      "token": "JtxLQjhbIp7x0JrED3lfoNkYxYHFQAgoPK64JStGxaA"
+    },
+    {
+      "value": "+27824160503",
+      "token": "0lxoK4Qy2ufJIlX8u8cPY4TWaegu0u21l6-LkMsNbPg"
+    }
+  ],
+  "addressKeys": [
+    {
+      "kind": "address",
+      "value": "Sam@Example.com ",
+      "key": "email:sam@example.com"
+    },
+    {
+      "kind": "address",
+      "value": " sam@example.com",
+      "key": "email:sam@example.com"
+    },
+    {
+      "kind": "address",
+      "value": "+27 82 416 0503",
+      "key": "phone:+27824160503"
+    },
+    {
+      "kind": "address",
+      "value": "27824160503",
+      "key": "phone:+27824160503"
+    },
+    {
+      "kind": "address",
+      "value": "+27(82)416-0503",
+      "key": "phone:+27824160503"
+    },
+    {
+      "kind": "address",
+      "value": "123456789012@lid",
+      "key": "lid:123456789012@lid"
+    },
+    {
+      "kind": "address",
+      "value": "Sam",
+      "key": "other:sam"
+    },
+    {
+      "kind": "address",
+      "value": "12",
+      "key": "other:12"
+    },
+    {
+      "kind": "chat",
+      "value": "27824160503@s.whatsapp.net",
+      "key": "chat:27824160503@s.whatsapp.net"
+    },
+    {
+      "kind": "chat",
+      "value": "120363025246125486@G.US",
+      "key": "chat:120363025246125486@g.us"
+    },
+    {
+      "kind": "domain",
+      "value": "Example.co.za",
+      "key": "domain:example.co.za"
+    },
+    {
+      "kind": "domain",
+      "value": "@example.co.za",
+      "key": "domain:example.co.za"
+    },
+    {
+      "kind": "domain",
+      "value": "example.co.za.",
+      "key": "domain:example.co.za"
+    }
+  ],
+  "localWrap": {
+    "masterKeyBase64": "//79/Pv6+fj39vX08/Lx8O/u7ezr6uno5+bl5OPi4eA=",
+    "userId": "caabe3e9-0000-4000-8000-000000000001",
+    "wrapped": "fSYosrscqz3BLrIPx5mEABzueDtB2wDA4DybkwHExepQJY9o1COnb99ScRgZK+HjoAQ6Z6HzqXIox6OC"
+  }
+}

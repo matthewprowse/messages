@@ -1,0 +1,36 @@
+{
+  "name": "worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "start": "tsx --env-file=.env src/index.ts",
+    "connect:icloud": "tsx --env-file=.env scripts/connect-icloud.ts",
+    "connect:google": "tsx --env-file=.env scripts/connect-google.ts",
+    "connect:whatsapp": "tsx --env-file=.env scripts/connect-whatsapp.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "set-password": "tsx --env-file=.env scripts/set-password.ts",
+    "encrypt-existing": "tsx --env-file=.env scripts/encrypt-existing.ts",
+    "drop-stored-html": "tsx --env-file=.env scripts/drop-stored-html.ts",
+    "encrypt-addresses": "tsx --env-file=.env scripts/encrypt-addresses.ts"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.9.0",
+    "@types/node": "^24.19.2",
+    "@types/nodemailer": "^8.0.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@messages/crypto": "workspace:*",
+    "@messages/db": "workspace:*",
+    "@messages/email-text": "workspace:*",
+    "@messages/qr": "workspace:*",
+    "@supabase/supabase-js": "^2.118.0",
+    "baileys": "7.0.0-rc14",
+    "imapflow": "^2.9.1",
+    "mailparser": "^3.12.4",
+    "nodemailer": "^10.2.1"
+  }
+}
