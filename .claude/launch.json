@@ -10,6 +10,20 @@
         "dev"
       ],
       "port": 3000
+    },
+    {
+      "name": "khanya",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "../Design/app",
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3100"
+      ],
+      "port": 3100
     }
   ]
 }

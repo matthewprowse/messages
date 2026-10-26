@@ -1,9 +1,9 @@
 import type { Tables } from "@messages/db";
-import { db, must, retryWrite } from "../db";
-import { buildNewEmail, buildReply, newMessageId, type ReplyInput } from "./compose";
+import { db, failureCode, must, recordEvent, retryWrite } from "../db";
+import { buildNewEmail, buildReply, newMessageId, type OutgoingAttachment, type ReplyInput } from "./compose";
 import type { AttachmentProvider } from "./attachment-rules";
 import { loadAttachmentFiles, waitForAttachments } from "./outbox-attachments";
-import { BAD_RECIPIENTS, chooseFrom, cleanRecipients, fromCandidates, replyToChosen, replyToParticipants } from "./from-address";
+import { chooseFrom, fromCandidates, outgoingRecipients, type OutgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";
 import { identitiesMergedFromElsewhere } from "../contacts/merged-identities";
 import { FIELD } from "@messages/crypto/fields";
 import { open, openAddresses } from "../vault";
@@ -36,7 +36,13 @@ export async function claimReady(row: OutboxRow): Promise<OutboxRow | null> {
     return null;
   }
   // Who it is to and from, opened for sending: the browser stored them encrypted.
-  return openAddresses(current.user_id, { ...current, status: "sending" });
+  const opened = await openAddresses(current.user_id, { ...current, status: "sending" });
+  // Cc and Bcc are sealed like To. Opened one by one here, and an unreadable one stays empty so the
+  // send fails rather than going without that person.
+  for (const key of ["cc_addresses", "bcc_addresses"] as const) {
+    opened[key] = await Promise.all((opened[key] ?? []).map(async (a) => (await open(opened.user_id, FIELD.address, a)) ?? ""));
+  }
+  return opened;
 }
 
 /**
@@ -44,15 +50,28 @@ export async function claimReady(row: OutboxRow): Promise<OutboxRow | null> {
  * write must not mark an email that went out as failed with "Try again", or it is sent twice.
  */
 export async function settleSent(id: string, providerMessageId: string): Promise<boolean> {
+  reportSend(id, "sent");
   const recorded = await retryWrite(() =>
     db.from("outbox").update({ status: "sent", provider_message_id: providerMessageId, sent_at: new Date().toISOString(), error: null }).eq("id", id),
   );
   if (recorded) return true;
-  await markFailed(id, "Sent, but could not be recorded. Check your Sent folder before sending again.").catch(() => undefined);
+  await markFailed(id, "Sent, but could not be recorded. Check your Sent folder before sending again.", false).catch(() => undefined);
   return false;
 }
 
-export async function markFailed(id: string, reason: string) {
+/** The send's outcome for the usage numbers: which provider and whether it went, never to whom or what. */
+function reportSend(id: string, outcome: "sent" | "failed", reason?: string) {
+  void Promise.resolve(db.from("outbox").select("user_id, accounts(provider)").eq("id", id).maybeSingle()).then(
+    ({ data }) => {
+      const provider = data?.accounts?.provider;
+      if (data && provider) recordEvent(data.user_id, "send_result", { provider, outcome, attempts: 1, ...(reason ? { code: failureCode(reason) } : {}) });
+    },
+    () => undefined,
+  );
+}
+
+export async function markFailed(id: string, reason: string, report = true) {
+  if (report) reportSend(id, "failed", reason);
   must(await db.from("outbox").update({ status: "failed", error: reason }).eq("id", id), "mark outbox failed");
 }
 
@@ -81,8 +100,10 @@ interface ReplyContext {
 /**
  * Who a reply goes to and how it threads. It answers the latest message from someone else (Reply, not
  * Reply All). In a conversation with only your own messages, it goes to everyone in the conversation.
+ * When the app set To or Cc (Reply All, or a reply with the recipients edited) those replace this, and
+ * only the threading is taken from the conversation.
  */
-async function replyContext(row: OutboxRow, selfAddresses: Set<string>): Promise<ReplyContext | null> {
+async function replyContext(row: OutboxRow, selfAddresses: Set<string>, explicit: boolean): Promise<ReplyContext | null> {
   if (!row.thread_id) return null; // a new email, not a reply
   // Read together; nothing from the messages is used until the thread is known to be yours.
   const [thread, messages, chosen] = await Promise.all([
@@ -117,7 +138,7 @@ async function replyContext(row: OutboxRow, selfAddresses: Set<string>): Promise
   if (row.reply_to_message_id) {
     if (!chosen || chosen.thread_id !== thread.id || chosen.user_id !== row.user_id) return null;
     const { to, inboundTo } = replyToChosen(chosen, selfAddresses);
-    if (to.length === 0) return null;
+    if (to.length === 0 && !explicit) return null;
     return {
       accountId: thread.account_id,
       threadId: thread.id,
@@ -142,7 +163,7 @@ async function replyContext(row: OutboxRow, selfAddresses: Set<string>): Promise
     const emails = people.flatMap((p) => p.contacts?.contact_identities.filter((i) => i.kind === "email" && !mergedIn.has(i.id)).map((i) => i.value) ?? []);
     to = replyToParticipants(emails, latest?.sender_address ?? null, selfAddresses);
   }
-  if (to.length === 0) return null;
+  if (to.length === 0 && !explicit) return null;
 
   const answering = latestInbound ?? latest;
   return {
@@ -178,16 +199,13 @@ function resolveFrom(row: OutboxRow, account: SendAccount, inboundTo: string[]):
 const OTHER_ACCOUNT = "This email belongs to another account.";
 
 interface NewEmailContext {
-  to: string[];
   subject: string | null;
 }
 
 /** A new email (no conversation yet) for this account, or the reason it cannot be sent. */
 function newEmailContext(row: OutboxRow, accountId: string): NewEmailContext | { error: string } {
   if (row.thread_id || row.account_id !== accountId) return { error: OTHER_ACCOUNT };
-  const to = cleanRecipients(row.to_addresses);
-  if (!to) return { error: BAD_RECIPIENTS };
-  return { to, subject: row.subject?.trim() || null };
+  return { subject: row.subject?.trim() || null };
 }
 
 const LINK_WINDOW_MS = 7 * 24 * 60 * 60_000;
@@ -274,15 +292,23 @@ interface Outgoing {
   messageId: string;
   from: string;
   to: string[];
+  cc: string[];
+  bcc: string[];
   /** The conversation a reply belongs to. Null for a new email until its sent copy is stored. */
   threadId: string | null;
   /** How many files are attached. */
   attachmentCount: number;
+  /** The files themselves. Inside raw too, unless they were asked for apart. */
+  files: OutgoingAttachment[];
 }
 
 /**
  * Builds a queued reply or new email for this account, or gives the reason to fail it with. A caller
- * that has just loaded the account passes it in, so it is not read twice.
+ * that has just loaded the account passes it in, so it is not read twice. With filesApart the email is
+ * built without its files, for a provider that takes them separately (Outlook's upload sessions). With
+ * keepBcc the message carries its Bcc header, for a provider that reads its recipients from the message
+ * and removes that header before delivering (Gmail, Microsoft Graph). Otherwise Bcc is never in the bytes,
+ * and the caller must send to `bcc` as well (SMTP envelope).
  */
 export async function composeOutgoing(
   row: OutboxRow,
@@ -290,16 +316,20 @@ export async function composeOutgoing(
   selfAddresses: Set<string>,
   provider: AttachmentProvider,
   account?: SendAccount,
+  filesApart = false,
+  keepBcc = false,
 ): Promise<Outgoing | { error: string }> {
   // What you wrote may be stored encrypted.
   row = { ...row, body: (await open(row.user_id, FIELD.body, row.body)) ?? "", subject: await open(row.user_id, FIELD.subject, row.subject) };
-  // A new email's recipients are checked first: that needs nothing from the database.
+  // The recipients are checked first: that needs nothing from the database.
+  const recipients = outgoingRecipients(row, !!row.thread_id);
+  if ("error" in recipients) return recipients;
   const fresh = row.thread_id ? null : newEmailContext(row, accountId);
   if (fresh && "error" in fresh) return fresh;
 
   // The rest is read at once: the conversation a reply answers, the account, your name and the files.
   const [reply, sendAccount, name, attachments] = await Promise.all([
-    fresh ? null : replyContext(row, selfAddresses),
+    fresh ? null : replyContext(row, selfAddresses, recipients.explicit),
     account ?? freshAccount(accountId),
     senderName(row.user_id),
     loadAttachmentFiles(row, provider),
@@ -312,9 +342,12 @@ export async function composeOutgoing(
   if ("error" in attachments) return attachments;
   const from = { name, address: chosen.address };
   const messageId = newMessageId(from.address);
-  const to = reply ? reply.input.to : fresh!.to;
+  // A reply with To or Cc set in the app goes to exactly those; otherwise the worker's own pick.
+  const to = reply && !recipients.explicit ? reply.input.to : recipients.to;
+  const { cc, bcc } = recipients;
+  const inside = filesApart ? [] : attachments;
   const raw = reply
-    ? await buildReply({ ...reply.input, from, body: row.body, attachments }, messageId)
-    : await buildNewEmail({ from, to, subject: fresh!.subject, body: row.body, attachments }, messageId);
-  return { raw, messageId, from: from.address, to, threadId: reply?.threadId ?? null, attachmentCount: attachments.length };
+    ? await buildReply({ ...reply.input, to, cc, bcc, from, body: row.body, attachments: inside }, messageId, keepBcc)
+    : await buildNewEmail({ from, to, cc, bcc, subject: fresh!.subject, body: row.body, attachments: inside }, messageId, keepBcc);
+  return { raw, messageId, from: from.address, to, cc, bcc, threadId: reply?.threadId ?? null, attachmentCount: attachments.length, files: attachments };
 }

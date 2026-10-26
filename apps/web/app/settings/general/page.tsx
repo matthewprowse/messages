@@ -1,7 +1,7 @@
 "use client";
 
 import { SettingsHeader } from "@/components/settings-header";
-import { AppearanceSection, DataSection, SignInSection } from "@/components/settings/sections";
+import { AppearanceSection, DataSection, SignInSection, TourSection } from "@/components/settings/sections";
 
 export default function GeneralPage() {
   return (
@@ -10,6 +10,7 @@ export default function GeneralPage() {
       <div className="space-y-8">
         <AppearanceSection />
         <DataSection />
+        <TourSection />
         <SignInSection />
       </div>
     </>

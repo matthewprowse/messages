@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import { openAddresses, openNestedThreads } from "./open-rows";
 import { allRows, identities, isUuid, latest } from "./contacts";
+import type { Provider } from "./types";
 
 // Companies as the Contacts page needs them. The database files every contact under the organization for
 // its email domain (personal mail providers and your own domains are left out), so a company is the people
@@ -31,6 +32,8 @@ export interface CompanyPerson {
 export interface CompanyConversation {
   id: string;
   channel: "email" | "whatsapp";
+  /** The service it comes from, for its logo. */
+  provider?: Provider;
   /** The company's person in the conversation, or the group name for a group. */
   title: string;
   /** The subject for email, the latest message for chats. */
@@ -71,7 +74,7 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
   const { data: o, error } = await supabase
     .from("organizations")
     .select(
-      "id, name, domain, summary, avatar_path, contacts(id, display_name, role, contact_identities(kind, value), thread_participants(threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at)))",
+      "id, name, domain, summary, avatar_path, contacts(id, display_name, role, contact_identities(kind, value), thread_participants(threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider))))",
     )
     .eq("id", id)
     .maybeSingle();
@@ -92,6 +95,7 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
       conversations.set(t.id, {
         id: t.id,
         channel: t.channel as CompanyConversation["channel"],
+        provider: (t.accounts?.provider ?? undefined) as Provider | undefined,
         title: (t.is_group ? t.group_name : c.display_name) ?? c.display_name,
         preview: (t.channel === "email" ? t.subject : null) ?? t.last_message_preview ?? (t.channel === "email" ? "No Subject" : ""),
         lastAt: t.last_message_at,

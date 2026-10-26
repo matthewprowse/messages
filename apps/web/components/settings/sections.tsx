@@ -7,14 +7,16 @@ import { useTheme } from "next-themes";
 import { Trash2 } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { signOut, useAuth } from "@/lib/auth";
+import { saveOnboarding } from "@/lib/onboarding";
+import { resetMockImport } from "@/lib/onboarding-demo";
 import type { Rule } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 // The one heading style in Settings, for sections and the groups inside them alike.
 export function SettingsHeading({ title, description, level = 2 }: { title: React.ReactNode; description?: React.ReactNode; level?: 2 | 3 | 4 }) {
@@ -42,17 +44,20 @@ export function SettingsRows({ children }: { children: React.ReactNode }) {
 }
 
 export function SettingsRow({ title, description, leading, href, children }: { title: React.ReactNode; description?: React.ReactNode; leading?: React.ReactNode; href?: string; children?: React.ReactNode }) {
+  // The controls wrap under the text when the row is narrow, so a long title is never squashed beside them.
   const body = (
     <>
-      {leading}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-sm font-medium">{title}</div>
-        {description && <div className="text-xs text-muted-foreground">{description}</div>}
+      <div className="flex min-w-[12rem] flex-1 items-center gap-4">
+        {leading}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">{title}</div>
+          {description && <div className="text-xs text-muted-foreground">{description}</div>}
+        </div>
       </div>
-      {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
+      {children && <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div>}
     </>
   );
-  const className = "flex items-center gap-4 px-4 py-3";
+  const className = "flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3";
   return href ? <Link href={href} className={cn(className, "hover:bg-muted/50")}>{body}</Link> : <div className={className}>{body}</div>;
 }
 
@@ -63,9 +68,11 @@ export function SettingsEmpty({ children }: { children: React.ReactNode }) {
 export function AboutSection() {
   const { profile, dispatch, notify } = useApp();
   const [form, setForm] = useState({ name: profile.name, about: profile.about, people: profile.people });
+  // Save is only offered when the form differs from what is saved.
+  const changed = form.name.trim() !== profile.name || form.about.trim() !== profile.about || form.people.trim() !== profile.people;
   return (
     <SettingsSection id="about" title="About" description="The AI reads this before it ranks anything or writes a word.">
-      <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); dispatch({ type: "patchProfile", patch: form }); notify("Saved"); }}>
+      <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); if (!changed) return; dispatch({ type: "patchProfile", patch: { name: form.name.trim(), about: form.about.trim(), people: form.people.trim() } }); notify("Saved"); }}>
         <div className="grid gap-2"><Label htmlFor="name">Name</Label><Input id="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
         <div className="grid gap-2">
           <Label htmlFor="about">Role and Goals</Label>
@@ -76,7 +83,7 @@ export function AboutSection() {
           <Textarea id="people" rows={4} value={form.people} onChange={(e) => setForm({ ...form, people: e.target.value })} />
           <p className="text-xs text-muted-foreground">Who they are to you, so the AI knows a one-line message from your co-founder outranks a long newsletter.</p>
         </div>
-        <Button type="submit">Save</Button>
+        <Button type="submit" disabled={!changed}>Save</Button>
       </form>
     </SettingsSection>
   );
@@ -86,18 +93,27 @@ export function WritingSection() {
   const { writingExamples, dispatch, notify } = useApp();
   const [context, setContext] = useState("");
   const [text, setText] = useState("");
+  // `required` lets whitespace through, so blank examples are refused here.
+  const addExample = () => {
+    const example = { context: context.trim(), text: text.trim() };
+    if (!example.context || !example.text) return;
+    dispatch({ type: "addExample", example: { id: `w-${Date.now()}`, ...example } });
+    setContext("");
+    setText("");
+    notify("Example added");
+  };
   return (
     <SettingsSection id="writing-style" title="Writing Style" description="Drafts copy how you already write to each person. These examples are used for people you have not written to yet.">
       {writingExamples.length > 0 && (
         <SettingsRows>
           {writingExamples.map((w) => (
             <SettingsRow key={w.id} title={w.context} description={w.text}>
-              <Button variant="ghost" size="icon-xs" aria-label="Remove" onClick={() => dispatch({ type: "removeExample", id: w.id })}><Trash2 /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label={`Remove Example: ${w.context}`} onClick={() => { dispatch({ type: "removeExample", id: w.id }); notify("Example removed", () => dispatch({ type: "addExample", example: w })); }}><Trash2 /></Button>
             </SettingsRow>
           ))}
         </SettingsRows>
       )}
-      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); dispatch({ type: "addExample", example: { id: `w-${Date.now()}`, context, text } }); setContext(""); setText(""); notify("Example added"); }}>
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); addExample(); }}>
         <div className="grid gap-2"><Label htmlFor="ctx">Situation</Label><Input id="ctx" value={context} onChange={(e) => setContext(e.target.value)} placeholder="Replying to a client" required /></div>
         <div className="grid gap-2"><Label htmlFor="txt">Example</Label><Textarea id="txt" rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste a message you actually sent" required /></div>
         <Button type="submit">Add Example</Button>
@@ -112,16 +128,24 @@ export function PrioritiesSection() {
   const { rules, dispatch, notify } = useApp();
   const [target, setTarget] = useState(params.get("add") ?? "");
   const [kind, setKind] = useState<Rule["kind"]>("always_important");
+  const addRule = () => {
+    const value = target.trim();
+    if (!value) return;
+    if (rules.some((r) => r.target.toLowerCase() === value.toLowerCase())) return notify("That sender already has a rule");
+    dispatch({ type: "addRule", rule: { id: `r-${Date.now()}`, kind, target: value } });
+    setTarget("");
+    notify("Rule added");
+  };
   const groups: { kind: Rule["kind"]; title: string; blurb: string }[] = [
     { kind: "always_important", title: "Always Important", blurb: "Lands in Priority no matter what it says." },
     { kind: "never_important", title: "Never Important", blurb: "Kept out of Priority and push notifications." },
   ];
   return (
     <SettingsSection id="priorities" title="Priorities" description="Rules win over the AI. Add a sender address, a phone number or a whole domain. Marking a conversation Important or Not Important also teaches the ranking.">
-      <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => { e.preventDefault(); dispatch({ type: "addRule", rule: { id: `r-${Date.now()}`, kind, target: target.trim() } }); setTarget(""); notify("Rule added"); }}>
-        <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="name@example.com, +44… or example.com" required className="flex-1" />
+      <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(e) => { e.preventDefault(); addRule(); }}>
+        <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="name@example.com, +44… or example.com" aria-label="Sender Address, Phone Number or Domain" required className="flex-1" />
         <Select value={kind} onValueChange={(v) => setKind(v as Rule["kind"])}>
-          <SelectTrigger className="sm:w-44"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="sm:w-44" aria-label="Rule Type"><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="always_important">Always Important</SelectItem><SelectItem value="never_important">Never Important</SelectItem></SelectContent>
         </Select>
         <Button type="submit">Add</Button>
@@ -134,7 +158,7 @@ export function PrioritiesSection() {
               <SettingsRows>
                 {list.map((r) => (
                   <SettingsRow key={r.id} title={r.target}>
-                    <Button variant="ghost" size="icon-xs" aria-label="Remove" onClick={() => dispatch({ type: "removeRule", id: r.id })}><Trash2 /></Button>
+                    <Button variant="ghost" size="icon-sm" aria-label={`Remove Rule: ${r.target}`} onClick={() => { dispatch({ type: "removeRule", id: r.id }); notify("Rule removed", () => dispatch({ type: "addRule", rule: r })); }}><Trash2 /></Button>
                   </SettingsRow>
                 ))}
               </SettingsRows>
@@ -167,32 +191,36 @@ export function AppearanceSection() {
 }
 
 export function DataSection() {
-  const { dispatch, notify } = useApp();
-  const [open, setOpen] = useState(false);
-  const [confirm, setConfirm] = useState("");
+  const { dispatch, profile } = useApp();
   return (
     <SettingsSection id="data" title="Data" description="Everything lives in your own database. Credentials and WhatsApp session keys are encrypted at rest, and message content never goes to logs.">
       <SettingsRows>
-        <SettingsRow title="Export" description="Messages, contacts and AI notes as JSON.">
-          <Button variant="outline" disabled>Coming Soon</Button>
+        <SettingsRow title="Share Usage Data" description="Counts of which screens and features are used, how long things take and how the AI did. Never message text, names, addresses or anything you type.">
+          <Switch checked={profile.shareUsage} onCheckedChange={(v) => dispatch({ type: "patchProfile", patch: { shareUsage: v } })} aria-label="Share Usage Data" />
         </SettingsRow>
-        <SettingsRow title="Delete All Data" description="Disconnects every account and removes all stored messages, contacts and settings.">
-          <Button variant="destructive" onClick={() => setOpen(true)}>Delete Everything</Button>
+        <SettingsRow title="Delete All Data" description="Deleting everything is not available yet. To stop an account syncing now, use Pause Sync in Connected Accounts.">
+          <Button variant="destructive" disabled>Delete Everything</Button>
         </SettingsRow>
       </SettingsRows>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete All Data?</DialogTitle>
-            <DialogDescription>This cannot be undone. Your email and WhatsApp accounts themselves are untouched; only this app's copy is removed. Type <span className="font-mono">delete</span> to confirm.</DialogDescription>
-          </DialogHeader>
-          <Input value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="delete" />
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button variant="destructive" disabled={confirm !== "delete"} onClick={() => { dispatch({ type: "reset" }); setOpen(false); setConfirm(""); notify("All data deleted"); }}>Delete</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+    </SettingsSection>
+  );
+}
+
+export function TourSection() {
+  const { notify } = useApp();
+  const failed = () => notify("Could not start that. Try again.");
+  const tour = () => saveOnboarding({ tour: "pending" }).catch(failed);
+  const setup = () => { resetMockImport(); saveOnboarding({ onboarding: "accounts", tour: "done" }).catch(failed); };
+  return (
+    <SettingsSection id="tour" title="Getting Started">
+      <SettingsRows>
+        <SettingsRow title="Take the Tour" description="A page by page look at Summary, Conversations, Contacts and the rest.">
+          <Button variant="outline" onClick={tour}>Start Tour</Button>
+        </SettingsRow>
+        <SettingsRow title="Run Setup Again" description="Accounts, what Konva knows about you, contacts and a practice reply.">
+          <Button variant="outline" onClick={setup}>Run Setup</Button>
+        </SettingsRow>
+      </SettingsRows>
     </SettingsSection>
   );
 }
@@ -200,7 +228,7 @@ export function DataSection() {
 export function SignInSection() {
   const { session } = useAuth();
   return (
-    <SettingsSection id="sign-in" title="Sign In">
+    <SettingsSection id="account" title="Account">
       <SettingsRows>
         <SettingsRow title="Signed In" description={session?.user.email}>
           <Button variant="outline" onClick={() => signOut()}>Sign Out</Button>

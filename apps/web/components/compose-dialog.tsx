@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/lib/store";
@@ -8,6 +9,7 @@ import { MAX_RECIPIENTS, parseAddresses, sendAddressesOf } from "@/lib/send-from
 import { attachProvider } from "@/lib/outbox-files";
 import { cn } from "@/lib/utils";
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
+import { ComposeAi, type Composed } from "@/components/compose-ai";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,7 +24,7 @@ const LINK_WAIT_MS = 30_000; // after it is sent, how long to wait for the conve
  * Sending a new email or WhatsApp message from a dialog: queue it, follow its outbox row, and once the
  * worker sets thread_id, close the dialog and open that conversation. reset() starts over.
  */
-export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => void) {
+export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => void, dialog: string) {
   const router = useRouter();
   const { composed, refreshCompose, ensureThread } = useApp();
   const [outboxId, setOutboxId] = useState<string | null>(null);
@@ -60,23 +62,26 @@ export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => v
     setQueueing(true);
     try {
       const id = await queue();
-      if (id) setOutboxId(id);
+      if (id) {
+        markSubmitted(dialog);
+        setOutboxId(id);
+      }
     } finally {
       setQueueing(false);
     }
-  }, []);
+  }, [dialog]);
   const reset = useCallback(() => setOutboxId(null), []);
 
   return { sent, waiting, locked: waiting || sent, error: failed ? status.error : undefined, failed, run, reset };
 }
 
 /** A new email to anyone. Once the worker has sent it, the new conversation opens. */
-export function ComposeDialog({ open, onOpenChange, to = [] }: { open: boolean; onOpenChange: (open: boolean) => void; to?: string[] }) {
-  const { accounts, composeEmail } = useApp();
-  const sending = useComposeSend(open, onOpenChange);
+export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSubject = "", body: initialBody = "" }: { open: boolean; onOpenChange: (open: boolean) => void; to?: string[]; subject?: string; body?: string }) {
+  const { accounts, contacts, composeEmail } = useApp();
+  const sending = useComposeSend(open, onOpenChange, "compose");
   const { locked, sent, waiting, reset } = sending;
   const emailAccounts = useMemo(
-    () => accounts.filter((a) => (a.provider === "icloud" || a.provider === "gmail") && a.status !== "disconnected"),
+    () => accounts.filter((a) => (a.provider === "icloud" || a.provider === "gmail" || a.provider === "outlook" || a.provider === "imap") && a.status !== "disconnected"),
     [accounts],
   );
   // One option per address, keyed by account and address so the same address on two accounts stays distinct.
@@ -88,17 +93,33 @@ export function ComposeDialog({ open, onOpenChange, to = [] }: { open: boolean; 
 
   const [fromKey, setFromKey] = useState("");
   const [toText, setToText] = useState("");
+  // Cc and Bcc stay out of the way until asked for.
+  const [ccText, setCcText] = useState("");
+  const [bccText, setBccText] = useState("");
+  const [showCc, setShowCc] = useState(false);
+  const [showBcc, setShowBcc] = useState(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [draftId, setDraftId] = useState<string | undefined>(undefined);
   const [checked, setChecked] = useState(false);
   const toKey = to.join(",");
+  const applyDraft = useCallback((next: Composed) => {
+    setBody(next.body);
+    if (next.subject !== undefined) setSubject(next.subject);
+    setDraftId(next.draftId);
+  }, []);
 
   // Each time it opens it starts fresh, prefilled with whoever it was opened for.
   useEffect(() => {
     if (!open) return;
     setToText(to.join(", "));
-    setSubject("");
-    setBody("");
+    setCcText("");
+    setBccText("");
+    setShowCc(false);
+    setShowBcc(false);
+    setSubject(initialSubject);
+    setBody(initialBody);
+    setDraftId(undefined);
     setChecked(false);
     reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -106,41 +127,63 @@ export function ComposeDialog({ open, onOpenChange, to = [] }: { open: boolean; 
 
   const from = options.some((o) => o.addresses.some((x) => x.key === fromKey)) ? fromKey : firstKey;
   const recipients = useMemo(() => parseAddresses(toText), [toText]);
+  // Who it is to, when the first address is a contact's, so a draft knows them and how you write to them.
+  const firstTo = recipients.valid[0]?.toLowerCase();
+  const contactId = useMemo(() => (firstTo ? contacts.find((c) => c.emails.some((e) => e.toLowerCase() === firstTo))?.id : undefined), [contacts, firstTo]);
   const toError = recipients.invalid.length
     ? `Check ${recipients.invalid.slice(0, 2).join(", ")}${recipients.invalid.length > 2 ? " and others" : ""}.`
     : recipients.valid.length === 0 ? "Add at least one address."
     : recipients.valid.length > MAX_RECIPIENTS ? `Send to ${MAX_RECIPIENTS} people or fewer.` : null;
+
+  const ccRecipients = useMemo(() => parseAddresses(ccText), [ccText]);
+  const bccRecipients = useMemo(() => parseAddresses(bccText), [bccText]);
+  const listError = (r: { valid: string[]; invalid: string[] }) =>
+    r.invalid.length ? `Check ${r.invalid.slice(0, 2).join(", ")}${r.invalid.length > 2 ? " and others" : ""}.`
+    : r.valid.length > MAX_RECIPIENTS ? `Copy ${MAX_RECIPIENTS} people or fewer.` : null;
+  const ccError = showCc ? listError(ccRecipients) : null;
+  const bccError = showBcc ? listError(bccRecipients) : null;
 
   // Files go up when Send is pressed, then the email is queued with them. The limit follows the From account.
   const fromAccount = emailAccounts.find((a) => a.id === from.split(" ")[0]);
   const files = useOutboxFiles(attachProvider(fromAccount?.provider), locked);
   const clearFiles = files.clear;
   useEffect(() => { if (open) clearFiles(); }, [open, toKey, clearFiles]);
-  const ready = !!from && (body.trim().length > 0 || files.items.length > 0) && !locked && !files.blocked;
+  const ready = !!from && (body.trim().length > 0 || files.items.length > 0) && !locked && !files.blocked && !ccError && !bccError;
 
   const submit = async () => {
     setChecked(true);
-    if (!ready || toError) return;
+    if (!ready || toError || ccError || bccError) return;
     const [accountId, fromAddress] = from.split(" ");
+    // A subject is one header line, so pasted line breaks become spaces rather than extra headers.
+    const cleanSubject = subject.replace(/[\r\n]+/g, " ").trim();
     await sending.run(async () => {
       const uploaded = await files.upload();
-      return uploaded ? composeEmail({ accountId, fromAddress, to: recipients.valid, subject, body, files: uploaded }) : null;
+      return uploaded ? composeEmail({
+        accountId,
+        fromAddress,
+        to: recipients.valid,
+        // Hidden fields are not sent, and nobody is on two lines.
+        cc: showCc ? ccRecipients.valid.filter((a) => !recipients.valid.includes(a)) : [],
+        bcc: showBcc ? bccRecipients.valid.filter((a) => !recipients.valid.includes(a) && !(showCc && ccRecipients.valid.includes(a))) : [],
+        subject: cleanSubject,
+        body,
+        files: uploaded,
+        draftId,
+      }) : null;
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="compose" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Email</DialogTitle>
           <DialogDescription>Sent from your own account, then filed in Conversations.</DialogDescription>
         </DialogHeader>
         {options.length === 0 ? (
-          <>
-            <p className="text-sm text-muted-foreground">
-              Connect iCloud+ Mail or Gmail to send email. <Link href="/settings/accounts" className="underline underline-offset-4" onClick={() => onOpenChange(false)}>Connected Accounts</Link>
-            </p>
-          </>
+          <p className="text-sm text-muted-foreground">
+            Connect iCloud+ Mail, Gmail, Outlook or another mailbox to send email. <Link href="/settings/accounts" className="underline underline-offset-4" onClick={() => onOpenChange(false)}>Connected Accounts</Link>
+          </p>
         ) : (
           <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }} {...files.dropProps}>
             <div className="grid gap-2">
@@ -159,7 +202,13 @@ export function ComposeDialog({ open, onOpenChange, to = [] }: { open: boolean; 
               </Select>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="compose-to">To</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="compose-to">To</Label>
+                <div className="flex gap-1">
+                  {!showCc && <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => setShowCc(true)}>Cc</Button>}
+                  {!showBcc && <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => setShowBcc(true)}>Bcc</Button>}
+                </div>
+              </div>
               <Input
                 id="compose-to"
                 value={toText}
@@ -172,6 +221,31 @@ export function ComposeDialog({ open, onOpenChange, to = [] }: { open: boolean; 
               />
               {checked && toError && <p className="text-xs text-destructive">{toError}</p>}
             </div>
+            {showCc && (
+              <div className="grid gap-2">
+                <Label htmlFor="compose-cc">Cc</Label>
+                <Input id="compose-cc" value={ccText} onChange={(e) => setCcText(e.target.value)} placeholder="name@example.com, another@example.com" aria-invalid={!!ccError} disabled={locked} autoFocus />
+                {ccError && <p className="text-xs text-destructive">{ccError}</p>}
+              </div>
+            )}
+            {showBcc && (
+              <div className="grid gap-2">
+                <Label htmlFor="compose-bcc">Bcc</Label>
+                <Input id="compose-bcc" value={bccText} onChange={(e) => setBccText(e.target.value)} placeholder="name@example.com, another@example.com" aria-invalid={!!bccError} disabled={locked} autoFocus />
+                {bccError && <p className="text-xs text-destructive">{bccError}</p>}
+              </div>
+            )}
+            <ComposeAi
+              open={open}
+              sent={sent}
+              disabled={locked}
+              accountId={from ? from.split(" ")[0] : undefined}
+              channel="email"
+              contactId={contactId}
+              body={body}
+              subject={subject}
+              onApply={applyDraft}
+            />
             <div className="grid gap-2">
               <Label htmlFor="compose-subject">Subject</Label>
               <Input id="compose-subject" value={subject} onChange={(e) => setSubject(e.target.value)} disabled={locked} autoFocus={to.length > 0} />

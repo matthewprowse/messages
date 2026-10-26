@@ -17,10 +17,24 @@ export const env = {
   /** The Google Cloud OAuth client (Desktop app type). Optional: only Gmail and Calendar need it. */
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+  /** The web app's Google OAuth client (Web application type), for sign-ins made in the app. The same values as in apps/web/.env.local. */
+  googleWebClientId: process.env.GOOGLE_WEB_CLIENT_ID ?? "",
+  googleWebClientSecret: process.env.GOOGLE_WEB_CLIENT_SECRET ?? "",
+  /** The Microsoft Entra app (public client, "Mobile and desktop applications"). Optional: only Outlook needs it. */
+  microsoftClientId: process.env.MICROSOFT_CLIENT_ID ?? "",
+  /** Only for an app registered as a confidential client. A public client leaves it empty. */
+  microsoftClientSecret: process.env.MICROSOFT_CLIENT_SECRET ?? "",
+  /** The Zoom Marketplace app (General app, user-managed), for Zoom accounts connected in the app. The same values as in apps/web/.env.local. */
+  zoomClientId: process.env.ZOOM_CLIENT_ID ?? "",
+  zoomClientSecret: process.env.ZOOM_CLIENT_SECRET ?? "",
   /** Wraps each user's data key (packages/crypto/src/wrap.ts). Needed to read or write encrypted text. */
   keyWrappingKey: process.env.KEY_WRAPPING_KEY ?? "",
   /** "true" stores message text encrypted; otherwise it is stored as before, and either kind is read. */
   encryptContent: process.env.ENCRYPT_CONTENT === "true",
   /** "true" stores addresses, numbers and chat IDs encrypted (encryption stage 2); they are matched on their blind indexes either way. */
   encryptAddresses: process.env.ENCRYPT_ADDRESSES === "true",
+  /** The port Konva Relay (apps/mac-relay) reaches the worker on for iCloud Reminders. 0 leaves it off. */
+  relayPort: Number(process.env.RELAY_PORT ?? 0) || 0,
+  /** Where it listens: this machine only by default, so outside access goes through a TLS proxy. */
+  relayHost: process.env.RELAY_HOST || "127.0.0.1",
 };

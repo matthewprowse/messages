@@ -12,16 +12,23 @@ let keysFor: string | null = null;
 
 /** The user's keys, fetching them on first use. Rejects when signed out or the key service is down. */
 export function userKeys(): Promise<UserKeys> {
-  return (keys ??= fetchKeys());
+  if (!keys) {
+    const pending = fetchKeys();
+    keys = pending;
+    // Any failure (signed out, network, a bad reply) lets the next call try again, but only clears this
+    // attempt: a newer fetch started after a sign-in change is left alone.
+    pending.catch(() => { if (keys === pending) { keys = null; keysFor = null; } });
+  }
+  return keys;
 }
 
 async function fetchKeys(): Promise<UserKeys> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
-  if (!token) { keys = null; throw new Error("Sign in first."); }
+  if (!token) throw new Error("Sign in first.");
   keysFor = data.session!.user.id;
   const res = await fetch("/api/keys", { method: "POST", headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
-  if (!res.ok) { keys = null; throw new Error("Could not open your messages."); }
+  if (!res.ok) throw new Error("Could not open your messages.");
   const { key } = (await res.json()) as { key: string };
   const raw = Uint8Array.from(atob(key), (c) => c.charCodeAt(0));
   const derived = await deriveUserKeys(raw);

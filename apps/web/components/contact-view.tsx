@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Users } from "lucide-react";
+import { toast } from "sonner";
 import type { ContactDetail } from "@/lib/contacts";
 import { useApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -15,8 +16,12 @@ import { NewWhatsAppDialog, whatsappLinked } from "@/components/new-whatsapp-dia
 import { phonesOf } from "@/lib/new-items";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ContactMenu, MergedAutomatically } from "@/components/contact-merge-actions";
-import { DetailList, DetailPage, Divided, ListRow, Section, withQuery } from "@/components/contact-list";
+import { ConversationRows, DetailList, DetailPage, Section } from "@/components/contact-list";
+import { withQuery } from "@/lib/utils";
 import { formatPhone } from "@/lib/format";
+import { EditContactDialog } from "@/components/contact-edit-dialog";
+import { MeetingList } from "@/components/meeting-card";
+import { useMeetings } from "@/components/meetings-data";
 
 // Email goes through New Email, a first WhatsApp message through New WhatsApp Message, and an event
 // with them as a guest through New Event. An existing WhatsApp chat opens instead of starting another.
@@ -53,16 +58,38 @@ function MessageButton({ contact }: { contact: ContactDetail }) {
   );
 }
 
+/** Their meetings on Teams, Zoom and Google Meet, newest first. Shown once there is one. */
+function ContactMeetings({ contactId }: { contactId: string }) {
+  const scope = useMemo(() => ({ contactIds: [contactId] }), [contactId]);
+  const { meetings } = useMeetings(scope);
+  if (meetings.length === 0) return null;
+  return (
+    <Section title="Meetings">
+      <MeetingList meetings={meetings} place="contact" />
+    </Section>
+  );
+}
+
 export function ContactView({ contact }: { contact: ContactDetail | null }) {
   const backHref = withQuery("/contacts", useSearchParams().toString());
+  const [editing, setEditing] = useState(false);
+  // An address picked in Details opens New Email to it.
+  const [email, setEmail] = useState({ open: false, to: "" });
 
   if (!contact) {
     return <EmptyState icon={Users} title="Contact Not Found" description="They may have been merged or deleted." action={<Button variant="outline" asChild><Link href="/contacts">Back to Contacts</Link></Button>} />;
   }
 
-  const details: { label: string; value: string; href?: string }[] = [
-    ...contact.emails.map((value) => ({ label: "Email", value })),
-    ...contact.phones.map((value) => ({ label: "Phone", value: formatPhone(value) })),
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text).then(
+      () => toast(`Copied ${text}`),
+      () => toast("Could not copy. Select it and copy it by hand."),
+    );
+  };
+
+  const details: { label: string; value: string; href?: string; onSelect?: () => void }[] = [
+    ...contact.emails.map((value) => ({ label: "Email", value, onSelect: () => setEmail({ open: true, to: value }) })),
+    ...contact.phones.map((value) => ({ label: "Phone", value: formatPhone(value), onSelect: () => copy(formatPhone(value)) })),
     ...(contact.organization
       ? [{ label: "Company", value: contact.organization.name, href: `/contacts/companies/${contact.organization.id}` }]
       : contact.company
@@ -80,10 +107,14 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
         <>
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <ContactAvatar contact={contact} className="size-10" />
-            <span className="truncate text-sm font-medium">{contact.name}</span>
+            <h1 className="truncate text-base font-medium">{contact.name}</h1>
           </div>
+          {/* On phones Edit moves into the More menu to leave room for the name. */}
+          <Button variant="outline" className="max-sm:hidden" onClick={() => setEditing(true)}>Edit</Button>
           <MessageButton contact={contact} />
-          <ContactMenu contact={contact} backHref={backHref} />
+          <ContactMenu contact={contact} backHref={backHref} onEdit={() => setEditing(true)} />
+          <EditContactDialog contact={contact} open={editing} onOpenChange={setEditing} />
+          <ComposeDialog open={email.open} onOpenChange={(open) => setEmail((e) => ({ ...e, open }))} to={email.to ? [email.to] : []} />
         </>
       }
     >
@@ -105,15 +136,11 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
         {contact.conversations.length === 0 ? (
           <p className="text-sm text-muted-foreground">No conversations yet.</p>
         ) : (
-          <div className="flex flex-col gap-2">
-            <Divided>
-              {contact.conversations.map((t) => (
-                <ListRow key={t.id} href={`/inbox/${t.id}`} title={t.title} at={t.lastAt} detail={t.preview ?? undefined} className="-mx-3 px-3 py-2" />
-              ))}
-            </Divided>
-          </div>
+          <ConversationRows items={contact.conversations} />
         )}
       </Section>
+
+      <ContactMeetings contactId={contact.id} />
 
       {contact.attachments.length > 0 && (
         <Section title="Attachments">

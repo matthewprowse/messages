@@ -4,33 +4,56 @@ Your voice comes in layers: what you said about yourself and style rules learned
 edits and choices (everyone); a note on how you write to this person and who they are (per person);
 and the conversation itself. Voice examples are how you answered the emails most like this one
 (found by embedding, public.similar_replies), then your own sent mail to this person and anyone.
-The reads before the model call run at once, so a draft waits about three round trips instead of nine.
+Everything before the model call is read in one call to public.draft_context, one round trip.
 
 The prompt puts what is the same for all your drafts first (who you are, your rules, saved examples,
 recent sent mail), then this person, then the conversation, and the tone, the decision picked with
 guided drafting's choices and the instruction last. Gemini
-bills a repeated start of a request at a tenth of the price, so asking again with another tone costs
-little more than the new lines.
+bills a repeated start of a request at a tenth of the price, but only past about 1,024 tokens, and a
+draft's prompt is about 1,100 in all (measured October 2026), so nothing is cached yet; the order is kept
+for when prompts grow. Tones are cheap another way: they adjust the text on the fast model.
 
 Up to MAX_RUNNING drafts are written at once, one at a time per conversation and oldest first, so the
 newest request is the one left as the live draft. The table is checked every POLL_IDLE_S, and every
-POLL_ACTIVE_S for a while after a draft was asked for, when another (a different tone) is likely."""
+POLL_ACTIVE_S for a while after a draft was asked for, when another (a different tone) is likely.
+
+A pre-draft (drafts.auto, asked for by the app with public.request_auto_draft while it is open) is
+written after the drafts people asked for, and dropped as 'expired' without asking the model when its
+message (for_message_id) is no longer the latest or has guided drafting choices: those need your
+decision first. A pre-draft that is replaced is expired, not discarded, so learning never reads a
+draft you did not see as one you threw away.
+
+A draft with tone 'edit' carries text you wrote yourself (drafts.source). It is not rewritten: the same
+prompt, ending with your text instead, asks for the fewest changes that fix it (EDIT_SYSTEM). Shorter,
+More Formal and More Casual with source are an adjustment of the text in your reply box (ADJUST_SYSTEM),
+so your own changes and every fact in it are kept. Both are revisions: they run on the fast model, and
+the draft they replace is 'revised', which learning does not read as a draft you threw away.
+
+A draft with audio_path was asked for by voice: the app sealed a recording of what you want the reply to
+say. It is heard in the same model call that writes the draft, what you said is kept as the draft's
+instruction (so another try or an adjustment works from text), and the recording is deleted.
+
+A draft with no thread_id is a new message, from New Email or New WhatsApp: account_id is the account it
+goes out from, contact_id who it is to when they are a contact. Its context comes from
+public.compose_context (you, your rules, facts and voice, and this person) and an email one gets a
+subject too."""
 
 from __future__ import annotations
 
+import json
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any
 
 from . import log
 from .embed import Embeddings, vector_literal
-from .fields import BODY, DRAFT, HTML, INSTRUCTION, SUBJECT
+from .fields import BODY, CHOICES, DRAFT, HTML, INSTRUCTION, NAME, NOTE, NOTE_TITLE, QUOTE, SUBJECT, TRANSCRIPT, VOICE_INSTRUCTION
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import not_in
 from .supabase import Supabase, in_list
-from .text import clean
+from .text import UNTRUSTED, clean
 from .vault import Vault
 
 SIMILAR_LIMIT = 3
@@ -41,10 +64,13 @@ VOICE_CHARS = 600
 MAX_VOICE = 6  # similar replies and voice examples together, unless this person's own emails add more
 RECENT_VOICE = 3  # recent sent emails in the part of the prompt that is the same for every draft
 TO_THEM_VOICE = 3
+FACT_CHARS = 1500  # of one note marked Use in Drafts
+FACTS_CHARS = 6000  # of them all, so a few long notes cannot crowd out the conversation
 MAX_ATTEMPTS = 3  # unexpected errors on one draft before it is failed instead of retried forever
 STALE_AFTER = timedelta(minutes=10)  # a draft still pending this long is failed, so the app never spins forever
 SWEEP_EVERY_S = 30  # how often drafts pending too long are looked for
 MAX_RUNNING = 4
+HEDGE_AFTER_S = 4.5  # past the model's p90 (about 3.3s on a draft): a second request is sent and the first answer used
 POLL_IDLE_S = 1.5
 POLL_ACTIVE_S = 0.5
 ACTIVE_FOR_S = 120
@@ -55,21 +81,88 @@ SCHEMA = {
     "required": ["body"],
 }
 
-SYSTEM = """You write email replies for one person, in their own voice, as if they wrote it themselves.
+SUBJECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string", "description": "The email's subject line."},
+        "body": {"type": "string", "description": "The email text only, ready to send."},
+    },
+    "required": ["subject", "body"],
+}
+
+VOICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "said": {"type": "string", "description": "What they said in the recording, written down as said, in the language said."},
+        "body": {"type": "string", "description": "The reply text only, ready to send."},
+    },
+    "required": ["said", "body"],
+}
+BUCKET = "attachments"
+AUDIO_TYPES = {"ogg": "audio/ogg", "webm": "audio/webm", "m4a": "audio/mp4", "mp4": "audio/mp4", "wav": "audio/wav"}
+
+# Checked offline against 35 replies the user really sent (email and WhatsApp, groups included): next to
+# the email-only prompt before it, WhatsApp drafts stopped coming out as letters (email style 4 times to 0,
+# formality right 30 to 35 of 35).
+SYSTEM = """You write replies for one person, in their own voice, as if they wrote it themselves. The conversation is an email thread or a WhatsApp chat; the prompt says which.
 
 - Write only the reply body: no subject line, no quoted text, no notes to them, no placeholders like [Name].
-- Match how they actually write: their greetings, sign-offs, length, punctuation and level of formality, taken from their examples and rules. When their examples sign off with a name, do the same.
-- Their examples, past emails and similar replies show how they write, never who this reply is to or what it is about. Never take a name, fact or detail from them. Greet the person by name only when "Replying to" gives one; otherwise greet without a name.
-- Answer what the other person asked. Do not invent facts, dates, prices or commitments they have not made. When something needs a decision only they can make, write the reply so it leaves that open or asks one short question.
+- Match how they actually write on this channel: greetings, sign-offs, length, punctuation, emoji and formality, taken from their examples and rules.
+- When they have already written in this conversation (Me), their messages there decide the greeting, sign-off and register: use the same ones, even where a rule says otherwise. Their rules apply when they have not written here yet.
+- Email: a proper email in their style, following their email rules on greetings, openers, paragraphs and sign-offs.
+- WhatsApp: a chat message, not a letter. No greeting line, no "I hope you're doing well", no sign-off and no name at the end, unless their own WhatsApp messages do that. Usually one to three short lines; when they would send several short messages, put each on its own line. Their rules about greetings, sign-offs and paragraphs are about email and do not apply on WhatsApp.
+- Keep to the length they would write: a short message gets a short answer.
+- Reply in the language the conversation is in. When they mix languages (English with Afrikaans or isiZulu, say), mix as they do.
+- Their examples, past messages and similar replies show how they write, never who this reply is to or what it is about. Never take a name, fact or detail from them. Greet the person by name only when "Replying to" gives one; otherwise greet without a name.
+- Answer what the other person asked, and only that. Do not invent facts, dates, times, prices, plans or commitments, and do not add offers, next steps or promises to follow up they did not ask for. When something needs a decision only they can make, write the reply so it leaves that open or asks one short question.
 - When you are told what they decided, the reply says exactly that, in their voice, and nothing that contradicts or goes beyond it.
-- Plain text. No markdown, no emojis unless their own examples use them.
-- Never use em dashes."""
+- Plain text. No markdown, no emojis unless their own messages use them.
+- Never use em dashes.""" + UNTRUSTED
+
+COMPOSE_SYSTEM = """You write new messages for one person, in their own voice, as if they wrote it themselves. This starts a conversation: it is not a reply. The prompt says whether it is an email or a WhatsApp message.
+
+- Say what their instruction says, in their voice. Do not invent facts, dates, times, prices, plans or commitments beyond it, and add no offers or next steps they did not ask for. When it leaves something open, leave it open.
+- Match how they actually write on this channel: greetings, sign-offs, length, punctuation, emoji and formality, taken from their examples and rules.
+- Email: a proper email in their style, and a subject: short, specific, in plain words, no "Re:" and no full stop.
+- WhatsApp: a chat message, not a letter. No greeting line or sign-off unless their own WhatsApp messages have them.
+- Their examples and past messages show how they write, never what this message is about. Never take a name, fact or detail from them. Greet the person by name only when "Writing to" gives one.
+- Write in the language of their instruction, unless it says otherwise.
+- Plain text. No markdown, no emojis unless their own messages use them, no placeholders like [Name].
+- Never use em dashes.""" + UNTRUSTED
+
+EDIT_SYSTEM = """You edit a message one person wrote themselves, before they send it. They want their own message back, lightly corrected, never rewritten.
+
+- Fix spelling, grammar, punctuation and phrasing that is wrong or hard to follow. Change nothing else.
+- Keep their words, sentence order, paragraphs, line breaks, length, greeting and sign-off. A sentence that is already fine stays exactly as written.
+- Keep their voice and level of formality, as their examples and rules show it. Do not make it more polished or formal than they write.
+- Never add anything: no new sentences, facts, offers, questions, pleasantries or sign-off. Never drop anything they said.
+- Use the conversation and the details about this person only to check what they refer to, such as the spelling of a name.
+- Never translate or anglicise. Afrikaans, isiZulu, isiXhosa, mixed languages, South African slang and chat shorthand (ja, lekker, now now, shot, tx) are correct as written.
+- When they give an instruction for the edit, apply only that, still changing as little as possible.
+- When the message needs no changes, return it exactly as it is.
+- Plain text. No markdown. Never use em dashes.""" + UNTRUSTED
+
+ADJUST_SYSTEM = """You adjust a reply one person is about to send, in their own voice. They asked for one change, given as "Change:". Make that change and nothing else.
+
+- Keep every fact, date, time, price, name, commitment and question in it. Add none.
+- Shorter means fewer words for the same message. More formal or more casual means the same message in another register, still clearly them.
+- Keep their greeting, sign-off and punctuation habits, as their text, examples and rules show them, unless the change itself needs them different.
+- When they also give an instruction, follow it.
+- Plain text. No markdown, no emojis unless their own text or examples use them. Never use em dashes.""" + UNTRUSTED
 
 TONES = {
     "default": "Their usual voice for this person.",
     "shorter": "Shorter than they would usually write: just what is needed.",
     "formal": "More formal than usual, still clearly them.",
     "casual": "More casual and relaxed than usual, still clearly them.",
+}
+
+# The same tones as a change to text that is already there. "Shorter" alone made the fast model cut the
+# greeting, the thanks and the sign-off along with the padding.
+ADJUSTMENTS = {
+    "shorter": "Shorter: the same message in fewer words. Cut repetition and padding; keep the greeting, the sign-off and every point.",
+    "formal": "More formal: the same message, more formal in wording, greeting and sign-off, still clearly them.",
+    "casual": "More casual: the same message, more relaxed in wording, greeting and sign-off, still clearly them.",
 }
 
 
@@ -91,19 +184,33 @@ def build_prompt(
     tone: str,
     instruction: str | None,
     decision: str | None = None,
+    edit: str | None = None,
+    spoken: bool = False,
+    channel: str = "email",
+    group_name: str = "",
+    subject: str = "",
+    last_from_me: bool = False,
+    facts: list[tuple[str, str]] | None = None,
+    compose: bool = False,
 ) -> str:
-    """You first (the same for every draft, so Gemini can bill it at the cached rate), then this person,
-    then the conversation, and what you asked for last."""
+    """You first (the same for every draft on this channel, so Gemini can bill it at the cached rate), then
+    this person, then the conversation, and what you asked for last. With edit, the end is your own text
+    to correct."""
+    medium = "WhatsApp" if channel == "whatsapp" else "email"
+    noun = "messages" if channel == "whatsapp" else "emails"
     lines = [f"You are writing as: {me or 'the user'}", f"About them: {about or 'not given'}"]
     if rules:
         lines += ["", "Rules learned from their sent mail and how they edit drafts:"] + [f"- {r}" for r in rules]
+    if facts:
+        lines += ["", "Facts they keep for replies (use one only when the reply needs it, and quote figures exactly):"]
+        lines += [f"[{title or 'Note'}]\n{body}\n" for title, body in facts]
     if examples:
         lines += ["", "Examples they saved:"] + [f"[{situation}]\n{body}\n" for situation, body in examples]
     if recent:
-        lines += ["", "Their own recent sent emails (for voice, not content):"] + [f"---\n{v}" for v in recent]
+        lines += ["", f"Their own recent sent {medium} {noun} (for voice, not content):"] + [f"---\n{v}" for v in recent]
     # With no name, the model would fill a "Hi [Name]" rule with a name from the examples, so it is told.
     replying = them or "someone whose name is not known. Greet them without a name, for example 'Hi,'"
-    lines += ["", f"Replying to: {replying}", f"Relationship: {relationship or 'unknown'}"]
+    lines += ["", f"{'Writing to' if compose else 'Replying to'}: {replying}", f"Relationship: {relationship or 'unknown'}"]
     if who_they_are:
         lines.append(f"Who this person is: {who_they_are}")
     if style_note:
@@ -111,18 +218,67 @@ def build_prompt(
     if person_rules:
         lines += ["", "Rules for writing to this person:"] + [f"- {r}" for r in person_rules]
     if more_voice:
-        lines += ["", "More of their own sent emails, to this person first (for voice, not content):"] + [f"---\n{v}" for v in more_voice]
+        lines += ["", f"More of their own sent {medium} {noun}, to this person first (for voice, not content):"] + [f"---\n{v}" for v in more_voice]
     if similar:
-        lines += ["", "How they answered similar emails before (for voice and approach, not facts):"]
+        lines += ["", "How they answered similar messages before (for voice and approach, not facts):"]
         lines += [f"--- They received:\n{inbound}\n--- They replied:\n{reply}" for inbound, reply in similar]
-    lines += ["", "The conversation, oldest first:"] + [f"--- {who}:\n{text}" for who, text in conversation]
+    where = f"WhatsApp group chat: {group_name}" if group_name else ("WhatsApp chat" if channel == "whatsapp" else "Email")
+    lines += ["", f"Channel: {where}"]
+    if subject and channel != "whatsapp":
+        lines.append(f"Subject: {subject}")
+    if compose:
+        lines.append(f"A new {medium} message, not a reply: there is no conversation yet.")
+    else:
+        lines += ["", "The conversation, oldest first (Me is them):"] + [f"--- {who}:\n{text}" for who, text in conversation]
+    if edit is not None and is_adjust(tone):
+        lines += ["", "The reply they have now, to adjust:", f"---\n{edit}\n---", f"Change: {ADJUSTMENTS[tone]}"]
+        if instruction:
+            lines.append(f"Their instruction for this reply: {instruction}")
+        lines.append("\nReturn the reply with only that change.")
+        return "\n".join(lines)
+    if edit is not None:
+        lines += ["", "The reply they wrote themselves, to edit:", f"---\n{edit}\n---"]
+        if instruction:
+            lines.append(f"Their instruction for this edit: {instruction}")
+        lines.append("\nReturn their reply with only the light edits it needs.")
+        return "\n".join(lines)
     lines += ["", f"Tone: {TONES.get(tone, TONES['default'])}"]
     if decision:
         lines.append(f"What they decided to say: {decision}")
     if instruction:
         lines.append(f"Their instruction for this reply: {instruction}")
-    lines.append("\nWrite their reply to the last message.")
+    if spoken:
+        lines.append("What they want this reply to say is in their recording, in their own words; it may be rough or rambling. Follow it, and write down what they said.")
+    if compose:
+        to = f" to {them}" if them else ""
+        lines.append(f"\nWrite their new {medium} message{to}" + (", with its subject." if channel != "whatsapp" else "."))
+    elif last_from_me:
+        # Asked to reply to "the last message", the model answered their own message back to them.
+        lines.append(f"\nThe last message is their own. Write the next {medium} message they would send: a short follow-up that adds to what they said, never a reply to themselves.")
+    else:
+        sender = conversation[-1][0] if conversation and conversation[-1][0] not in ("Them", "Me") else "the other person"
+        lines.append(f"\nWrite their {medium} reply to the latest message from {sender}.")
     return "\n".join(lines)
+
+
+def schema_for(*, voice: bool, subject: bool) -> dict[str, Any]:
+    """The answer's shape: the text, with what was said in a recording, and an email's subject."""
+    if not voice and not subject:
+        return SCHEMA
+    props = dict((SUBJECT_SCHEMA if subject else SCHEMA)["properties"])
+    if voice:
+        props = {"said": VOICE_SCHEMA["properties"]["said"], **props}
+    return {"type": "object", "properties": props, "required": list(props)}
+
+
+def is_adjust(tone: str | None) -> bool:
+    """Shorter, More Formal or More Casual: with source, a change to the text in the reply box."""
+    return tone in ADJUSTMENTS
+
+
+def revises(d: dict[str, Any]) -> bool:
+    """An edit or adjustment of the text in your reply box, rather than a draft written afresh."""
+    return bool((d.get("source") or "").strip()) and (d.get("tone") == "edit" or is_adjust(d.get("tone")))
 
 
 def pick_drafts(pending: list[dict[str, Any]], running: dict[str, str], room: int) -> list[dict[str, Any]]:
@@ -133,22 +289,25 @@ def pick_drafts(pending: list[dict[str, Any]], running: dict[str, str], room: in
     for d in pending:
         if len(picked) >= room:
             break
-        if d["id"] in running or d["thread_id"] in busy:
+        if d["id"] in running or (d["thread_id"] or d["id"]) in busy:
             continue
-        busy.add(d["thread_id"])
+        busy.add(d["thread_id"] or d["id"])  # a new message has no conversation: it is its own
         picked.append(d)
     return picked
 
 
 class Drafts:
-    def __init__(self, db: Supabase, gemini: Gemini, model: str, embeddings: Embeddings | None = None, vault: Vault | None = None):
+    def __init__(
+        self, db: Supabase, gemini: Gemini, model: str, embeddings: Embeddings | None = None, vault: Vault | None = None, fast_model: str | None = None
+    ):
         self.db = db
         self.gemini = gemini
         self.model = model
+        self.fast_model = fast_model or model  # edits and adjustments: a small change to text that is already there
         self.embeddings = embeddings
         self.vault = vault or Vault(db)  # without one, plaintext passes through and nothing is encrypted
-        self._pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="draft-read")
         self._runner = ThreadPoolExecutor(max_workers=MAX_RUNNING, thread_name_prefix="draft")
+        self._calls = ThreadPoolExecutor(max_workers=MAX_RUNNING * 2, thread_name_prefix="draft-call")
         self._lock = threading.Lock()
         self._running: dict[str, str] = {}  # draft id -> thread id, while it is being written
         self._attempts: dict[str, int] = {}
@@ -171,6 +330,12 @@ class Drafts:
                 {"status": "failed", "error": "The draft took too long. Try again.", "updated_at": _now()},
                 minimal=True,
             )
+            # Recordings are kept only until their draft is written: one whose draft never was goes too.
+            left = self.db.select("drafts", {"select": "id,status,audio_path", "status": "neq.pending", "audio_path": "not.is.null", "limit": "50"})
+            left = [r for r in left if r.get("audio_path") and r.get("status") != "pending"]
+            if left:
+                self.db.remove_files(BUCKET, [r["audio_path"] for r in left])
+                self.db.update("drafts", {"id": in_list([r["id"] for r in left])}, {"audio_path": None}, minimal=True)
         with self._lock:
             running = dict(self._running)
         if len(running) >= MAX_RUNNING:
@@ -178,9 +343,9 @@ class Drafts:
         pending = self.db.select(
             "drafts",
             {
-                "select": "id,user_id,thread_id,tone,instruction,decision",
+                "select": "id,user_id,thread_id,account_id,contact_id,tone,instruction,decision,source,auto,for_message_id,audio_path",
                 "status": "eq.pending",
-                "order": "created_at",
+                "order": "auto,created_at",  # drafts people asked for first, then pre-drafts
                 "limit": str(MAX_RUNNING * 2),
                 **not_in(list(running)),
             },
@@ -188,11 +353,14 @@ class Drafts:
         if pending:
             self._active_until = time.monotonic() + ACTIVE_FOR_S
         for d in pending:
-            self.vault.open_row(d["user_id"], d, [("instruction", INSTRUCTION), ("decision", INSTRUCTION)])
+            self.vault.open_row(d["user_id"], d, [("instruction", INSTRUCTION), ("decision", INSTRUCTION), ("source", DRAFT)])
         started = pick_drafts(pending, running, MAX_RUNNING - len(running))
+        warm = getattr(self.gemini, "warm", None)
+        if started and warm:  # the connection is ready by the time draft_context has been read
+            threading.Thread(target=warm, args=(self.fast_model if all(revises(d) for d in started) else self.model,), daemon=True).start()
         for d in started:
             with self._lock:
-                self._running[d["id"]] = d["thread_id"]
+                self._running[d["id"]] = d["thread_id"] or d["id"]
             self._runner.submit(self._run, d)
         return len(started)
 
@@ -204,7 +372,7 @@ class Drafts:
             # A database or network error mid-draft: the next check tries again, a couple of times, then stops.
             attempts = self._attempts.get(d["id"], 0) + 1
             self._attempts[d["id"]] = attempts
-            log.warn("draft error", draft=d["id"], attempts=attempts, code=getattr(err, "code", None) or type(err).__name__)
+            log.warn("draft error", draft=d["id"], attempts=attempts, code=log.code_of(err))
             if attempts >= MAX_ATTEMPTS:
                 self._attempts.pop(d["id"], None)
                 try:
@@ -219,193 +387,309 @@ class Drafts:
     def _fail(self, d: dict[str, Any], reason: str) -> None:
         self.db.update("drafts", {"id": f"eq.{d['id']}"}, {"status": "failed", "error": reason, "updated_at": _now()}, minimal=True)
 
-    def _all(self, calls: dict[str, Callable[[], Any]]) -> dict[str, Any]:
-        """Runs independent reads at once: each is a Supabase round trip of about a quarter second."""
-        futures = {name: self._pool.submit(fn) for name, fn in calls.items()}
-        return {name: f.result() for name, f in futures.items()}
+    def _expire(self, d: dict[str, Any]) -> None:
+        self.db.update("drafts", {"id": f"eq.{d['id']}", "status": "eq.pending"}, {"status": "expired", "updated_at": _now()}, minimal=True)
 
-    def _gather(self, d: dict[str, Any]) -> dict[str, Any] | str:
-        """Everything the prompt needs, or the reason the draft cannot be written. Reads only."""
+    def _gather(self, d: dict[str, Any]) -> dict[str, Any] | str | None:
+        """Everything the prompt needs, the reason the draft cannot be written, or None for a pre-draft
+        that is no longer wanted. Reads only: one call to public.draft_context, plus an embedding and a
+        search when the email has no vector yet."""
         user = d["user_id"]
-        first = self._all(
-            {
-                "thread": lambda: self.db.first("threads", {"select": "id,user_id,account_id,subject", "id": f"eq.{d['thread_id']}"}),
-                # Scoped by user as well, so nothing from someone else's thread is ever fetched.
-                "messages": lambda: self.db.select(
-                    "messages",
-                    {
-                        "select": "id,direction,sender_contact_id,body_text,body_html,subject,sent_at",
-                        "thread_id": f"eq.{d['thread_id']}",
-                        "user_id": f"eq.{user}",
-                        "order": "sent_at.desc",
-                        "limit": "12",
-                    },
-                ),
-                "profile": lambda: self.db.first("profiles", {"select": "display_name,about", "user_id": f"eq.{user}"}),
-                "rules": lambda: self.db.select(
-                    "style_rules",
-                    {
-                        "select": "rule,scope,contact_id",
-                        "user_id": f"eq.{user}",
-                        "enabled": "eq.true",
-                        "order": "support_count.desc,id",  # a stable order keeps the start of the prompt the same
-                        "limit": "40",
-                    },
-                ),
-                "examples": lambda: self.db.select(
-                    "writing_examples", {"select": "situation,body", "user_id": f"eq.{user}", "order": "created_at,id", "limit": "5"}
-                ),
-                "recent": lambda: self.db.select(
-                    "messages",
-                    {"select": "body_text,body_html", "user_id": f"eq.{user}", "direction": "eq.outbound", "order": "sent_at.desc,id", "limit": "8"},
-                ),
-            }
-        )
-        thread = first["thread"]
+        first = self.db.rpc("draft_context", {"p_user": user, "p_thread": d["thread_id"]}) or {}
+        thread = first.get("thread")
         # The draft row is the user's; the thread must be theirs too, or nothing read is used.
         if not thread or thread["user_id"] != user:
             return "This conversation could not be found."
         # Opened before anything reads them, the embedding of latest_in for similar replies included.
-        self.vault.open_row(user, thread, [("subject", SUBJECT)])
+        self.vault.open_row(user, thread, [("subject", SUBJECT), ("group_name", NAME)])
         for m in first["messages"]:
-            self.vault.open_row(user, m, [("subject", SUBJECT), ("body_text", BODY), ("body_html", HTML)])
-        for m in first["recent"]:
+            self.vault.open_row(user, m, [("subject", SUBJECT), ("body_text", BODY), ("body_html", HTML), ("transcript", TRANSCRIPT)])
+            if isinstance(m.get("quoted"), dict):
+                m["quoted"]["text"] = self.vault.open(user, QUOTE, m["quoted"].get("text"))
+            if m.get("transcript"):  # a voice note is read as what was said in it
+                m["body_text"] = f"(Voice note) {m['transcript']}\n\n{m.get('body_text') or ''}".strip()
+                m["body_html"] = None
+        for m in first["recent"] + (first.get("to_them") or []):
             self.vault.open_row(user, m, [("body_text", BODY), ("body_html", HTML)])
+        if d.get("auto") and stale(d, first["messages"], self.vault.open(user, CHOICES, first.get("choices"))):
+            return None
         messages = first["messages"][::-1]
+        edit = (d.get("source") or "").strip() if d.get("tone") == "edit" or (is_adjust(d.get("tone")) and d.get("source") is not None) else None
+        if edit == "":
+            return "There is nothing to edit yet."
         if not messages:
             return "There is nothing to reply to yet."
 
-        profile = first["profile"] or {}
-        contact_id = next((m["sender_contact_id"] for m in reversed(messages) if m["direction"] == "inbound" and m["sender_contact_id"]), None)
+        contact = first.get("contact") or {}
         latest_in = next((m for m in reversed(messages) if m["direction"] == "inbound"), None)
-        calls: dict[str, Callable[[], Any]] = {"similar": lambda: self._similar(user, thread, latest_in)}
-        if contact_id:
-            calls["contact"] = lambda: self.db.first(
-                "contacts",
-                {
-                    "select": "id,display_name,relationship,style_note,ai_summary,organizations(name,summary)",
-                    "id": f"eq.{contact_id}",
-                    "user_id": f"eq.{user}",
-                },
-            )
-            calls["to_them"] = lambda: self._sent_to(user, contact_id, thread["id"])
-        second = {"contact": None, "to_them": [], **self._all(calls)}
-        contact = second["contact"] or {}
-        org = contact.get("organizations") or {}
-        similar = second["similar"]
-        names = {contact.get("id"): contact.get("display_name")} if contact else {}
-
-        global_rules = [r["rule"] for r in first["rules"] if r["scope"] == "global"][:20]
-        person_rules = [r["rule"] for r in first["rules"] if contact_id and r["scope"] == "contact" and r.get("contact_id") == contact_id][:10]
-        examples = [(e["situation"], e["body"]) for e in first["examples"]]
-        recent = pick_voice([], first["recent"], limit=RECENT_VOICE)
-        more = pick_more_voice(second["to_them"], first["recent"], shown=recent, similar=similar)
+        similar = self._similar(user, thread, latest_in, first.get("similar"))
+        names = {cid: self.vault.open(user, NAME, name) for cid, name in (first.get("senders") or {}).items()}
+        if contact:
+            names.setdefault(contact.get("id"), contact.get("display_name"))
 
         conversation = []
         for m in messages:
             who = "Them" if m["direction"] == "inbound" else "Me"
             if m["direction"] == "inbound" and m.get("sender_contact_id") in names:
                 who = names[m["sender_contact_id"]] or "Them"
-            conversation.append((who, clean(m.get("body_text"), m.get("body_html"), limit=1500)))
+            conversation.append((who, describe(m)))
 
         return {
             "thread": thread,
             "prompt": build_prompt(
-                me=profile.get("display_name") or "",
-                about=profile.get("about") or "",
-                rules=global_rules,
-                examples=examples,
-                recent=recent,
-                them=contact.get("display_name") or "",
-                relationship=contact.get("relationship") or "",
-                style_note=contact.get("style_note") or "",
-                who_they_are=contact.get("ai_summary") or (f"{org['name']}: {org['summary']}" if org.get("summary") else ""),
-                person_rules=person_rules,
-                more_voice=more,
-                similar=similar,
+                **self._you(user, first, similar),
                 conversation=conversation,
                 tone=d.get("tone") or "default",
                 instruction=d.get("instruction"),
                 decision=d.get("decision"),
+                edit=edit,
+                spoken=bool(d.get("audio_path")) and edit is None,
+                channel=thread.get("channel") or "email",
+                group_name=(thread.get("group_name") or "WhatsApp group") if thread.get("is_group") else "",
+                subject=thread.get("subject") or "",
+                last_from_me=messages[-1]["direction"] == "outbound",
             ),
+            "edit": edit is not None,
+        }
+
+    def _you(self, user: str, first: dict[str, Any], similar: list[tuple[str, str]]) -> dict[str, Any]:
+        """The parts of the prompt about you and the person, from draft_context or compose_context."""
+        profile = first.get("profile") or {}
+        contact = first.get("contact") or {}
+        contact_id = contact.get("id")
+        org = contact.get("organizations") or {}
+        recent = pick_voice([], first["recent"], limit=RECENT_VOICE)
+        return {
+            "me": profile.get("display_name") or "",
+            "about": profile.get("about") or "",
+            "rules": [r["rule"] for r in first["rules"] if r["scope"] == "global"][:20],
+            "examples": [(e["situation"], e["body"]) for e in first["examples"]],
+            "recent": recent,
+            "facts": pick_facts([(self.vault.open(user, NOTE_TITLE, f.get("title")) or "", self.vault.open(user, NOTE, f.get("body")) or "") for f in first.get("facts") or []]),
+            "them": self.vault.open(user, NAME, contact.get("display_name")) or "",
+            "relationship": contact.get("relationship") or "",
+            "style_note": contact.get("style_note") or "",
+            "who_they_are": contact.get("ai_summary") or (f"{org['name']}: {org['summary']}" if org.get("summary") else ""),
+            "person_rules": [r["rule"] for r in first["rules"] if contact_id and r["scope"] == "contact" and r.get("contact_id") == contact_id][:10],
+            "more_voice": pick_more_voice(first.get("to_them") or [], first["recent"], shown=recent, similar=similar),
+            "similar": similar,
+        }
+
+    def _gather_compose(self, d: dict[str, Any]) -> dict[str, Any] | str:
+        """A new message's prompt, from public.compose_context: no conversation, so no similar replies."""
+        user = d["user_id"]
+        first = self.db.rpc("compose_context", {"p_user": user, "p_account": d.get("account_id"), "p_contact": d.get("contact_id")}) or {}
+        account = first.get("account")
+        if not account or account["user_id"] != user:
+            return "This account could not be found."
+        for m in first["recent"] + (first.get("to_them") or []):
+            self.vault.open_row(user, m, [("body_text", BODY), ("body_html", HTML)])
+        edit = (d.get("source") or "").strip() if d.get("tone") == "edit" or (is_adjust(d.get("tone")) and d.get("source") is not None) else None
+        if edit == "":
+            return "There is nothing to edit yet."
+        if edit is None and not (d.get("instruction") or "").strip() and not d.get("audio_path"):
+            return "Say what the message should say first."
+        channel = account.get("channel") or "email"
+        return {
+            "thread": {"id": None, "account_id": account["id"]},
+            "prompt": build_prompt(
+                **self._you(user, first, []),
+                conversation=[],
+                tone=d.get("tone") or "default",
+                instruction=d.get("instruction"),
+                edit=edit,
+                spoken=bool(d.get("audio_path")) and edit is None,
+                channel=channel,
+                compose=True,
+            ),
+            "edit": edit is not None,
+            "subject": channel == "email" and edit is None,
         }
 
     def _draft(self, d: dict[str, Any]) -> None:
-        gathered = self._gather(d)
+        try:
+            self._write(d)
+        finally:
+            if d.get("audio_path"):  # heard or not, a recording is not kept once its draft is done
+                self.db.remove_files(BUCKET, [d["audio_path"]])
+                self.db.update("drafts", {"id": f"eq.{d['id']}"}, {"audio_path": None}, minimal=True)
+
+    def _recording(self, d: dict[str, Any]) -> tuple[bytes, str] | None:
+        """The recording of what the draft should say, opened, with its type; None if it cannot be read."""
+        try:
+            data = self.vault.open_bytes(d["user_id"], VOICE_INSTRUCTION, self.db.download(BUCKET, d["audio_path"]))
+        except Exception as err:
+            log.warn("draft recording unavailable", draft=d["id"], code=log.code_of(err))
+            return None
+        ext = d["audio_path"].rsplit(".", 1)[-1].lower()
+        return (data, AUDIO_TYPES.get(ext, "audio/webm")) if data else None
+
+    def _write(self, d: dict[str, Any]) -> None:
+        gathered = self._gather(d) if d.get("thread_id") else self._gather_compose(d)
+        if gathered is None:
+            self._expire(d)
+            log.info("pre-draft dropped", draft=d["id"])
+            return
         if isinstance(gathered, str):
             self._fail(d, gathered)
             return
-        thread, prompt = gathered["thread"], gathered["prompt"]
+        thread, prompt, edit, subject = gathered["thread"], gathered["prompt"], gathered["edit"], gathered.get("subject", False)
+        compose = thread["id"] is None
+        adjust = edit and is_adjust(d.get("tone"))
+        model = self.fast_model if edit else self.model
+        audio = self._recording(d) if d.get("audio_path") and not edit else None
+        if d.get("audio_path") and not edit and audio is None:
+            self._fail(d, "The recording could not be read. Try again.")
+            return
         try:
-            result = self.gemini.json(
-                self.model,
-                SYSTEM,
+            result = self._hedged(lambda: self.gemini.json(
+                model,
+                ADJUST_SYSTEM if adjust else EDIT_SYSTEM if edit else COMPOSE_SYSTEM if compose else SYSTEM,
                 prompt,
-                SCHEMA,
+                schema_for(voice=audio is not None, subject=subject),
                 UsageContext(d["user_id"], "draft", thread["account_id"], thread["id"]),
-                temperature=0.6,
-                thinking="low",
+                temperature=0.4 if adjust else 0.2 if edit else 0.6,  # an edit should come back the same way each time
+                # On low the fast model let typos in all-lowercase text through; medium caught them in 2 to 5s,
+                # where the full model took 2 to 17s.
+                thinking="medium" if edit and not adjust else "low",
                 attempts=3,  # someone is waiting: fail and let them try again rather than wait minutes
                 timeout=60,
-            )
+                audio=audio,
+            ), hedge=audio is None)
         except GeminiError as err:
             log.warn("draft failed", draft=d["id"], status=err.status)
             self._fail(d, "The draft could not be written. Try again.")
             return
 
         body = (result.get("body") or "").replace("—", ", ").replace("–", "-").strip()
+        if edit:
+            body = keep_quotes(d.get("source") or "", body)
         if not body:
             self._fail(d, "The draft came back empty. Try again.")
             return
-        written = self.db.update(
-            "drafts",
-            {"id": f"eq.{d['id']}", "status": "eq.pending"},
-            {"body": self.vault.seal(d["user_id"], DRAFT, body), "status": "active", "model": self.model, "error": None, "updated_at": _now()},
-        )
+        done: dict[str, Any] = {"body": self.vault.seal(d["user_id"], DRAFT, body), "status": "active", "model": model, "error": None, "updated_at": _now()}
+        title = (result.get("subject") or "").replace("\n", " ").replace("—", ", ").strip()[:200] if subject else ""
+        if title:
+            done["subject"] = self.vault.seal(d["user_id"], SUBJECT, title)
+        said = (result.get("said") or "").strip() if audio else ""
+        if said:  # what you said becomes the instruction, so the app shows it and another try reuses it
+            done["instruction"] = self.vault.seal(d["user_id"], INSTRUCTION, said[:1000])
+        written = self.db.update("drafts", {"id": f"eq.{d['id']}", "status": "eq.pending"}, done)
         if not written:
             # The app gave up waiting and withdrew it, so the draft it already shows (if any) stays.
             log.info("draft withdrawn", draft=d["id"])
             return
-        # One live draft per conversation: older ones are replaced.
+        if compose:  # a new message has no conversation, and the dialog keeps its own draft
+            log.info("draft written", draft=d["id"])
+            return
+        # One live draft per conversation: older ones are replaced. One you asked for again was turned
+        # down; one a pre-draft replaces answered an older message, and is only out of date; one you
+        # edited or adjusted was kept and worked on.
         self.db.update(
             "drafts",
             {"thread_id": f"eq.{thread['id']}", "status": "eq.active", "id": f"neq.{d['id']}"},
-            {"status": "discarded", "updated_at": _now()},
+            {"status": "expired" if d.get("auto") else "revised" if revises(d) else "discarded", "updated_at": _now()},
             minimal=True,
         )
         log.info("draft written", draft=d["id"])
 
-    def _similar(self, user: str, thread: dict[str, Any], latest_in: dict[str, Any] | None) -> list[tuple[str, str]]:
-        """How you answered the emails most like the one being answered, from other conversations.
-        Never fails the draft: without embeddings it returns nothing and the recent mail is used."""
-        if not latest_in or not latest_in.get("id") or self.embeddings is None:
-            return []
-        try:
-            vector = self.embeddings.stored(latest_in["id"], user)
-            if not vector:
-                values = self.embeddings.for_message(latest_in, user, thread.get("account_id"), thread["id"])
-                if values is None:
-                    return []
-                vector = vector_literal(values)
-            rows = self.db.rpc("similar_replies", {"p_user": user, "p_embedding": vector, "p_limit": SIMILAR_LIMIT * 2, "p_exclude_thread": thread["id"]}) or []
-        except Exception as err:
-            log.warn("similar replies unavailable", thread=thread["id"], code=getattr(err, "code", None) or type(err).__name__)
-            return []
+    def _hedged(self, call: Any, *, hedge: bool = True) -> dict[str, Any]:
+        """call(), and when it has not answered after HEDGE_AFTER_S, the same call again: whichever answers
+        first is used. A slow model call (8 to 10s were seen against a usual 2.6s) then costs a few seconds
+        instead of the whole wait. The slower one still finishes and is billed, about one draft in ten."""
+        first: Future = self._calls.submit(call)
+        if not hedge:
+            return first.result()
+        done, _ = wait([first], timeout=HEDGE_AFTER_S)
+        if done:
+            return first.result()
+        second: Future = self._calls.submit(call)
+        racing = {first, second}
+        while racing:
+            done, racing = wait(racing, return_when=FIRST_COMPLETED)
+            for f in done:
+                if f.exception() is None:
+                    return f.result()
+        return first.result()  # both failed: the first one's error
+
+    def _similar(self, user: str, thread: dict[str, Any], latest_in: dict[str, Any] | None, rows: list[dict[str, Any]] | None) -> list[tuple[str, str]]:
+        """How you answered the emails most like the one being answered, from other conversations. rows
+        are what draft_context found with the email's stored vector; None when it has none yet (mail is
+        embedded once answered), so it is embedded now and searched with here."""
+        if rows is None:
+            rows = self._search(user, thread, latest_in)
         for r in rows:  # both texts are messages.body_text, so both open as BODY
             self.vault.open_row(user, r, [("inbound_subject", SUBJECT), ("inbound_text", BODY), ("reply_text", BODY)])
         return pick_similar(rows, thread["id"])
 
-    def _sent_to(self, user: str, contact_id: str, skip_thread: str) -> list[dict[str, Any]]:
-        """Their latest sent emails in other conversations with this person."""
-        threads = self.db.select("thread_participants", {"select": "thread_id", "contact_id": f"eq.{contact_id}", "limit": "30"})
-        ids = [t["thread_id"] for t in threads if t["thread_id"] != skip_thread]
-        if not ids:
+    def _search(self, user: str, thread: dict[str, Any], latest_in: dict[str, Any] | None) -> list[dict[str, Any]]:
+        """similar_replies for an email with no stored vector. Never fails the draft: without embeddings
+        it returns nothing and the recent mail is used."""
+        if not latest_in or not latest_in.get("id") or self.embeddings is None:
             return []
-        rows = self.db.select(
-            "messages",
-            {"select": "body_text,body_html", "thread_id": in_list(ids), "direction": "eq.outbound", "order": "sent_at.desc", "limit": "3"},
-        )
-        return [self.vault.open_row(user, m, [("body_text", BODY), ("body_html", HTML)]) for m in rows]
+        try:
+            values = self.embeddings.for_message(latest_in, user, thread.get("account_id"), thread["id"])
+            if values is None:
+                return []
+            return self.db.rpc("similar_replies", {"p_user": user, "p_embedding": vector_literal(values), "p_limit": SIMILAR_LIMIT * 2, "p_exclude_thread": thread["id"]}) or []
+        except Exception as err:
+            log.warn("similar replies unavailable", thread=thread["id"], code=log.code_of(err))
+            return []
+
+
+def pick_facts(notes: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Notes marked Use in Drafts as (title, text), in the order given, each cut to FACT_CHARS and all to
+    FACTS_CHARS. Empty notes are left out."""
+    out: list[tuple[str, str]] = []
+    room = FACTS_CHARS
+    for title, body in notes:
+        body = body.strip()[:FACT_CHARS]
+        if not body or room <= 0:
+            continue
+        body = body[:room]
+        room -= len(body)
+        out.append((title.strip(), body))
+    return out
+
+
+MEDIA = {"imageMessage": "photo", "videoMessage": "video", "stickerMessage": "sticker", "audioMessage": "voice note", "documentMessage": "document"}
+
+
+def describe(m: dict[str, Any]) -> str:
+    """A message as the prompt shows it: what it carries (attachments, media) and what it quotes, then its
+    text. Without these a draft answered "here's the file" as if nothing was attached."""
+    text = clean(m.get("body_text"), m.get("body_html"), limit=1500)
+    extra = []
+    files = [f for f in m.get("files") or [] if f]
+    if files:
+        extra.append("attached: " + ", ".join(files[:5]))
+    elif m.get("media") and not m.get("transcript"):
+        extra.append(MEDIA.get(m["media"], "file"))
+    quoted = m.get("quoted") if isinstance(m.get("quoted"), dict) else {}
+    if (quoted.get("text") or "").strip():
+        whose = "their own" if quoted.get("from_me") else "the"
+        extra.append(f"replying to {whose} message: " + quoted["text"].strip().replace("\n", " ")[:140])
+    head = f"({'; '.join(extra)})" if extra else ""
+    return (head + ("\n" if head and text else "") + text) or "(no text)"
+
+
+def keep_quotes(source: str, edited: str) -> str:
+    """The edit with straight quotes and apostrophes when you typed straight ones: the model tends to
+    make them curly, which is a change you did not ask for."""
+    if any(c in source for c in "‘’“”"):
+        return edited
+    return edited.replace("‘", "'").replace("’", "'").replace("“", '"').replace("”", '"')
+
+
+def stale(d: dict[str, Any], newest_first: list[dict[str, Any]], choices: str | None) -> bool:
+    """True when a pre-draft is no longer wanted: its message is not the conversation's latest any more,
+    or it has guided drafting choices (opened JSON), which need the user's decision before a draft."""
+    if not newest_first or newest_first[0].get("id") != d.get("for_message_id"):
+        return True
+    try:
+        return bool((json.loads(choices) if choices else {}).get("options"))
+    except (ValueError, AttributeError):
+        return False
 
 
 def pick_voice(to_them: list[dict[str, Any]], recent: list[dict[str, Any]], *, limit: int = MAX_VOICE, skip: list[str] | None = None) -> list[str]:

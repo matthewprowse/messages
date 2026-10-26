@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import type { Tables } from "@messages/db";
 import { useApp } from "@/lib/store";
@@ -19,6 +19,7 @@ type Learning = { learnedAt: string | null; notes: PersonNote[]; orgs: OrgNote[]
 
 const SAVE_FAILED = "Could not save that change. Check your connection and try again.";
 const SHOWN = 6;
+const UNDO_MS = 5_000;
 
 const GROUPS: { source: string; title: string; blurb: string }[] = [
   { source: "sent_mail", title: "From Your Sent Mail", blurb: "Read from your latest 40 sent emails once you have sent 10, and again every time you send 10 more." },
@@ -55,7 +56,7 @@ export function DraftsUseSection() {
   const [rules, setRules] = useState<StyleRule[] | null>(null);
   const [sentCount, setSentCount] = useState<number | null>(null);
   const [learning, setLearning] = useState<Learning | null>(null);
-  const emailAccountIds = accounts.filter((a) => a.provider === "icloud" || a.provider === "gmail").map((a) => a.id).join(",");
+  const emailAccountIds = accounts.filter((a) => a.provider === "icloud" || a.provider === "gmail" || a.provider === "outlook" || a.provider === "imap").map((a) => a.id).join(",");
 
   useEffect(() => {
     if (loading) return; // wait for the session, or row-level security returns nothing
@@ -97,6 +98,9 @@ export function DraftsUseSection() {
         kept: ratios.length ? Math.round((1 - ratios.reduce((a, b) => a + b, 0) / ratios.length) * 100) : null,
         outcomes: ratios.length,
       });
+    }).catch(() => {
+      // Opening the company addresses can fail; show empty lists rather than Loading for ever.
+      if (!cancelled) setLearning({ learnedAt: null, notes: [], orgs: [], indexed: 0, kept: null, outcomes: 0 });
     });
     return () => { cancelled = true; };
   }, [loading]);
@@ -110,11 +114,34 @@ export function DraftsUseSection() {
     });
   };
 
+  // A removed rule leaves the list at once but is only deleted once the Undo toast has gone, so Undo is a real undo.
+  const pending = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; rule: StyleRule }>());
+  const deleteRule = useCallback((rule: StyleRule) => {
+    pending.current.delete(rule.id);
+    supabase.from("style_rules").delete().eq("id", rule.id).then(({ error }) => {
+      if (error) { setRules((list) => (list && !list.some((r) => r.id === rule.id) ? [rule, ...list] : list)); notify(SAVE_FAILED); }
+    });
+  }, [notify]);
+  // Leaving the page finishes any delete still waiting.
+  const finish = useRef(deleteRule);
+  useEffect(() => { finish.current = deleteRule; }, [deleteRule]);
+  useEffect(() => {
+    const waiting = pending.current;
+    return () => {
+      for (const { timer, rule } of [...waiting.values()]) { clearTimeout(timer); finish.current(rule); }
+      waiting.clear();
+    };
+  }, []);
+
   const remove = (rule: StyleRule) => {
     setRules((list) => list?.filter((r) => r.id !== rule.id) ?? null);
-    supabase.from("style_rules").delete().eq("id", rule.id).then(({ error }) => {
-      if (error) { setRules((list) => (list ? [rule, ...list] : list)); notify(SAVE_FAILED); return; }
-      notify("Rule removed");
+    pending.current.set(rule.id, { timer: setTimeout(() => deleteRule(rule), UNDO_MS), rule });
+    notify("Rule removed", () => {
+      const waiting = pending.current.get(rule.id);
+      if (!waiting) return;
+      clearTimeout(waiting.timer);
+      pending.current.delete(rule.id);
+      setRules((list) => (list ? [...list, rule].sort((a, b) => b.support_count - a.support_count) : list));
     });
   };
 
@@ -158,8 +185,8 @@ export function DraftsUseSection() {
                           title={r.rule}
                           description={[who ? `For ${who}` : "Everyone", r.support_count > 1 ? `Seen ${r.support_count} times` : "", !r.enabled && r.disabled_reason === "unsupported" ? "No Longer Seen In Your Mail" : ""].filter(Boolean).join(" · ")}
                         >
-                          <Switch checked={r.enabled} onCheckedChange={(v) => setEnabled(r, v)} aria-label={r.enabled ? "Turn Off" : "Turn On"} />
-                          <Button variant="ghost" size="icon-xs" aria-label="Remove" onClick={() => remove(r)}><Trash2 /></Button>
+                          <Switch checked={r.enabled} onCheckedChange={(v) => setEnabled(r, v)} aria-label={r.rule} />
+                          <Button variant="ghost" size="icon-sm" aria-label={`Remove Rule: ${r.rule}`} onClick={() => remove(r)}><Trash2 /></Button>
                         </SettingsRow>
                       );
                     })}

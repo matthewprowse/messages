@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -19,13 +20,13 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   const isIndex = pathname === "/settings";
   return (
     <div className="flex h-full min-h-0">
-      <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-64", isIndex ? "flex" : "hidden")}>
-        {/* The scrollbar starts below the 64px floating header, as in Conversations. */}
-        <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[64px]! data-vertical:h-auto!">
-          <div className="sticky top-0 z-10 bg-background/70 p-3 backdrop-blur-xl backdrop-saturate-150">
+      <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-56", isIndex ? "flex" : "hidden")}>
+        {/* Solid, with a line under it, as in Summary; the scrollbar starts below its 65px. */}
+        <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[65px]! data-vertical:h-auto!">
+          <div className="sticky top-0 z-10 border-b bg-background p-3">
             <h1 className="flex h-10 items-center text-lg font-medium">Settings</h1>
           </div>
-          <div className="px-3 pb-3">
+          <div className="p-3">
             <div className="flex flex-col gap-3">
               {SECTIONS.map((s) => {
                 const selected = pathname.startsWith(s.href);
@@ -35,11 +36,12 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                     href={s.href}
                     aria-current={selected ? "page" : undefined}
                     className={cn(
-                      "flex h-8 scroll-mt-16 items-center rounded-lg px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
+                      "flex h-10 scroll-mt-16 items-center justify-between rounded-lg md:h-8 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
                       selected ? "bg-muted" : "hover:bg-muted/50",
                     )}
                   >
                     {s.label}
+                    <ChevronRight className="size-4 text-muted-foreground md:hidden" aria-hidden />
                   </Link>
                 );
               })}

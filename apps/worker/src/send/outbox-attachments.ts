@@ -68,7 +68,7 @@ export async function loadAttachmentFiles(row: OutboxFiles, provider: Attachment
   const rows = must(
     await db
       .from("outbox_attachments")
-      .select("id, user_id, storage_path, filename, mime_type, size_bytes, position")
+      .select("id, user_id, storage_path, filename, mime_type, size_bytes, position, voice_note")
       .eq("outbox_id", row.id)
       .order("position")
       .order("created_at")
@@ -104,7 +104,9 @@ export async function loadAttachmentFiles(row: OutboxFiles, provider: Attachment
       if (error || !data) return storageFailure(error);
       const content = Buffer.from(await data.arrayBuffer());
       if (content.length === 0) return { error: ATTACHMENTS_MISSING };
-      return { filename: safeFilename(a.filename), contentType: safeMimeType(a.mime_type), content };
+      const file: OutgoingAttachment = { filename: safeFilename(a.filename), contentType: safeMimeType(a.mime_type), content };
+      if (a.voice_note === true && provider === "whatsapp") file.voiceNote = true;
+      return file;
     }),
   );
   const missing = downloaded.find((f): f is { error: string } => "error" in f);

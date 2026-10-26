@@ -116,3 +116,30 @@ test("an email without files stays a single text part", async () => {
   assert.match(raw, /^Content-Type: text\/plain/m);
   assert.doesNotMatch(raw, /multipart/);
 });
+
+test("Cc is a header everyone sees, and Bcc is left out unless the provider strips it", async () => {
+  const input = {
+    from: { name: null, address: "matthew@prowse.co.za" },
+    to: ["julia@example.com"],
+    cc: ["sam@example.com"],
+    bcc: ["boss@example.com"],
+    subject: "Saturday",
+    body: "Hi",
+  };
+  const plain = (await buildNewEmail(input, "<a@prowse.co.za>")).toString();
+  assert.match(plain, /^Cc: sam@example\.com$/m);
+  assert.doesNotMatch(plain, /^Bcc:/m);
+  assert.doesNotMatch(plain, /boss@example\.com/);
+  const kept = (await buildReply({ ...input, inReplyTo: null, references: [] }, "<b@prowse.co.za>", true)).toString();
+  assert.match(kept, /^Bcc: boss@example\.com$/m);
+});
+
+test("line breaks in an address cannot start a header", async () => {
+  const raw = (
+    await buildNewEmail(
+      { from: { name: null, address: "m@prowse.co.za" }, to: ["a@example.com"], cc: ["b@example.com\r\nX-Evil: 1"], subject: "S", body: "Hi" },
+      "<c@prowse.co.za>",
+    )
+  ).toString();
+  assert.doesNotMatch(raw, /^X-Evil:/m);
+});

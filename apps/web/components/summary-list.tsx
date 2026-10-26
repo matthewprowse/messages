@@ -1,30 +1,36 @@
 "use client";
 
-import { Children, Fragment, isValidElement, useEffect, useMemo, useRef, useState } from "react";
+import { Children, Fragment, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { track } from "@/lib/analytics";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { CalendarDays, CircleCheck } from "lucide-react";
+import { CalendarDays, CalendarX, CircleCheck, Link2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
-import { dayKey, daysOf, loadEvents, type CalendarEvent } from "@/lib/calendar";
+import { dayKey, daysOf, eventDetail, loadEvents, type CalendarEvent } from "@/lib/calendar";
 import type { ListFilter, Thread } from "@/lib/types";
 import { longDate, timeOf } from "@/lib/format";
 import { shortcutAction } from "@/lib/selection";
 import { digest, summarise } from "@/lib/summary";
+import { taskDetail, tasksForToday, taskWhen, type DayTask } from "@/lib/tasks";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState } from "@/components/primitives";
-import { SelectionBar, ThreadRow, useThreadSelection } from "@/components/thread-list";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { EmptyState, providerLabel } from "@/components/primitives";
+import { useImporting } from "@/components/sync-bar";
+import { SelectionBar, ThreadRow, useSwipedRow, useThreadSelection } from "@/components/thread-list";
 import { BriefPlayer } from "@/components/brief-player";
 
 // The Summary list looks and behaves like the Conversations list: same header, rows (ThreadRow itself),
 // hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /briefing.
 
 const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
-  { key: "none", label: "No Filter" },
+  { key: "none", label: "All" },
   { key: "unread", label: "Unread" },
   { key: "email", label: "Email" },
   { key: "whatsapp", label: "WhatsApp" },
@@ -40,18 +46,12 @@ function useListState() {
   const params = useSearchParams();
   const raw = params.get("filter") as ListFilter | null;
   const filter: ListFilter = raw && FILTER_OPTIONS.some((o) => o.key === raw) ? raw : "none";
-  // A message jumped to from search belongs to one conversation, so it is not carried into list links.
-  const query = new URLSearchParams(params);
-  query.delete("message");
-  return { filter, query: query.toString() };
-}
-
-/** An event row's second line: when, where and who, such as "09:00 to 10:00 · Office · Sarah Lee". */
-function eventDetail(e: CalendarEvent) {
-  const who = e.attendees.map((a) => a.name).join(", ");
-  // All Day already sits on the right, so an all-day event's line starts with where.
-  const when = e.allDay ? "" : e.endsAt && e.endsAt !== e.startsAt ? `${timeOf(e.startsAt)} to ${timeOf(e.endsAt)}` : timeOf(e.startsAt);
-  return [when, e.location, who].filter(Boolean).join(" · ") || "All Day";
+  useEffect(() => {
+    if (filter !== "none") track("feature_used", { feature: "summary_filter", detail: filter });
+  }, [filter]);
+  // Row links carry only what the list needs to come back to: the filter. Anything else in the address
+  // (a message jumped to from search, a stray key) belongs to the page it was on.
+  return { filter, query: filter === "none" ? "" : `filter=${filter}` };
 }
 
 // Laid out like a conversation row: an avatar-sized icon, a title line and a detail line. Events are not
@@ -61,10 +61,10 @@ function EventRow({ event, today }: { event: CalendarEvent; today: string }) {
   const when = event.allDay ? "All Day" : dayKey(new Date(event.startsAt)) < today ? "Ongoing" : timeOf(event.startsAt);
   return (
     <Link
-      href="/calendar"
+      href={`/calendar?date=${today}&event=${encodeURIComponent(event.id)}`}
       data-row-link
       data-event-row
-      className="flex scroll-mt-[104px] items-center gap-3 rounded-lg p-3 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+      className="flex scroll-mt-[calc(var(--summary-header)+var(--summary-band))] items-center gap-3 rounded-lg p-3 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
     >
       <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
         <CalendarDays className="size-4" />
@@ -82,14 +82,53 @@ function EventRow({ event, today }: { event: CalendarEvent; today: string }) {
   );
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+// Laid out like an event row, with the task's checkbox where the icon goes. Ticking it shows at once; the row
+// opens the task in Calendar.
+function TaskRow({ item, today, source }: { item: DayTask; today: string; source: string | undefined }) {
+  const { tickTask } = useApp();
+  const { task, overdue } = item;
   return (
-    <section className="flex flex-col gap-2" aria-label={title}>
-      <h2 className="flex h-8 items-center gap-2 px-3 text-sm font-medium">
-        {title}
-        <Badge variant="secondary">{count}</Badge>
+    <div className={cn("flex items-center gap-3 rounded-lg p-3 hover:bg-muted/50", task.pending && "opacity-60")}>
+      <div className="flex size-8 shrink-0 items-center justify-center">
+        <Checkbox checked={task.completed} onCheckedChange={(checked) => tickTask(task, checked === true, "summary")} aria-label={task.title} />
+      </div>
+      <Link
+        href={`/calendar?date=${today}&task=${encodeURIComponent(task.id)}`}
+        data-row-link
+        data-event-row
+        className="flex min-w-0 flex-1 scroll-mt-[calc(var(--summary-header)+var(--summary-band))] flex-col gap-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <div className="flex h-5 items-center justify-between gap-3">
+          <span className={cn("min-w-0 truncate text-sm font-medium", task.completed && "line-through")}>{task.title}</span>
+          <span className={cn("shrink-0 text-xs tabular-nums text-muted-foreground", overdue && !task.pending && "text-destructive")}>{taskWhen(item, timeOf)}</span>
+        </div>
+        <div className="flex h-4 items-center">
+          <span className="min-w-0 truncate text-xs">{taskDetail(task, source)}</span>
+        </div>
+      </Link>
+    </div>
+  );
+}
+
+// A band like the search box in Conversations: padded, and separated below (the first section always, the rest once stuck). It sticks under
+// the header while its section scrolls, and the next section's band pushes it up. Each section after the first
+// has its own space above its band, so while the band above is still stuck there is room under its separator.
+function Section({ title, count, separated = false, children }: { title: string; count?: number; separated?: boolean; children: React.ReactNode }) {
+  return (
+    <section className="not-first:pt-3 last:pb-3" aria-label={title}>
+      <h2
+        data-band
+        className={cn(
+          "sticky top-(--summary-header) z-[5] -mx-3 flex items-center gap-2 border-b bg-background p-3 text-sm font-medium",
+          separated ? "border-border" : "border-transparent data-stuck:border-border",
+        )}
+      >
+        <span className="flex h-8 items-center gap-2">
+          {title}
+          {count !== undefined && <Badge variant="secondary">{count}</Badge>}
+        </span>
       </h2>
-      {children}
+      <div className="pt-3">{children}</div>
     </section>
   );
 }
@@ -115,7 +154,8 @@ const NO_END_MINUTES = 60;
 
 /**
  * Today's events that have not finished yet, all-day ones first. Undefined until the first load. The
- * last events loaded stay up while a refetch or a new day's load runs, and when one fails.
+ * last events loaded stay up while a refetch or a new day's load runs, and when one fails. `failed` is
+ * set while the latest load has failed with nothing loaded to show, and `retry` loads again.
  */
 function useTodaysEvents(now: Date) {
   const { session } = useAuth();
@@ -123,26 +163,42 @@ function useTodaysEvents(now: Date) {
   const today = dayKey(now);
   const tick = Math.floor(now.getTime() / (EVENTS_REFRESH_MINUTES * 60_000));
   const [loaded, setLoaded] = useState<CalendarEvent[]>();
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!userId) return;
     let cancelled = false;
     const [y, m, d] = today.split("-").map(Number);
     loadEvents(new Date(y, m - 1, d), new Date(y, m - 1, d + 1))
-      .then((events) => !cancelled && setLoaded(events))
+      .then((events) => {
+        if (cancelled) return;
+        setLoaded(events);
+        setFailed(false);
+      })
       .catch((err) => {
         console.error(err instanceof Error ? err.message : "Load events failed");
-        if (!cancelled) setLoaded((prev) => prev ?? []);
+        if (!cancelled) setFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [userId, today, tick]);
+  }, [userId, today, tick, attempt]);
 
-  return loaded
-    ?.filter((e) => daysOf(e, [today]).length > 0)
-    .filter((e) => e.allDay || (e.endsAt ? new Date(e.endsAt) : new Date(Date.parse(e.startsAt) + NO_END_MINUTES * 60_000)) > now)
-    .sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.startsAt.localeCompare(b.startsAt));
+  const retry = useCallback(() => {
+    setFailed(false);
+    setAttempt((n) => n + 1);
+  }, []);
+
+  const events = useMemo(
+    () =>
+      loaded
+        ?.filter((e) => daysOf(e, [today]).length > 0)
+        .filter((e) => e.allDay || (e.endsAt ? new Date(e.endsAt) : new Date(Date.parse(e.startsAt) + NO_END_MINUTES * 60_000)) > now)
+        .sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.startsAt.localeCompare(b.startsAt)),
+    [loaded, today, now],
+  );
+  return { events, failed: failed && !loaded, retry };
 }
 
 /**
@@ -176,8 +232,21 @@ export function SummaryList() {
   const { filter, query } = useListState();
   const params = useParams<{ id?: string }>();
   const router = useRouter();
-  const { threads, loading, contactById: contactOf, prefetchMessages } = useApp();
+  const { threads, accounts, tasks, loading, contactById: contactOf, prefetchMessages } = useApp();
   const rowsRef = useRowNavigation<HTMLDivElement>();
+  // The sticky header's height, which the section bands stick under and the scrollbar starts below. It
+  // changes with the selection bar and the text size, so it is measured rather than assumed.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(105);
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const measure = () => setHeaderHeight(header.getBoundingClientRect().height);
+    measure();
+    const resized = new ResizeObserver(measure);
+    resized.observe(header);
+    return () => resized.disconnect();
+  }, []);
 
   // Today, the sections' time windows and finished events move on while the page is left open.
   const [now, setNow] = useState(() => new Date());
@@ -187,17 +256,51 @@ export function SummaryList() {
   }, []);
 
   const sections = useMemo(() => summarise(threads, filter, now), [threads, filter, now]);
-  const allEvents = useTodaysEvents(now);
-  // Events are not email or WhatsApp, and never unread, so any filter leaves them out.
-  const events = filter === "none" ? allEvents ?? [] : [];
-  const order = [...sections.reply, ...sections.priority, ...sections.updates].map((t) => t.id);
+  const { events: loadedEvents, failed: calendarFailed, retry: retryCalendar } = useTodaysEvents(now);
+  // The calendar is not filtered: events are neither email nor WhatsApp nor unread, but they are still today.
+  const events = loadedEvents ?? [];
+  // Nor are tasks: open ones due today, and overdue ones, from Microsoft To Do, Google Tasks and iCloud Reminders.
+  const todaysTasks = useMemo(() => tasksForToday(tasks, now), [tasks, now]);
+  const sourceOf = (accountId: string) => {
+    const provider = accounts.find((a) => a.id === accountId)?.provider;
+    return provider ? providerLabel[provider] : undefined;
+  };
+  const order = useMemo(() => [...sections.reply, ...sections.priority, ...sections.updates].map((t) => t.id), [sections]);
   // Conversations show as soon as they are ready; the calendar section joins when its events arrive.
   const busy = loading;
-  const line = digest(sections, events.length);
+  // A new user with no account connected yet is pointed at connecting one.
+  const noAccounts = !accounts.some((a) => a.status !== "disconnected");
+  const importing = useImporting().length > 0;
+  // The calendar section stands in for events still loading or failed to load, so neither reads as "nothing today".
+  const calendarPending = !noAccounts && !calendarFailed && loadedEvents === undefined;
+  const calendarShown = events.length > 0 || calendarFailed || calendarPending;
+  const empty = !digest(sections, events.length, todaysTasks.length) && !calendarShown;
 
   const { picked, setChecked, check, run, onRowAction } = useThreadSelection(order, query, filter, BASE);
-  // The spoken brief's script, shown once it has been played.
-  const [script, setScript] = useState<string | null>(null);
+  // A section's band shows its separator only once it has left its place at the top of the section.
+  useEffect(() => {
+    const content = rowsRef.current;
+    const viewport = content?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    if (!content || !viewport) return;
+    const update = () => {
+      for (const band of content.querySelectorAll<HTMLElement>("[data-band]")) {
+        const section = band.parentElement;
+        if (!section) continue;
+        // Where the band sits when nothing has moved it: the section's top, below the section's own padding.
+        const home = section.getBoundingClientRect().top + parseFloat(getComputedStyle(section).paddingTop);
+        band.toggleAttribute("data-stuck", band.getBoundingClientRect().top - home > 0.5);
+      }
+    };
+    update();
+    viewport.addEventListener("scroll", update, { passive: true });
+    const resized = new ResizeObserver(update);
+    resized.observe(content);
+    return () => {
+      viewport.removeEventListener("scroll", update);
+      resized.disconnect();
+    };
+  }, [rowsRef, sections, events.length, todaysTasks.length, busy, calendarShown]);
+
   const today = dayKey(now);
 
   // An event row has nothing to archive or delete, so with one focused the shortcuts do nothing at all,
@@ -214,6 +317,8 @@ export function SummaryList() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [nothingPicked]);
 
+  const pickedIds = new Set(picked);
+  const rowSwipe = useSwipedRow();
   const rows = (items: Thread[]) => (
     <Separated>
       {items.map((t) => (
@@ -224,39 +329,49 @@ export function SummaryList() {
           contact={t.isGroup ? undefined : contactOf(t.participantIds[0])}
           query={query}
           selected={params.id === t.id}
-          checked={picked.includes(t.id)}
+          checked={pickedIds.has(t.id)}
           selecting={picked.length > 0}
           onCheck={check}
           onAction={onRowAction}
           onPress={prefetchMessages}
           baseHref={BASE}
           summary={t.summary.trim() || undefined}
+          swiped={rowSwipe.swiped === t.id}
+          onSwipe={rowSwipe.onSwipe}
+          onTouchRow={rowSwipe.onTouchRow}
         />
       ))}
     </Separated>
   );
 
   return (
-    // The scrollbar starts below the 104px floating header instead of running behind it.
-    <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[104px]! data-vertical:h-auto!">
-      {/* Rows scroll underneath this header and show through it faintly. */}
-      <div className="sticky top-0 z-10 space-y-2 bg-background/70 p-3 backdrop-blur-xl backdrop-saturate-150">
-        <h1 className="flex h-10 items-center text-lg font-medium">Summary</h1>
+    // The scrollbar starts below the sticky header and the section band, and sits above the bands that
+    // scroll past it so none of them hides it.
+    <ScrollArea
+      className="h-full"
+      style={{ "--summary-header": `${headerHeight}px`, "--summary-band": "57px" } as React.CSSProperties}
+      scrollbarClassName="z-20 data-vertical:top-[calc(var(--summary-header)+var(--summary-band))]! data-vertical:h-auto!"
+    >
+      {/* Plain white like the Conversations header, so the rows scrolling under it do not show through. */}
+      <div ref={headerRef} className="sticky top-0 z-10 space-y-2 border-b bg-background p-3">
+        <div className="flex h-10 items-center justify-between gap-2">
+          <h1 className="text-lg font-medium">Summary</h1>
+          <BriefPlayer />
+        </div>
         {picked.length > 0 ? (
           <SelectionBar
             allPicked={picked.length === order.length}
-            anyUnread={threads.some((t) => t.unread && picked.includes(t.id))}
+            anyUnread={threads.some((t) => t.unread && pickedIds.has(t.id))}
             onAll={() => setChecked(order)}
             onClear={() => setChecked([])}
             onAction={(action) => run(picked, action)}
           />
         ) : (
           <div className="flex items-center justify-between gap-2">
-            <span className="min-w-0 flex-1 truncate pl-3 text-sm text-muted-foreground">{longDate(now.toISOString())}</span>
-            <BriefPlayer onScript={setScript} />
-            <Select value={filter === "none" ? "" : filter} onValueChange={(v) => router.push(listHref(v as ListFilter))}>
+            <span className="min-w-0 truncate text-sm text-muted-foreground">{longDate(now.toISOString())}</span>
+            <Select value={filter} onValueChange={(v) => router.push(listHref(v as ListFilter))}>
               <SelectTrigger aria-label="Filter" className="w-36 data-[size=default]:h-8">
-                <SelectValue placeholder="Filter" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
                 {FILTER_OPTIONS.map((o) => (
@@ -267,9 +382,9 @@ export function SummaryList() {
           </div>
         )}
       </div>
-      <div ref={rowsRef} className="px-3 pb-3">
+      <div ref={rowsRef} className="px-3">
         {busy && (
-          <div className="flex flex-col gap-2" aria-label="Loading summary">
+          <div role="status" aria-busy="true" className="flex flex-col gap-2 py-3" aria-label="Loading summary">
             {Array.from({ length: 8 }, (_, i) => (
               <div key={i} className="flex items-center gap-3 p-3">
                 <Skeleton className="size-8 shrink-0 rounded-full" />
@@ -281,26 +396,63 @@ export function SummaryList() {
             ))}
           </div>
         )}
-        {script && <p className="mb-4 whitespace-pre-line px-3 text-sm">{script}</p>}
-        {!busy && !line && (
+        {!busy && empty && noAccounts && (
+          <div className="py-24">
+            <EmptyState
+              icon={Link2}
+              title="Connect an Account"
+              description="Connect Gmail, WhatsApp or iCloud to see what needs you here."
+              action={<Button asChild><Link href="/settings/accounts">Connect an Account</Link></Button>}
+            />
+          </div>
+        )}
+        {!busy && empty && !noAccounts && importing && filter === "none" && (
+          <div className="py-24">
+            <EmptyState icon={RefreshCw} title="Importing Your Messages" description="What needs you appears here as your messages arrive. The first import can take a few minutes." />
+          </div>
+        )}
+        {!busy && empty && !noAccounts && !(importing && filter === "none") && (
           <div className="py-24">
             <EmptyState
               icon={CircleCheck}
               title="You're All Caught Up"
-              description={filter === "none" ? "Replies waiting on you, urgent conversations and today's events appear here." : "Nothing that needs you matches this filter."}
+              description={filter === "none" ? "Replies waiting on you, urgent conversations, today's events and tasks appear here." : "Nothing that needs you matches this filter."}
+              action={filter !== "none" ? <Button variant="outline" onClick={() => router.push(BASE)}>Clear Filter</Button> : undefined}
             />
           </div>
         )}
-        {!busy && line && (
-          <div className="flex flex-col gap-4">
-            <p className="px-3 text-sm text-muted-foreground">{line}</p>
-            {sections.reply.length > 0 && <Section title="Needs Reply" count={sections.reply.length}>{rows(sections.reply)}</Section>}
-            {sections.priority.length > 0 && <Section title="Urgent and Important" count={sections.priority.length}>{rows(sections.priority)}</Section>}
-            {events.length > 0 && (
-              <Section title="Today's Calendar" count={events.length}>
-                <Separated>{events.map((e) => <EventRow key={e.id} event={e} today={today} />)}</Separated>
+        {!busy && !empty && (
+          <div>
+            {calendarShown && (
+              <Section title="Today's Calendar" count={calendarFailed || calendarPending ? undefined : events.length} separated>
+                {calendarFailed ? (
+                  <div className="flex items-center gap-3 p-3" role="alert">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+                      <CalendarX className="size-4" />
+                    </div>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">Couldn&apos;t Load Calendar</span>
+                    <Button variant="outline" size="sm" onClick={retryCalendar}>Retry</Button>
+                  </div>
+                ) : calendarPending ? (
+                  <div role="status" aria-busy="true" aria-label="Loading calendar" className="flex items-center gap-3 p-3">
+                    <Skeleton className="size-8 shrink-0 rounded-full" />
+                    <div className="flex flex-1 flex-col gap-1">
+                      <Skeleton className="h-5 w-1/2" />
+                      <Skeleton className="h-4 w-2/3" />
+                    </div>
+                  </div>
+                ) : (
+                  <Separated>{events.map((e) => <EventRow key={e.id} event={e} today={today} />)}</Separated>
+                )}
               </Section>
             )}
+            {todaysTasks.length > 0 && (
+              <Section title="Tasks" count={todaysTasks.length} separated={!calendarShown}>
+                <Separated>{todaysTasks.map((t) => <TaskRow key={t.task.id} item={t} today={today} source={sourceOf(t.task.accountId)} />)}</Separated>
+              </Section>
+            )}
+            {sections.reply.length > 0 && <Section title="Needs Reply" count={sections.reply.length} separated={!calendarShown && todaysTasks.length === 0}>{rows(sections.reply)}</Section>}
+            {sections.priority.length > 0 && <Section title="Important" count={sections.priority.length}>{rows(sections.priority)}</Section>}
             {sections.updates.length > 0 && <Section title="Updates" count={sections.updates.length}>{rows(sections.updates)}</Section>}
           </div>
         )}

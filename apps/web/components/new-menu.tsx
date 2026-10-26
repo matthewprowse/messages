@@ -6,6 +6,7 @@ import { CalendarPlus, Mail, MessageCircle, SquarePen } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { whatsappLinked } from "@/lib/new-items";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -26,16 +27,20 @@ export function isTypingKey(e: KeyboardEvent) {
   return !!el?.closest?.("input, textarea, select, [role=menu], [role=dialog], [role=listbox], [role=combobox]");
 }
 
+/** Other parts of the app (the search palette) open a new-item dialog by dispatching this event on window. */
+export const NEW_ITEM_EVENT = "konva:new-item";
+
 /** The rail's New button: a menu of new things to start, opened with C anywhere outside a field. */
 export function NewMenu() {
   const { accounts } = useApp();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [open, setOpen] = useState<Item | null>(null);
+  const [open, setOpenItem] = useState<Item | null>(null);
   // A dialog stays mounted once opened, so closing it still animates.
   const [used, setUsed] = useState<Set<Item>>(() => new Set());
-  useEffect(() => {
-    if (open && !used.has(open)) setUsed((prev) => new Set(prev).add(open));
-  }, [open, used]);
+  const setOpen = (item: Item | null) => {
+    setOpenItem(item);
+    if (item) setUsed((prev) => (prev.has(item) ? prev : new Set(prev).add(item)));
+  };
   const trigger = useRef<HTMLButtonElement>(null);
   const linked = whatsappLinked(accounts);
 
@@ -52,6 +57,17 @@ export function NewMenu() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
+  useEffect(() => {
+    function onNew(e: Event) {
+      const item = (e as CustomEvent<Item>).detail;
+      if (item === "email" || item === "whatsapp" || item === "event") setOpen(item);
+    }
+    window.addEventListener(NEW_ITEM_EVENT, onNew);
+    return () => window.removeEventListener(NEW_ITEM_EVENT, onNew);
+    // setOpen only touches state setters, so it is safe to leave out.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const set = (item: Item) => (value: boolean) => setOpen(value ? item : null);
 
   return (
@@ -65,7 +81,7 @@ export function NewMenu() {
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="right">New</TooltipContent>
+          <TooltipContent side="right">New <Kbd>C</Kbd></TooltipContent>
         </Tooltip>
         {/* When an item opens a dialog, focus must go to the dialog, not back to this button, or Esc and Tab miss it. */}
         <DropdownMenuContent side="right" align="start" className="w-max min-w-48" onCloseAutoFocus={(e) => { if (open) e.preventDefault(); }}>
@@ -82,9 +98,9 @@ export function NewMenu() {
           <DropdownMenuItem onSelect={() => setOpen("event")}><CalendarPlus />New Event</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {(used.has("email") || open === "email") && <ComposeDialog open={open === "email"} onOpenChange={set("email")} />}
-      {(used.has("whatsapp") || open === "whatsapp") && <NewWhatsAppDialog open={open === "whatsapp"} onOpenChange={set("whatsapp")} />}
-      {(used.has("event") || open === "event") && <NewEventDialog open={open === "event"} onOpenChange={set("event")} />}
+      {used.has("email") && <ComposeDialog open={open === "email"} onOpenChange={set("email")} />}
+      {used.has("whatsapp") && <NewWhatsAppDialog open={open === "whatsapp"} onOpenChange={set("whatsapp")} />}
+      {used.has("event") && <NewEventDialog open={open === "event"} onOpenChange={set("event")} />}
     </>
   );
 }

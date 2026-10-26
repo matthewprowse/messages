@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Message, Thread } from "@/lib/types";
 import { clashes, freeSlots, loadChoices, otherTimeDecision, slotButton, slotLabel, type Busy, type ReplyChoices } from "@/lib/choices";
 import { loadEvents } from "@/lib/calendar";
 import { Button } from "@/components/ui/button";
+import { track } from "@/lib/analytics";
 
 const DAY = 24 * 60 * 60_000;
 
@@ -25,7 +26,10 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
   useEffect(() => {
     if (!waiting) return;
     let live = true;
-    void loadChoices(waiting.id).then((value) => { if (live) setChoices({ id: waiting.id, value }); });
+    loadChoices(waiting.id).then(
+      (value) => { if (live) setChoices({ id: waiting.id, value }); },
+      () => { if (live) setChoices({ id: waiting.id, value: null }); },
+    );
     return () => { live = false; };
   }, [waiting?.id, thread.summary, thread.needsReply]);
 
@@ -43,6 +47,18 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
     );
     return () => { live = false; };
   }, [value, wantsCalendar]);
+
+  // The options offered, once for each message that has them.
+  const shownFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!waiting || !value || value.options.length === 0 || shownFor.current === waiting.id) return;
+    shownFor.current = waiting.id;
+    track("choice_shown", { count: value.options.length, kinds: value.options.map((o) => o.kind) });
+  }, [waiting, value]);
+  const pick = (decision: Decision) => {
+    track("choice_tapped", { kind: decision.kind });
+    onPick(decision);
+  };
 
   const minutes = value?.minutes ?? 60;
   const busy = useMemo(() => (value?.asked && events ? clashes(events, value.asked, new Date(value.asked.getTime() + minutes * 60_000)) : []), [value, events, minutes]);
@@ -62,7 +78,7 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
         {picking ? (
           <>
             {slots.map((slot) => (
-              <Button key={slot.toISOString()} variant="outline" disabled={disabled} onClick={() => onPick({ text: otherTimeDecision(slot, value.asked), kind: "other_time" })}>
+              <Button key={slot.toISOString()} variant="outline" disabled={disabled} onClick={() => pick({ text: otherTimeDecision(slot, value.asked), kind: "other_time" })}>
                 {slotButton(slot)}
               </Button>
             ))}
@@ -71,7 +87,7 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
           </>
         ) : (
           value.options.map((o) => (
-            <Button key={o.label} variant="outline" disabled={disabled} onClick={() => (o.kind === "other_time" ? setPicking(true) : onPick({ text: o.decision, kind: o.kind }))}>
+            <Button key={o.label} variant="outline" disabled={disabled} onClick={() => (o.kind === "other_time" ? setPicking(true) : pick({ text: o.decision, kind: o.kind }))}>
               {o.label}
             </Button>
           ))

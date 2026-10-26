@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BAD_RECIPIENTS, FROM_NOT_ALLOWED, chooseFrom, cleanRecipients, fromCandidates, isEmailAddress, replyToChosen, replyToParticipants } from "./from-address";
+import { BAD_RECIPIENTS, FROM_NOT_ALLOWED, chooseFrom, cleanRecipients, fromCandidates, isEmailAddress, outgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";
 
 const account = { accountAddress: "matthew@prowse.co.za", sendAddresses: ["matthew@prowse.co.za", "hello@prowse.co.za", "m@icloud.com"] };
 
@@ -73,4 +73,37 @@ test("a reply with no one else writing goes to the other people, else the latest
   assert.deepEqual(replyToParticipants(["a@x.com", "me@example.com", "A@x.com"], "me@gmail.com", self), ["a@x.com"]);
   assert.deepEqual(replyToParticipants(["me@example.com"], "Me@Gmail.com", self), ["me@gmail.com"]);
   assert.deepEqual(replyToParticipants([], null, self), []);
+});
+
+const none = { to_addresses: [], cc_addresses: [], bcc_addresses: [] };
+
+test("a new email needs a To, and Cc and Bcc are optional", () => {
+  assert.deepEqual(outgoingRecipients({ ...none, to_addresses: [" A@x.com "], bcc_addresses: ["b@x.com"] }, false), {
+    to: ["a@x.com"], cc: [], bcc: ["b@x.com"], explicit: false,
+  });
+  assert.deepEqual(outgoingRecipients(none, false), { error: BAD_RECIPIENTS });
+  assert.deepEqual(outgoingRecipients({ ...none, cc_addresses: ["b@x.com"] }, false), { error: BAD_RECIPIENTS });
+});
+
+test("a reply with To or Cc set goes to exactly those; with neither it is worked out", () => {
+  assert.deepEqual(outgoingRecipients({ ...none, to_addresses: ["a@x.com"], cc_addresses: ["b@x.com"] }, true), {
+    to: ["a@x.com"], cc: ["b@x.com"], bcc: [], explicit: true,
+  });
+  assert.deepEqual(outgoingRecipients({ ...none, cc_addresses: ["b@x.com"] }, true), { to: [], cc: ["b@x.com"], bcc: [], explicit: true });
+  assert.deepEqual(outgoingRecipients(none, true), { to: [], cc: [], bcc: [], explicit: false });
+  assert.deepEqual(outgoingRecipients({ ...none, bcc_addresses: ["c@x.com"] }, true), { to: [], cc: [], bcc: ["c@x.com"], explicit: false });
+});
+
+test("someone on two lines is kept on the first, and a bad or unreadable address fails the send", () => {
+  assert.deepEqual(
+    outgoingRecipients({ to_addresses: ["a@x.com"], cc_addresses: ["A@x.com", "b@x.com"], bcc_addresses: ["b@x.com", "c@x.com"] }, false),
+    { to: ["a@x.com"], cc: ["b@x.com"], bcc: ["c@x.com"], explicit: false },
+  );
+  assert.deepEqual(outgoingRecipients({ ...none, to_addresses: ["a@x.com"], cc_addresses: ["nope"] }, false), { error: BAD_RECIPIENTS });
+  assert.deepEqual(outgoingRecipients({ ...none, to_addresses: ["a@x.com"], bcc_addresses: [""] }, false), { error: BAD_RECIPIENTS });
+});
+
+test("line breaks are stripped from addresses before they are checked", () => {
+  assert.deepEqual(outgoingRecipients({ ...none, to_addresses: ["a@x.com\r\nBcc: evil@x.com"] }, false), { error: BAD_RECIPIENTS });
+  assert.deepEqual(outgoingRecipients({ ...none, to_addresses: ["a@x\r\n.com"] }, false), { to: ["a@x.com"], cc: [], bcc: [], explicit: false });
 });

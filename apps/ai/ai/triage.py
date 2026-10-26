@@ -6,7 +6,8 @@ with triage turned off (WhatsApp groups start that way) are skipped.
 
 The model is only asked when its answer is used. A conversation takes the triage of its latest
 incoming message, so an older one in a conversation that has a newer one is recorded without a model
-call; so is mail from a sender you unsubscribed from or in a conversation you marked Junk, and an
+call; so is mail from a sender you unsubscribed from or in a conversation you marked Junk, a bulk
+sender the model has labelled the same junk way every time lately (sender_outcome), and an
 email already triaged in another of your accounts (the same Message-ID) is copied. The rest go to
 the fast model GROUP at a time, per account, with minimal thinking: the instructions and what is
 known about you are sent once for the group, first, so they are the same at the start of every call.
@@ -25,23 +26,30 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from . import log
-from .fields import ADDRESS, BODY, CHOICES, HTML, SUBJECT, SUMMARY, UNSUBSCRIBE
+from .analytics import Analytics, event, prompt_id, traits as message_traits
+from .fields import ADDRESS, BODY, CHOICES, HTML, SUBJECT, SUMMARY, TRANSCRIPT, UNSUBSCRIBE
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, not_in
 from .supabase import Supabase, in_list
-from .text import clean
+from .text import UNTRUSTED, clean
 from .vault import Vault
 
 PRIORITIES = ["urgent", "important", "normal", "low"]
 CATEGORIES = ["personal", "work", "needs_reply", "fyi", "newsletter", "notification"]
 LOOKBACK_DAYS = 30
+VOICE_WAIT_S = 15 * 60  # how long a voice note waits for its transcript before it is triaged without one
+VOICE_RECHECK_S = 20
 BATCH = 24
 GROUP = 8  # emails per model call
 BODY_CHARS = 2500
+SUBJECT_CHARS = 300  # a subject is not a second body: a long one is cut before the prompt
 CONTEXT_TTL_S = 60  # what is known about a user (rules, unsubscribes, corrections) is reread this often
 LATEST_ROWS = 1000
 OPTION_KINDS = ["accept", "decline", "other_time", "answer"]
 MAX_OPTIONS = 4
+SENDER_KEEP = 3  # the model's last answers about a bulk sender that must all agree before it is skipped
+SENDER_RECHECK_DAYS = 14  # the model looks at a skipped sender again once its last answer is this old
+BULK_CATEGORIES = ("newsletter", "notification")
 NO_CHOICES = json.dumps({"options": []})  # looked at, nothing to offer: the backfill skips it
 
 SCHEMA = {
@@ -96,7 +104,7 @@ junk: true for mail that is not written for them: marketing, promotions, sales, 
 
 needs_reply: true only when a person expects an answer from them.
 
-summary: one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email".
+summary: one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email". Write it to them: call them "you" and never use their own name, even when the email addresses them by name (write "Cindy wants to set up an interview with you", not "with Matthew Prowse"). Their name and own addresses are given; when no name is given, the name in an email's greeting or the name matching their address is theirs. An email from one of their own addresses is one they sent (a copy, or to themselves): summarise it as theirs, such as "Your application for the Business Analyst role, copied to your inbox."
 
 choices: only when needs_reply is true and the answer needs a decision only they can make: whether they are free at a time, whether they will do or send something, a yes or no, which option, a price or an offer. Give 2 to 4 options they would realistically pick, each with:
 - label: button text, 1 to 4 words in Title Case, such as "Yes, Available", "Not Available", "Sending Today", "Which Documents?".
@@ -108,11 +116,13 @@ asked_time: when the message asks whether they are free at a specific date and t
 
 Use what you are told about them and their past corrections. Mail styled to look personal but sent to a list is still junk.
 
-Judge each email on its own and return one result for every email, with its number."""
+Judge each email on its own and return one result for every email, with its number.""" + UNTRUSTED
 
 
 @dataclass
 class UserContext:
+    name: str = ""  # profiles.display_name, so summaries can say "you" instead of it
+    own_addresses: list[str] = field(default_factory=list)  # their accounts' addresses, for the same reason
     about: str = ""
     important_people: str = ""
     always: list[str] = field(default_factory=list)
@@ -120,6 +130,7 @@ class UserContext:
     unsubscribed: set[str] = field(default_factory=set)
     corrections: list[str] = field(default_factory=list)
     accounts: list[str] = field(default_factory=list)  # every connected account, for finding the same email twice
+    timezone: str = ""  # profiles.timezone, for the time of day in a message's traits
 
 
 def matches(address: str, targets: list[str]) -> bool:
@@ -175,13 +186,34 @@ def known_outcome(m: dict[str, Any], ctx: UserContext, thread_feedback: list[str
     if not unsubscribed and junk_mark != "junk":
         return None
     category = "newsletter" if unsubscribed or m.get("list_unsubscribe") else "fyi"
-    return {"priority": "low", "category": category, "junk": True, "needs_reply": False, "summary": m.get("subject") or ""}
+    return {"priority": "low", "category": category, "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
+
+
+def sender_outcome(m: dict[str, Any], history: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
+    """A bulk sender the model has settled on: its last SENDER_KEEP answers (history, newest first, from
+    public.sender_history) were all junk newsletters or notifications of low or normal priority that
+    wanted no reply, none of their conversations was ever corrected, and the newest answer is under
+    SENDER_RECHECK_DAYS old, so the model still looks at each sender now and then. The result is the
+    newest answer with the subject as its summary, as known_outcome has it. None when any of that fails."""
+    if not (m.get("is_bulk") or m.get("list_unsubscribe")) or len(history) < SENDER_KEEP:
+        return None
+    for h in history:
+        if h["corrected"] or not h["junk"] or h["needs_reply"] or h["category"] not in BULK_CATEGORIES or h["priority"] not in ("low", "normal"):
+            return None
+    newest = history[0]
+    try:
+        decided = datetime.fromisoformat(str(newest["decided_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if now - decided > timedelta(days=SENDER_RECHECK_DAYS):
+        return None
+    return {"priority": newest["priority"], "category": newest["category"], "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
 
 
 def superseded_outcome(m: dict[str, Any]) -> dict[str, Any]:
     """For an older message in a conversation with a newer incoming one. Only the latest decides the
     conversation, so this is a placeholder that marks the message as done."""
-    return {"priority": "normal", "category": "fyi", "junk": False, "needs_reply": False, "summary": m.get("subject") or ""}
+    return {"priority": "normal", "category": "fyi", "junk": False, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
 
 
 def latest_incoming(rows: list[dict[str, Any]], batch: list[dict[str, Any]]) -> dict[str, tuple[bool, bool] | None]:
@@ -206,6 +238,8 @@ def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]]) -> str:
     """What is known about them first (the same on every call of theirs), then the numbered emails.
     Each email has name, sender, relationship, known, bulk, subject and body."""
     lines = [
+        f"Their name: {ctx.name or 'not given'}",
+        "Their own addresses: " + (", ".join(ctx.own_addresses) or "not given"),
         f"About them: {ctx.about or 'not given'}",
         f"People who matter to them: {ctx.important_people or 'not given'}",
         "Their recent corrections: " + ("; ".join(ctx.corrections[:12]) or "none"),
@@ -303,7 +337,7 @@ def pending_query(since: str, skip: list[str] | None = None) -> dict[str, str]:
         **not_in(skip or []),
         # Bodies are fetched later, only for the messages the model is asked about.
         "select": "id,user_id,account_id,thread_id,provider_message_id,subject,sender_address,sender_contact_id,"
-        "list_unsubscribe,sent_at,message_ai(message_id),threads!inner(triage_enabled)",
+        "list_unsubscribe,is_bulk,sender_index,sent_at,transcript,transcript_status,message_ai(message_id),threads!inner(triage_enabled,channel,is_group),attachments(filename)",
         "direction": "eq.inbound",
         "message_ai": "is.null",
         "threads.triage_enabled": "eq.true",
@@ -319,14 +353,37 @@ class Triage:
         self.gemini = gemini
         self.model = model
         self.vault = vault or Vault(db)  # without one, plaintext passes through and nothing is encrypted
+        self.analytics = Analytics(db)
         self._backoff = Backoff()
+        self._voice_wait: dict[str, float] = {}  # voice notes waiting for their transcript -> monotonic time to look again
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="triage")
         self._users: dict[str, tuple[float, UserContext]] = {}  # user_id -> (read at, context)
+
+    def _without_untranscribed(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Holds back a voice note until it is transcribed, so triage, the summary and the daily brief know
+        what was said. One whose file has not arrived, or could not be transcribed, is triaged without it
+        after VOICE_WAIT_S."""
+        now = time.monotonic()
+        keep = []
+        for r in rows:
+            voice = any(str(a.get("filename") or "").startswith("Voice Note.") for a in r.get("attachments") or [])
+            try:
+                sent = datetime.fromisoformat(str(r.get("sent_at")).replace("Z", "+00:00"))
+            except ValueError:  # an unreadable date must not stall the whole batch: triage it now
+                sent = datetime.min.replace(tzinfo=timezone.utc)
+            if voice and r.get("transcript_status") is None and datetime.now(timezone.utc) - sent < timedelta(seconds=VOICE_WAIT_S):
+                self._voice_wait[r["id"]] = now + VOICE_RECHECK_S
+            else:
+                self._voice_wait.pop(r["id"], None)
+                keep.append(r)
+        return keep
 
     def run_once(self) -> int:
         """Triages one batch. Returns how many were triaged, so the loop rests when nothing succeeded."""
         since = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
-        rows = self.db.select("messages", pending_query(since, self._backoff.waiting(time.monotonic())))
+        now = time.monotonic()
+        rows = self.db.select("messages", pending_query(since, self._backoff.waiting(now) + [i for i, at in self._voice_wait.items() if at > now]))
+        rows = self._without_untranscribed(rows)
         if not rows:
             return self.backfill_choices(since)
         for r in rows:  # opened first: known_outcome and superseded_outcome copy the subject into the summary
@@ -349,16 +406,25 @@ class Triage:
 
         # Decide what needs the model: (result, model) for the rest.
         results: dict[str, tuple[dict[str, Any], str | None]] = {}
+        sources: dict[str, str] = {}  # what decided each label: model, rule (your signals), copied or superseded
         ask: list[dict[str, Any]] = []
         for m in rows:
             ctx = contexts[m["user_id"]]
             settled = known_outcome(m, ctx, feedback.get(m["thread_id"], []))
             if settled is not None:
                 results[m["id"]] = (settled, None)
+                sources[m["id"]] = "rule"
             elif not latest[m["id"]][0]:
                 results[m["id"]] = (superseded_outcome(m), None)
+                sources[m["id"]] = "superseded"
             else:
                 ask.append(m)
+        settled_senders = self._settled_senders(ask)
+        for m in list(ask):
+            if m["id"] in settled_senders:
+                results[m["id"]] = (settled_senders[m["id"]], None)
+                sources[m["id"]] = "sender"
+                ask.remove(m)
         twins = self._twins(ask, contexts)
         firsts: dict[tuple[str, str], dict[str, Any]] = {}  # the same email twice in this batch is asked about once
         copies: list[dict[str, Any]] = []
@@ -366,9 +432,11 @@ class Triage:
             key = (m["user_id"], m.get("provider_message_id") or m["id"])
             if key in twins:
                 results[m["id"]] = twins[key]
+                sources[m["id"]] = "copied"
                 ask.remove(m)
             elif key in firsts:
                 copies.append(m)
+                sources[m["id"]] = "copied"
                 ask.remove(m)
             else:
                 firsts[key] = m
@@ -381,11 +449,23 @@ class Triage:
             first = firsts[(m["user_id"], m.get("provider_message_id") or m["id"])]
             if first["id"] in results:
                 results[m["id"]] = results[first["id"]]
+        for m in ask:
+            sources.setdefault(m["id"], "model")
 
         done = [m for m in rows if m["id"] in results]
         if not done:
             log.info("triage batch", messages=len(rows), triaged=0)
             return 0
+        stored = {
+            m["id"]: message_traits(
+                m,
+                sources[m["id"]],
+                chars=len((m.get("_email") or {}).get("body") or "") if m.get("_email") else None,
+                known=bool((m.get("_email") or {}).get("known")),
+                timezone=contexts[m["user_id"]].timezone,
+            )
+            for m in done
+        }
         final = {m["id"]: apply_signals(results[m["id"]][0], (m.get("sender_address") or "").lower(), contexts[m["user_id"]], feedback.get(m["thread_id"], [])) for m in done}
         self.db.upsert(
             "message_ai",
@@ -400,6 +480,8 @@ class Triage:
                     "junk": bool(final[m["id"]]["junk"]),
                     "reply_choices": self.vault.seal(m["user_id"], CHOICES, final[m["id"]]["choices"]),
                     "model": results[m["id"]][1],
+                    "prompt_version": prompt_id(SYSTEM) if results[m["id"]][1] else None,
+                    "traits": stored[m["id"]],
                 }
                 for m in done
             ],
@@ -407,7 +489,8 @@ class Triage:
         )
         # The conversation takes the triage of its latest incoming message.
         updates = [m for m in done if latest[m["id"]][0]]
-        list(self._pool.map(lambda m: self._update_thread(m, final[m["id"]], latest[m["id"]][1]), updates))
+        list(self._pool.map(lambda m: self._update_thread_safely(m, final[m["id"]], latest[m["id"]][1]), updates))
+        self._report(updates, final, stored)
         for m in done:
             self._backoff.succeeded(m["id"])
         log.info("triage batch", messages=len(rows), triaged=len(done), asked=asked, threads=len(updates))
@@ -443,9 +526,13 @@ class Triage:
             for answers in self._pool.map(lambda chunk: self._ask(contexts[chunk[0]["user_id"]], chunk), self._prepare(ask, contexts)):
                 found.update({mid: result["choices"] for mid, (result, _model) in answers.items()})
         by_id = {m["id"]: m for m in batch}
-        for mid, choices in found.items():
+
+        def store(item: tuple[str, str]) -> None:
+            mid, choices = item
             self.db.update("message_ai", {"message_id": f"eq.{mid}"}, {"reply_choices": self.vault.seal(by_id[mid]["user_id"], CHOICES, choices)}, minimal=True)
             self._backoff.succeeded(mid)
+
+        list(self._pool.map(store, found.items()))
         log.info("choices backfill", messages=len(batch), asked=len(ask), done=len(found))
         return len(found)
 
@@ -468,10 +555,10 @@ class Triage:
         return out
 
     def _user_context(self, user_id: str) -> UserContext:
-        profile = self.db.first("profiles", {"select": "about,important_people", "user_id": f"eq.{user_id}"}) or {}
+        profile = self.db.first("profiles", {"select": "display_name,about,important_people,timezone", "user_id": f"eq.{user_id}"}) or {}
         rules = self.db.select("priority_rules", {"select": "kind,target", "user_id": f"eq.{user_id}"})
         unsubs = self.db.select("unsubscribes", {"select": "sender_address", "user_id": f"eq.{user_id}"})
-        accounts = self.db.select("accounts", {"select": "id", "user_id": f"eq.{user_id}"})
+        accounts = self.db.select("accounts", {"select": "id,address", "user_id": f"eq.{user_id}"})
         feedback = self.db.select(
             "feedback",
             {"select": "value,threads(subject)", "user_id": f"eq.{user_id}", "order": "created_at.desc", "limit": "20"},
@@ -481,6 +568,8 @@ class Triage:
             for f in feedback
         ]
         return UserContext(
+            name=profile.get("display_name") or "",
+            own_addresses=sorted({a for a in ((self.vault.open(user_id, ADDRESS, r.get("address")) or "").lower() for r in accounts) if "@" in a}),
             about=profile.get("about") or "",
             important_people=profile.get("important_people") or "",
             always=[self.vault.open(user_id, ADDRESS, r["target"]) or "" for r in rules if r["kind"] == "always_important"],
@@ -488,6 +577,7 @@ class Triage:
             unsubscribed={(self.vault.open(user_id, ADDRESS, u["sender_address"]) or "").lower() for u in unsubs},
             corrections=corrections,
             accounts=[a["id"] for a in accounts],
+            timezone=profile.get("timezone") or "",
         )
 
     def _latest(self, batch: list[dict[str, Any]]) -> dict[str, tuple[bool, bool]]:
@@ -515,6 +605,31 @@ class Triage:
                 latest_any = self.db.first("messages", {"select": "direction", "thread_id": f"eq.{m['thread_id']}", "order": "sent_at.desc,id.desc"})
                 decided = (bool(latest_in) and latest_in["id"] == m["id"], bool(latest_any) and latest_any["direction"] == "inbound")
             out[m["id"]] = decided
+        return out
+
+    def _settled_senders(self, messages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Results by message id for bulk mail from a sender the model has settled on (sender_outcome). One
+        read per user for the batch. Without the sender_history migration, or when it fails, nothing is
+        settled and the model is asked as before."""
+        wanted: dict[str, set[str]] = {}
+        for m in messages:
+            if (m.get("is_bulk") or m.get("list_unsubscribe")) and m.get("sender_index"):
+                wanted.setdefault(m["user_id"], set()).add(m["sender_index"])
+        history: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for user_id, senders in wanted.items():
+            try:
+                rows = self.db.rpc("sender_history", {"p_user": user_id, "p_senders": sorted(senders), "p_keep": SENDER_KEEP}) or []
+            except Exception as err:
+                log.warn("sender history not read", code=log.code_of(err))
+                continue
+            for r in rows:
+                history.setdefault((user_id, r["sender_index"]), []).append(r)
+        now = datetime.now(timezone.utc)
+        out = {}
+        for m in messages:
+            outcome = sender_outcome(m, history.get((m["user_id"], m.get("sender_index") or ""), []), now)
+            if outcome is not None:
+                out[m["id"]] = outcome
         return out
 
     def _twins(self, messages: list[dict[str, Any]], contexts: dict[str, UserContext]) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]]:
@@ -563,13 +678,16 @@ class Triage:
         for m in ask:
             contact = contacts.get(m.get("sender_contact_id") or "") or {}
             body = self.vault.open_row(m["user_id"], dict(bodies.get(m["id"]) or {}), [("body_text", BODY), ("body_html", HTML)])
+            said = self.vault.open(m["user_id"], TRANSCRIPT, m.get("transcript"))
+            if said:  # a voice note is read as what was said in it
+                body = {"body_text": f"Voice note: {said}\n\n{body.get('body_text') or ''}".strip(), "body_html": None}
             m["_email"] = {
                 "name": contact.get("display_name") or "",
                 "sender": (m.get("sender_address") or "").lower(),
                 "relationship": contact.get("relationship") or "",
                 "known": m.get("sender_contact_id") in found["known"],
                 "bulk": bool(m.get("list_unsubscribe")),
-                "subject": m.get("subject") or "",
+                "subject": (m.get("subject") or "")[:SUBJECT_CHARS],
                 "sent": m.get("sent_at"),
                 "body": clean(body.get("body_text"), body.get("body_html"), limit=BODY_CHARS),
             }
@@ -621,11 +739,41 @@ class Triage:
             self._failed(missing, None)
         return out
 
+    def _report(self, updates: list[dict[str, Any]], final: dict[str, dict[str, Any]], stored: dict[str, dict[str, Any]]) -> None:
+        """One content-free event per label shown: what the AI said and the traits of the message. Set against
+        the corrections people make, this gives the correction rate for each kind of message."""
+        by_user: dict[str, list[dict[str, Any]]] = {}
+        for m in updates:
+            t = stored[m["id"]]
+            if t["source"] == "superseded":
+                continue
+            r = final[m["id"]]
+            by_user.setdefault(m["user_id"], []).append(
+                event(
+                    "triaged",
+                    **t,
+                    priority=r["priority"],
+                    category=r["category"],
+                    junk=bool(r["junk"]),
+                    needs_reply=bool(r["needs_reply"]),
+                    prompt=prompt_id(SYSTEM),
+                )
+            )
+        for user_id, events in by_user.items():
+            self.analytics.emit(user_id, events)
+
     def _failed(self, chunk: list[dict[str, Any]], status: int | None) -> None:
         now = time.monotonic()
         for m in chunk:
             failures = self._backoff.failed(m["id"], now)
             log.warn("triage failed", message=m["id"], status=status, failures=failures)
+
+    def _update_thread_safely(self, m: dict[str, Any], result: dict[str, Any], waiting_on_them: bool) -> None:
+        """One conversation that cannot be updated is logged and the rest still are."""
+        try:
+            self._update_thread(m, result, waiting_on_them)
+        except Exception as err:
+            log.warn("thread triage not saved", thread=m["thread_id"], code=log.code_of(err))
 
     def _update_thread(self, m: dict[str, Any], result: dict[str, Any], waiting_on_them: bool) -> None:
         self.db.update(

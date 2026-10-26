@@ -20,7 +20,7 @@ from .crypto import address_index
 from .fields import ADDRESS, BODY, DOMAIN, HTML, SUBJECT
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
-from .text import clean
+from .text import UNTRUSTED, clean
 from .vault import Vault
 from .voice import tidy_rule
 
@@ -41,23 +41,26 @@ ENCRYPTED = [("subject", SUBJECT), ("body_text", BODY), ("body_html", HTML)]
 PERSON_SCHEMA = {
     "type": "object",
     "properties": {
-        "style_note": {"type": "string", "description": "One or two sentences on how Me writes to this person."},
-        "summary": {"type": "string", "description": "Two or three sentences on who they are to Me and what they discuss."},
+        "style_note": {"type": "string", "description": "One or two sentences on how you write to this person."},
+        "summary": {"type": "string", "description": "Two or three sentences on who they are to you and what you discuss."},
     },
     "required": ["style_note", "summary"],
 }
 
-PERSON_SYSTEM = """You read emails between one person (Me) and someone they write to, and keep two short notes.
+PERSON_SYSTEM = """Read emails between one person and someone they write to, and keep two short notes for that
+person to read. Their own emails are marked "You". Write both notes to them as "you", never as "Me",
+"the user" or their name.
 
-style_note: one or two sentences on how Me writes to this person: greeting, sign-off, length, formality,
+style_note: one or two sentences on how you write to this person: greeting, sign-off, length, formality,
 language and anything particular to them. Style only, not content. Example: "Casual and brief, opens
 with 'Hey Sam', signs off 'Cheers, Matt'."
 
-summary: two or three sentences on who this person is to Me (their role, company and relationship, as
-far as the emails show) and what they write about. State only what the emails show; do not guess.
+summary: two or three sentences on who this person is to you (their role, company and relationship, as
+far as the emails show) and what you discuss. State only what the emails show; do not guess. Example:
+"Sam is the office manager at Acme. You look after their IT and they write about faults and invoices."
 
-Update the previous notes when given: keep what still holds, change what the newer emails show.
-Never use em dashes."""
+Update the previous notes when given: keep what still holds, change what the newer emails show, and
+reword anything that calls you "Me". Never use em dashes.""" + UNTRUSTED
 
 ORG_SCHEMA = {
     "type": "object",
@@ -68,7 +71,7 @@ ORG_SCHEMA = {
 ORG_SYSTEM = """You describe a company from the emails it sends one person, for their contacts list.
 Write at most two short sentences: what kind of company it is, then what it sends them.
 Example: "Airline. Sends booking confirmations and promotions." Example: "Bank. Sends statements and
-security alerts." No marketing language, no greetings. Never use em dashes."""
+security alerts." No marketing language, no greetings. Never use em dashes.""" + UNTRUSTED
 
 
 def _now() -> str:
@@ -207,7 +210,7 @@ class People:
             own = {self._address(user_id, a["address"]) for a in accts if a.get("address")}
             own |= {self._address(user_id, s) for a in accts for s in a.get("send_addresses") or []}
             own.discard("")
-            email_ids = [a["id"] for a in accts if a["provider"] in ("icloud", "gmail")]
+            email_ids = [a["id"] for a in accts if a["provider"] in ("icloud", "gmail", "outlook", "imap")]
             if not email_ids:
                 continue
             newest = self.db.first("messages", {"select": "created_at", "user_id": f"eq.{user_id}", "order": "created_at.desc"})
@@ -220,18 +223,28 @@ class People:
                 done += self._people(user_id, email_ids, own)
             except Exception as err:
                 failed = True
-                log.error("people learning failed", user=user_id, code=getattr(err, "code", None) or type(err).__name__)
+                log.error("people learning failed", user=user_id, code=log.code_of(err))
             try:
                 done += self._orgs(user_id)
             except Exception as err:
                 failed = True
-                log.error("organization summaries failed", user=user_id, code=getattr(err, "code", None) or type(err).__name__)
+                log.error("organization summaries failed", user=user_id, code=log.code_of(err))
             self._scanned[user_id] = (latest, time.monotonic(), self._backlog or failed)
         return done
 
     def _address(self, user_id: str, value: str | None) -> str:
         """A stored address as lowercase text, whether it is encrypted or not."""
         return (self.vault.open(user_id, ADDRESS, value) or "").strip().lower()
+
+    @staticmethod
+    def _guarded(step: Any, *args: Any) -> bool:
+        """Runs one contact's or organization's step; an unexpected error counts as not done (so it is
+        left for later) instead of ending the others' turn."""
+        try:
+            return bool(step(*args))
+        except Exception as err:
+            log.warn("people step failed", code=log.code_of(err))
+            return False
 
     def _skipped(self, item_id: str) -> bool:
         return time.monotonic() < self._skip.get(item_id, 0.0)
@@ -303,7 +316,7 @@ class People:
         due = [c for c in people_due(sent, contacts, inbound) if not self._skipped(c)]
         self._backlog = self._backlog or len(due) > PEOPLE_PER_RUN
         for contact_id in due[:PEOPLE_PER_RUN]:
-            if self._person(user_id, account_ids, by_id[contact_id]):
+            if self._guarded(self._person, user_id, account_ids, by_id[contact_id]):
                 done += 1
             else:
                 self._skip[contact_id] = time.monotonic() + RETRY_S
@@ -345,7 +358,7 @@ class People:
         name = contact.get("display_name") or "Them"
         emails = sorted((self.vault.open_row(user_id, m, ENCRYPTED) for m in theirs + mine), key=lambda m: _ts(m["sent_at"]))
         texts = [
-            ("Me" if m["direction"] == "outbound" else name, m.get("subject") or "", clean(m.get("body_text"), m.get("body_html"), limit=EMAIL_CHARS))
+            ("You" if m["direction"] == "outbound" else name, m.get("subject") or "", clean(m.get("body_text"), m.get("body_html"), limit=EMAIL_CHARS))
             for m in emails
         ]
         texts = [t for t in texts if t[2]]
@@ -403,7 +416,7 @@ class People:
         self._backlog = self._backlog or len(due) > ORGS_PER_RUN
         for org_id in due[:ORGS_PER_RUN]:
             contact_ids = [c for c, o in org_of.items() if o == org_id]
-            if self._org(user_id, by_id[org_id], contact_ids):
+            if self._guarded(self._org, user_id, by_id[org_id], contact_ids):
                 done += 1
             else:
                 self._skip[org_id] = time.monotonic() + RETRY_S

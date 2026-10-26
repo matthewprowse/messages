@@ -1,13 +1,14 @@
 "use client";
 
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { track } from "@/lib/analytics";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Archive, Check, ExternalLink, Inbox as InboxIcon, Mail, MailCheck, MailX, OctagonAlert, Trash2, X, type LucideIcon } from "lucide-react";
+import { Archive, Check, ExternalLink, Inbox as InboxIcon, Mail, MailCheck, MailX, OctagonAlert, Pin, RefreshCw, Trash2, X, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import type { Contact, ListFilter, Thread, Unsubscribe, View } from "@/lib/types";
 import { relTime } from "@/lib/format";
-import { shortcutAction, toggleSelection, type ShortcutAction } from "@/lib/selection";
+import { filtersForView, nextLimit, PAGE_SIZE, shortcutAction, toggleSelection, type ShortcutAction } from "@/lib/selection";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,6 +20,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContactAvatar, EmptyState } from "@/components/primitives";
+import { useImporting } from "@/components/sync-bar";
+import { ProviderLogo } from "@/components/provider-logo";
 
 const VIEWS: { key: View; label: string }[] = [
   { key: "all", label: "All" },
@@ -32,6 +35,7 @@ const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
   { key: "unread", label: "Unread" },
   { key: "email", label: "Email" },
   { key: "whatsapp", label: "WhatsApp" },
+  { key: "waiting", label: "Waiting" },
 ];
 
 const EMPTY: Record<View, { title: string; description: string }> = {
@@ -52,7 +56,8 @@ function withQuery(path: string, query: string) {
 function listHref(view: View, filter: ListFilter) {
   const p = new URLSearchParams();
   if (view !== "all") p.set("view", view);
-  if (filter !== "none") p.set("filter", filter);
+  // A filter that does not apply to the view (WhatsApp in Subscriptions) is left out of its link.
+  if (filter !== "none" && filtersForView(view).includes(filter)) p.set("filter", filter);
   return withQuery("/inbox", p.toString());
 }
 
@@ -64,7 +69,15 @@ function useListState() {
   const params = useSearchParams();
   const viewParam = params.get("view");
   const view: View = viewParam === "priority" || viewParam === "junk" || viewParam === "subscriptions" ? viewParam : "all";
-  const filter = filterOf(params.get("filter"));
+  const rawFilter = filterOf(params.get("filter"));
+  const filter: ListFilter = filtersForView(view).includes(rawFilter) ? rawFilter : "none";
+  // Which view and filter people choose (the default is not a choice).
+  useEffect(() => {
+    if (view !== "all") track("feature_used", { feature: "conversation_view", detail: view });
+  }, [view]);
+  useEffect(() => {
+    if (filter !== "none") track("feature_used", { feature: "conversation_filter", detail: filter });
+  }, [filter]);
   // A message jumped to from search belongs to one conversation, so it is not carried into list links.
   const query = new URLSearchParams(params);
   query.delete("message");
@@ -100,18 +113,18 @@ function ListControls({ view, filter }: { view: View; filter: ListFilter }) {
         <nav ref={views.ref} onScroll={views.onScroll} aria-label="View" className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {VIEWS.map((v) => (
             <Button key={v.key} asChild variant={view === v.key ? "secondary" : "ghost"} className={cn("shrink-0 px-2", view !== v.key && "text-muted-foreground")}>
-              <Link href={listHref(v.key, filter)} aria-current={view === v.key ? "page" : undefined}>{v.label}</Link>
+              <Link href={listHref(v.key, filter)} replace aria-current={view === v.key ? "page" : undefined}>{v.label}</Link>
             </Button>
           ))}
         </nav>
         {views.more && <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-linear-to-r from-transparent to-background" />}
       </div>
-      <Select value={filter === "none" ? "" : filter} onValueChange={(f) => router.push(listHref(view, f as ListFilter))}>
+      <Select value={filter === "none" ? "" : filter} onValueChange={(f) => router.replace(listHref(view, f as ListFilter))}>
         <SelectTrigger aria-label="Filter" className="w-36 data-[size=default]:h-8">
           <SelectValue placeholder="Filter" />
         </SelectTrigger>
         <SelectContent align="end">
-          {FILTER_OPTIONS.map((o) => (
+          {FILTER_OPTIONS.filter((o) => filtersForView(view).includes(o.key)).map((o) => (
             <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
           ))}
         </SelectContent>
@@ -159,10 +172,27 @@ function RowButton({ label, icon: Icon, onClick, variant = "ghost", className }:
 // On hover a row's content fades out over the 32px before its action buttons and is gone beneath them.
 // Each button is 32px with 4px between, 12px from the right edge. Keyed by the number of buttons.
 const FADE: Record<1 | 2 | 3, string> = {
-  1: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-76px),transparent_calc(100%-44px))] [&_[data-hover-hide]]:group-hover/row:invisible",
-  2: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-hover/row:invisible",
-  3: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:group-hover/row:invisible",
+  1: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-76px),transparent_calc(100%-44px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-76px),transparent_calc(100%-44px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-76px),transparent_calc(100%-44px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible",
+  2: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible",
+  3: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible",
 };
+
+// Conversation rows (here and on Summary) fade for their actions only with a mouse, or on a phone once
+// swiped: a phone shows the photo, the time and the unread count, and a swipe to the left brings the
+// actions and the checkbox out. Focus fades a row only with a mouse, as a tap focuses the row it opens.
+const ROW_FADE =
+  "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:group-hover/row:invisible pointer-fine:group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:pointer-fine:group-focus-within/row:invisible";
+const SWIPED_FADE = "[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:invisible";
+/** How far a finger moves sideways, and more sideways than down, before it counts as a swipe. */
+const SWIPE_PX = 32;
+
+/** Which row is swiped open on a touch screen: one at a time, closed by touching another row. */
+export function useSwipedRow() {
+  const [swiped, setSwiped] = useState<string | null>(null);
+  const onSwipe = useCallback((id: string | null) => setSwiped(id), []);
+  const onTouchRow = useCallback((id: string) => setSwiped((s) => (s === id ? s : null)), []);
+  return { swiped, onSwipe, onTouchRow };
+}
 
 // A row's hover actions, in order from the left.
 const ROW_ACTIONS = (thread: Thread): { action: RowAction; label: string; icon: LucideIcon }[] => [
@@ -197,6 +227,9 @@ export const ThreadRow = memo(function ThreadRow({
   onPress,
   baseHref = "/inbox",
   summary,
+  swiped = false,
+  onSwipe,
+  onTouchRow,
 }: {
   thread: Thread;
   /** Only read through relTime: a new day redraws the row. */
@@ -216,6 +249,12 @@ export const ThreadRow = memo(function ThreadRow({
   baseHref?: string;
   /** An extra line under the preview, such as the AI summary. */
   summary?: string;
+  /** Swiped open on a touch screen: the actions and the checkbox are out. */
+  swiped?: boolean;
+  /** A swipe to the left opens this row (id), to the right closes it (null). */
+  onSwipe?: (id: string | null) => void;
+  /** A finger came down on this row, which closes any other row left open. */
+  onTouchRow?: (id: string) => void;
 }) {
   const router = useRouter();
   const title = thread.isGroup ? thread.groupName : contact?.name ?? thread.fallbackName ?? "Unknown";
@@ -227,11 +266,34 @@ export const ThreadRow = memo(function ThreadRow({
   // Viewport prefetching would fetch every row, so a row is fetched once the pointer or focus reaches it.
   const prefetch = () => router.prefetch(href);
   const act = (action: RowAction) => onAction(thread.id, action);
+  const open = swiped && !selecting;
+
+  // A swipe is a sideways move, clearly more sideways than down, so scrolling the list is never one.
+  const touch = useRef<{ x: number; y: number; done: boolean } | null>(null);
+  const swipedAt = useRef(0);
+  const swipe = onSwipe && {
+    onTouchStart: (e: React.TouchEvent) => {
+      const t = e.touches[0];
+      touch.current = { x: t.clientX, y: t.clientY, done: false };
+      onTouchRow?.(thread.id);
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      const start = touch.current;
+      if (!start || start.done || selecting) return;
+      const t = e.touches[0];
+      const dx = t.clientX - start.x;
+      if (Math.abs(dx) < SWIPE_PX || Math.abs(dx) < Math.abs(t.clientY - start.y) * 1.5) return;
+      start.done = true;
+      swipedAt.current = Date.now();
+      onSwipe(dx < 0 ? thread.id : null);
+    },
+    onTouchEnd: () => { touch.current = null; },
+  };
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div data-thread-row={thread.id} className={cn("group/row relative rounded-lg", lit ? "bg-muted [&_[data-unread]]:bg-background" : "hover:bg-muted/50")}>
+        <div data-thread-row={thread.id} {...swipe} className={cn("group/row relative touch-pan-y rounded-lg", lit ? "bg-muted [&_[data-unread]]:bg-background" : "hover:bg-muted/50")}>
           <Link
             href={href}
             prefetch={false}
@@ -242,25 +304,33 @@ export const ThreadRow = memo(function ThreadRow({
             onPointerDown={() => onPress(thread.id)}
             // Cmd or Ctrl-click checks one row, Shift-click a range. Once any are checked, a click checks too.
             onClick={(e) => {
+              // The end of a swipe is not a tap, and a tap on a row swiped open closes it.
+              if (Date.now() - swipedAt.current < 400) { e.preventDefault(); return; }
+              if (open) { e.preventDefault(); onSwipe?.(null); return; }
               if (!(e.shiftKey || e.metaKey || e.ctrlKey || selecting)) return;
               e.preventDefault();
               onCheck(thread.id, e.shiftKey);
             }}
             // While rows are checked the header has the actions, so rows show none and nothing fades.
-            className={cn("flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", !selecting && FADE[3])}
+            className={cn("flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", !selecting && (open ? SWIPED_FADE : ROW_FADE))}
           >
-            <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", selecting ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible")}>
+            <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", selecting || open ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible pointer-fine:group-focus-within/row:invisible")}>
               {/* A group's own picture, or the other person's photo. */}
               <ContactAvatar contact={thread.isGroup ? thread : contact} className="size-8" />
             </div>
             {/* 20px name line + 4px gap + 16px preview line. */}
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <div className="flex h-5 items-center justify-between gap-3">
-                <span className="min-w-0 truncate text-sm font-medium">{title}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className={cn("min-w-0 truncate text-sm", thread.unread ? "font-semibold" : "font-medium")}>{title}</span>
+                  <ProviderLogo provider={thread.provider} />
+                  {thread.pinned && <Pin className="size-3 shrink-0 text-muted-foreground" aria-label="Pinned" />}
+                </span>
                 <span data-hover-hide className="shrink-0 text-xs tabular-nums text-muted-foreground">{relTime(thread.lastMessageAt)}</span>
               </div>
               <div className="flex h-4 items-center justify-between gap-3">
-                <span className="min-w-0 truncate text-xs">{preview}</span>
+                {/* Always full colour: unread shows in the bold name and the count. Only the AI summary below is muted. */}
+                <span className="min-w-0 truncate text-xs text-foreground">{preview}</span>
                 {unreadCount > 0 && (
                   <span data-unread className="-my-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium" data-hover-hide aria-label={`${unreadCount} unread`}>
                     {unreadCount}
@@ -270,20 +340,21 @@ export const ThreadRow = memo(function ThreadRow({
               {summary && <p className="line-clamp-2 text-xs text-muted-foreground">{summary}</p>}
             </div>
           </Link>
-          {/* Over the avatar: shown on hover, and on every row once one is checked. */}
-          <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex")}>
+          {/* Over the avatar: shown on hover or when swiped open, and on every row once one is checked. */}
+          <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting || open ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex pointer-fine:group-focus-within/row:flex")}>
             <Checkbox
               checked={checked}
               aria-label={`Select ${title}`}
               onClick={(e) => {
                 e.preventDefault();
                 onCheck(thread.id, e.shiftKey);
+                onSwipe?.(null); // checking starts selecting: every row shows its checkbox instead
               }}
             />
           </div>
-          {/* Shown on hover, over the faded content. */}
+          {/* Shown on hover, or slid out by a swipe, over the faded content. */}
           {!selecting && (
-            <div className="absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex">
+            <div className={cn("absolute top-1/2 right-3 -translate-y-1/2 items-center gap-1", open ? "flex animate-in fade-in-0 slide-in-from-right-4 duration-150" : "hidden group-hover/row:flex pointer-fine:group-focus-within/row:flex")}>
               {ROW_ACTIONS(thread).map((a) => (
                 <RowButton
                   key={a.action}
@@ -408,6 +479,7 @@ function useSubscriptions(items: Thread[], contactOf: (id: string) => Contact | 
   const run = useCallback(async (keys: string[]) => {
     const chosen = senders.filter((s) => keys.includes(s.key));
     if (chosen.length === 0) return;
+    track("feature_used", { feature: "unsubscribe", detail: chosen.length > 1 ? "many" : "one" });
     await unsubscribe(chosen.map((s) => ({ accountId: s.accountId, sender: s.address })));
     setChecked((c) => c.filter((k) => !keys.includes(k)));
   }, [senders, unsubscribe]);
@@ -463,7 +535,7 @@ function SubscriptionRow({ sender, status, query, open, checked, selecting, pick
         }}
         className={cn("flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", actions.length > 0 && FADE[actions.length as 1 | 2])}
       >
-        <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", pickable && (selecting ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible"))}>
+        <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", pickable && (selecting ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible group-focus-within/row:invisible pointer-coarse:invisible"))}>
           <ContactAvatar contact={sender.contact} className="size-8" />
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -479,7 +551,7 @@ function SubscriptionRow({ sender, status, query, open, checked, selecting, pick
       </Link>
       {/* Over the avatar: shown on hover, and on every pickable row once one is checked. */}
       {pickable && (
-        <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex")}>
+        <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex group-focus-within/row:flex pointer-coarse:flex")}>
           <Checkbox
             checked={checked}
             aria-label={`Select ${sender.name}`}
@@ -491,7 +563,7 @@ function SubscriptionRow({ sender, status, query, open, checked, selecting, pick
         </div>
       )}
       {actions.length > 0 && (
-        <div className="absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex">
+        <div className="absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex group-focus-within/row:flex pointer-coarse:flex">
           {actions.map((a) => <RowButton key={a.label} variant="outline" label={a.label} icon={a.icon} onClick={a.onClick} />)}
         </div>
       )}
@@ -502,7 +574,7 @@ function SubscriptionRow({ sender, status, query, open, checked, selecting, pick
 /** The placeholder rows shown while conversations load. */
 function LoadingRows() {
   return (
-    <div className="flex flex-col gap-2" aria-label="Loading conversations">
+    <div className="flex flex-col gap-2" role="status" aria-busy="true" aria-label="Loading conversations">
       {Array.from({ length: 8 }, (_, i) => (
         <div key={i} className="flex items-center gap-3 p-3">
           <Skeleton className="size-8 shrink-0 rounded-full" />
@@ -516,8 +588,10 @@ function LoadingRows() {
   );
 }
 
-/** Checked conversations and the actions on them. `order` is the rows top to bottom, and the selection clears whenever `reset` changes. */
-/** Checked rows, shift-click ranges and bulk actions. basePath is where it returns when the open conversation goes. */
+/**
+ * Checked rows, shift-click ranges and bulk actions. `order` is the rows top to bottom, the selection clears
+ * whenever `reset` changes, and basePath is where it returns when the open conversation goes.
+ */
 export function useThreadSelection(order: string[], query: string, reset: string, basePath = "/inbox") {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
@@ -615,7 +689,9 @@ function useRowNavigation<T extends HTMLElement>() {
 export function ThreadList() {
   const { view, filter, query } = useListState();
   const params = useParams<{ id?: string }>();
-  const { listThreads, loading, contactById: contactOf, prefetchMessages } = useApp();
+  const { listThreads, accounts, loading, contactById: contactOf, prefetchMessages } = useApp();
+  const noAccounts = !accounts.some((a) => a.status !== "disconnected");
+  const importing = useImporting().length > 0;
   const [search, setSearch] = useState("");
   const term = search.trim().toLowerCase();
   // Already sorted with pinned conversations first. Search matches the row's name, subject and preview.
@@ -635,20 +711,60 @@ export function ThreadList() {
   const pickedSet = useMemo(() => new Set(picked), [picked]);
   const rowsRef = useRowNavigation<HTMLDivElement>();
   const today = useToday();
+  const rowSwipe = useSwipedRow();
+
+  // Select mode lets touch users check rows without a modifier key. Rows act as if some are checked.
+  const [selectMode, setSelectMode] = useState(false);
+  const selectingRows = selectMode || picked.length > 0;
+  const selectingSubs = selectMode || subs.picked.length > 0;
+  const endSelecting = () => { setSelectMode(false); setChecked([]); subs.setChecked([]); };
+  // Escape leaves select mode once nothing is checked (with rows checked, it clears them first).
+  useEffect(() => {
+    if (!selectMode) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !(e.target as HTMLElement | null)?.closest(TYPING)) setSelectMode(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode]);
+
+  // Long lists draw a hundred rows, then a hundred more whenever the end nears the viewport. The limit
+  // starts over when the list changes. Keyboard navigation reads whatever rows are drawn.
+  const listKey = `${view}:${filter}:${term}`;
+  const [limit, setLimit] = useState({ key: listKey, n: PAGE_SIZE });
+  const shown = limit.key === listKey ? limit.n : PAGE_SIZE;
+  const total = view === "subscriptions" ? subs.senders.length : threads.length;
+  const sentinel = useRef<HTMLDivElement>(null);
+  const more = shown < total;
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !more) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries.some((e) => e.isIntersecting)) setLimit({ key: listKey, n: nextLimit(shown, total) }); },
+      { root: el.closest<HTMLElement>("[data-slot=scroll-area-viewport]"), rootMargin: "600px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [more, shown, total, listKey]);
 
   return (
     // The header sits above the scroll area, so the rows and their scrollbar both start below it.
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0">
         <div className="space-y-3 border-b p-3">
-          <h1 className="flex h-8 items-center text-lg font-medium">Conversations</h1>
-          {view === "subscriptions" && subs.picked.length > 0 ? (
-            <BulkBar allPicked={subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])}>
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="flex h-8 items-center text-lg font-medium">Conversations</h1>
+            <Button variant={selectMode ? "secondary" : "ghost"} aria-pressed={selectMode} onClick={() => (selectMode ? endSelecting() : setSelectMode(true))}>
+              {selectMode ? "Done" : "Select"}
+            </Button>
+          </div>
+          {view === "subscriptions" && selectingSubs ? (
+            <BulkBar allPicked={subs.pickable.length > 0 && subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])}>
               <RowButton label="Unsubscribe" icon={MailX} onClick={() => subs.run(subs.picked)} />
             </BulkBar>
-          ) : picked.length > 0 && view !== "subscriptions" ? (
+          ) : selectingRows && view !== "subscriptions" ? (
             <SelectionBar
-              allPicked={picked.length === order.length}
+              allPicked={order.length > 0 && picked.length === order.length}
               anyUnread={threads.some((t) => t.unread && pickedSet.has(t.id))}
               onAll={() => setChecked(order)}
               onClear={() => setChecked([])}
@@ -664,8 +780,8 @@ export function ThreadList() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Escape" && search) { e.stopPropagation(); setSearch(""); } }}
-            placeholder="Search Conversations"
-            aria-label="Search Conversations"
+            placeholder="Filter Conversations"
+            aria-label="Filter Conversations"
           />
         </div>
       </div>
@@ -674,8 +790,17 @@ export function ThreadList() {
           {loading && <LoadingRows />}
           {!loading && threads.length === 0 && (
             <div className="py-24">
-              {term ? (
+              {noAccounts ? (
+                <EmptyState
+                  icon={Mail}
+                  title="Connect an Account"
+                  description="Link Gmail, iCloud or WhatsApp to see your conversations here."
+                  action={<Button asChild><Link href="/settings/accounts">Connect an Account</Link></Button>}
+                />
+              ) : term ? (
                 <EmptyState icon={InboxIcon} title="No Matches" description="No conversations match your search." />
+              ) : importing ? (
+                <EmptyState icon={RefreshCw} title="Importing Your Messages" description="Conversations appear here as they arrive. The first import can take a few minutes." />
               ) : (
                 <EmptyState icon={InboxIcon} title={EMPTY[view].title} description={EMPTY[view].description} />
               )}
@@ -683,7 +808,7 @@ export function ThreadList() {
           )}
           {view === "subscriptions" ? (
             <div className="flex flex-col gap-2">
-              {subs.senders.map((s, i) => (
+              {subs.senders.slice(0, shown).map((s, i) => (
                 <Fragment key={s.key}>
                   {i > 0 && <div className="pl-14"><Separator /></div>}
                   <SubscriptionRow
@@ -692,7 +817,7 @@ export function ThreadList() {
                     query={query}
                     open={params.id === s.latest.id}
                     checked={subsPicked.has(s.key)}
-                    selecting={subs.picked.length > 0}
+                    selecting={selectingSubs}
                     pickable={subsPickable.has(s.key)}
                     onCheck={subs.check}
                     onUnsubscribe={(key) => subs.run([key])}
@@ -703,7 +828,7 @@ export function ThreadList() {
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              {threads.map((t, i) => (
+              {threads.slice(0, shown).map((t, i) => (
                 <Fragment key={t.id}>
                   {i > 0 && <div className="pl-14"><Separator /></div>}
                   <ThreadRow
@@ -713,15 +838,19 @@ export function ThreadList() {
                     query={query}
                     selected={params.id === t.id}
                     checked={pickedSet.has(t.id)}
-                    selecting={picked.length > 0}
+                    selecting={selectingRows}
                     onCheck={check}
                     onAction={onRowAction}
                     onPress={prefetchMessages}
+                    swiped={rowSwipe.swiped === t.id}
+                    onSwipe={rowSwipe.onSwipe}
+                    onTouchRow={rowSwipe.onTouchRow}
                   />
                 </Fragment>
               ))}
             </div>
           )}
+          {more && <div ref={sentinel} aria-hidden className="h-px" />}
         </div>
       </ScrollArea>
     </div>

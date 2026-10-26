@@ -6,13 +6,13 @@ export interface Decision {
   text: string;
   kind: ChoiceKind;
 }
-export type Channel = "email" | "whatsapp";
-export type Provider = "icloud" | "gmail" | "whatsapp" | "google_calendar";
+export type Channel = "email" | "whatsapp" | "linkedin" | "instagram" | "teams" | "zoom" | "google_chat";
+export type Provider = "icloud" | "gmail" | "outlook" | "whatsapp" | "google_calendar" | "outlook_calendar" | "icloud_calendar" | "imap" | "teams" | "zoom" | "google_meet" | "linkedin" | "instagram" | "microsoft_todo" | "google_tasks" | "icloud_reminders";
 export type Priority = "urgent" | "important" | "normal" | "low";
 export type Category = "personal" | "work" | "needs_reply" | "fyi" | "newsletter" | "notification";
 export type ThreadStatus = "inbox" | "archived" | "trash";
 export type View = "priority" | "all" | "junk" | "subscriptions";
-export type ListFilter = "none" | "unread" | "email" | "whatsapp";
+export type ListFilter = "none" | "unread" | "email" | "whatsapp" | "waiting";
 export type AccountStatus = "connecting" | "syncing" | "connected" | "disconnected" | "error";
 
 export interface Contact {
@@ -31,7 +31,7 @@ export interface Contact {
 export interface Attachment {
   id: string;
   name: string;
-  kind: "image" | "pdf" | "video" | "file";
+  kind: "image" | "pdf" | "video" | "audio" | "file";
   size: string;
   path?: string; // where the file is stored in the private attachments bucket, once it is
   hiddenReason?: "inline" | "tiny" | "junk" | "manual"; // set for files kept out of the attachment lists
@@ -65,6 +65,8 @@ export interface Message {
   forward?: ForwardedEmail;
   /** The bold and italic runs of an email's HTML, found again in body when it is drawn. */
   marks?: Emphasis[];
+  /** What was said in a WhatsApp voice note, for View Transcript. */
+  transcript?: string;
   /** A WhatsApp message: body is its text as sent, with WhatsApp's formatting markers. */
   whatsapp?: boolean;
   /** The email has an HTML version, which View Original fetches from the provider when opened. */
@@ -86,10 +88,15 @@ export interface Message {
 export interface Draft {
   id: string;
   body: string;
-  tone: "default" | "shorter" | "formal" | "casual" | "custom";
+  /** edit: your own text, lightly corrected by the AI rather than written by it. */
+  tone: "default" | "shorter" | "formal" | "casual" | "custom" | "edit";
   instruction?: string;
+  /** What you wrote before an edit, for Undo Edit. */
+  source?: string;
   /** What you decided with a guided drafting choice, kept when you ask for another tone. */
   decision?: Decision;
+  /** Written before you asked (a pre-draft), so it never replaces what you are typing. */
+  auto?: boolean;
   generatedAt: string;
 }
 
@@ -117,6 +124,10 @@ export interface Thread {
   category: Category;
   summary: string;
   needsReply: boolean;
+  /** The latest message is yours, so the conversation waits on them, not you. */
+  lastFromMe: boolean;
+  /** That message of yours expects an answer (a question, a request, documents sent), as the AI read it. */
+  waiting?: boolean;
   /** Spam, marketing or impersonal bulk mail, kept out of All and Priority. */
   junk: boolean;
   /** Offers a way to unsubscribe. Junk that does is shown under Subscriptions, the rest under Junk. */
@@ -170,4 +181,27 @@ export interface Profile {
   pushImportant: boolean;
   autoDraftTop: boolean;
   whatsappReadReceipts: boolean;
+  /** Send content-free usage numbers (which screens and features are used, never any text) to improve the product. */
+  shareUsage: boolean;
+}
+
+/** A task or reminder from Microsoft To Do, Google Tasks or iCloud Reminders, shown in Calendar on the day it is due. */
+export interface Task {
+  id: string;
+  accountId: string;
+  title: string;
+  notes?: string;
+  /** The list it is in, such as "Clients". */
+  listName?: string;
+  /** A due time, or midnight UTC of the due date when dueAllDay. Null when it has no date. */
+  dueAt: string | null;
+  dueAllDay: boolean;
+  completed: boolean;
+  completedAt?: string;
+  /** 1 high, 2 medium, 3 low. */
+  priority?: 1 | 2 | 3;
+  /** The client it is about, when it could be matched. */
+  contactId?: string;
+  /** Ticked or unticked here and not yet made at the provider. */
+  pending?: boolean;
 }

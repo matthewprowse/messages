@@ -14,13 +14,30 @@ export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly
 export const CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 /** Read only: names and photos of your Google contacts, matched to the people in Messages. */
 export const CONTACTS_SCOPE = "https://www.googleapis.com/auth/contacts.readonly";
-export const SCOPES = [GMAIL_SCOPE, CALENDAR_SCOPE, CALENDAR_EVENTS_SCOPE, CONTACTS_SCOPE];
+/** Read your Google Tasks lists and tasks, and tick tasks off or back on from Messages. */
+export const TASKS_SCOPE = "https://www.googleapis.com/auth/tasks";
+export const SCOPES = [GMAIL_SCOPE, CALENDAR_SCOPE, CALENDAR_EVENTS_SCOPE, CONTACTS_SCOPE, TASKS_SCOPE];
 
-/** Stored encrypted in account_credentials, shared by the Gmail and Google Calendar accounts. */
+// Meet Transcripts and Google Chat: asked for only when that option is ticked, and kept in a google_meet
+// account of its own. Both need a Google Workspace account; openid and email tell the worker whether it is one.
+/** Read only: your Meet conferences, their participants and transcripts. Sensitive, not restricted. */
+export const MEET_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
+/** Read your Google Chat messages and send replies as you. Restricted, like gmail.modify. */
+export const CHAT_MESSAGES_SCOPE = "https://www.googleapis.com/auth/chat.messages";
+/** Read only: which Chat spaces, group chats and direct messages you are in. Sensitive. */
+export const CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly";
+/** Who you are: your Google ID (to know your own messages and your place in a meeting) and Workspace domain. */
+export const OPENID_SCOPES = ["openid", "email"];
+export const MEET_CHAT_SCOPES = [MEET_SCOPE, CHAT_MESSAGES_SCOPE, CHAT_SPACES_SCOPE, ...OPENID_SCOPES];
+
+/** Stored encrypted in account_credentials, shared by the Gmail, Google Calendar, Google Tasks and Google Meet accounts. */
 export interface GoogleCredentials {
   refreshToken: string;
   /** The scopes you agreed to. Google lets you untick some on the consent screen. */
   scopes: string[];
+  /** "web" when the sign-in was made in the web app, whose OAuth client is a different one. A refresh token
+   *  only works with the client that issued it. Absent for sign-ins from pnpm connect:google. */
+  client?: "web";
 }
 
 export interface Pkce {
@@ -34,13 +51,14 @@ export function pkce(): Pkce {
   return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
 }
 
-export function authUrl(opts: { clientId: string; redirectUri: string; state: string; challenge: string }): string {
+/** `scopes` defaults to SCOPES; the Meet and Chat option adds MEET_CHAT_SCOPES. */
+export function authUrl(opts: { clientId: string; redirectUri: string; state: string; challenge: string; scopes?: string[] }): string {
   const url = new URL(AUTH_URL);
   url.search = new URLSearchParams({
     client_id: opts.clientId,
     redirect_uri: opts.redirectUri,
     response_type: "code",
-    scope: SCOPES.join(" "),
+    scope: (opts.scopes ?? SCOPES).join(" "),
     access_type: "offline", // ask for a refresh token
     prompt: "consent", // always issue a new refresh token, also when reconnecting
     state: opts.state,

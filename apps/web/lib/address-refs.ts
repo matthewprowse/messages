@@ -27,14 +27,44 @@ export async function sealAddress(value: string): Promise<string> {
 /** Each address or number with its index, ready for create_contact. */
 export async function identityRefs(items: { kind: string; value: string }[]): Promise<IdentityRef[]> {
   const keys = await userKeys();
-  return Promise.all(items.map(async (i) => ({ kind: i.kind, value: await sealAddress(i.value), idx: await addressIndex(keys, i.value) })));
+  return Promise.all(items.map(async (i) => ({
+    kind: i.kind,
+    value: encryptAddresses ? await encryptField(keys, FIELD.address, i.value) : i.value,
+    idx: await addressIndex(keys, i.value),
+  })));
+}
+
+// Your own addresses change only when an account is linked or edited, so they are read and opened once per
+// signed-in user and reused for a few minutes. Without this every companyRef call re-read and re-decrypted
+// every account.
+const OWN_ADDRESSES_TTL = 10 * 60_000;
+let ownCache: { user: string | null; at: number; value: Promise<string[]> } | null = null;
+
+supabase.auth.onAuthStateChange((_event, session) => {
+  if (ownCache && ownCache.user !== (session?.user.id ?? null)) ownCache = null;
+});
+
+async function readOwnAddresses(): Promise<string[]> {
+  const { data, error } = await supabase.from("accounts").select("address, send_addresses");
+  if (error) throw new Error(`Load accounts failed (${error.code})`);
+  const values = (data ?? []).flatMap((a) => [a.address, ...(a.send_addresses ?? [])]);
+  return (await Promise.all(values.map((v) => open(FIELD.address, v)))).filter((v): v is string => !!v);
 }
 
 /** Every address on your accounts, for leaving your own domains out of companies. */
 async function ownAddresses(): Promise<string[]> {
-  const { data } = await supabase.from("accounts").select("address, send_addresses");
-  const values = (data ?? []).flatMap((a) => [a.address, ...(a.send_addresses ?? [])]);
-  return (await Promise.all(values.map((v) => open(FIELD.address, v)))).filter((v): v is string => !!v);
+  const { data } = await supabase.auth.getSession();
+  const user = data.session?.user.id ?? null;
+  if (ownCache && ownCache.user === user && Date.now() - ownCache.at < OWN_ADDRESSES_TTL) return ownCache.value;
+  const entry = { user, at: Date.now(), value: readOwnAddresses() };
+  ownCache = entry;
+  // A failed read is not kept: the next call tries again, and for now your addresses read as none, as before.
+  const read = entry.value.catch(() => {
+    if (ownCache === entry) ownCache = null;
+    return [] as string[];
+  });
+  entry.value = read;
+  return read;
 }
 
 /** The company an email address belongs to, as organization_for_index takes it, or null. */

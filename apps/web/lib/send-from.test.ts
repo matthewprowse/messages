@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Contact, Message } from "./types";
-import { defaultFrom, parseAddresses, replyRecipients, sendAddressesOf } from "./send-from";
+import { defaultFrom, parseAddresses, replyAllRecipients, replyRecipients, sendAddressesOf } from "./send-from";
 
 const account = { detail: "Me@Example.com", sendAddresses: ["me@example.com", "hello@shop.co", " Sales@Shop.co "] };
 
@@ -61,4 +61,30 @@ test("parseAddresses reads pasted names and matches the worker's rules", () => {
 test("defaultFrom skips a reply still sending", () => {
   const msgs = [msg({ toAddresses: ["hello@shop.co"] }), msg({ from: "me", address: "sales@shop.co", sendState: "sending" })];
   assert.equal(defaultFrom(account, msgs), "hello@shop.co");
+});
+
+test("replyAllRecipients sends to the sender and copies everyone else, minus your own addresses", () => {
+  const msgs = [msg({ address: "Jane@x.com", toAddresses: ["me@example.com", "bob@y.co", "amy@z.io", "jane@x.com"] })];
+  assert.deepEqual(replyAllRecipients(msgs, sendAddressesOf(account)), { to: ["jane@x.com"], cc: ["bob@y.co", "amy@z.io"] });
+});
+
+test("replyAllRecipients answers the latest message from someone else, skipping replies still sending", () => {
+  const msgs = [
+    msg({ address: "jane@x.com", toAddresses: ["me@example.com", "bob@y.co"] }),
+    msg({ from: "me", address: "me@example.com", toAddresses: ["jane@x.com", "bob@y.co"] }),
+    msg({ address: "late@x.com", toAddresses: ["me@example.com"], sendState: "sending" }),
+  ];
+  assert.deepEqual(replyAllRecipients(msgs, sendAddressesOf(account)), { to: ["jane@x.com"], cc: ["bob@y.co"] });
+});
+
+test("replyAllRecipients on a chosen message answers that one, and on your own email goes to its recipients", () => {
+  const theirs = msg({ address: "jane@x.com", toAddresses: ["me@example.com", "bob@y.co"] });
+  const mine = msg({ from: "me", address: "me@example.com", toAddresses: ["Jane@x.com", "bob@y.co", "hello@shop.co"] });
+  assert.deepEqual(replyAllRecipients([theirs, mine], sendAddressesOf(account), theirs), { to: ["jane@x.com"], cc: ["bob@y.co"] });
+  assert.deepEqual(replyAllRecipients([theirs, mine], sendAddressesOf(account), mine), { to: ["jane@x.com", "bob@y.co"], cc: [] });
+});
+
+test("replyAllRecipients has no one to fill in when there is nothing to answer", () => {
+  assert.deepEqual(replyAllRecipients([], sendAddressesOf(account)), { to: [], cc: [] });
+  assert.deepEqual(replyAllRecipients([msg({ from: "me" })], sendAddressesOf(account)), { to: [], cc: [] });
 });

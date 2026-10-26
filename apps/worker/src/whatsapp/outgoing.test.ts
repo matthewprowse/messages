@@ -20,6 +20,17 @@ test("photos, videos, audio and documents each get the right kind", () => {
   assert.ok("document" in fileMessage(file("video/quicktime")));
 });
 
+test("a converted voice note goes as a voice note, with its length and waveform", () => {
+  const waveform = new Uint8Array(64);
+  const note = { filename: "Voice Note.ogg", contentType: "audio/ogg", content: Buffer.from("x"), voice: { seconds: 7, waveform } };
+  assert.deepEqual(fileMessage(note), { audio: note.content, mimetype: "audio/ogg; codecs=opus", ptt: true, seconds: 7, waveform });
+  assert.deepEqual(fileMessage(file("audio/ogg")), { audio: Buffer.from("x"), mimetype: "audio/ogg", ptt: false });
+  // The text goes on its own first, as a voice note carries no caption.
+  const out = outgoingMessages("Listen", [note]);
+  assert.deepEqual(out[0], { text: "Listen" });
+  assert.equal((out[1] as { ptt?: boolean }).ptt, true);
+});
+
 test("the text is the caption of the first file that can carry one", () => {
   const out = outgoingMessages("Look", [file("image/png"), file("application/pdf")]);
   assert.equal(out.length, 2);

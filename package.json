@@ -9,11 +9,16 @@
     "lint": "pnpm -r lint",
     "worker": "pnpm --filter worker dev",
     "connect:icloud": "pnpm --filter worker connect:icloud",
+    "connect:imap": "pnpm --filter worker connect:imap",
+    "connect:icloud-calendar": "pnpm --filter worker connect:icloud-calendar",
     "connect:google": "pnpm --filter worker connect:google",
+    "connect:microsoft": "pnpm --filter worker connect:microsoft",
     "connect:whatsapp": "pnpm --filter worker connect:whatsapp",
+    "linkedin:build": "cd apps/linkedin && go build -o bin/konva-linkedin .",
     "test": "pnpm -r test",
     "set-password": "pnpm --filter worker set-password",
     "ai": "cd apps/ai && python3 -m ai",
+    "instagram": "cd apps/ai && python3 -m ai instagram",
     "test:ai": "cd apps/ai && python3 -m unittest discover -s tests -t ."
   }
 }

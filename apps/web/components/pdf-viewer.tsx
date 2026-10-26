@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject, type TouchEvent as ReactTouchEvent } from "react";
 import { ChevronLeft, ChevronRight, MoveHorizontal, ZoomIn, ZoomOut } from "lucide-react";
 import { openPdf, renderPage, type PDFDocumentProxy } from "@/lib/pdf";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 // ---------------------------------------------------------------------------
 
 const THUMB_WIDTH = 240;
+// Each first page is a data URL of a few KB, so only the 200 most recently used are kept.
+const THUMB_CACHE_MAX = 200;
 const thumbs = new Map<string, Promise<string>>();
 
 // At most three PDFs open at once for thumbnails, so a full grid does not download every file together.
@@ -30,7 +32,11 @@ async function oneAtATime<T>(work: () => Promise<T>): Promise<T> {
 
 function firstPageImage(key: string, url: string): Promise<string> {
   let made = thumbs.get(key);
-  if (!made) {
+  if (made) {
+    // Re-insert so the Map's order is least recently used first.
+    thumbs.delete(key);
+    thumbs.set(key, made);
+  } else {
     made = oneAtATime(async () => {
       const doc = await openPdf(url);
       try {
@@ -44,12 +50,13 @@ function firstPageImage(key: string, url: string): Promise<string> {
     });
     made.catch(() => thumbs.delete(key));
     thumbs.set(key, made);
+    while (thumbs.size > THUMB_CACHE_MAX) thumbs.delete(thumbs.keys().next().value as string);
   }
   return made;
 }
 
 /** The first page of a PDF. Mount it only once on screen: drawing it loads pdf.js and the file's start. */
-export function PdfThumbnail({ cacheKey, url, name, className, onError }: { cacheKey: string; url: string; name: string; className?: string; onError: () => void }) {
+export function PdfThumbnail({ cacheKey, url, className, onError }: { cacheKey: string; url: string; name?: string; className?: string; onError: () => void }) {
   const [src, setSrc] = useState<string | null>(null);
   const failed = useRef(onError);
   useEffect(() => { failed.current = onError; });
@@ -67,7 +74,7 @@ export function PdfThumbnail({ cacheKey, url, name, className, onError }: { cach
     <div className={cn("size-full", className)}>
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={name} className="size-full bg-white object-cover object-top" />
+        <img src={src} alt="" className="size-full bg-white object-cover object-top" />
       ) : (
         <Skeleton className="size-full rounded-none" />
       )}
@@ -156,6 +163,20 @@ export function PdfViewer({ url, name }: { url: string; name: string }) {
       return next;
     });
   }, [pages]);
+  // On a phone the page strip is hidden, so a horizontal swipe on an unzoomed page turns it.
+  const touch = useRef<{ x: number; y: number } | null>(null);
+  const onTouchStart = (e: ReactTouchEvent) => {
+    touch.current = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+  };
+  const onTouchEnd = (e: ReactTouchEvent) => {
+    const start = touch.current;
+    touch.current = null;
+    const el = scroller.current;
+    if (!start || !el || window.matchMedia("(min-width: 40rem)").matches || el.scrollWidth > el.clientWidth + 1) return;
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(page + (dx < 0 ? 1 : -1));
+  };
   const zoomBy = useCallback((factor: number) => setZoom((z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * factor))), []);
 
   useEffect(() => {
@@ -188,30 +209,30 @@ export function PdfViewer({ url, name }: { url: string; name: string }) {
     <div className="flex h-[min(70vh,calc(100dvh-15rem))] min-h-64 flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" aria-label="Previous Page" title="Previous Page" disabled={page <= 1} onClick={() => go(page - 1)}>
+          <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Previous Page" title="Previous Page" disabled={page <= 1} onClick={() => go(page - 1)}>
             <ChevronLeft />
           </Button>
           <span className="min-w-20 text-center text-xs text-muted-foreground tabular-nums">{pages ? `Page ${page} of ${pages}` : "Loading"}</span>
-          <Button variant="ghost" size="icon-sm" aria-label="Next Page" title="Next Page" disabled={!pages || page >= pages} onClick={() => go(page + 1)}>
+          <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Next Page" title="Next Page" disabled={!pages || page >= pages} onClick={() => go(page + 1)}>
             <ChevronRight />
           </Button>
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" aria-label="Zoom Out" title="Zoom Out" disabled={zoom <= MIN_ZOOM} onClick={() => zoomBy(1 / ZOOM_STEP)}>
+          <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Zoom Out" title="Zoom Out" disabled={zoom <= MIN_ZOOM} onClick={() => zoomBy(1 / ZOOM_STEP)}>
             <ZoomOut />
           </Button>
           <span className="w-11 text-center text-xs text-muted-foreground tabular-nums">{actual ? `${Math.round(actual * 100)}%` : ""}</span>
-          <Button variant="ghost" size="icon-sm" aria-label="Zoom In" title="Zoom In" disabled={zoom >= MAX_ZOOM} onClick={() => zoomBy(ZOOM_STEP)}>
+          <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Zoom In" title="Zoom In" disabled={zoom >= MAX_ZOOM} onClick={() => zoomBy(ZOOM_STEP)}>
             <ZoomIn />
           </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Fit to Width" title="Fit to Width" disabled={zoom === 1} onClick={() => setZoom(1)}>
+          <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Fit to Width" title="Fit to Width" disabled={zoom === 1} onClick={() => setZoom(1)}>
             <MoveHorizontal />
           </Button>
         </div>
       </div>
       <div className="flex min-h-0 flex-1 gap-2">
         {doc && pages > 1 && <PageStrip doc={doc} current={page} onPick={go} />}
-        <div ref={scroller} className="min-w-0 flex-1 overflow-auto rounded-lg bg-muted p-4">
+        <div ref={scroller} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="min-w-0 flex-1 overflow-auto rounded-lg bg-muted p-4">
           {!doc && <Skeleton className="mx-auto aspect-[1/1.414] w-full max-w-xl" />}
           <canvas ref={canvas} aria-label={`${name}, page ${page}`} className={cn("mx-auto bg-white shadow-sm", !doc && "hidden")} />
         </div>

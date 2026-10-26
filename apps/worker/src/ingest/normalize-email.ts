@@ -11,7 +11,7 @@ export interface EmailAddress {
 export interface EmailAttachment {
   filename: string;
   mimeType: string;
-  kind: "image" | "pdf" | "video" | "file";
+  kind: "image" | "pdf" | "video" | "audio" | "file";
   sizeBytes: number;
   /** The file itself. Uploaded to storage, never sent to the database row. */
   content: Buffer;
@@ -60,6 +60,7 @@ function kindOf(mimeType: string): EmailAttachment["kind"] {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType === "application/pdf") return "pdf";
   if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
   return "file";
 }
 

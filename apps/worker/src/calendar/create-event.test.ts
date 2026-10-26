@@ -207,12 +207,17 @@ test("a created event is stored like a synced one", () => {
         { email: "room@resource.calendar.google.com", resource: true },
       ],
     },
-    { userId: "u1", accountId: "a1", calendarId: "me@example.com" },
+    { userId: "u1", accountId: "a1", calendarId: "me@example.com", calendarName: "Work" },
   );
   assert.deepEqual(stored, {
     user_id: "u1",
     account_id: "a1",
     calendar_id: "me@example.com",
+    calendar_name: "Work",
+    description: null,
+    conference_url: null,
+    resource_url: null,
+    series_id: null,
     provider_event_id: "abc123",
     title: "Lunch with Julia",
     starts_at: "2026-11-03T10:00:00.000Z",
@@ -251,4 +256,27 @@ test("only a clear refusal says the event was not made", () => {
   assert.equal(createFailure(429, null), "Google Calendar is busy. Try again in a minute.");
   assert.equal(createFailure(404, "notFound"), "You cannot add events to this calendar.");
   assert.equal(createFailure(400, "invalid"), "Google Calendar did not accept this event.");
+});
+
+test("a Google event keeps its notes, Meet link and series", () => {
+  const stored = storedEvent(
+    {
+      id: "abc123_20261103T100000Z",
+      recurringEventId: "abc123",
+      summary: "Standup",
+      description: "  Weekly sync  ",
+      hangoutLink: "https://meet.google.com/abc-defg-hij",
+      start: { dateTime: "2026-11-03T12:00:00+02:00" },
+      end: { dateTime: "2026-11-03T12:15:00+02:00" },
+    },
+    { userId: "u1", accountId: "a1", calendarId: "me@example.com" },
+  )!;
+  assert.equal(stored.description, "Weekly sync");
+  assert.equal(stored.conference_url, "https://meet.google.com/abc-defg-hij");
+  assert.equal(stored.series_id, "abc123");
+  const video = storedEvent(
+    { id: "x", summary: "Call", start: { dateTime: "2026-11-03T12:00:00+02:00" }, conferenceData: { entryPoints: [{ entryPointType: "phone", uri: "tel:+1" }, { entryPointType: "video", uri: "javascript:1" }] } },
+    { userId: "u1", accountId: "a1", calendarId: "c" },
+  )!;
+  assert.equal(video.conference_url, null); // only https links are kept
 });

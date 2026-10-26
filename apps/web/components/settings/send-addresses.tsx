@@ -9,10 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
 
-function ICloudAddresses({ account }: { account: Account }) {
+/** iCloud and other IMAP mailboxes: the server cannot say which addresses you send from, so you list them. */
+function ListedAddresses({ account }: { account: Account }) {
   const { saveSendAddresses, notify } = useApp();
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const errorId = `address-error-${account.id}`;
   const own = account.detail.toLowerCase();
   // The account's own address can always send, so it is shown but cannot be removed.
   const extra = sendAddressesOf(account).filter((a) => a !== own);
@@ -36,15 +38,15 @@ function ICloudAddresses({ account }: { account: Account }) {
         <SettingsRow title={own} description="Account Address" />
         {extra.map((a) => (
           <SettingsRow key={a} title={a}>
-            <Button variant="ghost" size="icon-xs" aria-label={`Remove ${a}`} onClick={() => save(extra.filter((x) => x !== a))}><Trash2 /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={`Remove ${a}`} onClick={async () => { if (await save(extra.filter((x) => x !== a))) notify("Address removed", () => void save(extra)); }}><Trash2 /></Button>
           </SettingsRow>
         ))}
       </SettingsRows>
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); add(); }}>
-        <Input value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} placeholder="you@yourdomain.com" aria-invalid={!!error} aria-label="Address to Add" className="flex-1" />
+        <Input value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} placeholder="you@yourdomain.com" aria-invalid={!!error} aria-describedby={error ? errorId : undefined} aria-label="Address to Add" className="flex-1" />
         <Button type="submit" disabled={!value.trim()}>Add</Button>
       </form>
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>}
     </>
   );
 }
@@ -60,7 +62,7 @@ function GmailAddresses({ account }: { account: Account }) {
 /** The addresses each email account can send from, picked in the reply box and in New Email. */
 export function SendAddressesSection() {
   const { accounts } = useApp();
-  const email = accounts.filter((a) => (a.provider === "icloud" || a.provider === "gmail") && a.status !== "disconnected");
+  const email = accounts.filter((a) => (a.provider === "icloud" || a.provider === "gmail" || a.provider === "imap") && a.status !== "disconnected");
   if (email.length === 0) return null;
   return (
     <SettingsSection id="send-addresses" title="Addresses You Send From" description="Choose between these when you reply or start a new email.">
@@ -71,9 +73,11 @@ export function SendAddressesSection() {
           title={a.label}
           description={a.provider === "icloud"
             ? "Each address must already be set up as an iCloud+ custom domain address."
-            : "From Gmail Settings, under Send Mail As. Changes there appear here on the next sync."}
+            : a.provider === "imap"
+              ? "Each address must be one your mail server lets you send from, like an alias of this mailbox."
+              : "From Gmail Settings, under Send Mail As. Changes there appear here on the next sync."}
         >
-          {a.provider === "icloud" ? <ICloudAddresses account={a} /> : <GmailAddresses account={a} />}
+          {a.provider === "gmail" ? <GmailAddresses account={a} /> : <ListedAddresses account={a} />}
         </SettingsSection>
       ))}
     </SettingsSection>

@@ -183,7 +183,51 @@
 @keyframes fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .animate-fade-up { animation: fade-up 180ms ease-out both; }
 
+/* Anyone who asks their device for less motion gets none: no animation, no transitions, no smooth scrolling. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .prose-mail p { margin: 0 0 0.75em; }
 .prose-mail p:last-child { margin-bottom: 0; }
 .prose-mail a { @apply underline underline-offset-2; }
 .prose-mail code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]; }
+
+/* Notes: the editor's formatting, in the app's own text size and stock colours. */
+/* 16px on phones so iOS does not zoom into the editor; the app size from md up. */
+.note-content { @apply min-h-40 text-base leading-6 outline-none md:text-sm; }
+.note-content > * + * { margin-top: 0.75em; }
+.note-content h1 { @apply mt-6 text-xl font-semibold leading-8; }
+.note-content h2 { @apply mt-5 text-lg font-semibold leading-7; }
+.note-content h3 { @apply mt-4 text-base font-semibold leading-6; }
+.note-content > :first-child { margin-top: 0; }
+.note-content a { @apply cursor-text underline underline-offset-2; }
+.note-content strong { @apply font-semibold; }
+.note-content code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]; }
+.note-content pre { @apply overflow-x-auto rounded-lg bg-muted p-3 font-mono text-[0.85rem] leading-5; }
+.note-content pre code { @apply bg-transparent p-0 text-inherit; }
+.note-content blockquote { @apply border-l-2 pl-3 text-muted-foreground; }
+.note-content hr { @apply my-4 border-t; }
+.note-content ul { @apply list-disc pl-6; }
+.note-content ol { @apply list-decimal pl-6; }
+.note-content li > p { margin: 0; }
+.note-content li + li { margin-top: 0.25em; }
+.note-content ul[data-type="taskList"] { @apply list-none pl-0; }
+.note-content ul[data-type="taskList"] ul[data-type="taskList"] { @apply mt-1; }
+.note-content .tableWrapper { @apply overflow-x-auto; }
+.note-content table { @apply w-full border-collapse text-left; table-layout: fixed; }
+.note-content th, .note-content td { @apply relative min-w-24 border px-2 py-1 align-top; }
+.note-content th { @apply bg-muted/50 font-medium; }
+.note-content th > p, .note-content td > p { margin: 0; }
+.note-content .selectedCell::after { @apply pointer-events-none absolute inset-0 bg-primary/10 content-['']; }
+.note-content img { @apply max-w-full rounded-lg; }
+.note-content p.is-editor-empty:first-child::before { @apply pointer-events-none float-left h-0 text-muted-foreground/60 content-[attr(data-placeholder)]; }
+.note-content .ProseMirror-selectednode:not([data-node-view-wrapper]) { @apply rounded ring-2 ring-ring/50; }
+
+/* The tour marks the page it is showing in the navigation. */
+[data-tour-active] { @apply rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background transition-shadow; }

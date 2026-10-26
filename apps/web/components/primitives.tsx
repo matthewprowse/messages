@@ -1,6 +1,9 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
+import { wordOf } from "@messages/analytics";
+import { track } from "@/lib/analytics";
 import { Paperclip, type LucideIcon } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -38,8 +41,20 @@ export function ThreadAvatar({ thread, contacts, className }: { thread: Thread; 
 export const providerLabel: Record<Provider, string> = {
   icloud: "iCloud Mail",
   gmail: "Gmail",
+  outlook: "Outlook",
   whatsapp: "WhatsApp",
   google_calendar: "Google Calendar",
+  outlook_calendar: "Outlook Calendar",
+  icloud_calendar: "iCloud Calendar",
+  imap: "Email",
+  teams: "Microsoft Teams",
+  zoom: "Zoom",
+  google_meet: "Google Meet",
+  linkedin: "LinkedIn",
+  instagram: "Instagram",
+  microsoft_todo: "Microsoft To Do",
+  google_tasks: "Google Tasks",
+  icloud_reminders: "iCloud Reminders",
 };
 
 export const priorityLabel: Record<Priority, string> = { urgent: "Urgent", important: "Important", normal: "Normal", low: "Low" };
@@ -52,7 +67,7 @@ export function PriorityBadge({ priority, showAll = false, className }: { priori
 export const categoryLabel: Record<Category, string> = {
   personal: "Personal",
   work: "Work",
-  needs_reply: "Needs reply",
+  needs_reply: "Needs Reply",
   fyi: "FYI",
   newsletter: "Newsletter",
   notification: "Notification",
@@ -78,9 +93,23 @@ export function PageHeader({ title, subtitle, actions, className }: { title: Rea
   );
 }
 
-export function EmptyState({ icon: Icon, title, description, action }: { icon: LucideIcon; title: string; description?: string; action?: React.ReactNode }) {
+/** Wraps skeleton placeholders so screen readers hear that content is loading rather than a row of empty boxes. */
+export function LoadingRegion({ label = "Loading", className, children }: { label?: string; className?: string; children: React.ReactNode }) {
   return (
-    <Empty className="h-full border-0">
+    <div role="status" aria-busy="true" aria-label={label} className={className}>
+      {children}
+    </div>
+  );
+}
+
+export function EmptyState({ icon: Icon, title, description, action, loading = false }: { icon: LucideIcon; title: string; description?: string; action?: React.ReactNode; loading?: boolean }) {
+  // Which empty or failed state was reached, by its fixed title. "Pick a ..." and "Select a ..." only invite a choice, so they are not one.
+  useEffect(() => {
+    const what = wordOf(title);
+    if (what && !what.startsWith("pick_a_") && !what.startsWith("select_a_")) track("empty_state", { what });
+  }, [title]);
+  return (
+    <Empty role={loading ? "status" : undefined} aria-busy={loading || undefined} className="h-full border-0">
       <EmptyHeader>
         <EmptyMedia variant="icon"><Icon /></EmptyMedia>
         <EmptyTitle>{title}</EmptyTitle>

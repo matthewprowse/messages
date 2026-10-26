@@ -140,7 +140,7 @@ class Voice:
         self._next: dict[str, float] = {}  # user_id -> monotonic time this process may try them again
 
     def run_once(self) -> int:
-        accounts = self.db.select("accounts", {"select": "id,user_id", "provider": "in.(icloud,gmail)", "status": "neq.disconnected"})
+        accounts = self.db.select("accounts", {"select": "id,user_id", "provider": "in.(icloud,gmail,outlook)", "status": "neq.disconnected"})
         by_user: dict[str, list[str]] = {}
         for a in accounts:
             by_user.setdefault(a["user_id"], []).append(a["id"])
@@ -148,8 +148,12 @@ class Voice:
         for user_id, account_ids in by_user.items():
             if time.monotonic() < self._next.get(user_id, 0.0):
                 continue
-            if self._learn(user_id, account_ids):
-                done += 1
+            try:  # one user's failure must not skip the others
+                if self._learn(user_id, account_ids):
+                    done += 1
+            except Exception as err:
+                self._next[user_id] = time.monotonic() + RETRY_S
+                log.warn("voice learning errored", user=user_id, code=log.code_of(err))
         return done
 
     def _learn(self, user_id: str, account_ids: list[str]) -> bool:

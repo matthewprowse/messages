@@ -5,8 +5,9 @@ export const BAD_RECIPIENTS = "Check the recipients. One of them is not a valid 
 
 const MAX_RECIPIENTS = 100;
 
+/** One address as compared and sent: line breaks removed first, so it can never start a header of its own. */
 function norm(address: string): string {
-  return address.trim().toLowerCase();
+  return address.replace(/[\r\n]+/g, "").trim().toLowerCase();
 }
 
 /** Addresses as they are compared: trimmed, lowercase, empty ones dropped. */
@@ -82,4 +83,44 @@ export function cleanRecipients(list: string[]): string[] | null {
   const out = [...new Set(list.map(norm).filter(Boolean))];
   if (out.length === 0 || out.length > MAX_RECIPIENTS) return null;
   return out.every(isEmailAddress) ? out : null;
+}
+
+export interface OutgoingRecipients {
+  /** Empty only for a reply that works out its own recipients. */
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  /** A reply whose To or Cc was set in the app (Reply All, or edited), so it goes to exactly those. */
+  explicit: boolean;
+}
+
+/** An optional list of addresses: empty is fine, a bad or unreadable one is not (null). */
+function cleanOptional(list: readonly string[] | null | undefined): string[] | null {
+  const items = list ?? [];
+  if (items.some((a) => !norm(a))) return null; // an address that could not be opened must not be skipped quietly
+  const out = [...new Set(items.map(norm))];
+  if (out.length > MAX_RECIPIENTS) return null;
+  return out.every(isEmailAddress) ? out : null;
+}
+
+/**
+ * Who an outbox row goes to. A new email needs a To. A reply with To or Cc set goes to exactly those;
+ * with neither set, its To is left empty for the worker to work out from the conversation. Someone on
+ * more than one line is kept on the first (To, then Cc, then Bcc), so nobody gets the same email twice.
+ */
+export function outgoingRecipients(
+  row: { to_addresses: string[]; cc_addresses: string[]; bcc_addresses: string[] },
+  isReply: boolean,
+): OutgoingRecipients | { error: string } {
+  const to = cleanOptional(row.to_addresses);
+  const cc = cleanOptional(row.cc_addresses);
+  const bcc = cleanOptional(row.bcc_addresses);
+  if (!to || !cc || !bcc) return { error: BAD_RECIPIENTS };
+  const explicit = isReply && (to.length > 0 || cc.length > 0);
+  if (!isReply && to.length === 0) return { error: BAD_RECIPIENTS };
+  const seen = new Set(to);
+  const ccOnly = cc.filter((a) => !seen.has(a));
+  ccOnly.forEach((a) => seen.add(a));
+  const bccOnly = bcc.filter((a) => !seen.has(a));
+  return { to, cc: ccOnly, bcc: bccOnly, explicit };
 }

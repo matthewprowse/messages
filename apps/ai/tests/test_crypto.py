@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
-from ai.crypto import address_key, blind_index, chat_key, domain_key, decrypt_field, derive_user_keys, encrypt_field, encrypt_optional, is_ciphertext
+from ai.crypto import address_key, blind_index, chat_key, domain_key, decrypt_bytes, decrypt_field, derive_user_keys, encrypt_bytes, encrypt_field, encrypt_optional, is_ciphertext
 
 VECTORS = json.loads((Path(__file__).resolve().parents[3] / "packages" / "crypto" / "vectors.json").read_text())
 KEYS = derive_user_keys(bytes.fromhex(VECTORS["dataKeyHex"]))
@@ -35,6 +35,25 @@ class SharedFormat(unittest.TestCase):
         self.assertTrue(is_ciphertext(c))
         self.assertEqual(decrypt_field(KEYS, "threads.summary", c), "Lunch on Friday?")
         self.assertIsNone(encrypt_optional(KEYS, "threads.summary", None))
+
+
+class SealedFiles(unittest.TestCase):
+    # encryptBytes in packages/crypto with data key 0..31, nonce 100..111, field voice_instruction.
+    TS = bytes.fromhex("6531623a00ff4b4e6465666768696a6b6c6d6e6f7f2d066b3e84b18bf28913f0d7f13d5196e1c4fee3")
+
+    def test_opens_what_the_typescript_side_sealed(self):
+        keys = derive_user_keys(bytes(range(32)))
+        self.assertEqual(decrypt_bytes(keys, "voice_instruction", self.TS), bytes([1, 2, 3, 250, 251]))
+        self.assertEqual(encrypt_bytes(keys, "voice_instruction", bytes([1, 2, 3, 250, 251]), bytes(range(100, 112))), self.TS)
+
+    def test_another_field_or_altered_bytes_fail(self):
+        keys = derive_user_keys(bytes(range(32)))
+        with self.assertRaises(Exception):
+            decrypt_bytes(keys, "note_file_data", self.TS)
+        with self.assertRaises(Exception):
+            decrypt_bytes(keys, "voice_instruction", self.TS[:-1] + bytes([self.TS[-1] ^ 1]))
+        with self.assertRaises(ValueError):
+            decrypt_bytes(keys, "voice_instruction", b"not sealed at all, just audio")
 
 
 class Unwrap(unittest.TestCase):

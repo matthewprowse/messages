@@ -69,7 +69,7 @@ async function loadLinkerData(user: string) {
     allRows((f, t) => db.from("threads").select("id").eq("user_id", user).eq("is_group", true).order("id").range(f, t), "load groups"),
   ]);
   const cc = countryCodeFrom(accounts);
-  const mailAccounts = accounts.filter((a) => a.provider === "icloud" || a.provider === "gmail").map((a) => a.id);
+  const mailAccounts = accounts.filter((a) => a.provider === "icloud" || a.provider === "gmail" || a.provider === "imap").map((a) => a.id);
 
   const groupMembers = new Map<string, string[]>();
   for (const ids of chunks(groupThreads.map((g) => g.id), 100)) {

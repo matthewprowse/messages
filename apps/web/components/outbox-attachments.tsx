@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { File as FileIcon, Paperclip, X } from "lucide-react";
+import { File as FileIcon, Paperclip, Pause, Play, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
   MAX_FILES,
@@ -14,12 +14,15 @@ import {
   pastedName,
   shouldTakePastedFiles,
   uploadFile,
+  uniqueName,
   uploadMessage,
   type AttachProvider,
   type OutboxUpload,
 } from "@/lib/outbox-files";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
+import { clock, useMedia } from "@/components/media-player";
 
 interface Item {
   id: string;
@@ -27,7 +30,8 @@ interface Item {
   name: string;
   size: number;
   mimeType: string;
-  preview?: string; // a local link for an image's thumbnail
+  preview?: string; // a local link for an image's thumbnail, or a voice note to play back
+  voiceNote?: { seconds: number }; // recorded in the reply box
   progress?: number; // 0 to 1 while uploading
   path?: string; // set once uploaded, so a retry does not upload it again
   error?: string;
@@ -72,6 +76,20 @@ export function useOutboxFiles(provider: AttachProvider | null, disabled = false
     setNotice(problem);
     setItems(next);
   }, [provider, disabled, uploading]);
+
+  /** Adds a voice note recorded in the reply box. */
+  const addVoiceNote = useCallback((file: File, seconds: number) => {
+    if (!provider || disabled || uploading) return;
+    const list = itemsRef.current;
+    if (list.length >= MAX_FILES) { setNotice(`Attach up to ${MAX_FILES} files per message.`); return; }
+    const mimeType = mimeOf(file.name, file.type);
+    const name = uniqueName(file.name, list.map((i) => i.name));
+    setNotice(null);
+    setItems([...list, { id: crypto.randomUUID(), file, name, size: file.size, mimeType, preview: URL.createObjectURL(file), voiceNote: { seconds } }]);
+  }, [provider, disabled, uploading]);
+
+  /** Shows a message under the files, or clears it with null. */
+  const notify = useCallback((message: string | null) => setNotice(message), []);
 
   const remove = useCallback((id: string) => {
     const item = itemsRef.current.find((i) => i.id === id);
@@ -125,7 +143,7 @@ export function useOutboxFiles(provider: AttachProvider | null, disabled = false
         setNotice(paths.length === 1 ? "The file did not upload. Try sending again." : "Some files did not upload. Try sending again.");
         return null;
       }
-      return list.map((item, i) => ({ path: paths[i]!, filename: item.name, mimeType: item.mimeType, size: item.size }));
+      return list.map((item, i) => ({ path: paths[i]!, filename: item.name, mimeType: item.mimeType, size: item.size, voiceNote: !!item.voiceNote }));
     } catch {
       setNotice("The files did not upload. Check your connection and try again.");
       return null;
@@ -170,7 +188,7 @@ export function useOutboxFiles(provider: AttachProvider | null, disabled = false
   };
 
   const limit = useMemo(() => (provider ? limitError(provider, items) : null), [provider, items]);
-  return { provider, items, add, remove, clear, upload, uploading, dragging, dropProps, onPaste, error: limit || notice, blocked: !!limit, disabled };
+  return { provider, items, add, addVoiceNote, notify, remove, clear, upload, uploading, dragging, dropProps, onPaste, error: limit || notice, blocked: !!limit, disabled };
 }
 
 /** The Paperclip button that opens the file picker. Hidden where files cannot be sent. */
@@ -214,7 +232,9 @@ export function AttachmentChips({ files }: { files: OutboxFiles }) {
       {files.items.length > 0 && (
         <ul className="flex min-w-0 flex-wrap gap-2" aria-label="Attachments">
           {files.items.map((item) => (
-            <Chip key={item.id} item={item} locked={files.disabled || files.uploading} onRemove={() => files.remove(item.id)} />
+            item.voiceNote
+              ? <VoiceChip key={item.id} item={item} locked={files.disabled || files.uploading} onRemove={() => files.remove(item.id)} />
+              : <Chip key={item.id} item={item} locked={files.disabled || files.uploading} onRemove={() => files.remove(item.id)} />
           ))}
         </ul>
       )}
@@ -246,6 +266,37 @@ function Chip({ item, locked, onRemove }: { item: Item; locked: boolean; onRemov
           <span className="block text-xs text-muted-foreground">{formatBytes(item.size)}</span>
         )}
       </span>
+      <Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${item.name}`} title="Remove" disabled={locked} onClick={onRemove}>
+        <X />
+      </Button>
+    </li>
+  );
+}
+
+/** A recorded voice note waiting to be sent: play it back, scrub through it, or remove it. */
+function VoiceChip({ item, locked, onRemove }: { item: Item; locked: boolean; onRemove: () => void }) {
+  const ref = useRef<HTMLAudioElement>(null);
+  const { playing, time, duration, failed, toggle, seek } = useMedia(ref);
+  // WebM recordings often report no length until played through, so the recorded length stands in.
+  const length = duration || item.voiceNote!.seconds;
+  const uploadingNow = item.progress !== undefined;
+  return (
+    <li className="flex w-72 max-w-full min-w-0 items-center gap-2 rounded-md border bg-background p-1.5">
+      <audio ref={ref} src={item.preview} preload="metadata" />
+      <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 rounded-full" disabled={failed} onClick={toggle} aria-label={playing ? "Pause Voice Note" : "Play Voice Note"}>
+        {playing ? <Pause /> : <Play />}
+      </Button>
+      <span className="min-w-0 flex-1">
+        {item.error ? (
+          <span className="block truncate text-xs text-destructive">{item.error}</span>
+        ) : uploadingNow ? (
+          <Progress value={Math.round((item.progress ?? 0) * 100)} aria-label="Uploading Voice Note" />
+        ) : (
+          <Slider value={[Math.min(time, length)]} max={length || 1} step={0.1} disabled={failed || !length} onValueChange={([v]) => seek(v)} aria-label="Position in Voice Note" />
+        )}
+      </span>
+      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{clock(playing || time ? time : length)}</span>
+      <span className="shrink-0 text-xs font-medium">{item.name.replace(/\.[a-z0-9]+$/i, "")}</span>
       <Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${item.name}`} title="Remove" disabled={locked} onClick={onRemove}>
         <X />
       </Button>

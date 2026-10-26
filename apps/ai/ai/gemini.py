@@ -4,7 +4,8 @@ Calls go over a kept-alive connection. A call that fails for a passing reason (r
 dropped connection) is tried again, after the wait Gemini asks for when it gives one; one it will not
 answer soon (a quota that resets in more than a minute) fails at once, so the caller's own back-off
 takes over instead of holding the worker. Usage rows are written in the background, so a draft is not
-kept waiting on bookkeeping."""
+kept waiting on bookkeeping. Each call also leaves a content-free analytics event (ai_call: feature, model,
+prompt code, time taken, tokens, cost, tries), for finding slow, failing or costly calls."""
 
 from __future__ import annotations
 
@@ -22,12 +23,17 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import log
+from .analytics import Analytics, event, prompt_id
 from .http import POOL
 from .pricing import cost_usd
 from .supabase import Supabase
 
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 EMBED_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
+MODEL_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}"
+UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
+FILE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/{name}"  # name is "files/<id>"
+FILE_READY_S = 300  # a long recording can take a minute or two to be processed after upload
 EMBED_DIMENSIONS = 768  # matches messages.embedding
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 MAX_RETRY_WAIT_S = 60  # a longer wait asked for (a daily quota) is not waited out here
@@ -45,7 +51,7 @@ class UsageContext:
     """Who a call was for, so its cost is filed against the right person and account."""
 
     user_id: str
-    feature: str  # triage, draft, learn (learning includes embeddings and summaries) or brief
+    feature: str  # triage, draft, learn (learning includes embeddings and summaries), brief or transcribe
     account_id: str | None = None
     thread_id: str | None = None
 
@@ -109,6 +115,7 @@ class Gemini:
         self._key = api_key
         self._db = db
         self._usage = ThreadPoolExecutor(max_workers=1, thread_name_prefix="usage")  # finishes its queue on exit
+        self._events = Analytics(db)
         self._no_minimal: set[str] = set()  # models that turned down thinkingLevel "minimal"
 
     def json(
@@ -124,12 +131,15 @@ class Gemini:
         max_output: int | None = None,
         attempts: int = 4,
         timeout: float = 90,
+        audio: tuple[bytes, str] | None = None,
+        file: tuple[str, str] | None = None,
     ) -> dict[str, Any]:
         """system goes first and should be the same text on every call of a kind, and prompt should put
         what changes least first: Gemini bills a repeated start of a request at the cached rate.
         max_output caps output and thinking tokens together, against a reply that runs away; keep it
         generous, as a reply cut short is not JSON. thinking "minimal" falls back to "low" on a model
-        that does not offer it."""
+        that does not offer it. audio is sent inline (up to about 20MB); file is (uri, mime type) of one
+        sent ahead with upload_file, for a recording too long to send inline."""
         if thinking == "minimal" and model in self._no_minimal:
             thinking = "low"
         config: dict[str, Any] = {
@@ -140,32 +150,50 @@ class Gemini:
         }
         if max_output:
             config["maxOutputTokens"] = max_output
+        parts: list[dict[str, Any]] = [{"text": prompt}]
+        if audio:  # (bytes, mime type): a recording sent with the prompt, such as a voice note to transcribe
+            parts.append({"inlineData": {"mimeType": audio[1], "data": base64.b64encode(audio[0]).decode("ascii")}})
+        if file:
+            parts.append({"fileData": {"fileUri": file[0], "mimeType": file[1]}})
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": config,
         }
+        started = time.monotonic()
+        stats = {"attempts": 0}
+        code = prompt_id(system)
         try:
-            data = self._call(model, body, attempts=attempts, timeout=timeout)
+            data = self._call(model, body, attempts=attempts, timeout=timeout, stats=stats)
         except GeminiError as err:
             if not (thinking == "minimal" and err.status == 400 and "thinking" in err.detail.lower()):
+                self._failed(model, usage, code, started, stats, err)
                 raise
             self._no_minimal.add(model)
             log.warn("thinking level minimal not offered, using low", model=model)
             config["thinkingConfig"] = {"thinkingLevel": "low"}
-            data = self._call(model, body, attempts=attempts, timeout=timeout)
+            try:
+                data = self._call(model, body, attempts=attempts, timeout=timeout, stats=stats)
+            except GeminiError as again:
+                self._failed(model, usage, code, started, stats, again)
+                raise
         when = datetime.now(timezone.utc)
-        self._record(model, usage, read_usage(model, data.get("usageMetadata") or {}, when))
+        used = read_usage(model, data.get("usageMetadata") or {}, when)
+        self._record(model, usage, used)
 
         candidates = data.get("candidates") or []
         if not candidates:
+            self._failed(model, usage, code, started, stats, None, "empty", used)
             raise GeminiError(None, "no candidates (blocked or empty)")
         parts = candidates[0].get("content", {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
         try:
-            return json.loads(text)
+            answer = json.loads(text)
         except ValueError:
+            self._failed(model, usage, code, started, stats, None, "not_json", used)
             raise GeminiError(None, "response was not JSON") from None
+        self._emit(model, usage, code, started, stats, used)
+        return answer
 
     def speak(self, model: str, text: str, voice: str, usage: UsageContext, *, timeout: float = 180) -> bytes:
         """text read aloud by a speech model, as a WAV file. Raw PCM (audio/L16) is wrapped in a WAV
@@ -177,12 +205,21 @@ class Gemini:
                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}},
             },
         }
-        data = self._call(model, body, timeout=timeout)
-        self._record(model, usage, read_usage(model, data.get("usageMetadata") or {}, datetime.now(timezone.utc)))
+        started = time.monotonic()
+        stats = {"attempts": 0}
+        try:
+            data = self._call(model, body, timeout=timeout, stats=stats)
+        except GeminiError as err:
+            self._failed(model, usage, "speech", started, stats, err)
+            raise
+        used = read_usage(model, data.get("usageMetadata") or {}, datetime.now(timezone.utc))
+        self._record(model, usage, used)
         parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
         inline = next((p["inlineData"] for p in parts if isinstance(p.get("inlineData"), dict)), None)
         if not inline or not inline.get("data"):
+            self._failed(model, usage, "speech", started, stats, None, "empty", used)
             raise GeminiError(None, "no audio (blocked or empty)")
+        self._emit(model, usage, "speech", started, stats, used)
         audio = base64.b64decode(inline["data"])
         mime = str(inline.get("mimeType") or "")
         if "wav" in mime:
@@ -201,23 +238,101 @@ class Gemini:
                 for t in texts
             ]
         }
-        data = self._call(model, body, EMBED_ENDPOINT)
+        started = time.monotonic()
+        stats = {"attempts": 0}
+        try:
+            data = self._call(model, body, EMBED_ENDPOINT, stats=stats)
+        except GeminiError as err:
+            self._failed(model, usage, "embedding", started, stats, err)
+            raise
         when = datetime.now(timezone.utc)
         metadata = data.get("usageMetadata") or {}
         if not metadata.get("promptTokenCount"):
             # The embedding API may not report tokens; about four characters a token is close for email text.
             metadata = {"promptTokenCount": sum(len(t) for t in texts) // 4 + len(texts)}
-        self._record(model, usage, read_usage(model, metadata, when))
+        used = read_usage(model, metadata, when)
+        self._record(model, usage, used)
+        self._emit(model, usage, "embedding", started, stats, used)
 
         vectors = [normalise(e.get("values") or []) for e in data.get("embeddings") or []]
         if len(vectors) != len(texts) or any(len(v) != EMBED_DIMENSIONS for v in vectors):
             raise GeminiError(None, "embeddings missing or the wrong size")
         return vectors
 
-    def _call(self, model: str, body: dict[str, Any], endpoint: str = ENDPOINT, *, attempts: int = 4, timeout: float = 90) -> dict[str, Any]:
+    def upload_file(self, data: bytes, mime: str, *, timeout: float = 600) -> tuple[str, str]:
+        """Sends a file to Gemini's Files API for calls that are too large to carry it inline, such as a
+        meeting recording, and waits until it can be used. Returns (name, uri): uri goes in json(file=...),
+        name in delete_file once done. Gemini keeps a file at most 48 hours; delete it sooner."""
+        headers = {
+            "x-goog-api-key": self._key,
+            "Content-Type": "application/json",
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Length": str(len(data)),
+            "X-Goog-Upload-Header-Content-Type": mime,
+        }
+        try:
+            # The display name is fixed: nothing about the file's content leaves here but its bytes.
+            res = POOL.request("POST", UPLOAD_ENDPOINT, json.dumps({"file": {"display_name": "recording"}}).encode(), headers, timeout=60)
+            url = res.headers.get("x-goog-upload-url")
+            if res.status >= 300 or not url:
+                raise GeminiError(res.status, error_reason(res.body)[0])
+            sent = POOL.request(
+                "POST",
+                url,
+                data,
+                {"x-goog-api-key": self._key, "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize"},
+                timeout=timeout,
+            )
+        except (OSError, http.client.HTTPException) as err:
+            raise GeminiError(None, type(err).__name__) from None
+        if sent.status >= 300:
+            raise GeminiError(sent.status, error_reason(sent.body)[0])
+        try:
+            info = json.loads(sent.body).get("file") or {}
+        except ValueError:
+            raise GeminiError(sent.status, "response was not JSON") from None
+        name, uri = str(info.get("name") or ""), str(info.get("uri") or "")
+        if not name or not uri:
+            raise GeminiError(sent.status, "no file in the response")
+        deadline = time.monotonic() + FILE_READY_S
+        state = str(info.get("state") or "")
+        while state != "ACTIVE":
+            if state == "FAILED" or time.monotonic() > deadline:
+                self.delete_file(name)
+                raise GeminiError(None, "file not processed")
+            time.sleep(3)
+            try:
+                res = POOL.request("GET", FILE_ENDPOINT.format(name=name), None, {"x-goog-api-key": self._key}, timeout=30)
+                state = str(json.loads(res.body).get("state") or "") if res.status < 300 else state
+            except (OSError, http.client.HTTPException, ValueError):
+                pass  # tried again until the deadline
+        return name, uri
+
+    def delete_file(self, name: str) -> None:
+        """Removes a file sent with upload_file. Failures are ignored: Gemini drops it after 48 hours anyway."""
+        try:
+            POOL.request("DELETE", FILE_ENDPOINT.format(name=name), None, {"x-goog-api-key": self._key}, timeout=30)
+        except Exception:
+            pass
+
+    def warm(self, model: str) -> None:
+        """Opens (or refreshes) a pooled connection to Gemini ahead of a call, so the call does not wait for
+        a TLS handshake: about 0.6s on a draft, measured. Reads only the model's description, so it costs
+        no tokens. Failures are ignored; the call opens its own connection."""
+        try:
+            POOL.request("GET", MODEL_ENDPOINT.format(model=model), None, {"x-goog-api-key": self._key}, timeout=10)
+        except Exception:
+            pass
+
+    def _call(
+        self, model: str, body: dict[str, Any], endpoint: str = ENDPOINT, *, attempts: int = 4, timeout: float = 90, stats: dict[str, int] | None = None
+    ) -> dict[str, Any]:
         payload = json.dumps(body).encode()
         headers = {"Content-Type": "application/json", "x-goog-api-key": self._key}
         for attempt in range(attempts):
+            if stats is not None:
+                stats["attempts"] += 1
             last = attempt == attempts - 1
             wait = min(30.0, 2**attempt + random.random())
             try:
@@ -243,6 +358,37 @@ class Gemini:
     def _record(self, model: str, ctx: UsageContext, usage: Usage) -> None:
         self._usage.submit(self._insert_usage, model, ctx, usage)
 
+    def _emit(
+        self, model: str, ctx: UsageContext, prompt: str, started: float, stats: dict[str, int], used: Usage | None, *, ok: bool = True, code: str | None = None
+    ) -> None:
+        cached = round(100 * used.cached_tokens / used.input_tokens) if used and used.input_tokens else 0
+        self._events.emit(
+            ctx.user_id,
+            [
+                event(
+                    "ai_call",
+                    feature=ctx.feature,
+                    model=model,
+                    prompt=prompt,
+                    ms=round((time.monotonic() - started) * 1000),
+                    ok=ok,
+                    code=code,
+                    in_tok=used.input_tokens if used else 0,
+                    out_tok=used.output_tokens if used else 0,
+                    cached_pct=cached,
+                    cost_micro=round(used.cost_usd * 1_000_000) if used else 0,
+                    attempts=stats["attempts"],
+                )
+            ],
+        )
+
+    def _failed(
+        self, model: str, ctx: UsageContext, prompt: str, started: float, stats: dict[str, int], err: GeminiError | None, code: str | None = None, used: Usage | None = None
+    ) -> None:
+        if code is None:
+            code = f"http_{err.status}" if err is not None and err.status else "no_response"
+        self._emit(model, ctx, prompt, started, stats, used, ok=False, code=code)
+
     def _insert_usage(self, model: str, ctx: UsageContext, usage: Usage) -> None:
         try:
             self._db.insert(
@@ -261,4 +407,4 @@ class Gemini:
                 },
             )
         except Exception as err:  # never lose the answer over bookkeeping
-            log.warn("usage not recorded", code=getattr(err, "code", None) or type(err).__name__)
+            log.warn("usage not recorded", code=log.code_of(err))

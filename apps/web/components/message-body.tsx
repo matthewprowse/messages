@@ -1,15 +1,16 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { track } from "@/lib/analytics";
 import type { Message } from "@/lib/types";
 import type { Emphasis, ForwardedEmail, Mark } from "@/lib/email-text";
 import { bulkPreview, originalDoc } from "@/lib/email-text";
 import { findEmphasis, richParts, sliceRanges, whatsappMarkup, type MarkRange } from "@/lib/rich-text";
-import { Forward, Mail, X } from "lucide-react";
+import { Forward, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/lib/supabase";
 import { open as openText } from "@/lib/vault";
@@ -205,9 +206,53 @@ function Linked({ text }: { text: string }) {
 
 // How long View Original waits for the sync worker to fetch an email from Gmail or iCloud.
 const ORIGINAL_WAIT_MS = 30_000;
-const ORIGINAL_POLL_MS = 700;
+// A missed Realtime update is caught by checking the row again, after 2 seconds and then twice as long each time.
+const ORIGINAL_RECHECK_MS = 2_000;
+const ORIGINAL_RECHECK_MAX_MS = 10_000;
 
-type Original = { status: "loading" } | { status: "ready"; srcdoc: string } | { status: "failed"; error: string };
+type Original = { status: "loading" } | { status: "ready"; html: string } | { status: "failed"; error: string };
+type Answer = { status: "done"; html: string } | { status: "failed"; error: string } | { status: "timeout" };
+
+/**
+ * Waits for the sync worker to answer a request row: a Realtime subscription on that row, with a slower
+ * re-check in case an update is missed. Settles once, then stops listening.
+ */
+function awaitAnswer(id: string): Promise<Answer> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = ORIGINAL_RECHECK_MS;
+    const channel = supabase.channel(`original-${id}`);
+    const deadline = setTimeout(() => finish({ status: "timeout" }), ORIGINAL_WAIT_MS);
+    function finish(answer: Answer) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(deadline);
+      void supabase.removeChannel(channel);
+      resolve(answer);
+    }
+    async function check() {
+      const { data: row } = await supabase.from("email_originals").select("status, html, error").eq("id", id).maybeSingle();
+      if (settled || !row) return;
+      if (row.status === "done" && row.html) finish({ status: "done", html: row.html });
+      else if (row.status === "failed") finish({ status: "failed", error: row.error ?? "The original could not be fetched." });
+    }
+    function recheck() {
+      timer = setTimeout(async () => {
+        await check();
+        if (settled) return;
+        delay = Math.min(delay * 2, ORIGINAL_RECHECK_MAX_MS);
+        recheck();
+      }, delay);
+    }
+    channel
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "email_originals", filter: `id=eq.${id}` }, () => void check())
+      // Once listening, look once, in case the answer came before the subscription was ready.
+      .subscribe((status) => { if (status === "SUBSCRIBED") void check(); });
+    recheck();
+  });
+}
 
 /**
  * The email as it was sent, fetched from the provider when asked for: its HTML is not stored. The sync
@@ -218,20 +263,13 @@ async function fetchOriginal(messageId: string): Promise<Original> {
   const { data, error } = await supabase.from("email_originals").insert({ message_id: messageId }).select("id").single();
   if (error || !data) return { status: "failed", error: "Could not ask your mailbox for the original." };
   const clear = () => void supabase.from("email_originals").delete().eq("id", data.id).then(() => undefined);
-  for (const until = Date.now() + ORIGINAL_WAIT_MS; Date.now() < until; ) {
-    await new Promise((r) => setTimeout(r, ORIGINAL_POLL_MS));
-    const { data: row } = await supabase.from("email_originals").select("status, html, error").eq("id", data.id).maybeSingle();
-    if (row?.status === "done" && row.html) {
-      const html = await openText(FIELD.html, row.html);
-      clear();
-      return html ? { status: "ready", srcdoc: originalDoc(html, true).srcdoc } : { status: "failed", error: "The original could not be opened." };
-    }
-    if (row?.status === "failed") {
-      clear();
-      return { status: "failed", error: row.error ?? "The original could not be fetched." };
-    }
-  }
+  const answer = await awaitAnswer(data.id);
   clear();
+  if (answer.status === "done") {
+    const html = await openText(FIELD.html, answer.html);
+    return html ? { status: "ready", html } : { status: "failed", error: "The original could not be opened." };
+  }
+  if (answer.status === "failed") return { status: "failed", error: answer.error };
   return { status: "failed", error: "Your mailbox took too long to answer. Try again." };
 }
 
@@ -239,11 +277,16 @@ async function fetchOriginal(messageId: string): Promise<Original> {
 export function ViewOriginal({ messageId }: { messageId: string }) {
   const [open, setOpen] = useState(false);
   const [original, setOriginal] = useState<Original | null>(null);
+  // Remote images are blocked until you allow them for this message.
+  const [images, setImages] = useState(false);
+  const doc = useMemo(() => (original?.status === "ready" ? originalDoc(original.html, images) : null), [original, images]);
   const load = () => {
     setOriginal({ status: "loading" });
+    setImages(false);
     void fetchOriginal(messageId).then(setOriginal);
   };
   const show = () => {
+    track("original_opened", { channel: "email" });
     setOpen(true);
     if (!original || original.status === "failed") load();
   };
@@ -256,17 +299,20 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
         <TooltipContent>View Original</TooltipContent>
       </Tooltip>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex h-[85dvh] flex-col sm:max-w-3xl" showCloseButton={false}>
-          <div className="flex items-start justify-between gap-3">
-            <DialogHeader>
-              <DialogTitle>Original Email</DialogTitle>
-              <DialogDescription>The email as it was sent, fetched from your mailbox.</DialogDescription>
-            </DialogHeader>
-            <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setOpen(false)}><X /></Button>
-          </div>
-          {original?.status === "ready" ? (
+        <DialogContent track="view_original" className="flex h-[85dvh] flex-col sm:max-w-3xl" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Original Email</DialogTitle>
+            <DialogDescription>The email as it was sent, fetched from your mailbox.</DialogDescription>
+          </DialogHeader>
+          {doc && !images && doc.blocked > 0 && (
+            <div className="flex items-center justify-between gap-3 rounded-md border p-2 pl-3 text-sm">
+              <span className="min-w-0 text-muted-foreground">Images are hidden. Loading them tells the sender you opened this email.</span>
+              <Button variant="secondary" className="shrink-0" onClick={() => setImages(true)}>Load Images</Button>
+            </div>
+          )}
+          {doc ? (
             // No allow-scripts and no allow-same-origin: the email cannot run code or reach the app. Popups let links open in a new tab.
-            <iframe title="Original Email" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" srcDoc={original.srcdoc} className="min-h-0 w-full flex-1 rounded-md border" />
+            <iframe title="Original Email" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" srcDoc={doc.srcdoc} className="min-h-0 w-full flex-1 rounded-md border" />
           ) : original?.status === "failed" ? (
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-md border text-sm text-muted-foreground">
               <p>{original.error}</p>
@@ -275,6 +321,9 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
           ) : (
             <Skeleton className="min-h-0 w-full flex-1 rounded-md" />
           )}
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Close</Button></DialogClose>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

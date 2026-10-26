@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Messages",
-    short_name: "Messages",
+    name: "Konva",
+    short_name: "Konva",
     description: "One inbox for email and WhatsApp.",
     start_url: "/inbox",
     display: "standalone",

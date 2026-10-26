@@ -5,8 +5,9 @@ import { open, openRows, type TextColumn } from "./vault";
 // Encrypted columns and the kind of text each holds. Rows are opened in place as they arrive, before
 // data.ts maps them, so a row written before encryption and one written after read the same way.
 const THREAD_TEXT: TextColumn[] = [["subject", FIELD.subject], ["last_message_preview", FIELD.preview], ["summary", FIELD.summary]];
-const MESSAGE_TEXT: TextColumn[] = [["subject", FIELD.subject], ["preview", FIELD.preview], ["body_text", FIELD.body], ["body_html", FIELD.html], ["list_unsubscribe", FIELD.unsubscribe], ["body_marks", FIELD.marks]];
-const DRAFT_TEXT: TextColumn[] = [["body", FIELD.draft], ["instruction", FIELD.instruction], ["decision", FIELD.instruction]];
+const MESSAGE_TEXT: TextColumn[] = [["subject", FIELD.subject], ["preview", FIELD.preview], ["body_text", FIELD.body], ["body_html", FIELD.html], ["list_unsubscribe", FIELD.unsubscribe], ["body_marks", FIELD.marks], ["transcript", FIELD.transcript]];
+const DRAFT_TEXT: TextColumn[] = [["body", FIELD.draft], ["instruction", FIELD.instruction], ["decision", FIELD.instruction], ["source", FIELD.draft], ["subject", FIELD.subject]];
+const TASK_TEXT: TextColumn[] = [["title", FIELD.taskTitle], ["notes", FIELD.taskNotes], ["list_name", FIELD.taskList]];
 
 // Addresses, numbers and chat IDs (encryption stage 2), wherever they sit in a row or the rows nested in
 // it: the keys below, and a contact identity's value. A company's domain has its own field.
@@ -36,6 +37,7 @@ export async function openAddresses<T>(rows: T): Promise<T> {
   return rows;
 }
 
+export const openTasks = <T extends object>(rows: T[]) => openRows(rows, TASK_TEXT);
 export const openThreads = async <T extends object>(rows: T[]) => openAddresses(await openRows(rows, THREAD_TEXT));
 export const openDrafts = <T extends object>(rows: T[]) => openRows(rows, DRAFT_TEXT);
 

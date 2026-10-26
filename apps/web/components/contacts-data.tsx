@@ -12,9 +12,11 @@ export interface ContactsData {
   suggestions: MergeSuggestion[] | null | undefined;
   /** Takes a suggestion off the list straight away, after Merge or Not the Same. */
   removeSuggestion: (id: string) => void;
+  /** Loads the contacts, companies and suggestions again, after one of them failed to load. */
+  reload: () => void;
 }
 
-export const ContactsDataContext = createContext<ContactsData>({ contacts: undefined, suggestions: undefined, removeSuggestion: () => {} });
+export const ContactsDataContext = createContext<ContactsData>({ contacts: undefined, suggestions: undefined, removeSuggestion: () => {}, reload: () => {} });
 
 export function useContactsData() {
   return useContext(ContactsDataContext);

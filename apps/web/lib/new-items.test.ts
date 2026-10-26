@@ -11,6 +11,7 @@ import {
   needsReconnect,
   normalisePhone,
   parseGuests,
+  pendingEvent,
   searchEmailContacts,
   searchPhoneContacts,
   shiftEnd,
@@ -158,6 +159,23 @@ test("buildEventRow makes all-day events midnight to midnight", () => {
   assert.equal(r.row.ends_at, new Date(2026, 9, 24).toISOString());
 });
 
+test("pendingEvent is the queued event as the Calendar shows it", () => {
+  const people = [{ id: "c1", name: "Jane Doe", emails: ["Jane@x.com"] }] as Contact[];
+  const timed = buildEventRow(form({ guests: ["jane@x.com", "bob@y.com"], location: "Cafe" }), "acc", "Europe/London");
+  assert.ok(timed.ok);
+  const e = pendingEvent("q1", timed.row, "2026-10-23", people);
+  assert.deepEqual([e.id, e.title, e.allDay, e.startsAt, e.endsAt, e.location], ["q1", timed.row.title, false, timed.row.starts_at, timed.row.ends_at, "Cafe"]);
+  assert.deepEqual(e.attendees, [
+    { email: "jane@x.com", name: "Jane Doe", contactId: "c1" },
+    { email: "bob@y.com", name: "bob@y.com", contactId: null },
+  ]);
+  // An all-day event is midnight UTC on its date, the day after at the end, as the worker stores it.
+  const allDay = buildEventRow(form({ allDay: true, startTime: "", endTime: "" }), "acc", "Europe/London");
+  assert.ok(allDay.ok);
+  const d = pendingEvent("q2", allDay.row, "2026-10-31", []);
+  assert.deepEqual([d.allDay, d.startsAt, d.endsAt], [true, "2026-10-31T00:00:00.000Z", "2026-11-01T00:00:00.000Z"]);
+});
+
 test("buildEventRow names the first thing to fix", () => {
   const fail = (p: Partial<EventForm>) => {
     const r = buildEventRow(form(p), "acc", "Europe/London");
@@ -177,6 +195,7 @@ test("buildEventRow names the first thing to fix", () => {
 
 test("needsReconnect spots the worker's reconnect message", () => {
   assert.equal(needsReconnect("Reconnect Google to allow creating events. Run pnpm connect:google."), true);
+  assert.equal(needsReconnect("iCloud rejected the sign-in. Run pnpm connect:icloud-calendar to reconnect."), true);
   assert.equal(needsReconnect("Google Calendar could not be reached."), false);
   assert.equal(needsReconnect(undefined), false);
 });

@@ -7,7 +7,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ai.drafts import build_prompt as draft_prompt
-from ai.drafts import pick_drafts, pick_more_voice, pick_similar, pick_voice
+from ai.chasers import build_prompt as follow_up_prompt, latest_per_thread
+from ai.drafts import describe, is_adjust, pick_facts, keep_quotes, revises, pick_drafts, pick_more_voice, pick_similar, pick_voice, stale
 from ai.embed import PREFIX, Embeddings as EmbeddingStore, embed_text, embedding_rows, queue_row, vector_literal
 from ai.gemini import Gemini, GeminiError, UsageContext, error_reason, normalise, read_usage, retry_wait
 from ai.http import Pool
@@ -18,7 +19,7 @@ from ai.pricing import cost_usd
 from ai.signals import TONE_RULES, plan_signals, tone_counts
 from ai.text import clean
 from ai.triage import SYSTEM as TRIAGE_SYSTEM
-from ai.triage import Triage, UserContext, apply_signals, groups, known_outcome, latest_incoming, matches, pending_query, read_results, triage_prompt
+from ai.triage import Triage, UserContext, apply_signals, groups, known_outcome, latest_incoming, matches, pending_query, read_results, sender_outcome, triage_prompt
 from ai.retry import MAX_WAIT_S, Backoff, not_in
 from ai.voice import PROMPT_CHARS, build_prompt, plan_voice, tidy_rule, voice_due
 
@@ -183,7 +184,7 @@ class Embeddings(unittest.TestCase):
 class TriageQuery(unittest.TestCase):
     def test_only_threads_with_triage_on(self):
         q = pending_query("2026-10-01T00:00:00Z")
-        self.assertIn("threads!inner(triage_enabled)", q["select"])
+        self.assertIn("threads!inner(triage_enabled,", q["select"])
         self.assertEqual(q["threads.triage_enabled"], "eq.true")
         self.assertEqual(q["message_ai"], "is.null")
 
@@ -301,10 +302,10 @@ class PeopleNotes(unittest.TestCase):
         self.assertEqual(orgs_due(orgs, {"b": ["2999-01-01T00:00:00Z"] * 5}), [])
 
     def test_person_prompt_keeps_newest_within_budget(self):
-        emails = [("Sam", "Old", "x" * 20000), ("Me", "New", "See you then")]
+        emails = [("Sam", "Old", "x" * 20000), ("You", "New", "See you then")]
         prompt = person_prompt("Sam", {"style_note": "Brief", "summary": ""}, emails)
         self.assertIn("style_note: Brief", prompt)
-        self.assertIn("--- Me, subject: New\nSee you then", prompt)
+        self.assertIn("--- You, subject: New\nSee you then", prompt)
         self.assertNotIn("Old", prompt)
 
 
@@ -334,6 +335,59 @@ class TriageDecisions(unittest.TestCase):
         self.assertIsNone(known_outcome({"sender_address": "a@b.com"}, UserContext(), ["not_junk", "junk"]))  # latest says Not Junk
         self.assertIsNone(known_outcome({"sender_address": "a@b.com"}, UserContext(), ["important"]))
 
+    def test_a_bulk_sender_the_model_keeps_calling_junk_is_not_asked_about_again(self):
+        now = datetime.now(timezone.utc)
+
+        def answered(days=1, **kw):
+            return {"priority": "low", "category": "newsletter", "junk": True, "needs_reply": False, "corrected": False, "decided_at": _days_ago(days), **kw}
+
+        bulk = {"is_bulk": True, "subject": "10% off"}
+        got = sender_outcome(bulk, [answered(1), answered(2), answered(3)], now)
+        self.assertEqual((got["priority"], got["category"], got["junk"], got["needs_reply"], got["summary"]), ("low", "newsletter", True, False, "10% off"))
+        self.assertIsNotNone(sender_outcome({"list_unsubscribe": "<mailto:x@y.com>"}, [answered(1)] * 3, now))  # the header alone counts as bulk
+        self.assertEqual(sender_outcome(bulk, [answered(1, category="notification"), answered(2), answered(3)], now)["category"], "notification")  # the newest answer's
+
+    def test_a_sender_is_asked_about_when_anything_is_in_doubt(self):
+        now = datetime.now(timezone.utc)
+
+        def answered(days=1, **kw):
+            return {"priority": "low", "category": "newsletter", "junk": True, "needs_reply": False, "corrected": False, "decided_at": _days_ago(days), **kw}
+
+        bulk = {"is_bulk": True}
+        self.assertIsNone(sender_outcome({"subject": "Hi"}, [answered()] * 3, now))  # not bulk mail
+        self.assertIsNone(sender_outcome(bulk, [answered()] * 2, now))  # too little evidence
+        self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(junk=False)], now))
+        self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(needs_reply=True)], now))
+        self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(category="personal")], now))
+        self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(priority="important")], now))
+        self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(corrected=True)], now))  # you corrected one
+        self.assertIsNone(sender_outcome(bulk, [answered(20), answered(21), answered(22)], now))  # the model looks again every two weeks
+        self.assertIsNotNone(sender_outcome(bulk, [answered(13), answered(21), answered(22)], now))
+
+    def test_settled_senders_are_read_once_per_user_and_a_failed_read_settles_nothing(self):
+        class Db:
+            def __init__(self, fail=False):
+                self.calls, self.fail = [], fail
+
+            def rpc(self, function, args):
+                self.calls.append((function, args))
+                if self.fail:
+                    raise SupabaseError(404, "PGRST202")
+                row = {"priority": "low", "category": "newsletter", "junk": True, "needs_reply": False, "corrected": False, "decided_at": _days_ago(1)}
+                return [{"sender_index": "s1", **row}] * 3
+
+        mail = [
+            {"id": "a", "user_id": "u1", "sender_index": "s1", "is_bulk": True, "subject": "Sale"},
+            {"id": "b", "user_id": "u1", "sender_index": "s2", "is_bulk": True, "subject": "Other"},
+            {"id": "c", "user_id": "u1", "sender_index": "s1", "is_bulk": False, "subject": "A person"},
+            {"id": "d", "user_id": "u1", "is_bulk": True, "subject": "No index"},
+        ]
+        db = Db()
+        got = Triage(db, None, "m")._settled_senders(mail)
+        self.assertEqual(list(got), ["a"])  # s2 has no history, c is not bulk, d cannot be looked up
+        self.assertEqual(db.calls, [("sender_history", {"p_user": "u1", "p_senders": ["s1", "s2"], "p_keep": 3})])
+        self.assertEqual(Triage(Db(fail=True), None, "m")._settled_senders(mail), {})
+
     def test_latest_incoming_per_conversation(self):
         rows = [  # newest first
             {"id": "out1", "thread_id": "t1", "direction": "outbound"},
@@ -348,7 +402,7 @@ class TriageDecisions(unittest.TestCase):
         email = {"name": "Sam", "sender": "sam@x.com", "relationship": "", "known": True, "bulk": False, "subject": "Lunch", "body": "Free Friday?"}
         a = triage_prompt(UserContext(about="Runs a cafe"), [email])
         b = triage_prompt(UserContext(about="Runs a cafe"), [email, {**email, "subject": "Other"}])
-        self.assertTrue(a.startswith("About them: Runs a cafe"))
+        self.assertTrue(a.startswith("Their name: not given\nTheir own addresses: not given\nAbout them: Runs a cafe"))
         self.assertTrue(b.startswith(a))  # the same start, which Gemini bills at the cached rate when it repeats
         self.assertIn("=== Email 2\nFrom: Sam <sam@x.com>", b)
         self.assertIn("They have written to this sender before: yes", a)
@@ -450,6 +504,27 @@ class TriageRun(unittest.TestCase):
         self.assertEqual(sorted(db.thread_updates), ["t1", "t2"])
         self.assertTrue(db.thread_updates["t1"]["needs_reply"])
 
+    def test_labels_keep_their_prompt_and_traits_and_leave_events_without_text(self):
+        pending = [self.msg("m2", "t1", list_unsubscribe="<mailto:x>"), self.msg("m1", "t1")]
+        rows = [{"id": "m2", "thread_id": "t1", "direction": "inbound"}, {"id": "m1", "thread_id": "t1", "direction": "inbound"}]
+        db, gemini = FakeTriageDb(pending, rows), FakeTriageGemini()
+        triage = Triage(db, gemini, "fast")
+        sent = []
+        triage.analytics.emit = lambda user_id, events: sent.append((user_id, events))
+        triage.run_once()
+        [(_, written)] = db.upserts
+        by_id = {r["message_id"]: r for r in written}
+        self.assertRegex(by_id["m2"]["prompt_version"], r"^p[0-9a-f]{7}$")
+        self.assertIsNone(by_id["m1"]["prompt_version"])
+        self.assertEqual(by_id["m2"]["traits"]["source"], "model")
+        self.assertEqual((by_id["m2"]["traits"]["sender"], by_id["m1"]["traits"]["source"]), ("bulk", "superseded"))
+        [(user, events)] = sent  # one event for the latest message; the superseded one is not a label anyone sees
+        self.assertEqual((user, len(events), events[0]["name"]), ("u", 1, "triaged"))
+        props = events[0]["props"]
+        self.assertEqual((props["priority"], props["junk"], props["bulk"], props["source"]), ("important", False, True, "model"))
+        self.assertNotIn("Subject", str(events))
+        self.assertNotIn("sam@x.com", str(events))
+
     def test_junk_conversation_and_twins_skip_the_model(self):
         pending = [self.msg("m1", "t1"), self.msg("m2", "t2", account="acc2", provider_message_id="<same@x>"),
                    self.msg("m3", "t3", provider_message_id="<same@x>")]
@@ -492,6 +567,65 @@ class TriageRun(unittest.TestCase):
         self.assertEqual(triage._backoff.failures("m2"), 1)
 
 
+class FollowUps(unittest.TestCase):
+    def test_your_last_message_and_the_one_before(self):
+        ms = [  # newest first
+            {"id": "a3", "thread_id": "a", "direction": "outbound"},
+            {"id": "a2", "thread_id": "a", "direction": "outbound"},
+            {"id": "a1", "thread_id": "a", "direction": "inbound"},
+            {"id": "b2", "thread_id": "b", "direction": "inbound"},  # they answered: not waiting
+            {"id": "b1", "thread_id": "b", "direction": "outbound"},
+            {"id": "c1", "thread_id": "c", "direction": "outbound"},
+        ]
+        got = latest_per_thread(ms)
+        self.assertEqual(sorted(got), ["a", "c"])
+        self.assertEqual((got["a"][0]["id"], got["a"][1]["id"]), ("a1", "a3"))
+        self.assertIsNone(got["c"][0])
+
+    def test_prompt_marks_whose_message_is_last(self):
+        p = follow_up_prompt([("1", "Can you send the plans?", "Will do tomorrow"), ("2", "", "Are you free Friday?")])
+        self.assertIn("Conversation 1:\n--- Them:\nCan you send the plans?\n--- Me (last):\nWill do tomorrow", p)
+        self.assertIn("Conversation 2:\n--- Me (last):\nAre you free Friday?", p)
+
+
+class Hedging(unittest.TestCase):
+    def test_a_slow_call_is_raced_by_a_second(self):
+        import time as _time
+        from unittest import mock
+        import ai.drafts as drafts_mod
+        calls = []
+
+        def call():
+            calls.append(1)
+            if len(calls) == 1:
+                _time.sleep(0.5)
+                return {"body": "slow"}
+            return {"body": "fast"}
+
+        d = drafts_mod.Drafts(None, None, "m")
+        with mock.patch.object(drafts_mod, "HEDGE_AFTER_S", 0.05):
+            self.assertEqual(d._hedged(call), {"body": "fast"})
+            calls.clear()
+            self.assertEqual(d._hedged(call, hedge=False), {"body": "slow"})
+        self.assertEqual(len(calls), 1)
+
+    def test_a_failed_second_call_waits_for_the_first(self):
+        import time as _time
+        from unittest import mock
+        import ai.drafts as drafts_mod
+        calls = []
+
+        def call():
+            calls.append(1)
+            if len(calls) == 1:
+                _time.sleep(0.2)
+                return {"body": "first"}
+            raise RuntimeError("second failed")
+
+        with mock.patch.object(drafts_mod, "HEDGE_AFTER_S", 0.05):
+            self.assertEqual(drafts_mod.Drafts(None, None, "m")._hedged(call), {"body": "first"})
+
+
 class DraftOrder(unittest.TestCase):
     def prompt(self, **kw):
         base = dict(me="Matt", about="Runs a cafe", rules=["Signs off with Matt"], examples=[], recent=["Cheers, Matt"], them="Sam",
@@ -505,10 +639,68 @@ class DraftOrder(unittest.TestCase):
         self.assertLess(a.index("Signs off with Matt"), a.index("Replying to: Sam"))
         self.assertLess(a.index("Cheers, Matt"), a.index("Replying to: Sam"))
 
+    def test_an_edit_shares_the_start_and_ends_with_your_text(self):
+        a, e = self.prompt(), self.prompt(tone="edit", edit="hey sam, lunch sounds grate", instruction="Keep it short")
+        common = len(a.split("Tone:")[0])
+        self.assertEqual(a[:common], e[:common])
+        self.assertTrue(e.rstrip().endswith("Return their reply with only the light edits it needs."))
+        self.assertIn("---\nhey sam, lunch sounds grate\n---", e)
+        self.assertIn("Their instruction for this edit: Keep it short", e)
+        self.assertNotIn("Tone:", e)
+        self.assertNotIn("Write their reply", e)
+
+    def test_an_adjustment_starts_from_your_text(self):
+        a, e = self.prompt(), self.prompt(tone="shorter", edit="Hi Sam, Tuesday works. Matt", instruction="Say yes")
+        common = len(a.split("Tone:")[0])
+        self.assertEqual(a[:common], e[:common])
+        self.assertIn("The reply they have now, to adjust:\n---\nHi Sam, Tuesday works. Matt\n---\nChange: Shorter:", e)
+        self.assertIn("Their instruction for this reply: Say yes", e)
+        self.assertNotIn("Tone:", e)
+
+    def test_what_counts_as_a_revision(self):
+        self.assertTrue(is_adjust("formal"))
+        self.assertFalse(is_adjust("default") or is_adjust("custom") or is_adjust("edit"))
+        self.assertTrue(revises({"tone": "edit", "source": "hi"}))
+        self.assertTrue(revises({"tone": "casual", "source": "hi"}))
+        self.assertFalse(revises({"tone": "casual", "source": None}))  # a tone asked for afresh is a new draft
+        self.assertFalse(revises({"tone": "custom", "source": "hi"}))
+
+    def test_the_channel_shapes_the_prompt(self):
+        email = self.prompt(subject="Lunch plans")
+        self.assertIn("Their own recent sent email emails", email)
+        self.assertIn("Channel: Email\nSubject: Lunch plans", email)
+        self.assertTrue(email.rstrip().endswith("Write their email reply to the latest message from Sam."))
+        chat = self.prompt(channel="whatsapp", subject="ignored", group_name="Braai Crew")
+        self.assertIn("Their own recent sent WhatsApp messages", chat)
+        self.assertIn("Channel: WhatsApp group chat: Braai Crew", chat)
+        self.assertNotIn("Subject:", chat)
+
+    def test_a_follow_up_when_you_wrote_last(self):
+        p = self.prompt(channel="whatsapp", conversation=[("Sam", "Lunch?"), ("Me", "Sure, where?")], last_from_me=True)
+        self.assertIn("The last message is their own. Write the next WhatsApp message", p)
+        self.assertNotIn("Write their WhatsApp reply", p)
+
+    def test_a_message_shows_what_it_carries(self):
+        m = {"body_text": "Here you go", "files": ["Offer.pdf"], "quoted": {"text": "Can you send\nthe offer?", "from_me": True}}
+        self.assertEqual(describe(m), "(attached: Offer.pdf; replying to their own message: Can you send the offer?)\nHere you go")
+        self.assertEqual(describe({"body_text": "", "media": "imageMessage"}), "(photo)")
+        self.assertEqual(describe({"body_text": "", "media": "audioMessage", "transcript": "hi"}), "(no text)")
+
+    def test_facts_sit_with_you_before_the_person(self):
+        p = self.prompt(facts=[("Fees", "Commission is 7.5% plus VAT")])
+        self.assertIn("[Fees]\nCommission is 7.5% plus VAT", p)
+        self.assertLess(p.index("Commission is 7.5%"), p.index("Replying to: Sam"))
+        self.assertEqual(pick_facts([("A", "  "), ("B", "x" * 5000), ("C", "y" * 5000), ("D", "z" * 5000), ("E", "w" * 5000), ("F", "v")]),
+                         [("B", "x" * 1500), ("C", "y" * 1500), ("D", "z" * 1500), ("E", "w" * 1500)])
+
+    def test_an_edit_keeps_your_quotes(self):
+        self.assertEqual(keep_quotes("ill be there", "I’ll be there, “soon”"), "I'll be there, \"soon\"")
+        self.assertEqual(keep_quotes("I’m late", "I’m late."), "I’m late.")
+
     def test_person_rules_and_voice_come_after_you(self):
         p = self.prompt(person_rules=["Calls him mate"], more_voice=["Hey Sam"])
         self.assertLess(p.index("Replying to: Sam"), p.index("Rules for writing to this person:\n- Calls him mate"))
-        self.assertLess(p.index("Hey Sam"), p.index("The conversation, oldest first:"))
+        self.assertLess(p.index("Hey Sam"), p.index("The conversation, oldest first"))
 
     def test_unknown_recipient_is_greeted_without_a_name(self):
         p = self.prompt(them="", recent=["Hi Norman,"])
@@ -524,11 +716,24 @@ class DraftOrder(unittest.TestCase):
         similar = [("q", "Note 3"), ("q", "x"), ("q", "y")]
         self.assertEqual(pick_more_voice(to_them, recent, shown=shown, similar=similar), ["To Sam 1", "To Sam 2"])
 
+    def test_stale_pre_drafts(self):
+        d = {"auto": True, "for_message_id": "m2"}
+        newest_first = [{"id": "m2"}, {"id": "m1"}]
+        self.assertFalse(stale(d, newest_first, None))
+        self.assertFalse(stale(d, newest_first, '{"options": []}'))  # looked at, nothing to decide
+        self.assertTrue(stale(d, newest_first, '{"options": [{"kind": "accept", "label": "Yes"}]}'))
+        self.assertTrue(stale(d, [{"id": "m3"}] + newest_first, None))  # a newer message came in
+        self.assertTrue(stale(d, [], None))
+        self.assertFalse(stale(d, newest_first, "not json"))
+
     def test_pick_drafts_one_per_conversation_oldest_first(self):
         pending = [{"id": "d1", "thread_id": "t1"}, {"id": "d2", "thread_id": "t1"}, {"id": "d3", "thread_id": "t2"}, {"id": "d4", "thread_id": "t3"},
                    {"id": "d5", "thread_id": "t4"}]
         self.assertEqual([d["id"] for d in pick_drafts(pending, {}, 3)], ["d1", "d3", "d4"])
         self.assertEqual([d["id"] for d in pick_drafts(pending, {"d0": "t2"}, 4)], ["d1", "d4", "d5"])
+        # New messages have no conversation: each is its own, so two can be written at once.
+        new = [{"id": "n1", "thread_id": None}, {"id": "n2", "thread_id": None}]
+        self.assertEqual([d["id"] for d in pick_drafts(new, {}, 4)], ["n1", "n2"])
 
 
 class GeminiErrors(unittest.TestCase):
@@ -549,7 +754,7 @@ class GeminiErrors(unittest.TestCase):
                 super().__init__("key", FakeDb())
                 self.levels = []
 
-            def _call(self, model, body, endpoint="", *, attempts=4, timeout=90):
+            def _call(self, model, body, endpoint="", *, attempts=4, timeout=90, stats=None):
                 level = body["generationConfig"]["thinkingConfig"]["thinkingLevel"]
                 self.levels.append(level)
                 if level == "minimal":
@@ -658,6 +863,13 @@ class KeepAlive(unittest.TestCase):
 
     def test_reuses_the_connection_and_unzips(self):
         self.assertEqual([self.pool.request("GET", self.url).body for _ in range(3)], [b"hello"] * 3)
+        self.assertEqual(len(set(_Handler.ports)), 1)
+
+    def test_threads_share_the_warm_connection(self):
+        self.pool.request("GET", self.url)
+        other = threading.Thread(target=lambda: self.pool.request("GET", self.url))
+        other.start()
+        other.join()
         self.assertEqual(len(set(_Handler.ports)), 1)
 
     def test_reconnects_when_the_server_closed_it(self):

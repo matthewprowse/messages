@@ -37,6 +37,7 @@ const STORE_AT_ONCE = 25; // messages per database call during imports; the next
 const SETTLE_AT_ONCE = 100; // conversations placed together during a full sync
 const PROGRESS_EVERY = 500;
 const FILES_EVERY_MS = 10 * 60_000;
+const WRITE_AT_ONCE = 6; // row updates in flight together when many messages change at once
 const FILES_AT_ONCE = 200; // attachment rows checked per catch-up
 const HISTORY_TYPES = ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"];
 
@@ -305,7 +306,7 @@ export class GmailConnector {
       const row = known.get(id);
       if (row) updates.set(id, labels ?? fetched.get(id) ?? row.meta.labels ?? []);
     }
-    let relabelled = 0;
+    const writes: { row: KnownMessage; patch: { provider_meta: GmailMeta; is_read?: boolean } }[] = [];
     for (const [gmailId, labels] of updates) {
       const row = known.get(gmailId)!;
       touched.add(row.threadId);
@@ -316,22 +317,32 @@ export class GmailConnector {
       const patch: { provider_meta: GmailMeta; is_read?: boolean } = { provider_meta: { ...row.meta, labels } };
       if (row.direction === "inbound") patch.is_read = isRead;
       if (before.includes("SPAM") && !labels.includes("SPAM")) unspammed.add(row.threadId);
+      writes.push({ row, patch });
+    }
+    // A mass read or archive in Gmail changes many messages at once, so these go a few at a time.
+    await mapLimit(writes, WRITE_AT_ONCE, async ({ row, patch }) => {
       must(await db.from("messages").update(patch).eq("id", row.id), "update gmail labels");
       changed.add(row.threadId);
-      relabelled++;
-    }
+    });
+    const relabelled = writes.length;
 
     // Deleted for good in Gmail: the app keeps its copy, but it no longer counts as in the Inbox.
+    const gone: KnownMessage[] = [];
     for (const gmailId of changes.deleted) {
       const row = known.get(gmailId);
       if (!row) continue;
       touched.add(row.threadId);
       if (row.meta.deleted && !row.meta.labels?.length) continue;
+      gone.push(row);
+    }
+    await mapLimit(gone, WRITE_AT_ONCE, async (row) => {
       must(await db.from("messages").update({ provider_meta: { ...row.meta, labels: [], deleted: true } }).eq("id", row.id), "mark gmail deleted");
       changed.add(row.threadId);
-    }
+    });
 
-    for (const threadId of changed) must(await db.rpc("refresh_thread", { p_thread_id: threadId }), "refresh thread");
+    await mapLimit([...changed], WRITE_AT_ONCE, async (threadId) => {
+      must(await db.rpc("refresh_thread", { p_thread_id: threadId }), "refresh thread");
+    });
     await this.settleThreads([...touched], unspammed);
     log.info("gmail changes applied", { account: this.id, inserted, relabelled, deleted: changes.deleted.size });
   }
@@ -511,13 +522,13 @@ export class GmailConnector {
       if (gmailId) messages.set(r.message_id, gmailId);
     }
     let saved = 0;
-    for (const [messageId, gmailId] of messages) {
+    await mapLimit([...messages], FETCH_AT_ONCE / 2, async ([messageId, gmailId]) => {
       if (this.stopped) return;
       const msg = await this.fetchMessage(gmailId, "raw");
-      if (!msg?.raw) continue;
+      if (!msg?.raw) return;
       const mail = await this.parse(msg).catch((err) => void log.warn("attachment upload failed", { account: this.id, code: errorCode(err) }));
       if (mail) saved += await saveFilesQuietly(this.id, this.account.user_id, messageId, mail.attachments);
-    }
+    });
     if (saved > 0) log.info("attachment files saved", { account: this.id, saved });
   }
 
@@ -534,7 +545,7 @@ export class GmailConnector {
     let messageId: string;
     let requested = false; // once the email is on its way, a lost answer does not mean it was not sent
     try {
-      const out = await composeOutgoing(row, this.id, this.selfAddresses, "gmail");
+      const out = await composeOutgoing(row, this.id, this.selfAddresses, "gmail", undefined, false, true); // Gmail reads Bcc from the message and removes it before delivering
       if ("error" in out) {
         await markFailed(row.id, out.error);
         return;
@@ -635,20 +646,23 @@ export class GmailConnector {
 
       for (const { list, add, remove } of groups) {
         if (list.length === 0) continue;
-        await this.need().request(`${API}/messages/batchModify`, {
-          method: "POST",
-          body: { ids: list.map((m) => m.meta.gmail_id), addLabelIds: add, removeLabelIds: remove },
-        });
-        for (const m of list) {
-          const { was_inbox: _, was_spam: __, ...meta } = m.meta;
-          const labels = applyLabelChange(meta.labels ?? [], add, remove);
-          const next: GmailMeta =
-            row.action === "trash"
-              ? { ...meta, labels, was_inbox: (meta.labels ?? []).includes("INBOX") }
-              : row.action === "unspam"
-                ? { ...meta, labels, was_spam: true }
-                : { ...meta, labels };
-          must(await db.from("messages").update({ provider_meta: next }).eq("id", m.id), "save gmail labels");
+        // Gmail takes at most 1000 messages in one batchModify.
+        for (const part of chunks(list, 1000)) {
+          await this.need().request(`${API}/messages/batchModify`, {
+            method: "POST",
+            body: { ids: part.map((m) => m.meta.gmail_id), addLabelIds: add, removeLabelIds: remove },
+          });
+          await mapLimit(part, WRITE_AT_ONCE, async (m) => {
+            const { was_inbox: _, was_spam: __, ...meta } = m.meta;
+            const labels = applyLabelChange(meta.labels ?? [], add, remove);
+            const next: GmailMeta =
+              row.action === "trash"
+                ? { ...meta, labels, was_inbox: (meta.labels ?? []).includes("INBOX") }
+                : row.action === "unspam"
+                  ? { ...meta, labels, was_spam: true }
+                  : { ...meta, labels };
+            must(await db.from("messages").update({ provider_meta: next }).eq("id", m.id), "save gmail labels");
+          });
         }
       }
     };

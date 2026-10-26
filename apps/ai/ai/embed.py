@@ -1,7 +1,10 @@
 """Embeddings: a 768 number fingerprint of what each email says, so drafts can find how you answered
-emails like the one in front of you (public.similar_replies). Only incoming messages are embedded:
-similar_replies searches what you received and reads your replies as text. New mail is embedded
-first, then older mail a batch at a time, so the backfill never floods the API or the database.
+emails like the one in front of you (public.similar_replies). Only incoming messages you have replied to
+are embedded: similar_replies searches what you received and returns it only with your reply, which it
+reads as text, so a vector for mail nobody answered is never used. The database trigger queues a
+message when its reply is stored (20261027100100_embed_replied_mail_only). The mail being drafted
+for is embedded on the spot (for_message). The newest is embedded first, then older mail a batch at
+a time, so the backfill never floods the API or the database.
 
 Vectors live in public.message_embeddings, not on messages: messages is sent to open browsers by
 Realtime on every change, and the vector would go with it. A database trigger adds a row with no
@@ -95,24 +98,6 @@ class Embeddings:
         log.info("messages embedded", messages=done)
         return done
 
-    def stored(self, message_id: str, user_id: str) -> str | None:
-        """The saved vector of one message in pgvector's text form, or None when it has none yet."""
-        if not self._legacy():
-            try:
-                row = self.db.first("message_embeddings", {"select": "embedding", "message_id": f"eq.{message_id}", "user_id": f"eq.{user_id}"})
-                return (row or {}).get("embedding") or None
-            except Exception as err:
-                if not self._went_legacy(err):
-                    raise
-        try:
-            row = self.db.first("messages", {"select": "embedding", "id": f"eq.{message_id}", "user_id": f"eq.{user_id}"})
-        except Exception as err:
-            if missing_relation(err):  # the migration ran meanwhile: messages.embedding is gone
-                self._legacy_until = 0.0
-                return None
-            raise
-        return (row or {}).get("embedding") or None
-
     def for_message(self, message: dict[str, Any], user_id: str, account_id: str | None, thread_id: str | None) -> list[float] | None:
         """The vector for one message, embedding and saving it now when the backfill has not reached it.
         message needs id and sent_at to be saved, and its subject and body already opened."""
@@ -186,7 +171,7 @@ class Embeddings:
                 return {m["id"] for m in messages}
             except Exception as err:
                 if not self._went_legacy(err):
-                    log.warn("embeddings not saved", messages=len(messages), code=getattr(err, "code", None) or type(err).__name__)
+                    log.warn("embeddings not saved", messages=len(messages), code=log.code_of(err))
                     return set()
         writes = [self._pool.submit(self._save_legacy, m["id"], v) for m, v in zip(messages, vectors)]
         return {m["id"] for m, w in zip(messages, writes) if w.result()}
@@ -196,5 +181,5 @@ class Embeddings:
             self.db.update("messages", {"id": f"eq.{message_id}"}, {"embedding": vector_literal(vector)}, minimal=True)
             return True
         except Exception as err:
-            log.warn("embedding not saved", message=message_id, code=getattr(err, "code", None) or type(err).__name__)
+            log.warn("embedding not saved", message=message_id, code=log.code_of(err))
             return False

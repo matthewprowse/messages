@@ -9,8 +9,8 @@ export interface MediaInfo {
   type: MediaType;
   filename: string;
   mimeType: string;
-  /** The attachments table's kind: image, pdf, video or file. */
-  kind: "image" | "pdf" | "video" | "file";
+  /** The attachments table's kind: image, pdf, video, audio or file. */
+  kind: "image" | "pdf" | "video" | "audio" | "file";
   sizeBytes: number | null;
 }
 
@@ -60,6 +60,7 @@ function kindOf(mimeType: string): MediaInfo["kind"] {
   const m = mimeType.toLowerCase();
   if (m.startsWith("image/")) return "image";
   if (m.startsWith("video/")) return "video";
+  if (m.startsWith("audio/")) return "audio";
   if (m === "application/pdf") return "pdf";
   return "file";
 }
@@ -134,7 +135,7 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
       const seconds = m.seconds ?? 0;
       const length = seconds ? ` (${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")})` : "";
       preview = `${m.ptt ? "Voice Note" : "Audio"}${length}`;
-      media = { type, filename: `${m.ptt ? "Voice Note" : "Audio"}.${extension(mime, "ogg")}`, mimeType: mime, kind: "file", sizeBytes: size(m.fileLength) };
+      media = { type, filename: `${m.ptt ? "Voice Note" : "Audio"}.${extension(mime, "ogg")}`, mimeType: mime, kind: "audio", sizeBytes: size(m.fileLength) };
       context = m.contextInfo;
       break;
     }

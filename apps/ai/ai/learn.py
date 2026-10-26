@@ -112,16 +112,21 @@ class Learn:
             )
             todo = [s for s in todo if s.get("drafts")]
             for row in todo:
-                self.vault.open_row(row["user_id"], row, [("body", BODY)])
-                self.vault.open_row(row["user_id"], row["drafts"], [("body", DRAFT)])
-                self._learn(row["user_id"], row["draft_id"], row["thread_id"], row["drafts"]["body"] or "", row["body"], mark_sent=True)
-            done += len(todo)
+                if not row.get("thread_id"):  # a new email or chat whose conversation is not filed yet: next time
+                    continue
+                try:  # one row that fails must not hold up the ones behind it
+                    self.vault.open_row(row["user_id"], row, [("body", BODY)])
+                    self.vault.open_row(row["user_id"], row["drafts"], [("body", DRAFT)])
+                    self._learn(row["user_id"], row["draft_id"], row["thread_id"], row["drafts"]["body"] or "", row["body"], mark_sent=True)
+                    done += 1
+                except Exception as err:
+                    log.warn("draft outcome not learned", draft=row["draft_id"], code=log.code_of(err))
         if time.monotonic() - self._rewrites_at >= REWRITES_EVERY_S:
             self._rewrites_at = time.monotonic()
             try:
                 done += self._rewrites()
             except Exception as err:
-                log.error("rewrite learning failed", code=getattr(err, "code", None) or type(err).__name__)
+                log.error("rewrite learning failed", code=log.code_of(err))
         return done
 
     def _rewrites(self) -> int:
@@ -132,6 +137,8 @@ class Learn:
             {
                 "select": "id,user_id,thread_id,body,created_at",
                 "status": "eq.discarded",
+                "tone": "neq.edit",
+                "thread_id": "not.is.null",  # a new message thrown away has no conversation to compare with  # an edit you undid is your own text, not a draft you replaced
                 "body": "neq.",
                 "created_at": f"gte.{since}",
                 "order": "created_at.desc",
@@ -172,8 +179,11 @@ class Learn:
                 continue
             sent_body = clean(reply.get("body_text"), reply.get("body_html"), limit=4000)
             if sent_body:
-                self._learn(d["user_id"], d["id"], d["thread_id"], d["body"], sent_body, mark_sent=False)
-                done += 1
+                try:
+                    self._learn(d["user_id"], d["id"], d["thread_id"], d["body"], sent_body, mark_sent=False)
+                    done += 1
+                except Exception as err:
+                    log.warn("rewrite not learned", draft=d["id"], code=log.code_of(err))
         return done
 
     def _learn(self, user_id: str, draft_id: str, thread_id: str, draft_body: str, sent_body: str, *, mark_sent: bool) -> None:

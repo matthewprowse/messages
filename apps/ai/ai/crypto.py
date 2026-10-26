@@ -60,6 +60,32 @@ def decrypt_field(keys: UserKeys, field: str, payload: str) -> str:
     return AESGCM(keys.enc).decrypt(raw[:NONCE_BYTES], raw[NONCE_BYTES:], field.encode("utf-8")).decode("utf-8")
 
 
+# Sealed files (encryptBytes in index.ts): MAGIC, a 12-byte nonce, then ciphertext and its 16-byte tag, with
+# the field as additional data. MAGIC is "e1b:" 00 FF "KN".
+MAGIC = bytes([0x65, 0x31, 0x62, 0x3A, 0x00, 0xFF, 0x4B, 0x4E])
+
+
+def is_sealed_bytes(data: bytes) -> bool:
+    return data[: len(MAGIC)] == MAGIC
+
+
+def encrypt_bytes(keys: UserKeys, field: str, plain: bytes, nonce: bytes | None = None) -> bytes:
+    iv = nonce if nonce is not None else os.urandom(NONCE_BYTES)
+    if len(iv) != NONCE_BYTES:
+        raise ValueError("A nonce is 12 bytes.")
+    return MAGIC + iv + AESGCM(keys.enc).encrypt(iv, plain, field.encode("utf-8"))
+
+
+def decrypt_bytes(keys: UserKeys, field: str, sealed: bytes) -> bytes:
+    """Opens bytes sealed by encryptBytes for the same field. Raises if they were altered, moved or are not sealed."""
+    if not is_sealed_bytes(sealed):
+        raise ValueError("Not a sealed file.")
+    start = len(MAGIC) + NONCE_BYTES
+    if len(sealed) < start + 16:
+        raise ValueError("Sealed file is too short.")
+    return AESGCM(keys.enc).decrypt(sealed[len(MAGIC) : start], sealed[start:], field.encode("utf-8"))
+
+
 def encrypt_optional(keys: UserKeys, field: str, plaintext: str | None) -> str | None:
     return None if plaintext is None else encrypt_field(keys, field, plaintext)
 

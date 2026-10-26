@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Check, ChevronDown, MoreHorizontal, SquarePen, X, Inbox, Paperclip } from "lucide-react";
+import { ArrowDown, ArrowLeft, Check, ChevronDown, Loader2, MoreHorizontal, SquarePen, X, Inbox, Paperclip } from "lucide-react";
 import { useApp, type DraftPhase } from "@/lib/store";
 import type { Attachment, Contact, Decision, Draft, FiledAttachment, Message, Thread } from "@/lib/types";
 import { dayLabel, formatPhone, fullStamp, relTime } from "@/lib/format";
@@ -17,15 +17,29 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import { ThreadAvatar, EmptyState, providerLabel } from "@/components/primitives";
+import { ProviderLogo } from "@/components/provider-logo";
 import { AttachmentGrid, AttachmentTile, AttachmentViewer, StickerImage, isSticker } from "@/components/attachments";
 import { MessageBody } from "@/components/message-body";
+import { VoiceNote } from "@/components/media-player";
 import { GuidedChoices } from "@/components/guided-choices";
-import { BubbleActions, QuoteBlock, ReactionChips, useReactorName, type NameOf, type OnReact } from "@/components/message-extras";
-import { ReplyHeader, useReplyFrom } from "@/components/reply-header";
+import { BubbleActions, QuoteBlock, ReactionChips, useReactorName, useTouchReveal, type NameOf, type OnReact } from "@/components/message-extras";
+import { ReplyHeader, useReplyAll, useReplyFrom } from "@/components/reply-header";
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
+import { RecordButton, RecordingActions, RecordingStatus, SpeakButton, useVoiceRecorder } from "@/components/voice-recorder";
 import { isTypingKey } from "@/components/new-menu";
 import { ComposeDialog } from "@/components/compose-dialog";
+import { takeVia, track } from "@/lib/analytics";
 import { attachProvider, type OutboxUpload } from "@/lib/outbox-files";
+import { shortcutAction } from "@/lib/selection";
+import { MESSAGE_PAGE } from "@/lib/data";
+import { meetingsAmong, type Meeting } from "@/lib/meetings";
+import { useMeetings } from "@/components/meetings-data";
+import { MeetingCard } from "@/components/meeting-card";
+
+/** A conversation is marked read after it has been open this long in a visible tab. */
+const READ_AFTER_MS = 2000;
+/** Within this many pixels of the end of the list counts as being at the bottom. */
+const NEAR_BOTTOM_PX = 120;
 
 /** basePath is where Back, Escape and archiving return: /inbox, or /briefing when opened from the Summary page. */
 export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string; basePath?: string }) {
@@ -34,20 +48,26 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const focusId = params.get("message");
   const listQuery = new URLSearchParams(params);
   listQuery.delete("message");
-  const backHref = listQuery.size ? `${basePath}?${listQuery.toString()}` : basePath;
+  // A path in this view, keeping the list's filters and search so going back lands where you were.
+  const withQuery = (path: string) => (listQuery.size ? `${path}?${listQuery.toString()}` : path);
+  const backHref = withQuery(basePath);
   const {
     threadById, contactById, contacts, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, loading, markRead, archive, trash, pin, giveFeedback,
-    send, generateDraft, discardDraft, setJunk, drafting, hydrated, setReplyTo, react,
+    send, generateDraft, discardDraft, requestAutoDraft, setJunk, drafting, hydrated, setReplyTo, react,
   } = useApp();
   const thread = threadById(threadId);
   // The store keeps one list per conversation, which only changes when this conversation does.
-  const msgs = messagesFor(threadId);
+  const stored = messagesFor(threadId);
+  // Failed sends you have deleted, or retried as a new send, are hidden here.
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const msgs = useMemo(() => (dismissed.size ? stored.filter((m) => !dismissed.has(m.id)) : stored), [stored, dismissed]);
   const loaded = messagesLoaded(threadId);
   const phase = drafting[threadId];
   const scrollRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const threadExists = !!thread;
   const [filesOpen, setFilesOpen] = useState(false);
+  const [forwarding, setForwarding] = useState(false);
   // One viewer for the whole conversation, opened by any bubble's attachment.
   const [viewing, setViewing] = useState<Attachment | null>(null);
   const files = useMemo(
@@ -61,6 +81,21 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     return out;
   }, [msgs, contactById]);
   const header = useMemo(() => (thread ? headerOf(thread, msgs, contactById) : null), [thread, msgs, contactById]);
+  // Meetings that someone in this conversation was in, placed among its messages by when they started.
+  const participantIds = thread?.participantIds;
+  const meetingScope = useMemo(() => (participantIds ? { contactIds: participantIds } : null), [participantIds]);
+  const { meetings: theirMeetings } = useMeetings(meetingScope);
+  const meetings = useMemo(() => meetingsAmong(theirMeetings, msgs[0]?.sentAt, msgs.length < MESSAGE_PAGE), [theirMeetings, msgs]);
+
+  // Opening a conversation: from where, and whether it had a summary to read first.
+  const openedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!thread || openedRef.current === threadId) return;
+    openedRef.current = threadId;
+    track("thread_opened", { via: takeVia(basePath === "/briefing" ? "summary" : "list"), channel: thread.channel, had_summary: thread.summary.length > 0, unread: thread.unread });
+    void requestAutoDraft(threadId); // a pre-draft, when it qualifies and has none: ready while you read
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId, threadExists]);
 
   // Messages load when a conversation is opened, and then stay live.
   useEffect(() => {
@@ -70,23 +105,63 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
 
   useEffect(() => {
     if (!hydrated || !thread?.unread) return;
-    const t = setTimeout(() => markRead(threadId, true, true), 600);
-    return () => clearTimeout(t);
+    // Read only once it has been open for two seconds in a tab you can see: not while it sits in the background.
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      clearTimeout(t);
+      if (document.visibilityState === "visible") t = setTimeout(() => markRead(threadId, true, true), READ_AFTER_MS);
+    };
+    arm();
+    document.addEventListener("visibilitychange", arm);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("visibilitychange", arm);
+    };
     // Re-checked once the conversation has loaded, for when it is opened straight from its address.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, hydrated, threadExists]);
 
-  // New messages at the bottom scroll it into view; older ones loaded at the top do not.
+  // New messages at the bottom scroll into view when you are already near the bottom (or sent them
+  // yourself); otherwise a New Messages button offers the jump. Older ones loaded at the top do not scroll.
   const lastId = msgs[msgs.length - 1]?.id;
+  const lastMine = msgs[msgs.length - 1]?.from === "me";
+  const nearBottom = useRef(true);
+  const seenLast = useRef<{ threadId: string; id: string | undefined } | null>(null);
+  const [newBelow, setNewBelow] = useState(false);
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = viewportOf(scrollRef.current);
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    setNewBelow(false);
+  }, []);
   useEffect(() => {
     const el = viewportOf(scrollRef.current);
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [threadId, lastId, phase]);
+    if (!el) return;
+    function onScroll() {
+      if (!el) return;
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+      nearBottom.current = near;
+      if (near) setNewBelow(false);
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [threadId, threadExists]);
+  useEffect(() => { nearBottom.current = true; setNewBelow(false); }, [threadId]);
+  useEffect(() => {
+    const prev = seenLast.current;
+    seenLast.current = { threadId, id: lastId };
+    // Opening a conversation, or its first messages arriving, goes to the bottom.
+    const opening = !prev || prev.threadId !== threadId || prev.id === undefined;
+    if (opening || nearBottom.current || lastMine) scrollToBottom();
+    else if (prev.id !== lastId) setNewBelow(true);
+  }, [threadId, lastId, lastMine, scrollToBottom]);
+  // A reply being drafted grows the list at the bottom: follow it only when already there.
+  useEffect(() => { if (phase && nearBottom.current) scrollToBottom(); }, [phase, scrollToBottom]);
 
   // Scrolling near the top loads the page before, and keeps the message that was first in view where it
   // was. Measured from that message, so it holds whether or not the browser's own scroll anchoring acts.
   const anchor = useRef<{ id: string; top: number } | null>(null);
   const firstId = msgs[0]?.id;
+  const [loadingOlder, setLoadingOlder] = useState(false);
   useLayoutEffect(() => {
     const el = viewportOf(scrollRef.current);
     const a = anchor.current;
@@ -101,12 +176,16 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       const first = el?.querySelector("[data-message-id]");
       if (!el || !first || el.scrollTop > 400 || anchor.current) return;
       anchor.current = { id: first.getAttribute("data-message-id")!, top: first.getBoundingClientRect().top };
-      loadOlderMessages(threadId).then((added) => { if (!added) anchor.current = null; });
+      setLoadingOlder(true);
+      loadOlderMessages(threadId)
+        .then((added) => { if (!added) anchor.current = null; })
+        .finally(() => setLoadingOlder(false));
     }
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
       anchor.current = null;
+      setLoadingOlder(false);
     };
   }, [threadId, loaded, threadExists, loadOlderMessages]);
 
@@ -121,6 +200,12 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   }, [setReplyTo, threadId]);
 
+  // Delete hides a failed send. Retry queues the same text again as a new send and hides the failed one.
+  const onDismiss = useCallback((m: Message) => setDismissed((d) => new Set(d).add(m.id)), []);
+  const onRetry = useCallback(async (m: Message) => {
+    if (await send(threadId, m.body, undefined, [], true)) onDismiss(m);
+  }, [send, threadId, onDismiss]);
+
   // A message opened from search is scrolled to the middle and briefly ringed, once it is loaded: one older
   // than the loaded pages is loaded first. The param is then dropped so later sends still scroll to the
   // bottom and the same message can be searched again.
@@ -134,7 +219,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     }
     setFilesOpen(false); // "Show in Conversation" from the Attachments panel lands here
     jumpTo(focusId);
-    router.replace(`${basePath}/${threadId}${listQuery.size ? `?${listQuery.toString()}` : ""}`, { scroll: false });
+    router.replace(withQuery(`${basePath}/${threadId}`), { scroll: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, focusId, loaded, msgs, focusLoaded]);
   useEffect(() => {
@@ -147,11 +232,19 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     function onKey(e: KeyboardEvent) {
       // Keys typed in a field, menu, dialog or select (which jumps by letter) belong to that control.
       if (e.metaKey || e.ctrlKey || !thread || isTypingKey(e)) return;
-      if (e.key === "e") { archive(thread.id); router.push(backHref); }
-      if (e.key === "u") { markRead(thread.id, false); router.push(backHref); }
-      if ((e.key === "#" || e.key === "Delete") && !e.altKey) { trash(thread.id); router.push(backHref); }
-      if (e.key === "!" && !e.altKey) { setJunk(thread.id, !thread.junk); router.push(backHref); }
-      if (e.key === "Escape") router.push(backHref);
+      // The same E, # or Delete and ! shortcuts as the list, plus U for unread and Escape to go back.
+      const action = shortcutAction(e);
+      if (action === "archive") archive(thread.id);
+      else if (action === "trash") trash(thread.id);
+      else if (action === "junk") setJunk(thread.id, !thread.junk);
+      else if (e.key === "u" && !e.altKey) markRead(thread.id, false);
+      else if (e.key === "r" && !e.altKey && !e.shiftKey) {
+        // R starts a reply: the cursor goes to the message box.
+        e.preventDefault();
+        rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+        return;
+      } else if (e.key !== "Escape") return;
+      router.push(backHref);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -162,6 +255,9 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     return <EmptyState icon={Inbox} title="Conversation Not Found" description="It may have been archived or deleted." action={<Button variant="outline" asChild><Link href={basePath}>{basePath === "/inbox" ? "Back to Conversations" : "Go Back"}</Link></Button>} />;
   }
   const { primary, title, subtitle } = header;
+  // Forward opens a new email with the latest stored message quoted. Files are not carried over.
+  const forwardable = thread.channel === "email" && stored.some((m) => !m.sendState && !m.deleted);
+  const forwardOf = forwardable ? forwardDraft(thread, stored) : undefined;
 
   return (
     // A solid header and composer, each set off by a line, with only the messages scrolling between them,
@@ -172,26 +268,27 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
           <Link href={backHref}><ArrowLeft /></Link>
         </Button>
         <div className="min-w-0 flex-1">
-          {/* Hovering the avatar or name slides a View button out from behind the name. */}
-          <div className="group/name flex w-fit max-w-full min-w-0 items-center gap-3">
-            <ThreadAvatar thread={thread} contacts={contactById} className="size-8" />
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{title}</div>
-              {subtitle && <div className="truncate text-xs text-muted-foreground">{subtitle}</div>}
-            </div>
-            {primary && (
-              <Button
-                asChild
-                variant="outline"
-                size="sm"
-                className="pointer-events-none h-8 shrink-0 -translate-x-2 opacity-0 transition-all duration-200 ease-out group-hover/name:pointer-events-auto group-hover/name:translate-x-0 group-hover/name:opacity-100 focus-visible:pointer-events-auto focus-visible:translate-x-0 focus-visible:opacity-100"
-              >
-                <Link href={`/contacts/${primary.id}`}>View</Link>
-              </Button>
-            )}
-          </div>
+          {/* The avatar and name open the person's contact page. */}
+          {(() => {
+            const who = (
+              <>
+                <ThreadAvatar thread={thread} contacts={contactById} className="size-8" />
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-sm font-medium">{title}</span>
+                    <ProviderLogo provider={thread.provider} />
+                  </div>
+                  {subtitle && <div className="truncate text-xs text-muted-foreground">{subtitle}</div>}
+                </div>
+              </>
+            );
+            const cls = "flex w-fit max-w-full min-w-0 items-center gap-3";
+            return primary
+              ? <Link href={`/contacts/${primary.id}`} aria-label={`View ${title}`} className={cn(cls, "rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50")}>{who}</Link>
+              : <div className={cls}>{who}</div>;
+          })()}
         </div>
-        <ChannelTabs thread={thread} person={primary} hrefFor={(id) => (listQuery.size ? `${basePath}/${id}?${listQuery.toString()}` : `${basePath}/${id}`)} />
+        <ChannelTabs thread={thread} person={primary} hrefFor={(id) => withQuery(`${basePath}/${id}`)} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-max">
@@ -199,6 +296,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
             <DropdownMenuItem onClick={() => { archive(thread.id); router.push(backHref); }}>Archive</DropdownMenuItem>
             <DropdownMenuItem onClick={() => { trash(thread.id); router.push(backHref); }}>Delete</DropdownMenuItem>
             <DropdownMenuItem onClick={() => setFilesOpen(true)}>Attachments</DropdownMenuItem>
+            {forwardable && <DropdownMenuItem onClick={() => setForwarding(true)}>Forward</DropdownMenuItem>}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => giveFeedback(thread.id, "important")}>Important</DropdownMenuItem>
             <DropdownMenuItem onClick={() => giveFeedback(thread.id, "not_important")}>Not Important</DropdownMenuItem>
@@ -212,7 +310,8 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       </header>
 
       {/* Padding sits outside the 672px column, as in the composer, so bubbles line up with the message box. */}
-      <ScrollArea ref={scrollRef} className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
+      <ScrollArea ref={scrollRef} className="h-full">
         <div className="p-3 md:px-4">
           <div className="mx-auto w-full max-w-2xl">
             {!loaded && msgs.length === 0 ? (
@@ -220,6 +319,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
             ) : (
               <Messages
                 msgs={msgs}
+                meetings={meetings}
                 isGroup={!!thread.isGroup}
                 whatsapp={thread.channel === "whatsapp"}
                 flashId={flashId}
@@ -229,22 +329,41 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
                 onReply={onReply}
                 onReact={react}
                 onOpen={setViewing}
+                onRetry={onRetry}
+                onDismiss={onDismiss}
               />
             )}
           </div>
         </div>
       </ScrollArea>
+      {loadingOlder && (
+        <div className="pointer-events-none absolute inset-x-0 top-2 flex justify-center" role="status" aria-label="Loading Earlier Messages">
+          <div className="flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground shadow-xs">
+            <Loader2 className="size-3.5 animate-spin" />Loading Earlier Messages
+          </div>
+        </div>
+      )}
+      {newBelow && (
+        <div className="absolute inset-x-0 bottom-3 flex justify-center">
+          <Button variant="secondary" className="rounded-full shadow-md" onClick={() => scrollToBottom(true)}>
+            <ArrowDown />New Messages
+          </Button>
+        </div>
+      )}
+      </div>
 
       <Composer
         thread={thread}
         phase={phase}
-        onDraft={(tone, instruction, decision) => generateDraft(thread.id, tone, instruction, decision)}
+        onDraft={(tone, instruction, decision, source, audio) => generateDraft(thread.id, tone, instruction, decision, source, audio)}
         onDiscardDraft={() => discardDraft(thread.id)}
         msgs={msgs}
-        onSend={(body, from, files) => send(thread.id, body, from, files)}
+        onSend={(body, from, files, copies) => send(thread.id, body, from, files, false, copies)}
       />
 
       <AttachmentViewer attachment={viewing} onClose={() => setViewing(null)} />
+
+      {forwardOf && <ComposeDialog open={forwarding} onOpenChange={setForwarding} subject={forwardOf.subject} body={forwardOf.body} />}
 
       <Sheet open={filesOpen} onOpenChange={setFilesOpen}>
         <SheetContent className="w-full gap-0 sm:max-w-md">
@@ -327,6 +446,24 @@ function ChannelTabs({ thread, person, hrefFor }: { thread: Thread; person?: Con
   );
 }
 
+/** A forward of the latest message: its subject and the message quoted below an empty space for a note. */
+function forwardDraft(thread: Thread, msgs: Message[]) {
+  const m = [...msgs].reverse().find((x) => !x.sendState && !x.deleted);
+  const subject = thread.subject?.trim() ?? "";
+  const lines = [
+    "",
+    "",
+    "Begin forwarded message:",
+    "",
+    ...(m?.address ? [`From: ${m.address}`] : []),
+    ...(m ? [`Date: ${fullStamp(m.sentAt)}`] : []),
+    ...(subject ? [`Subject: ${subject}`] : []),
+    "",
+    m?.body ?? "",
+  ];
+  return { subject: /^fwd?:/i.test(subject) ? subject : `Fwd: ${subject}`.trim(), body: lines.join("\n") };
+}
+
 function viewportOf(root: HTMLElement | null) {
   return root?.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]") ?? null;
 }
@@ -350,6 +487,8 @@ function headerOf(thread: Thread, msgs: Message[], contactById: (id: string) => 
 
 interface ListProps {
   msgs: Message[];
+  /** Meetings with these people, oldest first, shown as cards between the messages around them. */
+  meetings: Meeting[];
   isGroup: boolean;
   whatsapp: boolean;
   flashId: string | null;
@@ -359,6 +498,8 @@ interface ListProps {
   onReply: (m: Message) => void;
   onReact: OnReact;
   onOpen: (a: Attachment) => void;
+  onRetry: (m: Message) => void;
+  onDismiss: (m: Message) => void;
 }
 
 /** How close together photos must be sent to show as one album, as WhatsApp groups them. */
@@ -383,28 +524,39 @@ function withAlbums(run: Message[]): Message[][] {
 }
 
 /* Every conversation renders as a chat, email included. */
-const Messages = memo(function Messages({ msgs, isGroup, whatsapp, flashId, senderNames, ...handlers }: ListProps) {
+const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, flashId, senderNames, ...handlers }: ListProps) {
   // A WhatsApp quote names the quoted message by WhatsApp's own ID.
   const byProviderId = useMemo(() => new Map(msgs.flatMap((m) => (m.providerId ? [[m.providerId, m.id] as const] : []))), [msgs]);
-  // Split each day into runs of consecutive messages from the same sender. The label is worked out once per day.
+  // Split each day into runs of consecutive messages from the same sender, with a meeting between the messages
+  // sent before and after it starts (and so ending a run). The label is worked out once per day.
   const groups = useMemo(() => {
     const now = new Date();
-    const out: { key: string; day: string; runs: Message[][] }[] = [];
-    for (const m of msgs) {
-      const key = new Date(m.sentAt).toDateString();
+    const out: { key: string; day: string; runs: (Message[] | Meeting)[] }[] = [];
+    const dayOf = (iso: string) => {
+      const key = new Date(iso).toDateString();
       let g = out[out.length - 1];
       if (!g || g.key !== key) {
-        g = { key, day: dayLabel(m.sentAt, now), runs: [] };
+        g = { key, day: dayLabel(iso, now), runs: [] };
         out.push(g);
       }
+      return g;
+    };
+    let next = 0;
+    for (const m of msgs) {
+      while (next < meetings.length && Date.parse(meetings[next].startedAt) <= Date.parse(m.sentAt)) {
+        dayOf(meetings[next].startedAt).runs.push(meetings[next]);
+        next++;
+      }
+      const g = dayOf(m.sentAt);
       const run = g.runs[g.runs.length - 1];
-      if (run && run[0].from === m.from) run.push(m);
+      if (Array.isArray(run) && run[0].from === m.from) run.push(m);
       else g.runs.push([m]);
     }
+    for (; next < meetings.length; next++) dayOf(meetings[next].startedAt).runs.push(meetings[next]);
     return out;
-  }, [msgs]);
+  }, [msgs, meetings]);
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" role="log" aria-live="polite" aria-label="Messages">
       {groups.map((g) => (
         <div key={g.key} className="space-y-6">
           <div className="flex items-center gap-3">
@@ -413,6 +565,7 @@ const Messages = memo(function Messages({ msgs, isGroup, whatsapp, flashId, send
             <Separator className="flex-1" />
           </div>
           {g.runs.map((run) => {
+            if (!Array.isArray(run)) return <MeetingCard key={run.id} meeting={run} place="conversation" />;
             const items = whatsapp ? withAlbums(run) : run.map((m) => [m]);
             return (
               <div key={run[0].id} className="flex flex-col gap-2">
@@ -437,7 +590,7 @@ const Messages = memo(function Messages({ msgs, isGroup, whatsapp, flashId, send
   );
 });
 
-interface BubbleProps extends Pick<ListProps, "whatsapp" | "nameOf" | "onJump" | "onReply" | "onReact" | "onOpen"> {
+interface BubbleProps extends Pick<ListProps, "whatsapp" | "nameOf" | "onJump" | "onReply" | "onReact" | "onOpen" | "onRetry" | "onDismiss"> {
   m: Message;
   showMeta: boolean;
   /** The sender's name, shown in groups. */
@@ -447,22 +600,25 @@ interface BubbleProps extends Pick<ListProps, "whatsapp" | "nameOf" | "onJump" |
 }
 
 // Memoised with stable props, so a new message or a reaction redraws only the bubbles it changes.
-const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quotedId, nameOf, onJump, onReply, onReact, onOpen }: BubbleProps) {
+const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quotedId, nameOf, onJump, onReply, onReact, onOpen, onRetry, onDismiss }: BubbleProps) {
+  const touch = useTouchReveal();
   const me = m.from === "me";
   const bulk = !!m.bulk;
   // A sticker, photo or file sent with no words shows on its own, without an empty bubble.
   const showBubble = !!(m.body.trim() || m.quoted || m.quote || !m.attachments?.length);
   // Replies and reactions need a stored message: not one still sending, and not one its sender deleted.
-  const actions = !m.sendState && !m.deleted ? <BubbleActions m={m} canReact={whatsapp} onReply={onReply} onReact={onReact} /> : null;
+  const actions = !m.sendState && !m.deleted ? <BubbleActions m={m} canReact={whatsapp} revealed={touch.revealed} onReply={onReply} onReact={onReact} /> : null;
   return (
-    <div data-message-id={m.id} className={cn("group/bubble flex flex-col gap-2", me ? "items-end" : "items-start")}>
+    <div ref={touch.ref} {...touch.props} data-message-id={m.id} className={cn("group/bubble flex flex-col gap-2", me ? "items-end" : "items-start")}>
       {m.attachments && m.attachments.length > 0 && (
         <div className={cn("flex max-w-full items-center gap-1", me && "flex-row-reverse")}>
           <div className={cn("flex flex-wrap gap-2", me && "justify-end")}>
             {m.attachments.map((a) =>
               isSticker(a) && a.path
                 ? <StickerImage key={a.id} attachment={a} onOpen={() => onOpen(a)} />
-                : <AttachmentTile key={a.id} attachment={a} onOpen={() => onOpen(a)} showName={!(whatsapp && a.kind === "image")} />,
+                : a.kind === "audio"
+                  ? <VoiceNote key={a.id} attachment={a} me={me} transcript={m.transcript} />
+                  : <AttachmentTile key={a.id} attachment={a} onOpen={() => onOpen(a)} showName={!(whatsapp && a.kind === "image")} />,
             )}
           </div>
           {!showBubble && actions}
@@ -480,7 +636,12 @@ const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quot
       )}
       <ReactionChips m={m} me={me} nameOf={nameOf} onReact={onReact} />
       {m.sendState === "failed" ? (
-        <div className="px-3 text-xs text-destructive">{m.sendError ?? "Not Sent"}</div>
+        <div className="flex flex-wrap items-center gap-1 px-3 text-xs text-destructive">
+          <span>{m.sendError ?? "Not Sent"}</span>
+          {/* Files cannot be re-queued from here, so a failed send with files can only be deleted. */}
+          {!m.attachments?.length && <Button variant="ghost" size="xs" onClick={() => onRetry(m)}>Retry</Button>}
+          <Button variant="ghost" size="xs" onClick={() => onDismiss(m)}>Delete</Button>
+        </div>
       ) : m.sendState === "sending" ? (
         <div className="px-3 text-xs text-muted-foreground">Sending</div>
       ) : (
@@ -499,18 +660,19 @@ const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quot
  * Photos sent together, as WhatsApp shows them: one grid, two to a row. Each photo keeps its own reactions;
  * Reply and React act on the last one, and the time is the last one's.
  */
-const ImageAlbum = memo(function ImageAlbum({ ms, showMeta, sender, whatsapp, flash, nameOf, onReply, onReact, onOpen }: Omit<BubbleProps, "m" | "quotedId" | "onJump"> & { ms: Message[] }) {
+const ImageAlbum = memo(function ImageAlbum({ ms, showMeta, sender, whatsapp, flash, nameOf, onReply, onReact, onOpen }: Omit<BubbleProps, "m" | "quotedId" | "onJump" | "onRetry" | "onDismiss"> & { ms: Message[] }) {
+  const touch = useTouchReveal();
   const last = ms[ms.length - 1];
   const me = last.from === "me";
   return (
-    <div data-message-id={last.id} className={cn("group/bubble flex flex-col gap-2", me ? "items-end" : "items-start")}>
+    <div ref={touch.ref} {...touch.props} data-message-id={last.id} className={cn("group/bubble flex flex-col gap-2", me ? "items-end" : "items-start")}>
       <div className={cn("flex max-w-full items-center gap-1", me && "flex-row-reverse")}>
         <div className={cn("grid grid-cols-2 gap-2 rounded-lg ring-ring/50 transition-shadow duration-500", flash && "ring-2")}>
           {ms.flatMap((m) => m.attachments!.map((a) => (
             <AttachmentTile key={a.id} attachment={a} onOpen={() => onOpen(a)} showName={false} />
           )))}
         </div>
-        <BubbleActions m={last} canReact={whatsapp} onReply={onReply} onReact={onReact} />
+        <BubbleActions m={last} canReact={whatsapp} revealed={touch.revealed} onReply={onReply} onReact={onReact} />
       </div>
       {ms.map((m) => <ReactionChips key={m.id} m={m} me={me} nameOf={nameOf} onReact={onReact} />)}
       {showMeta && (
@@ -576,23 +738,83 @@ export function ConversationSkeleton() {
   );
 }
 
+// Adjust changes the text in the reply box (yours or a draft you changed), keeping what it says.
 const TONES: { key: Draft["tone"]; label: string }[] = [
   { key: "shorter", label: "Shorter" },
   { key: "formal", label: "More Formal" },
   { key: "casual", label: "More Casual" },
 ];
 
-function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { thread: Thread; msgs: Message[]; phase?: DraftPhase; onDraft: (tone?: Draft["tone"], instruction?: string, decision?: Decision) => void; onDiscardDraft: () => void; onSend: (body: string, from?: string, files?: OutboxUpload[]) => Promise<boolean> }) {
+// For as long as the app is open: what you typed in each conversation, so leaving it and coming back
+// keeps it; and what the reply box held when you last asked the AI for something there, for Undo.
+const typedText = new Map<string, string>();
+const beforeAsk = new Map<string, { text: string; replacing?: string }>();
+
+function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { thread: Thread; msgs: Message[]; phase?: DraftPhase; onDraft: (tone?: Draft["tone"], instruction?: string, decision?: Decision, source?: string, audio?: Blob) => void; onDiscardDraft: () => void; onSend: (body: string, from?: string, files?: OutboxUpload[], copies?: { to: string[]; cc: string[] }) => Promise<boolean> }) {
   const replyFrom = useReplyFrom(thread, msgs);
+  const replyAll = useReplyAll(thread, msgs, replyFrom);
   const [text, setText] = useState("");
   const [instruction, setInstruction] = useState("");
-  const [showInstruction, setShowInstruction] = useState(false);
   const draft = thread.draft;
   const busy = !!phase;
   const ref = useRef<HTMLTextAreaElement>(null);
+  const threadRef = useRef(thread.id);
+  threadRef.current = thread.id;
+  // Undo puts back what the box held once the draft is gone, instead of the empty box a discard leaves.
+  const restoreRef = useRef<string | undefined>(undefined);
+  // Your own text (or a draft you changed) can be lightly corrected by the AI without being rewritten.
+  const editable = !busy && text.trim().length > 0 && text.trim() !== (draft?.body ?? "").trim();
+  // Undo is offered for a draft you asked for over text that was there, until you change the draft.
+  const before = beforeAsk.get(thread.id);
+  const undoable = !busy && !!draft && !draft.auto && !!before && draft.id !== before.replacing && text === draft.body;
 
-  useEffect(() => { setText(draft?.body ?? ""); }, [thread.id, draft?.id, draft?.body]);
-  useEffect(() => { setInstruction(""); setShowInstruction(false); }, [thread.id, draft?.id]);
+  // What the box last showed for this conversation and from which draft, so a pre-draft arriving while
+  // you type is held back, and a run with nothing new (React runs it twice on mount in development)
+  // leaves the box alone.
+  const shownRef = useRef({ thread: "", text: "", draft: "", body: "" });
+  const textRef = useRef(text);
+  textRef.current = text;
+  useEffect(() => {
+    const same = shownRef.current.thread === thread.id;
+    if (same && restoreRef.current === undefined && shownRef.current.draft === (draft?.id ?? "") && shownRef.current.body === (draft?.body ?? "")) return;
+    const typing = same && textRef.current.trim() !== "" && textRef.current !== shownRef.current.text;
+    if (draft?.auto && typing) return;
+    // Back in a conversation, what you were typing there comes back instead of its draft. It still
+    // counts as typing, so a pre-draft arriving does not replace it.
+    const kept = same ? undefined : typedText.get(thread.id);
+    const next = kept ?? restoreRef.current ?? draft?.body ?? "";
+    restoreRef.current = undefined;
+    shownRef.current = { thread: thread.id, text: kept === undefined ? next : draft?.body ?? "", draft: draft?.id ?? "", body: draft?.body ?? "" };
+    setText(next);
+  }, [thread.id, draft?.id, draft?.body, draft?.auto]);
+  // What you asked for stays in the box with its draft, so another try or an adjustment keeps it.
+  // A pre-draft has none, and arriving it leaves what you are typing there alone.
+  const askedIn = useRef("");
+  useEffect(() => {
+    if (draft?.auto && askedIn.current === thread.id) return;
+    askedIn.current = thread.id;
+    setInstruction(draft?.instruction ?? "");
+  }, [thread.id, draft?.id, draft?.instruction, draft?.auto]);
+  const type = (value: string) => {
+    setText(value);
+    if (value.trim() && value !== (draft?.body ?? "")) typedText.set(thread.id, value);
+    else typedText.delete(thread.id);
+  };
+  // Every request goes through here, so what the box held can come back with Undo.
+  const ask = (tone?: Draft["tone"], said?: string, decision?: Decision, source?: string, audio?: Blob) => {
+    if (text.trim()) beforeAsk.set(thread.id, { text, replacing: draft?.id });
+    else beforeAsk.delete(thread.id);
+    typedText.delete(thread.id);
+    onDraft(tone, said, decision, source, audio);
+  };
+  const undo = () => {
+    if (!before) return;
+    beforeAsk.delete(thread.id);
+    restoreRef.current = before.text;
+    typedText.set(thread.id, before.text);
+    onDiscardDraft();
+  };
+  const said = instruction.trim();
   useEffect(() => {
     const el = ref.current; if (!el) return;
     el.style.height = "0px"; el.style.height = Math.min(el.scrollHeight, 240) + "px";
@@ -603,41 +825,59 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
   const files = useOutboxFiles(attachProvider(thread.provider), busy || sending);
   const clearFiles = files.clear;
   useEffect(() => { clearFiles(); }, [thread.id, clearFiles]);
-  const canSend = (text.trim().length > 0 || files.items.length > 0) && !busy && !sending && !files.blocked;
+  const voice = useVoiceRecorder(files, thread.id);
+  // Speak: what you say becomes the draft's instruction. The newest ask() is used when the clip is done.
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const speech = useVoiceRecorder(files, thread.id, (clip) => askRef.current("custom", undefined, thread.draft?.decision, undefined, clip));
+  const recorder = voice.recording ? voice : speech.recording ? speech : undefined;
+  const canSend = (text.trim().length > 0 || files.items.length > 0) && !busy && !sending && !files.blocked && !replyAll.error && !recorder;
   const submit = async () => {
     if (!canSend) return;
     setSending(true);
     const uploaded = await files.upload();
     if (!uploaded) { setSending(false); return; }
-    const queued = await onSend(text, replyFrom.chosen ?? undefined, uploaded);
+    const sentFrom = thread.id;
+    const queued = await onSend(text, replyFrom.chosen ?? undefined, uploaded, replyAll.copies);
     setSending(false);
-    if (queued) { setText(""); files.clear(); }
+    if (!queued) return;
+    typedText.delete(sentFrom);
+    beforeAsk.delete(sentFrom);
+    // Only the box that sent is cleared: you may have moved to another conversation meanwhile.
+    if (threadRef.current === sentFrom) { setText(""); setInstruction(""); files.clear(); replyAll.reset(); }
   };
 
   return (
     <div className="shrink-0 border-t bg-background p-3 md:px-4">
       <div className="mx-auto w-full max-w-2xl">
-        {draft && (
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            {TONES.map((t) => (
-              <Button key={t.key} variant={draft.tone === t.key ? "secondary" : "outline"} disabled={busy} onClick={() => onDraft(t.key, undefined, draft.decision)}>{t.label}</Button>
-            ))}
-            <Button variant={showInstruction ? "secondary" : "outline"} disabled={busy} onClick={() => setShowInstruction(!showInstruction)}>Instruct</Button>
-            <Button variant="ghost" disabled={busy} onClick={() => onDraft(draft.tone, draft.instruction, draft.decision)}>Regenerate</Button>
-            <Button variant="ghost" size="icon" className="ml-auto size-8" aria-label="Discard Draft" disabled={busy} onClick={() => { onDiscardDraft(); setText(""); }}><X /></Button>
-          </div>
-        )}
-        {!draft && !busy && <GuidedChoices thread={thread} msgs={msgs} disabled={busy} onPick={(decision) => onDraft("default", undefined, decision)} />}
-        {showInstruction && !busy && (
-          <form className="mb-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (instruction.trim()) onDraft("custom", instruction, draft?.decision); }}>
-            <Input autoFocus value={instruction} onChange={(e) => setInstruction(e.target.value)} placeholder="Custom Response Prompt" className="h-8" />
-            <Button type="submit" variant="secondary" disabled={!instruction.trim()}>Redraft</Button>
+        {!draft && !busy && <GuidedChoices thread={thread} msgs={msgs} disabled={busy} onPick={(decision) => ask("default", undefined, decision)} />}
+        {!recorder && (
+          // Say what the reply should say, then Draft. Empty, it drafts (or tries again) on its own.
+          <form className="mb-3 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (!busy) ask(said ? "custom" : "default", said || undefined, draft?.decision); }}>
+            <Input value={instruction} onChange={(e) => setInstruction(e.target.value)} disabled={busy} placeholder={draft ? "What To Change" : "What To Say"} aria-label="What To Say" className="h-8 min-w-48 flex-1" />
+            <SpeakButton voice={speech} disabled={busy} />
+            {/* When you wrote last, a draft is a follow-up to your own message (drafts.py). */}
+            <Button type="submit" variant="secondary" disabled={busy}>{draft ? "Redraft" : thread.lastFromMe ? "Draft Follow-Up" : "Draft"}</Button>
+            {text.trim() && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild><Button type="button" variant="outline" disabled={busy}>Adjust <ChevronDown /></Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {TONES.map((t) => (
+                    <DropdownMenuItem key={t.key} onSelect={() => ask(t.key, said || undefined, draft?.decision, text)}>{t.label}</DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {undoable && <Button type="button" variant="outline" onClick={undo}>Undo</Button>}
+            {draft && <Button type="button" variant="ghost" size="icon" className="size-8" aria-label="Discard Draft" disabled={busy} onClick={() => { beforeAsk.delete(thread.id); typedText.delete(thread.id); onDiscardDraft(); setText(""); }}><X /></Button>}
           </form>
         )}
         {/* While a draft is written the text box becomes a placeholder line. */}
         <div {...files.dropProps} className={cn("rounded-lg border bg-background/50 p-3 focus-within:ring-3 focus-within:ring-ring/30", files.dragging && "border-ring ring-3 ring-ring/30")}>
-          <ReplyHeader thread={thread} msgs={msgs} reply={replyFrom} />
-          {phase === "thinking" ? (
+          <ReplyHeader thread={thread} msgs={msgs} reply={replyFrom} all={replyAll} />
+          {recorder ? (
+            <RecordingStatus voice={recorder} />
+          ) : phase === "thinking" ? (
             // One line, the height of the empty text box, so the composer does not jump in size.
             <div className="flex h-5 items-center" aria-label="Drafting a reply">
               <Skeleton className="h-3 w-3/5" />
@@ -647,23 +887,28 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
               ref={ref}
               value={text}
               readOnly={phase === "streaming"}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => type(e.target.value)}
               onPaste={files.onPaste}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
-              placeholder="Message"
+              placeholder="Message (⌘↵ to Send)"
               rows={1}
-              className="min-h-5 resize-none rounded-none border-0 bg-transparent p-0 text-sm leading-5 shadow-none focus-visible:ring-0 dark:bg-transparent"
+              className="min-h-5 resize-none rounded-none border-0 bg-transparent p-0 text-base leading-5 md:text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
           )}
           <div className="mt-3 empty:hidden"><AttachmentChips files={files} /></div>
           <div className="mt-6 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <AttachButton files={files} />
-              {!draft && !busy && (
-                <Button variant="secondary" onClick={() => onDraft()}>Draft Reply</Button>
-              )}
-            </div>
-            <Button disabled={!canSend} onClick={submit}>Send via {providerLabel[thread.provider]}</Button>
+            {recorder ? <div /> : (
+              <div className="flex items-center gap-2">
+                <AttachButton files={files} />
+                <RecordButton files={files} voice={voice} />
+                {editable && (
+                  <Button variant="secondary" onClick={() => ask("edit", undefined, undefined, text)}>Edit Text</Button>
+                )}
+              </div>
+            )}
+            {recorder
+              ? <RecordingActions voice={recorder} done={recorder === speech ? "Draft" : "Stop"} />
+              : <Button disabled={!canSend} onClick={submit}>Send via {providerLabel[thread.provider]}</Button>}
           </div>
         </div>
       </div>

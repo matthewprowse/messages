@@ -1,18 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import type { Tables } from "@messages/db";
 import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import { providerLabel } from "@/components/primitives";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsHeader } from "@/components/settings-header";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
 
 type SummaryRow = Tables<"ai_usage_summary">;
 
-const FEATURE_LABEL: Record<string, string> = { triage: "Sorting and Junk", draft: "Drafts", learn: "Learning From Edits", brief: "Daily Brief" };
-const REFRESH_MS = 30_000;
+// In the order shown under This Month by Feature.
+const FEATURE_LABEL: Record<string, string> = { triage: "Sorting and Junk", draft: "Drafts", learn: "Learning From Edits", brief: "Daily Brief", transcribe: "Voice Note Transcripts" };
+const FEATURES = Object.keys(FEATURE_LABEL);
+const COLUMNS = "account_id, month, feature, model, calls, input_tokens, output_tokens, cost_usd";
 
 function money(usd: number) {
   if (usd === 0) return "$0.00";
@@ -37,34 +42,54 @@ function Amount({ value, label }: { value: string; label?: string }) {
 export default function UsagePage() {
   const { accounts } = useApp();
   const [rows, setRows] = useState<SummaryRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      supabase
-        .from("ai_usage_summary")
-        .select("*")
-        .then(({ data }) => { if (!cancelled) setRows(data ?? []); });
-    load();
-    const timer = setInterval(load, REFRESH_MS);
-    return () => { cancelled = true; clearInterval(timer); };
+  // Loaded once when the page opens, then again only when asked for.
+  const load = useCallback(async () => {
+    setRefreshing(true);
+    setFailed(false);
+    const { data, error } = await supabase.from("ai_usage_summary").select(COLUMNS);
+    if (error) setFailed(true);
+    else setRows((data ?? []) as SummaryRow[]);
+    setRefreshing(false);
   }, []);
+  useEffect(() => { void load(); }, [load]);
 
   // Months are grouped in UTC by the database.
   const now = new Date();
-  const thisMonth = (r: SummaryRow) =>
-    !!r.month && new Date(r.month).getUTCFullYear() === now.getUTCFullYear() && new Date(r.month).getUTCMonth() === now.getUTCMonth();
+  const thisMonth = (r: SummaryRow) => {
+    if (!r.month) return false;
+    const m = new Date(r.month);
+    return m.getUTCFullYear() === now.getUTCFullYear() && m.getUTCMonth() === now.getUTCMonth();
+  };
   const sum = (list: SummaryRow[], key: "cost_usd" | "calls" | "input_tokens" | "output_tokens") => list.reduce((n, r) => n + Number(r[key] ?? 0), 0);
 
   const accountIds = [...new Set([...accounts.map((a) => a.id), ...(rows ?? []).map((r) => r.account_id ?? "none")])];
-  const features = ["triage", "draft", "learn", "brief"];
   const month = (rows ?? []).filter(thisMonth);
 
   return (
     <>
-      <SettingsHeader title="Usage" description="What the AI has cost, per connected account, in US dollars at Google's published Gemini prices." />
+      <SettingsHeader
+        title="Usage"
+        description="What the AI has cost, per connected account, in US dollars at Google's published Gemini prices."
+        actions={rows && (
+          <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void load()}>
+            <RefreshCw className={refreshing ? "animate-spin" : undefined} /> Refresh
+          </Button>
+        )}
+      />
+      {failed && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertTitle>Could Not Load Usage</AlertTitle>
+          <AlertDescription>
+            <p>Check your connection and try again.</p>
+            <Button variant="outline" size="sm" className="mt-2" disabled={refreshing} onClick={() => void load()}>Retry</Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {rows === null ? (
-        <Skeleton className="h-40 w-full rounded-lg" />
+        failed ? null : <Skeleton className="h-40 w-full rounded-lg" />
       ) : (
         <div className="space-y-8">
           <SettingsSection id="accounts" title="Accounts">
@@ -90,7 +115,7 @@ export default function UsagePage() {
 
           <SettingsSection id="features" title="This Month by Feature">
             <SettingsRows>
-              {features.map((f) => {
+              {FEATURES.map((f) => {
                 const list = month.filter((r) => r.feature === f);
                 const models = [...new Set(list.map((r) => r.model))].join(", ");
                 return (

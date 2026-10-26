@@ -37,12 +37,12 @@ test("photo without a caption previews as Photo", () => {
   assert.equal(d.media?.filename, "Photo.png");
 });
 
-test("voice note shows its length", () => {
+test("voice note shows its length and is audio", () => {
   const d = describe({ audioMessage: { ptt: true, seconds: 75, mimetype: "audio/ogg; codecs=opus" } });
   assert.ok(d.kind === "message");
   assert.equal(d.preview, "Voice Note (1:15)");
   assert.equal(d.media?.filename, "Voice Note.ogg");
-  assert.equal(d.media?.kind, "file");
+  assert.equal(d.media?.kind, "audio");
 });
 
 test("documents keep their file name, PDFs are pdf, documents with captions unwrap", () => {

@@ -3,7 +3,7 @@ import { db, must } from "../src/db";
 import { encryptJson } from "../src/crypto";
 import { env } from "../src/env";
 import { ICLOUD_IMAP, type ICloudCredentials } from "../src/connectors/icloud";
-import { ask, ownerUserId } from "./owner";
+import { ask, ownerUserId, saveAccountRow } from "./owner";
 
 // Connects your iCloud+ Mail account from the terminal, so the app-specific password is typed only here,
 // checked against iCloud, encrypted, and stored. It is never printed or logged.
@@ -41,17 +41,7 @@ async function main() {
 
   const userId = await ownerUserId(ownerEmail);
 
-  const account = must(
-    await db
-      .from("accounts")
-      .upsert(
-        { user_id: userId, provider: "icloud", label: "iCloud+ Mail", address, status: "connecting", status_detail: null },
-        { onConflict: "user_id,provider,address" },
-      )
-      .select("id")
-      .single(),
-    "save account",
-  );
+  const account = await saveAccountRow(userId, "icloud", "iCloud+ Mail", address);
 
   const credentials: ICloudCredentials = {
     username,

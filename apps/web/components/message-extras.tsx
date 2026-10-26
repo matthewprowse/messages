@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Reply, SmilePlus } from "lucide-react";
 import type { Contact, Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ViewOriginal } from "@/components/message-body";
 
 // The parts of a chat bubble beyond its text: the message a reply quotes, reactions, and the Reply and
-// React actions that appear on hover (and stay visible on touch screens, which cannot hover). They take
+// React actions that appear on hover, or on tap or long press on touch screens, which cannot hover. They take
 // what they need as props, not from the store, so a memoised bubble only redraws when its message changes.
 
 /** WhatsApp's own quick reactions, in its order. */
@@ -82,14 +82,60 @@ export function ReactionChips({ m, me, nameOf, onReact }: { m: Message; me: bool
   );
 }
 
-/** Reply, and React for WhatsApp, beside a message. */
-export function BubbleActions({ m, canReact, onReply, onReact }: { m: Message; canReact: boolean; onReply: (m: Message) => void; onReact: OnReact }) {
+const LONG_PRESS_MS = 450;
+
+/**
+ * Touch screens cannot hover, so a bubble's actions show when it is tapped (tap again, or tap elsewhere, to
+ * hide them) or pressed and held. Spread props on the bubble's outer element and pass revealed to its actions.
+ */
+export function useTouchReveal() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [revealed, setRevealed] = useState(false);
+  const touch = useRef(false);
+  const held = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    if (!revealed) return;
+    function away(e: PointerEvent) {
+      if (!ref.current?.contains(e.target as Node)) setRevealed(false);
+    }
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [revealed]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const stop = () => clearTimeout(timer.current);
+  return {
+    ref,
+    revealed,
+    props: {
+      onPointerDown: (e: React.PointerEvent) => {
+        touch.current = e.pointerType === "touch";
+        held.current = false;
+        if (!touch.current) return;
+        timer.current = setTimeout(() => { held.current = true; setRevealed(true); }, LONG_PRESS_MS);
+      },
+      onPointerUp: stop,
+      onPointerCancel: stop,
+      onPointerMove: stop,
+      onClick: (e: React.MouseEvent) => {
+        // Clicks from a dialog or popover opened by an action bubble up here in React, but not in the page.
+        if (!touch.current || !e.currentTarget.contains(e.target as Node)) return;
+        if (held.current) { held.current = false; return; }
+        setRevealed((v) => !v);
+      },
+    },
+  };
+}
+
+/** Reply, View Original, and React for WhatsApp, beside a message. On touch screens they show once revealed. */
+export function BubbleActions({ m, canReact, revealed = false, onReply, onReact }: { m: Message; canReact: boolean; revealed?: boolean; onReply: (m: Message) => void; onReact: OnReact }) {
   const [open, setOpen] = useState(false);
   const mine = m.reactions?.me;
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/bubble:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100",
+        "flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/bubble:opacity-100 focus-within:opacity-100",
+        revealed ? "[@media(hover:none)]:opacity-100" : "[@media(hover:none)]:pointer-events-none",
         open && "opacity-100",
       )}
     >

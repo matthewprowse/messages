@@ -1,0 +1,4 @@
+# The Instagram connector only (pnpm instagram): pip3 install -r apps/ai/requirements-instagram.txt
+# Pinned: instagrapi follows Instagram's private API closely and changes often. Check a new release on
+# GitHub (subzeroid/instagrapi) before moving the pin.
+instagrapi==3.2.1

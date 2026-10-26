@@ -5,6 +5,7 @@ import { cn } from "cn"
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
 
 import { Button } from "@/components/ui/button"
+import { useDialogTracking } from "@/lib/use-dialog-tracking"
 
 function AlertDialog({
   ...props
@@ -47,14 +48,20 @@ function AlertDialogOverlay({
 function AlertDialogContent({
   className,
   size = "default",
+  track,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: "default" | "sm"
+  /** A name for usage analytics: opened, submitted or cancelled, time open. */
+  track?: string
 }) {
+  const ref = React.useRef<HTMLDivElement>(null)
+  useDialogTracking(track, ref)
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
       <AlertDialogPrimitive.Content
+        ref={ref}
         data-slot="alert-dialog-content"
         data-size={size}
         className={cn(

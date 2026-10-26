@@ -9,7 +9,7 @@ import { FIELD, type Field } from "@messages/crypto/fields";
 import { dataKeyFor, localWrapper, type KeyStore } from "@messages/crypto/wrap";
 import { db, must } from "./db";
 import { env } from "./env";
-import { log } from "./log";
+import { log, errorCode } from "./log";
 
 const store: KeyStore = {
   async read(userId) {
@@ -42,7 +42,7 @@ export async function open(userId: string, field: Field, value: string | null | 
   try {
     return await decryptField(await keysFor(userId), field, value);
   } catch (err) {
-    log.warn("could not open a stored value", { field, error: (err as Error).message });
+    log.warn("could not open a stored value", { field, code: errorCode(err) });
     return "";
   }
 }

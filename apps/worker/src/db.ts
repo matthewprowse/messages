@@ -1,6 +1,7 @@
 import { createClient, type PostgrestSingleResponse } from "@supabase/supabase-js";
 import type { AccountStatus, Database, Tables } from "@messages/db";
 import { env } from "./env";
+import { cleanProps, type EventName, type Events } from "@messages/analytics";
 import { decryptJson } from "./crypto";
 
 // The worker uses the service role: it bypasses row-level security, so every query here
@@ -24,10 +25,44 @@ export function must<T>(result: PostgrestSingleResponse<T>, what: string): T {
   return result.data;
 }
 
+/**
+ * Records a content-free usage event for someone (see @messages/analytics). Fire and forget: it never throws and
+ * never waits, and the database drops it when they turned off Share Usage Data.
+ */
+export function recordEvent<K extends EventName>(userId: string, name: K, props: Events[K]) {
+  void Promise.resolve(db.rpc("analytics_record", { p_user: userId, p_events: [{ name, props: cleanProps(props as Record<string, unknown>) }] })).then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+/** A reason shown to people, as a short code word for the analytics. The words themselves are never recorded. */
+export function failureCode(reason: string): string {
+  const r = reason.toLowerCase();
+  if (r.includes("interrupted")) return "interrupted";
+  if (r.includes("attach")) return "attachment";
+  if (r.includes("needs attention") || r.includes("reconnect")) return "account_needs_attention";
+  if (r.includes("recorded")) return "not_recorded";
+  return "send_failed";
+}
+
 export async function setAccountStatus(accountId: string, status: AccountStatus, detail: string | null = null) {
+  const before = await db.from("accounts").select("user_id, provider, status, created_at, last_synced_at").eq("id", accountId).maybeSingle();
   const patch: Database["public"]["Tables"]["accounts"]["Update"] = { status, status_detail: detail };
   if (status === "connected") patch.last_synced_at = new Date().toISOString();
   must(await db.from("accounts").update(patch).eq("id", accountId), "update account status");
+  const prev = before.data;
+  if (!prev || prev.status === status) return;
+  const { user_id: user, provider } = prev;
+  if (status === "error") {
+    recordEvent(user, "sync_error", { provider, code: "account_error" });
+    if (prev.status === "connecting") recordEvent(user, "account_connect", { provider, step: "sync", outcome: "failed", code: "connect_failed" });
+  } else if (status === "connected") {
+    if (prev.status === "connecting") recordEvent(user, "account_connect", { provider, step: "sync", outcome: "done" });
+    if (!prev.last_synced_at) recordEvent(user, "first_sync_done", { provider, secs: Math.round(Math.max(0, Date.now() - Date.parse(prev.created_at)) / 1000) });
+  } else if (status === "connecting" && prev.status === "connected" && provider === "whatsapp") {
+    recordEvent(user, "wa_reconnect", { reason: "connection_lost" });
+  }
 }
 
 export async function loadCredentials<T>(accountId: string): Promise<T> {

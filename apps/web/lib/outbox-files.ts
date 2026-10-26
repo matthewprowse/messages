@@ -9,21 +9,24 @@ export const BUCKET = "attachments";
 export const MAX_FILES = 10;
 const MB = 1024 * 1024;
 
-export type AttachProvider = "icloud" | "gmail" | "whatsapp";
+export type AttachProvider = "icloud" | "gmail" | "outlook" | "whatsapp" | "imap";
 
 /** What each service accepts. Email limits cover every file together; WhatsApp limits each file. */
 export const OUTBOX_LIMITS: Record<AttachProvider, { totalBytes?: number; perFileBytes?: number; message: string }> = {
   icloud: { totalBytes: 20 * MB, message: "iCloud Mail allows up to 20 MB per email. Attachments grow by about a third when sent." },
   gmail: { totalBytes: 25 * MB, message: "Gmail allows up to 25 MB per email. Attachments grow by about a third when sent." },
+  outlook: { totalBytes: 20 * MB, message: "Outlook allows up to 20 MB per email. Attachments grow by about a third when sent." },
   // WhatsApp itself takes 100 MB, but uploads go through Supabase Storage, whose Free plan stops at 50 MB.
   whatsapp: { perFileBytes: 50 * MB, message: "WhatsApp files can be up to 50 MB each here." },
+  // Any other mailbox: each host sets its own limit, and 20 MB of files fits the common ones.
+  imap: { totalBytes: 20 * MB, message: "Your mail server allows up to 20 MB per email. Attachments grow by about a third when sent." },
 };
 
 /**
  * The service files are sent through, or null when this kind of conversation cannot carry files.
  */
 export function attachProvider(p: Provider | undefined): AttachProvider | null {
-  return p === "icloud" || p === "gmail" || p === "whatsapp" ? p : null;
+  return p === "icloud" || p === "gmail" || p === "outlook" || p === "whatsapp" || p === "imap" ? p : null;
 }
 
 /** Why these files cannot be sent through this service, or null when they can. */
@@ -132,7 +135,9 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 
 /** The browser's own type when it gives one, otherwise a guess from the extension. */
 export function mimeOf(name: string, type: string): string {
-  if (type && /^[\w.+-]+\/[\w.+-]+/.test(type)) return type.toLowerCase();
+  // Only the "type/subtype" part, so no parameters ride along into the upload or the email's headers.
+  const essence = /^[\w.+-]+\/[\w.+-]+/.exec(type.trim())?.[0];
+  if (essence) return essence.toLowerCase();
   const ext = splitExtension(name)[1].slice(1).toLowerCase();
   return MIME_BY_EXTENSION[ext] ?? "application/octet-stream";
 }
@@ -140,6 +145,7 @@ export function mimeOf(name: string, type: string): string {
 export function kindOf(mime: string): Attachment["kind"] {
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
   if (mime === "application/pdf") return "pdf";
   return "file";
 }
@@ -175,6 +181,8 @@ export interface OutboxUpload {
   filename: string;
   mimeType: string;
   size: number;
+  /** Recorded in the reply box, so WhatsApp sends it as a voice note rather than an audio file. */
+  voiceNote?: boolean;
 }
 
 /** The attachment tiles an optimistic sent bubble shows, read from the files already uploaded. */
@@ -184,7 +192,7 @@ export function pendingAttachments(files: OutboxUpload[]): Attachment[] {
 
 /** The outbox_attachments rows for an outbox row, in the order the files were added. */
 export function attachmentRows(outboxId: string, files: OutboxUpload[]) {
-  return files.map((f, position) => ({ outbox_id: outboxId, storage_path: f.path, filename: f.filename, mime_type: f.mimeType, size_bytes: f.size, position }));
+  return files.map((f, position) => ({ outbox_id: outboxId, storage_path: f.path, filename: f.filename, mime_type: f.mimeType, size_bytes: f.size, position, voice_note: !!f.voiceNote }));
 }
 
 export function formatBytes(bytes: number): string {

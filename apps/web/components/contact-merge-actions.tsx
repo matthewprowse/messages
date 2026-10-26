@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { markSubmitted } from "@/lib/analytics";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
@@ -28,8 +29,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { ContactAvatar } from "@/components/primitives";
 import { DIALOG_BUTTONS, MergeDialog, useCloseOnOverlay } from "@/components/merge-dialog";
 import { useContactsData } from "@/components/contacts-data";
-import { Divided, Section, withQuery } from "@/components/contact-list";
-import { formatPhone } from "@/lib/format";
+import { byRecent, Divided, firstReach, Section } from "@/components/contact-list";
+import { withQuery } from "@/lib/utils";
 
 function useContactHref() {
   const query = useSearchParams().toString();
@@ -45,7 +46,7 @@ function MergeWithDialog({ contact, open, onOpenChange }: { contact: ContactDeta
   const [target, setTarget] = useState<ContactSummary | null>(null);
   const [confirming, setConfirming] = useState(false);
   const others = useMemo(
-    () => (contacts ?? []).filter((c) => c.id !== contact.id).sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? "") || a.name.localeCompare(b.name)),
+    () => (contacts ?? []).filter((c) => c.id !== contact.id).sort(byRecent),
     [contacts, contact.id],
   );
 
@@ -75,7 +76,7 @@ function MergeWithDialog({ contact, open, onOpenChange }: { contact: ContactDeta
               >
                 <ContactAvatar contact={c} className="size-6" />
                 <span className="min-w-0 truncate">{c.name}</span>
-                <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">{c.emails[0] ?? (c.phones[0] ? formatPhone(c.phones[0]) : "")}</span>
+                <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">{firstReach(c)}</span>
               </CommandItem>
             ))}
           </CommandGroup>
@@ -105,6 +106,7 @@ function SplitForm({ contact, onDone }: { contact: ContactDetail; onDone: () => 
     const id = await splitContact(contact.id, ids, trimmed);
     setSaving(false);
     if (!id) return;
+    markSubmitted("split_contact");
     onDone();
     toast(`Moved to ${trimmed}`, { action: { label: "Open", onClick: () => router.push(hrefOf(id)) } });
   };
@@ -149,7 +151,7 @@ function SplitForm({ contact, onDone }: { contact: ContactDetail; onDone: () => 
 function SplitDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent track="split_contact" className="sm:max-w-md" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>Split Contact</DialogTitle>
           <DialogDescription>Choose what belongs to someone else. Their messages and conversations move with them.</DialogDescription>
@@ -175,6 +177,7 @@ function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: Cont
       toast(error);
       return;
     }
+    markSubmitted("delete_contact");
     onOpenChange(false);
     router.push(backHref);
     toast(`Deleted ${contact.name}`);
@@ -183,7 +186,7 @@ function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: Cont
 
   return (
     <AlertDialog open={open} onOpenChange={(next) => !deleting && onOpenChange(next)}>
-      <AlertDialogContent>
+      <AlertDialogContent track="delete_contact">
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {contact.name}?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -209,8 +212,8 @@ function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: Cont
   );
 }
 
-/** The contact page's menu: Merge With..., Split and Delete Contact. */
-export function ContactMenu({ contact, backHref }: { contact: ContactDetail; backHref: string }) {
+/** The contact page's menu: Edit (on phones, where the header has no room for its button), Merge With..., Split and Delete Contact. */
+export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDetail; backHref: string; onEdit?: () => void }) {
   const [open, setOpen] = useState<"merge" | "split" | "delete" | null>(null);
   const set = (item: "merge" | "split" | "delete") => (value: boolean) => setOpen(value ? item : null);
   const canSplit = useMemo(() => identityGroups(contact.identityRows).length > 1, [contact.identityRows]);
@@ -221,6 +224,7 @@ export function ContactMenu({ contact, backHref }: { contact: ContactDetail; bac
           <Button variant="ghost" size="icon" aria-label="More"><MoreHorizontal /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-max">
+          {onEdit && <DropdownMenuItem className="sm:hidden" onSelect={onEdit}>Edit</DropdownMenuItem>}
           <DropdownMenuItem onSelect={() => setOpen("merge")}>Merge With...</DropdownMenuItem>
           <DropdownMenuItem disabled={!canSplit} onSelect={() => setOpen("split")}>Split</DropdownMenuItem>
           <DropdownMenuSeparator />

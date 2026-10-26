@@ -12,6 +12,11 @@ export type StoredEvent = {
   all_day: boolean;
   location: string | null;
   attendees: Json;
+  description?: string | null;
+  calendar_name?: string | null;
+  conference_url?: string | null;
+  resource_url?: string | null;
+  series_id?: string | null;
 };
 
 /** The same moment written two ways ("...+00:00" from the database, "...Z" from toISOString) is equal. */
@@ -29,6 +34,11 @@ export function eventChanged(stored: StoredEvent | undefined, next: TablesInsert
     !sameTime(stored.ends_at, next.ends_at ?? null) ||
     stored.all_day !== (next.all_day ?? false) ||
     (stored.location ?? null) !== (next.location ?? null) ||
+    (stored.description ?? null) !== (next.description ?? null) ||
+    (stored.calendar_name ?? null) !== (next.calendar_name ?? null) ||
+    (stored.conference_url ?? null) !== (next.conference_url ?? null) ||
+    (stored.resource_url ?? null) !== (next.resource_url ?? null) ||
+    (stored.series_id ?? null) !== (next.series_id ?? null) ||
     JSON.stringify(stored.attendees ?? []) !== JSON.stringify(next.attendees ?? [])
   );
 }

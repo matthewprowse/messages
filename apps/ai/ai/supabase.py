@@ -20,6 +20,7 @@ class SupabaseError(Exception):
 class Supabase:
     def __init__(self, url: str, key: str):
         self.base = url.rstrip("/") + "/rest/v1"
+        self.storage = url.rstrip("/") + "/storage/v1"
         self.headers = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
     def _request(
@@ -78,6 +79,42 @@ class Supabase:
 
     def rpc(self, function: str, args: dict[str, Any]) -> Any:
         return self._request("POST", f"rpc/{function}", body=args)
+
+    def download(self, bucket: str, path: str, *, timeout: float = 60) -> bytes:
+        """A stored file's bytes, such as a WhatsApp voice note from the private attachments bucket."""
+        url = f"{self.storage}/object/{bucket}/{urllib.parse.quote(path)}"
+        headers = {k: v for k, v in self.headers.items() if k != "Content-Type"}
+        res = POOL.request("GET", url, None, headers, timeout=timeout)
+        if res.status >= 400:
+            raise SupabaseError(res.status, None)
+        return res.body
+
+    def upload(self, bucket: str, path: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        """Stores a file in a private bucket, replacing one at the same path (a brief spoken again)."""
+        url = f"{self.storage}/object/{bucket}/{urllib.parse.quote(path)}"
+        headers = {**self.headers, "Content-Type": content_type, "x-upsert": "true"}
+        res = POOL.request("POST", url, data, headers, timeout=60)
+        if res.status >= 400:
+            raise SupabaseError(res.status, None)
+
+    def list_files(self, bucket: str, prefix: str) -> list[str]:
+        """Names of the files directly inside a folder of a bucket (prefix without a trailing slash)."""
+        url = f"{self.storage}/object/list/{bucket}"
+        body = json.dumps({"prefix": prefix, "limit": 1000, "offset": 0}).encode()
+        res = POOL.request("POST", url, body, self.headers, timeout=30)
+        if res.status >= 400:
+            raise SupabaseError(res.status, None)
+        rows = json.loads(res.body) if res.body else []
+        return [str(r["name"]) for r in rows if isinstance(r, dict) and r.get("name")]
+
+    def remove_files(self, bucket: str, paths: list[str]) -> None:
+        """Deletes files from a bucket. Paths that do not exist are not an error."""
+        if not paths:
+            return
+        url = f"{self.storage}/object/{bucket}"
+        res = POOL.request("DELETE", url, json.dumps({"prefixes": paths}).encode(), self.headers, timeout=30)
+        if res.status >= 400:
+            raise SupabaseError(res.status, None)
 
 
 def missing_relation(err: Exception) -> bool:

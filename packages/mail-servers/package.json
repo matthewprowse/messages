@@ -1,0 +1,24 @@
+{
+  "name": "@messages/mail-servers",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./net": "./src/net.ts",
+    "./probe": "./src/probe.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "imapflow": "^2.9.1",
+    "nodemailer": "^10.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/nodemailer": "^8.0.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.2"
+  }
+}

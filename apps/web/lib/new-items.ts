@@ -1,3 +1,4 @@
+import type { CalendarEvent } from "./calendar";
 import type { Account, Contact, Thread } from "./types";
 import { isEmail } from "./send-from";
 
@@ -291,9 +292,30 @@ export function buildEventRow(
   };
 }
 
-/** True when a failed event needs Google to be connected again with permission to create events. */
+/**
+ * A queued event as the Calendar shows it until the worker has created it, so it appears the moment it is
+ * saved. date is the form's date; an all-day event is midnight UTC on its date, as the worker stores it.
+ */
+export function pendingEvent(id: string, row: CalendarOutboxInsert, date: string, contacts: Contact[]): CalendarEvent {
+  const day = parseDate(date);
+  const nextDay = day ? dateKey(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) : date;
+  return {
+    id,
+    title: row.title,
+    startsAt: row.all_day ? `${date}T00:00:00.000Z` : row.starts_at,
+    endsAt: row.all_day ? `${nextDay}T00:00:00.000Z` : row.ends_at,
+    allDay: row.all_day,
+    location: row.location,
+    attendees: row.attendees.map((email) => {
+      const contact = contacts.find((c) => c.emails.some((e) => e.toLowerCase() === email));
+      return { email, name: contact?.name ?? email, contactId: contact?.id ?? null };
+    }),
+  };
+}
+
+/** True when a failed event needs Google or iCloud to be connected again. */
 export function needsReconnect(error: string | null | undefined) {
-  return !!error && /reconnect google/i.test(error);
+  return !!error && /reconnect google|pnpm connect:icloud-calendar/i.test(error);
 }
 
 /** The linked WhatsApp account that can send, if any. */

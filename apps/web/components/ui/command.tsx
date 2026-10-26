@@ -67,12 +67,13 @@ function CommandDialog({
 
 function CommandInput({
   className,
+  groupClassName,
   ...props
-}: React.ComponentProps<typeof CommandPrimitive.Input>) {
+}: React.ComponentProps<typeof CommandPrimitive.Input> & { groupClassName?: string }) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
       {/* The group only rings its own input-group-control, so the command input's focus ring is added here. Hover matches the Filter select. */}
-      <InputGroup className="h-10! bg-transparent dark:bg-transparent dark:hover:bg-input/50 has-[[data-slot=command-input]:focus]:border-ring has-[[data-slot=command-input]:focus]:ring-3 has-[[data-slot=command-input]:focus]:ring-ring/50 *:data-[slot=input-group-addon]:pl-2!">
+      <InputGroup className={cn("h-10! bg-transparent dark:bg-transparent dark:hover:bg-input/50 has-[[data-slot=command-input]:focus]:border-ring has-[[data-slot=command-input]:focus]:ring-3 has-[[data-slot=command-input]:focus]:ring-ring/50 *:data-[slot=input-group-addon]:pl-2!", groupClassName)}>
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(

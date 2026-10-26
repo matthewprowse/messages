@@ -53,7 +53,10 @@ export function replyRecipients(
   const seen = new Set<string>();
   for (const c of participants) {
     const values = channel === "email" ? c.emails.filter((e) => !mine.has(e.toLowerCase())) : c.phones.slice(0, 1);
-    for (const address of values) if (!seen.has(address)) { seen.add(address); out.push({ contactId: c.id, address }); }
+    for (const address of values) {
+      const key = address.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); out.push({ contactId: c.id, address }); }
+    }
     if (channel !== "email" && out.length) break;
   }
   // Everyone in it is you (mail between your own addresses): the reply goes back to the latest sender.
@@ -62,6 +65,36 @@ export function replyRecipients(
     if (latest?.address) return [{ contactId: latest.from === "me" || latest.from === "unknown" ? undefined : latest.from, address: latest.address }];
   }
   return channel === "email" ? out : out.slice(0, 1);
+}
+
+export interface ReplyAll {
+  to: string[];
+  cc: string[];
+}
+
+/**
+ * Who Reply All fills in. The message being answered is the one picked with Reply on a message, else the
+ * latest from someone who is not you. Its sender goes in To; everyone else it was sent to goes in Cc
+ * (the stored list holds To and Cc together), minus your own addresses. Answering your own email goes to
+ * the people it was sent to. Lowercase, no repeats.
+ */
+export function replyAllRecipients(msgs: Message[], self: string[], target?: Message): ReplyAll {
+  const mine = new Set(self.map((a) => a.trim().toLowerCase()));
+  const clean = (list: (string | undefined)[]) => [...new Set(list.map((a) => (a ?? "").trim().toLowerCase()).filter((a) => a && !mine.has(a)))];
+  let answered = target;
+  if (!answered) {
+    for (let i = msgs.length - 1; i >= 0 && !answered; i--) {
+      const m = msgs[i];
+      if (!m.sendState && m.from !== "me" && m.address && !mine.has(m.address.toLowerCase())) answered = m;
+    }
+  }
+  if (!answered) return { to: [], cc: [] };
+  const sender = answered.from !== "me" && answered.address ? clean([answered.address]) : [];
+  if (sender.length) return { to: sender, cc: clean(answered.toAddresses ?? []).filter((a) => a !== sender[0]) };
+  // Your own email (or one between your own addresses): everyone it went to.
+  const to = clean(answered.toAddresses ?? []);
+  if (to.length) return { to, cc: [] };
+  return { to: clean([answered.address]), cc: [] };
 }
 
 // The same rule the sync worker checks before sending (isEmailAddress in apps/worker), so the app never

@@ -5,6 +5,7 @@ import "./globals.css";
 import { AppProvider } from "@/lib/store";
 import { AuthProvider } from "@/lib/auth";
 import { AppShell } from "@/components/app-shell";
+import { AnalyticsTracker } from "@/components/analytics-tracker";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -17,10 +18,10 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-geist", display: "sw
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", display: "swap" });
 
 export const metadata: Metadata = {
-  title: { default: "Messages", template: "%s · Messages" },
+  title: { default: "Konva", template: "%s · Konva" },
   description: "One inbox for email and WhatsApp, with AI triage and drafts in your voice.",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, statusBarStyle: "default", title: "Messages" },
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "Konva" },
   icons: { icon: "/icon.svg", apple: "/apple-touch-icon.png" },
 };
 
@@ -32,16 +33,18 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>
       <body className="font-sans">
-        <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AuthProvider>
             <TooltipProvider delayDuration={300}>
               <AppProvider>
+                <AnalyticsTracker />
                 <AppShell>{children}</AppShell>
               </AppProvider>
             </TooltipProvider>

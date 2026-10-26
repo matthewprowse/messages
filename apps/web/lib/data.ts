@@ -1,12 +1,12 @@
 import type { Tables } from "@messages/db";
-import { openAddresses, openDrafts, openMessages, openThreads } from "./open-rows";
+import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "./open-rows";
 import { supabase } from "./supabase";
-import type { Account, AccountStatus, Attachment, Category, Contact, Draft, FiledAttachment, Message, Priority, Profile, Provider, Rule, Thread, Unsubscribe, WritingExample } from "./types";
-import { formatSize } from "./format";
+import type { Account, AccountStatus, Attachment, Category, Contact, Draft, FiledAttachment, Message, Priority, Profile, Provider, Rule, Task, Thread, Unsubscribe, WritingExample } from "./types";
+import { formatPhone, formatSize } from "./format";
 import { emailParts, emphasisRuns, type Emphasis } from "./email-text";
 import type { ChoiceKind } from "./choices";
 import { allRows } from "./contacts";
-import { formatPhone } from "./format";
+import { mapTask, TASK_COLUMNS } from "./tasks";
 
 // Turns database rows into the shapes the screens use, and loads them for the signed-in user.
 // Row-level security means every query here only ever returns that user's own rows.
@@ -16,23 +16,32 @@ type IdentityRow = Pick<Tables<"contact_identities">, "kind" | "value">;
 type ThreadRow = Pick<
   Tables<"threads">,
   | "id" | "account_id" | "channel" | "subject" | "is_group" | "group_name" | "avatar_path" | "provider_thread_id" | "last_message_at"
-  | "created_at" | "last_message_preview" | "junk" | "subscription" | "last_sender_contact_id" | "unread_count" | "pinned" | "status" | "priority" | "category" | "summary" | "needs_reply"
+  | "created_at" | "last_message_preview" | "junk" | "subscription" | "last_sender_contact_id" | "unread_count" | "pinned" | "status" | "priority" | "category" | "summary" | "needs_reply" | "last_from_me"
 >;
 type AttachmentRow = Pick<Tables<"attachments">, "id" | "message_id" | "filename" | "kind" | "size_bytes" | "storage_path" | "hidden">;
 export type MessageRow = Pick<
   Tables<"messages">,
-  "id" | "provider_message_id" | "thread_id" | "direction" | "sender_contact_id" | "sender_address" | "to_addresses" | "sent_at" | "subject" | "body_text" | "body_html" | "provider_meta" | "has_original" | "is_bulk" | "body_marks"
+  "id" | "provider_message_id" | "thread_id" | "direction" | "sender_contact_id" | "sender_address" | "to_addresses" | "sent_at" | "subject" | "body_text" | "body_html" | "provider_meta" | "has_original" | "is_bulk" | "body_marks" | "transcript"
 > & { attachments: AttachmentRow[] };
 
 const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path";
 const THREAD_COLUMNS =
-  "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply";
+  "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me";
 // Threads with their account's provider and their people, so the list can draw names in one request.
 const THREAD_WITH_PEOPLE = `${THREAD_COLUMNS}, accounts(provider), thread_participants(contact_id, contacts(${CONTACT_COLUMNS}, contact_identities(kind, value)))` as const;
+// Explicit lists, so a column the app never reads (a WhatsApp QR or pairing code) never reaches every page.
+const ACCOUNT_COLUMNS = "id, provider, label, address, status, status_detail, last_synced_at, send_addresses";
+const PROFILE_COLUMNS = "display_name, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage";
+const DRAFT_COLUMNS = "id, thread_id, body, tone, instruction, decision, decision_kind, source, auto, updated_at";
+export const UNSUBSCRIBE_COLUMNS = "id, account_id, sender_address, status, manual_url, error";
+type AccountRow = Pick<Tables<"accounts">, "id" | "provider" | "label" | "address" | "status" | "status_detail" | "last_synced_at" | "send_addresses">;
+type ProfileRow = Pick<Tables<"profiles">, "display_name" | "about" | "important_people" | "quiet_start" | "quiet_end" | "push_urgent" | "push_important" | "auto_draft_top" | "whatsapp_read_receipts" | "share_usage">;
+type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruction" | "decision" | "decision_kind" | "source" | "auto" | "updated_at">;
+type UnsubscribeRow = Pick<Tables<"unsubscribes">, "id" | "account_id" | "sender_address" | "status" | "manual_url" | "error">;
 const ATTACHMENT_COLUMNS = "id, message_id, filename, kind, size_bytes, storage_path, hidden";
 // Named columns, never select("*"). body_html is only still set on emails stored before the HTML stopped
 // being kept (View Original now fetches it); is_bulk and has_original carry what it was needed for.
-const MESSAGE_COLUMNS = `id, provider_message_id, thread_id, direction, sender_contact_id, sender_address, to_addresses, sent_at, subject, body_text, body_html, provider_meta, has_original, is_bulk, body_marks, attachments(${ATTACHMENT_COLUMNS})` as const;
+const MESSAGE_COLUMNS = `id, provider_message_id, thread_id, direction, sender_contact_id, sender_address, to_addresses, sent_at, subject, body_text, body_html, provider_meta, has_original, is_bulk, body_marks, transcript, attachments(${ATTACHMENT_COLUMNS})` as const;
 
 /** How many messages a conversation opens with, and how many more each scroll up loads. */
 export const MESSAGE_PAGE = 200;
@@ -47,6 +56,7 @@ export const EMPTY_PROFILE: Profile = {
   pushImportant: true,
   autoDraftTop: true,
   whatsappReadReceipts: true,
+  shareUsage: true,
 };
 
 function initialsOf(name: string) {
@@ -105,6 +115,7 @@ export function mapThread(row: ThreadRow, participantIds: string[], provider: Pr
     category: (row.category as Category | null) ?? "fyi",
     summary: row.summary ?? "",
     needsReply: row.needs_reply,
+    lastFromMe: row.last_from_me,
   };
 }
 
@@ -183,6 +194,7 @@ export function mapMessage(row: MessageRow): Message {
     bulk: parts.bulk,
     forward: parts.forward,
     marks: whatsapp ? undefined : emailMarks(row),
+    transcript: row.transcript ?? undefined,
     whatsapp: whatsapp || undefined,
     hasOriginal: row.has_original,
     attachments: files.length ? files : undefined,
@@ -194,19 +206,20 @@ export function mapMessage(row: MessageRow): Message {
  * new text. Email bodies never change and may be missing from the payload, so they are left alone.
  * Returns the same object when nothing shown has changed, such as when only is_read did.
  */
-export function patchMessage(m: Message, row: { provider_meta?: unknown; body_text?: string | null }): Message {
+export function patchMessage(m: Message, row: { provider_meta?: unknown; body_text?: string | null; transcript?: string | null }): Message {
   const next: Message = row.provider_meta === undefined ? { ...m } : { ...m, ...whatsappExtras(row.provider_meta) };
+  if (typeof row.transcript === "string") next.transcript = row.transcript; // a voice note's, written after it arrived
   if (m.whatsapp && typeof row.body_text === "string") next.body = row.body_text;
   else if (!m.hasOriginal && typeof row.body_text === "string") {
     const parts = emailParts(row.body_text, null);
     next.body = parts.body;
     next.quoted = parts.quoted;
   }
-  const shown = (x: Message) => JSON.stringify([x.body, x.quoted, x.quote, x.reactions, x.deleted, x.edited]);
+  const shown = (x: Message) => JSON.stringify([x.body, x.quoted, x.quote, x.reactions, x.deleted, x.edited, x.transcript]);
   return shown(next) === shown(m) ? m : next;
 }
 
-export function mapAccount(row: Tables<"accounts">): Account {
+export function mapAccount(row: AccountRow): Account {
   return {
     id: row.id,
     provider: row.provider as Provider,
@@ -219,7 +232,7 @@ export function mapAccount(row: Tables<"accounts">): Account {
   };
 }
 
-function mapProfile(row: Tables<"profiles"> | null): Profile {
+function mapProfile(row: ProfileRow | null): Profile {
   if (!row) return EMPTY_PROFILE;
   return {
     name: row.display_name ?? "",
@@ -231,6 +244,7 @@ function mapProfile(row: Tables<"profiles"> | null): Profile {
     pushImportant: row.push_important,
     autoDraftTop: row.auto_draft_top,
     whatsappReadReceipts: row.whatsapp_read_receipts,
+    shareUsage: row.share_usage,
   };
 }
 
@@ -246,21 +260,24 @@ export function profilePatch(patch: Partial<Profile>) {
   if (patch.pushImportant !== undefined) out.push_important = patch.pushImportant;
   if (patch.autoDraftTop !== undefined) out.auto_draft_top = patch.autoDraftTop;
   if (patch.whatsappReadReceipts !== undefined) out.whatsapp_read_receipts = patch.whatsappReadReceipts;
+  if (patch.shareUsage !== undefined) out.share_usage = patch.shareUsage;
   return out;
 }
 
-export function mapDraft(row: Tables<"drafts">): Draft {
+export function mapDraft(row: DraftRow): Draft {
   return {
     id: row.id,
     body: row.body,
     tone: row.tone as Draft["tone"],
     instruction: row.instruction ?? undefined,
     decision: row.decision && row.decision_kind ? { text: row.decision, kind: row.decision_kind as ChoiceKind } : undefined,
+    source: row.source ?? undefined,
+    auto: row.auto || undefined,
     generatedAt: row.updated_at,
   };
 }
 
-export function mapUnsubscribe(row: Tables<"unsubscribes">): Unsubscribe {
+export function mapUnsubscribe(row: UnsubscribeRow): Unsubscribe {
   return {
     id: row.id,
     accountId: row.account_id,
@@ -280,23 +297,32 @@ export interface Loaded {
   writingExamples: WritingExample[];
   profile: Profile;
   unsubscribes: Unsubscribe[];
+  /** Tasks with a due date: every open one, and completed ones due in the last TASK_DAYS days or later. */
+  tasks: Task[];
 }
 
 const THREAD_LIMIT = 1000;
+const TASK_LIMIT = 2000;
+/** How far back completed tasks are shown in Calendar. Open ones are loaded however old, as they are overdue. */
+const TASK_DAYS = 60;
 
 
 /** Everything the list screens need, in parallel. Messages load per conversation when it is opened. */
 export async function loadEverything(): Promise<Loaded> {
-  const [threads, accounts, profile, rules, examples, drafts, unsubscribes] = await Promise.all([
+  const taskSince = new Date(Date.now() - TASK_DAYS * 86_400_000).toISOString();
+  const [threads, accounts, profile, rules, examples, drafts, unsubscribes, followUps, tasks] = await Promise.all([
     // Deleted conversations (in the provider's bin) are never shown, so they are not loaded.
     supabase.from("threads").select(THREAD_WITH_PEOPLE).neq("status", "trash")
       .order("last_message_at", { ascending: false, nullsFirst: false }).limit(THREAD_LIMIT),
-    supabase.from("accounts").select("*"),
-    supabase.from("profiles").select("*").maybeSingle(),
+    supabase.from("accounts").select(ACCOUNT_COLUMNS),
+    supabase.from("profiles").select(PROFILE_COLUMNS).maybeSingle(),
     supabase.from("priority_rules").select("id, kind, target").order("created_at", { ascending: false }),
     supabase.from("writing_examples").select("id, situation, body").order("created_at", { ascending: false }),
-    supabase.from("drafts").select("*").eq("status", "active"),
-    supabase.from("unsubscribes").select("*"),
+    // A new message's draft (no conversation) lives in its dialog only.
+    supabase.from("drafts").select(DRAFT_COLUMNS).eq("status", "active").not("thread_id", "is", null),
+    supabase.from("unsubscribes").select(UNSUBSCRIBE_COLUMNS),
+    supabase.from("follow_ups").select("thread_id").eq("expects_reply", true),
+    supabase.from("tasks").select(TASK_COLUMNS).not("due_at", "is", null).or(`status.eq.open,due_at.gte.${taskSince}`).order("due_at").limit(TASK_LIMIT),
   ]);
   const failed = [threads, accounts, profile, rules, examples, drafts, unsubscribes].find((r) => r.error);
   if (failed?.error) throw failed.error;
@@ -304,18 +330,23 @@ export async function loadEverything(): Promise<Loaded> {
     openThreads(threads.data ?? []),
     openDrafts(drafts.data ?? []),
     openAddresses([accounts.data ?? [], rules.data ?? [], unsubscribes.data ?? []]),
+    openTasks(tasks.data ?? []),
   ]);
 
   const draftOf = new Map((drafts.data ?? []).map((d) => [d.thread_id, mapDraft(d)]));
+  // Not required: without it (the table not there yet) the Waiting filter is just empty.
+  const waiting = new Set((followUps.data ?? []).map((f) => f.thread_id));
   const contacts = new Map<string, Contact>();
   return {
-    threads: (threads.data ?? []).map((t) => ({ ...threadWithPeople(t, contacts), draft: draftOf.get(t.id) })),
+    threads: (threads.data ?? []).map((t) => ({ ...threadWithPeople(t, contacts), draft: draftOf.get(t.id), waiting: waiting.has(t.id) })),
     contacts: [...contacts.values()],
     accounts: (accounts.data ?? []).map(mapAccount),
     rules: (rules.data ?? []).map((r) => ({ id: r.id, kind: r.kind as Rule["kind"], target: r.target })),
     writingExamples: (examples.data ?? []).map((w) => ({ id: w.id, context: w.situation, text: w.body })),
     profile: mapProfile(profile.data),
     unsubscribes: (unsubscribes.data ?? []).map(mapUnsubscribe),
+    // Not required either: without it (no task account, or the table not there yet) Calendar shows events only.
+    tasks: (tasks.data ?? []).map(mapTask),
   };
 }
 

@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from . import log
-from .crypto import UserKeys, decrypt_field, derive_user_keys, encrypt_field, is_ciphertext
+from .crypto import UserKeys, decrypt_bytes, decrypt_field, derive_user_keys, encrypt_field, is_ciphertext, is_sealed_bytes
 from .keys import unwrap
 
 MISSING_RECHECK_S = 60
@@ -68,6 +68,21 @@ class Vault:
         except Exception as err:
             log.warn("field could not be opened", user=user_id, field=field, code=type(err).__name__)
             return ""
+
+    def open_bytes(self, user_id: str, field: str, data: bytes) -> bytes | None:
+        """The plain bytes of a file the app sealed; unsealed bytes come back as they are. None when it is
+        sealed and cannot be opened."""
+        if not is_sealed_bytes(data):
+            return data
+        keys = self.keys_for(user_id)
+        if keys is None:
+            log.warn("file could not be opened", user=user_id, field=field, code="no_key")
+            return None
+        try:
+            return decrypt_bytes(keys, field, data)
+        except Exception as err:
+            log.warn("file could not be opened", user=user_id, field=field, code=type(err).__name__)
+            return None
 
     def open_row(self, user_id: str, row: dict[str, Any] | None, columns: list[tuple[str, str]]) -> dict[str, Any] | None:
         """Opens the given (column, field) pairs of row in place and returns it. Missing columns are skipped."""

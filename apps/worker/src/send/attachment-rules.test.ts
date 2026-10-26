@@ -11,6 +11,7 @@ test("email limits count all files together, as sent", () => {
   assert.equal(limitError("gmail", [18 * MB]), null);
   assert.equal(limitError("gmail", [19 * MB]), "Gmail allows up to 25 MB per email. Attachments grow by about a third when sent.");
   assert.equal(limitError("gmail", []), null);
+  assert.equal(limitError("imap", [16 * MB]), "Your mail server allows up to 20 MB per email. Attachments grow by about a third when sent.");
 });
 
 test("the encoded size is about a third larger than the files", () => {

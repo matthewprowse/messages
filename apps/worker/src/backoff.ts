@@ -46,7 +46,16 @@ export class Sleeper {
   private wake: (() => void) | null = null;
 
   wait(ms: number): Promise<void> {
-    return Promise.race([sleep(ms), new Promise<void>((resolve) => (this.wake = resolve))]);
+    return new Promise<void>((resolve) => {
+      // An interrupted wait clears its timer, so a stopped connector leaves nothing pending behind.
+      const done = () => {
+        clearTimeout(timer);
+        if (this.wake === done) this.wake = null;
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      this.wake = done;
+    });
   }
 
   interrupt() {

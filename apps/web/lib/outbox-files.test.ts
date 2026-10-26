@@ -24,6 +24,7 @@ const file = (size: number, name = "a.pdf") => ({ name, size });
 
 test("attachProvider allows email and WhatsApp, not Calendar", () => {
   assert.equal(attachProvider("icloud"), "icloud");
+  assert.equal(attachProvider("imap"), "imap");
   assert.equal(attachProvider("gmail"), "gmail");
   assert.equal(attachProvider("whatsapp"), "whatsapp");
   assert.equal(attachProvider("google_calendar"), null);
@@ -94,8 +95,10 @@ test("mimeOf prefers the browser's type and guesses from the extension", () => {
   assert.equal(mimeOf("Report.PDF", ""), "application/pdf");
   assert.equal(mimeOf("deck.key", ""), "application/vnd.apple.keynote");
   assert.equal(mimeOf("mystery", ""), "application/octet-stream");
+  assert.equal(mimeOf("a.txt", "Text/Plain; charset=utf-8\r\nX-Evil: 1"), "text/plain");
   assert.equal(kindOf("image/heic"), "image");
   assert.equal(kindOf("video/mp4"), "video");
+  assert.equal(kindOf("audio/webm"), "audio");
   assert.equal(kindOf("application/pdf"), "pdf");
   assert.equal(kindOf("text/plain"), "file");
 });
@@ -121,8 +124,8 @@ test("attachmentRows and pendingAttachments keep the order files were added in",
     { path: "u/outbox/2/b.pdf", filename: "b.pdf", mimeType: "application/pdf", size: 3 * MB },
   ];
   assert.deepEqual(attachmentRows("o1", files), [
-    { outbox_id: "o1", storage_path: "u/outbox/1/a.png", filename: "a.png", mime_type: "image/png", size_bytes: 2048, position: 0 },
-    { outbox_id: "o1", storage_path: "u/outbox/2/b.pdf", filename: "b.pdf", mime_type: "application/pdf", size_bytes: 3 * MB, position: 1 },
+    { outbox_id: "o1", storage_path: "u/outbox/1/a.png", filename: "a.png", mime_type: "image/png", size_bytes: 2048, position: 0, voice_note: false },
+    { outbox_id: "o1", storage_path: "u/outbox/2/b.pdf", filename: "b.pdf", mime_type: "application/pdf", size_bytes: 3 * MB, position: 1, voice_note: false },
   ]);
   assert.deepEqual(pendingAttachments(files).map((a) => [a.kind, a.size, a.path]), [
     ["image", "2 KB", "u/outbox/1/a.png"],

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
@@ -8,6 +9,7 @@ import { useApp } from "@/lib/store";
 import { defaultCountryCode, existingChat, normalisePhone, PHONE_HINT, searchPhoneContacts, linkedAccount } from "@/lib/new-items";
 import { ContactAvatar } from "@/components/primitives";
 import { useComposeSend } from "@/components/compose-dialog";
+import { ComposeAi, type Composed } from "@/components/compose-ai";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,7 +26,7 @@ export { whatsappLinked } from "@/lib/new-items";
 export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; onOpenChange: (open: boolean) => void; to?: { phone: string; name?: string } }) {
   const router = useRouter();
   const { accounts, contacts, contactById, threads, composeWhatsApp, send } = useApp();
-  const sending = useComposeSend(open, onOpenChange);
+  const sending = useComposeSend(open, onOpenChange, "new_whatsapp");
   const { locked, sent, waiting, reset } = sending;
   const account = linkedAccount(accounts);
   // Your own linked number decides the country first, so an old unlinked one does not.
@@ -33,7 +35,9 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<{ phone: string; name?: string } | null>(null);
   const [body, setBody] = useState("");
+  const [draftId, setDraftId] = useState<string | undefined>(undefined);
   const [checked, setChecked] = useState(false);
+  const applyDraft = useCallback((next: Composed) => { setBody(next.body); setDraftId(next.draftId); }, []);
   const [toFocused, setToFocused] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const toKey = to?.phone ?? "";
@@ -44,6 +48,7 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
     setQuery("");
     setPicked(to ?? null);
     setBody("");
+    setDraftId(undefined);
     setChecked(false);
     reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -58,6 +63,11 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
     [threads, number, accountId, contactById],
   );
   const suggestions = useMemo(() => searchPhoneContacts(contacts, query), [contacts, query]);
+  // Who it is to, when the number is a contact's, so a draft knows them and how you write to them.
+  const contactId = useMemo(
+    () => (number ? contacts.find((c) => c.phones.some((p) => p === number || normalisePhone(p, country) === number))?.id : undefined),
+    [contacts, number, country],
+  );
   const ready = !!account && body.trim().length > 0 && !locked;
 
   const pick = (phone: string, name?: string) => {
@@ -78,26 +88,27 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
       // A chat with this number already exists, so the message goes there as a reply instead.
       if (chat) {
         // Standalone, so the chat's AI draft and Reply-to are left alone.
-        if (await send(chat.id, body, undefined, [], true)) openChat(chat.id);
+        if (await send(chat.id, body, undefined, [], true)) {
+          markSubmitted("new_whatsapp");
+          openChat(chat.id);
+        }
         return null;
       }
-      return composeWhatsApp(account.id, number, body);
+      return composeWhatsApp(account.id, number, body, draftId);
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="new_whatsapp" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New WhatsApp Message</DialogTitle>
           <DialogDescription>Sent from your linked WhatsApp, then shown in Conversations.</DialogDescription>
         </DialogHeader>
         {!account ? (
-          <>
-            <p className="text-sm text-muted-foreground">
-              Link WhatsApp first to start a chat. <Link href="/settings/accounts/whatsapp" className="underline underline-offset-4" onClick={() => onOpenChange(false)}>Link WhatsApp</Link>
-            </p>
-          </>
+          <p className="text-sm text-muted-foreground">
+            Link WhatsApp first to start a chat. <Link href="/settings/accounts/whatsapp" className="underline underline-offset-4" onClick={() => onOpenChange(false)}>Link WhatsApp</Link>
+          </p>
         ) : (
           <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
             <div className="grid gap-2">
@@ -163,6 +174,16 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
                 </p>
               )}
             </div>
+            <ComposeAi
+              open={open}
+              sent={sent}
+              disabled={locked}
+              accountId={account.id}
+              channel="whatsapp"
+              contactId={contactId}
+              body={body}
+              onApply={applyDraft}
+            />
             <div className="grid gap-2">
               <Label htmlFor="whatsapp-body">Message</Label>
               <Textarea

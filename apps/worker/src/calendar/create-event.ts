@@ -9,7 +9,7 @@ export const MAX_ATTENDEES = 50;
 
 export type CalendarOutboxRow = Tables<"calendar_outbox">;
 
-export const EVENTS_NOT_GRANTED = "Reconnect Google to allow creating events. Run pnpm connect:google.";
+export const EVENTS_NOT_GRANTED = "Reconnect Google in Settings, Connected Accounts, to allow creating events.";
 export const MAYBE_CREATED = "The event may have been created. Check Google Calendar before trying again.";
 export const BAD_TIME_ZONE = "This time zone is not recognised.";
 export const BAD_TIMES = "The event must end after it starts.";
@@ -30,11 +30,14 @@ export interface GoogleEvent {
   description?: string;
   location?: string;
   htmlLink?: string;
+  hangoutLink?: string;
+  /** Set on each occurrence of a repeating event: the id of the series. */
+  recurringEventId?: string;
   start?: EventTime;
   end?: EventTime;
   attendees?: { email?: string; displayName?: string; responseStatus?: string; self?: boolean; organizer?: boolean; resource?: boolean }[];
   organizer?: { email?: string; self?: boolean };
-  conferenceData?: { createRequest: { requestId: string; conferenceSolutionKey: { type: "hangoutsMeet" } } };
+  conferenceData?: { createRequest?: { requestId: string; conferenceSolutionKey: { type: "hangoutsMeet" } }; entryPoints?: { entryPointType?: string; uri?: string }[] };
 }
 
 export interface CreateEventRequest {
@@ -159,7 +162,7 @@ export function toTimestamp(time: EventTime | undefined): string | null {
 /** A Google event as it is stored in calendar_events. Null for cancelled events or ones without a start. */
 export function storedEvent(
   event: GoogleEvent,
-  owner: { userId: string; accountId: string; calendarId: string },
+  owner: { userId: string; accountId: string; calendarId: string; calendarName?: string | null },
 ): TablesInsert<"calendar_events"> | null {
   const startsAt = toTimestamp(event.start);
   if (!event.id || event.status === "cancelled" || !startsAt) return null;
@@ -177,7 +180,18 @@ export function storedEvent(
     all_day: !event.start?.dateTime,
     location: event.location ?? null,
     attendees: attendees satisfies Json,
+    description: event.description?.trim().slice(0, 5000) || null,
+    calendar_name: owner.calendarName ?? null,
+    conference_url: meetingUrl(event),
+    resource_url: null,
+    series_id: event.recurringEventId ?? null,
   };
+}
+
+/** The video link Google has for an event: its Meet link, else any video entry point. Only https. */
+function meetingUrl(event: GoogleEvent): string | null {
+  const link = event.hangoutLink ?? event.conferenceData?.entryPoints?.find((p) => p.entryPointType === "video")?.uri;
+  return link && /^https:\/\//i.test(link) ? link : null;
 }
 
 /**
@@ -196,7 +210,7 @@ export function createdCalendarId(row: Pick<CalendarOutboxRow, "calendar_id">, e
 export function createFailure(status: number | null, reason: string | null): string {
   if (status === null || status >= 500) return MAYBE_CREATED;
   if (status === 409) return MAYBE_CREATED; // the id is taken: this row was created before
-  if (status === 401) return "Google sign-in expired or was removed. Run pnpm connect:google to reconnect.";
+  if (status === 401) return "Google sign-in expired or was removed. Reconnect Google in Settings, Connected Accounts.";
   if (status === 403 && reason && /rate|quota/i.test(reason)) return "Google Calendar is busy. Try again in a minute.";
   if (status === 429) return "Google Calendar is busy. Try again in a minute.";
   if (status === 403 && reason === "insufficientPermissions") return EVENTS_NOT_GRANTED;

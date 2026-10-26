@@ -76,6 +76,44 @@ export async function decryptField(keys: UserKeys, field: string, payload: strin
   return fromUtf8.decode(plain);
 }
 
+// Files are sealed the same way as fields, but as raw bytes: MAGIC (8 bytes) | nonce 12 bytes | ciphertext |
+// GCM tag 16 bytes, with the field name as additional data. The magic marks a stored file as sealed (and
+// carries the format version, "e1b:"), so files uploaded before sealing can still be told apart and read.
+const MAGIC = Uint8Array.of(0x65, 0x31, 0x62, 0x3a, 0x00, 0xff, 0x4b, 0x4e); // "e1b:" 00 FF "KN"
+const HEADER_BYTES = MAGIC.length + NONCE_BYTES;
+
+/** Whether these bytes (or the first few of them) start with the sealed-file header. */
+export function isSealedBytes(bytes: Uint8Array): boolean {
+  return bytes.length >= MAGIC.length && MAGIC.every((b, i) => bytes[i] === b);
+}
+
+/** How many leading bytes isSealedBytes needs to see. */
+export const SEALED_MAGIC_BYTES = MAGIC.length;
+
+/** Seals a file's bytes for `field` (fields.ts). A nonce is only passed by tests. */
+export async function encryptBytes(keys: UserKeys, field: string, plain: Uint8Array<ArrayBuffer>, nonce?: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const iv = nonce ?? globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
+  if (iv.length !== NONCE_BYTES) throw new Error("A nonce is 12 bytes.");
+  const sealed = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv, additionalData: utf8.encode(field) }, keys.enc, plain));
+  const out = new Uint8Array(HEADER_BYTES + sealed.length);
+  out.set(MAGIC);
+  out.set(iv, MAGIC.length);
+  out.set(sealed, HEADER_BYTES);
+  return out;
+}
+
+/** Opens bytes written by encryptBytes for the same field. Throws if they were altered, moved or are not sealed. */
+export async function decryptBytes(keys: UserKeys, field: string, sealed: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  if (!isSealedBytes(sealed)) throw new Error("Not a sealed file.");
+  if (sealed.length < HEADER_BYTES + 16) throw new Error("Sealed file is too short.");
+  const plain = await subtle.decrypt(
+    { name: "AES-GCM", iv: sealed.subarray(MAGIC.length, HEADER_BYTES), additionalData: utf8.encode(field) },
+    keys.enc,
+    sealed.subarray(HEADER_BYTES),
+  );
+  return new Uint8Array(plain);
+}
+
 /** encryptField for a value that may be missing: null and undefined stay null. */
 export async function encryptOptional(keys: UserKeys, field: string, plaintext: string | null | undefined): Promise<string | null> {
   return plaintext == null ? null : encryptField(keys, field, plaintext);

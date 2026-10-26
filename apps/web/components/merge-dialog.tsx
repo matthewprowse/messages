@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { markSubmitted } from "@/lib/analytics";
 import { namesDiffer } from "@/lib/merging";
 import {
   AlertDialog,
@@ -29,7 +30,8 @@ export function useCloseOnOverlay(open: boolean, onOpenChange: (open: boolean) =
 
 /**
  * Confirms a merge. When the two names differ meaningfully the buttons are the two names, so choosing
- * one is the confirmation; otherwise a single Merge button.
+ * one is the confirmation; otherwise a single Merge button. The dialog stays open, showing Merging,
+ * until onConfirm has finished.
  */
 export function MergeDialog({
   a,
@@ -42,14 +44,33 @@ export function MergeDialog({
   b: { name: string } | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (name?: string) => void;
+  onConfirm: (name?: string) => void | Promise<void>;
 }) {
-  useCloseOnOverlay(open, onOpenChange);
+  const [busy, setBusy] = useState<string | null>(null);
+  useCloseOnOverlay(open && busy === null, onOpenChange);
   if (!a || !b) return null;
   const ask = namesDiffer(a.name, b.name);
+
+  const run = async (e: React.MouseEvent, key: string, name?: string) => {
+    // Stays open until the merge is done.
+    e.preventDefault();
+    if (busy) return;
+    markSubmitted("merge_contacts");
+    setBusy(key);
+    try {
+      await onConfirm(name);
+    } finally {
+      setBusy(null);
+      onOpenChange(false);
+    }
+  };
+  const label = (key: string, text: string) => (
+    <span className="min-w-0 max-w-full truncate">{busy === key ? "Merging" : text}</span>
+  );
+
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+    <AlertDialog open={open} onOpenChange={(next) => busy === null && onOpenChange(next)}>
+      <AlertDialogContent track="merge_contacts">
         <AlertDialogHeader>
           <AlertDialogTitle>{ask ? "Which Name Should We Keep?" : "Merge These Contacts?"}</AlertDialogTitle>
           <AlertDialogDescription>
@@ -57,14 +78,14 @@ export function MergeDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className={DIALOG_BUTTONS}>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy !== null}>Cancel</AlertDialogCancel>
           {ask ? (
             <>
-              <AlertDialogAction variant="outline" onClick={() => onConfirm(b.name.trim())}>{b.name}</AlertDialogAction>
-              <AlertDialogAction onClick={() => onConfirm(a.name.trim())}>{a.name}</AlertDialogAction>
+              <AlertDialogAction variant="outline" className="max-w-full min-w-0" disabled={busy !== null} onClick={(e) => run(e, "b", b.name.trim())}>{label("b", b.name)}</AlertDialogAction>
+              <AlertDialogAction className="max-w-full min-w-0" disabled={busy !== null} onClick={(e) => run(e, "a", a.name.trim())}>{label("a", a.name)}</AlertDialogAction>
             </>
           ) : (
-            <AlertDialogAction onClick={() => onConfirm()}>Merge</AlertDialogAction>
+            <AlertDialogAction disabled={busy !== null} onClick={(e) => run(e, "merge")}>{label("merge", "Merge")}</AlertDialogAction>
           )}
         </div>
       </AlertDialogContent>

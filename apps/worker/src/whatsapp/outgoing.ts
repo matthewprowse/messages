@@ -11,8 +11,16 @@ const PHOTO = /^image\/(jpeg|png)$/;
 const VIDEO = /^video\/(mp4|3gpp)$/;
 const AUDIO = /^audio\//;
 
-export function fileMessage(file: OutgoingAttachment, caption?: string): AnyMessageContent {
+/** A file ready for WhatsApp. A voice note has been converted to Ogg Opus and carries its length and waveform. */
+export type WhatsAppFile = OutgoingAttachment & { voice?: { seconds: number; waveform: Uint8Array } };
+
+export function fileMessage(file: WhatsAppFile, caption?: string): AnyMessageContent {
   const mimetype = file.contentType;
+  if (file.voice) {
+    // Baileys sends the waveform it is given, though its types leave it out.
+    const { seconds, waveform } = file.voice;
+    return { audio: file.content, mimetype: "audio/ogg; codecs=opus", ptt: true, seconds, waveform } as AnyMessageContent;
+  }
   if (PHOTO.test(mimetype)) return { image: file.content, mimetype, ...(caption ? { caption } : {}) };
   if (VIDEO.test(mimetype)) return { video: file.content, mimetype, ...(caption ? { caption } : {}) };
   if (AUDIO.test(mimetype)) return { audio: file.content, mimetype, ptt: false };
@@ -20,7 +28,7 @@ export function fileMessage(file: OutgoingAttachment, caption?: string): AnyMess
 }
 
 /** Everything one outbox row sends, in order. Empty when there is neither text nor a file. */
-export function outgoingMessages(body: string, files: OutgoingAttachment[]): AnyMessageContent[] {
+export function outgoingMessages(body: string, files: WhatsAppFile[]): AnyMessageContent[] {
   const text = body.trim();
   if (files.length === 0) return text ? [{ text }] : [];
   // Audio cannot carry a caption.

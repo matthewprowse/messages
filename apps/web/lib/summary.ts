@@ -35,8 +35,9 @@ const byNewest = (a: Thread, b: Thread) => Date.parse(b.lastMessageAt) - Date.pa
 
 /** Sorts inbox conversations into the Summary's sections. Each conversation appears once, in the first that fits. */
 export function summarise(threads: Thread[], filter: ListFilter, now: Date = new Date()): SummarySections {
-  // Junk, archived and deleted conversations never need you.
-  const open = threads.filter((t) => t.status === "inbox" && !t.junk && matches(t, filter));
+  // Junk, archived and deleted conversations never need you, and nor does one you answered last: it waits
+  // on them until they write again, whatever priority and category the AI gave it.
+  const open = threads.filter((t) => t.status === "inbox" && !t.junk && !t.lastFromMe && matches(t, filter));
   const within = (t: Thread, hours: number) => now.getTime() - Date.parse(t.lastMessageAt) <= hours * 3_600_000;
 
   // Only the needs-reply flag: the AI clears it once you have answered, while the category stays.
@@ -56,8 +57,8 @@ export function summarise(threads: Thread[], filter: ListFilter, now: Date = new
   return { reply: reply.sort(byPressing), priority: priority.sort(byPressing), updates: updates.sort(byNewest) };
 }
 
-/** One line for the top of the page, such as "3 Need a Reply, 2 Urgent or Important, 4 Events Today". Empty when there is nothing. */
-export function digest(sections: SummarySections, events: number): string {
+/** One line for the top of the page, such as "3 Need a Reply, 2 Urgent or Important, 4 Events Today, 1 Task". Empty when there is nothing. */
+export function digest(sections: SummarySections, events: number, tasks = 0): string {
   // Each count matches its section's badge.
   const reply = sections.reply.length;
   const priority = sections.priority.length;
@@ -66,6 +67,7 @@ export function digest(sections: SummarySections, events: number): string {
     reply > 0 && `${reply} ${reply === 1 ? "Needs" : "Need"} a Reply`,
     priority > 0 && `${priority} Urgent or Important`,
     events > 0 && `${events} ${events === 1 ? "Event" : "Events"} Today`,
+    tasks > 0 && `${tasks} ${tasks === 1 ? "Task" : "Tasks"}`,
     updates > 0 && `${updates} ${updates === 1 ? "Update" : "Updates"}`,
   ]
     .filter(Boolean)

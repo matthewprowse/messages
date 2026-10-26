@@ -6,7 +6,10 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "start": "tsx --env-file=.env src/index.ts",
     "connect:icloud": "tsx --env-file=.env scripts/connect-icloud.ts",
+    "connect:imap": "tsx --env-file=.env scripts/connect-imap.ts",
+    "connect:icloud-calendar": "tsx --env-file=.env scripts/connect-icloud-calendar.ts",
     "connect:google": "tsx --env-file=.env scripts/connect-google.ts",
+    "connect:microsoft": "tsx --env-file=.env scripts/connect-microsoft.ts",
     "connect:whatsapp": "tsx --env-file=.env scripts/connect-whatsapp.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
@@ -23,9 +26,11 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@messages/analytics": "workspace:*",
     "@messages/crypto": "workspace:*",
     "@messages/db": "workspace:*",
     "@messages/email-text": "workspace:*",
+    "@messages/mail-servers": "workspace:*",
     "@messages/qr": "workspace:*",
     "@supabase/supabase-js": "^2.118.0",
     "baileys": "7.0.0-rc14",

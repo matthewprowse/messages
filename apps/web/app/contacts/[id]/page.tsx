@@ -6,7 +6,10 @@ import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { getContact, type ContactDetail } from "@/lib/contacts";
 import { resolveMergedContact } from "@/lib/contact-merging";
+import { Users } from "lucide-react";
 import { ContactView } from "@/components/contact-view";
+import { DetailSkeleton, LoadFailed } from "@/components/contact-list";
+import { withQuery } from "@/lib/utils";
 
 export default function ContactPage() {
   const { id } = useParams<{ id: string }>();
@@ -16,8 +19,10 @@ export default function ContactPage() {
   const userId = session?.user.id;
   // A merge, split or undo reloads the open contact.
   const { contactsVersion } = useApp();
-  // undefined while loading, null when there is no such contact.
-  const [contact, setContact] = useState<{ id: string; detail: ContactDetail | null } | undefined>(undefined);
+  // undefined while loading, null when there is no such contact, failed when it could not be read.
+  const [contact, setContact] = useState<{ id: string; detail: ContactDetail | null; failed?: boolean } | undefined>(undefined);
+  // Bumped by Retry.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!userId) return;
@@ -33,20 +38,34 @@ export default function ContactPage() {
         // A contact merged into another opens the one it became.
         const kept = await resolveMergedContact(id);
         if (cancelled) return;
-        if (kept) router.replace(`/contacts/${kept}${query ? `?${query}` : ""}`);
+        if (kept) router.replace(withQuery(`/contacts/${kept}`, query));
         else setContact({ id, detail: null });
       } catch (err) {
         console.error(err instanceof Error ? err.message : "Load contact failed");
-        if (!cancelled) setContact({ id, detail: null });
+        if (!cancelled) setContact({ id, detail: null, failed: true });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [id, userId, contactsVersion, router, query]);
+  }, [id, userId, contactsVersion, router, query, attempt]);
 
-  // Like a conversation, nothing shows until the contact has loaded.
-  if (!contact || contact.id !== id) return null;
+  const backHref = withQuery("/contacts", query);
+  if (!contact || contact.id !== id) return <DetailSkeleton backHref={backHref} />;
+  if (contact.failed) {
+    return (
+      <LoadFailed
+        icon={Users}
+        title="Contact Did Not Load"
+        backHref={backHref}
+        backLabel="Back to Contacts"
+        onRetry={() => {
+          setContact(undefined);
+          setAttempt((n) => n + 1);
+        }}
+      />
+    );
+  }
   return (
     <Suspense fallback={null}>
       <ContactView contact={contact.detail} />

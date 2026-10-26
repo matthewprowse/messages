@@ -23,7 +23,7 @@ import makeWASocket, {
 import type { Json, Tables } from "@messages/db";
 import { Backoff, SerialQueue, sleep } from "../backoff";
 import { finishAction } from "../send/actions";
-import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
+import { allRows, db, getSyncState, must, recordEvent, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { MAX_FILE_BYTES } from "../ingest/attachment-files";
@@ -31,6 +31,7 @@ import { isFailure } from "../ingest/batch-rpc";
 import { claimReady, linkThread, markFailed, settleSent, type OutboxRow } from "../send/outbox";
 import { loadAttachmentFiles } from "../send/outbox-attachments";
 import { newChatNumber, outgoingMessages } from "../whatsapp/outgoing";
+import { prepareVoiceNotes } from "../whatsapp/voice-note";
 import { isLinked, useDbAuthState, type DbAuthState } from "../whatsapp/auth-state";
 import { silentLogger } from "../whatsapp/logger";
 import { messageFromRef, mediaRef, saveMedia, type StoredMedia } from "../whatsapp/media";
@@ -38,7 +39,7 @@ import { describe, e164, formatPairingCode, nameMentions, oneLine, pairingDigits
 import { quietSignalLogs } from "../whatsapp/quiet-signal";
 import { HISTORY_PER_CALL, ingestWhatsApp, ingestWhatsAppHistory, type WhatsAppStored } from "../whatsapp/ingest";
 import { saveContactPhoto, saveGroupPhoto } from "../photos/store";
-import { chunks } from "../util";
+import { chunks, mapLimit } from "../util";
 import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, chatIndex } from "@messages/crypto/addresses";
 import type { UserKeys } from "@messages/crypto";
@@ -324,6 +325,11 @@ export class WhatsAppConnector {
 
   /** Ends a link that needs you: the old codes go, and the reason shows in Settings. */
   private async linkFailed(detail: string) {
+    const account = await db.from("accounts").select("user_id").eq("id", this.id).maybeSingle();
+    if (account.data) {
+      recordEvent(account.data.user_id, "sync_error", { provider: "whatsapp", code: "link_failed" });
+      recordEvent(account.data.user_id, "account_connect", { provider: "whatsapp", step: "link", outcome: "failed", code: "link_failed" });
+    }
     must(
       await db.from("accounts").update({ qr_code: null, pairing_code: null, status: "error", status_detail: detail }).eq("id", this.id),
       "update account status",
@@ -455,13 +461,14 @@ export class WhatsAppConnector {
   }
 
   private async onLidMapping(pairs: { lid: string; pn: string }[]) {
-    for (const pair of pairs) {
+    // A history batch can carry thousands of pairs, so a few are saved at a time.
+    await mapLimit(pairs, 4, async (pair) => {
       const phone = e164(pair.pn);
-      if (!phone) continue;
+      if (!phone) return;
       const lid = jidNormalizedUser(pair.lid);
       const pn = jidNormalizedUser(pair.pn);
       this.pnByLid.set(lid, pn);
-      if (this.mappedLids.get(lid) === pn) continue;
+      if (this.mappedLids.get(lid) === pn) return;
       const keys = await keysFor(this.account.user_id);
       must(
         await db.rpc("whatsapp_map_lid", {
@@ -477,7 +484,7 @@ export class WhatsAppConnector {
         "map privacy id",
       );
       this.mappedLids.set(lid, pn);
-    }
+    });
   }
 
   /** Chats read on your phone are marked read here too. No receipt is sent: the phone already did. */
@@ -848,7 +855,8 @@ export class WhatsAppConnector {
 
   /**
    * Sends one queued reply over the linked device, then stores it so it shows in the conversation. A
-   * reply with files goes as one message per file, the text as the first one's caption. Claimed first
+   * reply with files goes as one message per file, the text as the first one's caption, and a voice
+   * note recorded in the app is converted to the format WhatsApp needs first. Claimed first
    * (once its files have arrived), so it can never go out twice; while disconnected it waits in the queue.
    */
   async send(queuedRow: OutboxRow) {
@@ -882,7 +890,12 @@ export class WhatsAppConnector {
         await markFailed(row.id, files.error);
         return;
       }
-      parts = outgoingMessages((await open(row.user_id, FIELD.body, row.body)) ?? "", files);
+      const ready = await prepareVoiceNotes(files, { account: this.id, outbox: row.id });
+      if ("error" in ready) {
+        await markFailed(row.id, ready.error);
+        return;
+      }
+      parts = outgoingMessages((await open(row.user_id, FIELD.body, row.body)) ?? "", ready);
     } catch (err) {
       log.warn("whatsapp attachments failed", { account: this.id, outbox: row.id, code: errorCode(err) });
       await markFailed(row.id, "The attachments could not be read. Try again.").catch(() => undefined);

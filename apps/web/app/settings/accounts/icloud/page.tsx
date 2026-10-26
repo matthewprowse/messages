@@ -1,29 +1,34 @@
 "use client";
 
-import { SettingsHeader } from "@/components/settings-header";
-import { SettingsHeading } from "@/components/settings/sections";
+import { toast } from "sonner";
+import { useAuth } from "@/lib/auth";
+import { ICloudConnectForm } from "@/components/icloud-connect";
+import { Command, SetupSteps, type SetupStep } from "../setup-steps";
+
+const STEPS: SetupStep[] = [
+  { title: "Create an App-Specific Password", body: "At account.apple.com, under Sign-In and Security. It is four groups of four letters." },
+  { title: "Run the Connect Command", body: <><p>From the project folder:</p><Command>pnpm connect:icloud</Command></> },
+  { title: "Keep the Worker Running", body: <><Command>pnpm worker</Command><p className="mt-2">New mail then appears in Conversations within seconds.</p></> },
+];
 
 export default function ICloudSetup() {
+  const { session } = useAuth();
   return (
-    <>
-      <SettingsHeader title="Connect iCloud+ Mail" description="iCloud is connected from your terminal, so the app-specific password is typed only there, checked with iCloud, and stored encrypted." back="/settings/accounts" />
-      <ol className="space-y-6">
-        <li>
-          <SettingsHeading title="1. Create an App-Specific Password" description="At account.apple.com, under Sign-In and Security. It is four groups of four letters." />
-        </li>
-        <li>
-          <SettingsHeading
-            title="2. Run the Connect Command"
-            description={<><p>From the project folder:</p><pre className="mt-2 rounded-lg bg-muted px-3 py-2 font-mono text-xs text-foreground">pnpm connect:icloud</pre></>}
+    <SetupSteps
+      provider="icloud"
+      title="Connect iCloud+ Mail"
+      description="iCloud Mail connects with an app-specific password, which is checked with iCloud and stored encrypted. iCloud Calendar can connect with it too."
+      steps={STEPS}
+      label="iCloud+ Mail"
+      watch={["icloud"]}
+      connect={
+        <div className="max-w-sm">
+          <ICloudConnectForm
+            defaultEmail={session?.user.email ?? ""}
+            onConnected={({ calendar }) => toast(calendar ? "iCloud Mail and Calendar are connected." : "iCloud Mail is connected. Calendar did not accept the same sign-in.")}
           />
-        </li>
-        <li>
-          <SettingsHeading
-            title="3. Keep the Worker Running"
-            description={<><pre className="mt-2 rounded-lg bg-muted px-3 py-2 font-mono text-xs text-foreground">pnpm worker</pre><p className="mt-2">New mail then appears in Conversations within seconds.</p></>}
-          />
-        </li>
-      </ol>
-    </>
+        </div>
+      }
+    />
   );
 }

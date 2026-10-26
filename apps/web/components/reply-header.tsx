@@ -4,9 +4,11 @@ import { Fragment, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { useApp } from "@/lib/store";
 import type { Message, Thread } from "@/lib/types";
-import { defaultFrom, replyRecipients, sendAddressesOf } from "@/lib/send-from";
+import { MAX_RECIPIENTS, defaultFrom, parseAddresses, replyAllRecipients, replyRecipients, sendAddressesOf } from "@/lib/send-from";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { formatPhone } from "@/lib/format";
 
@@ -29,6 +31,61 @@ export function useReplyFrom(thread: Thread, msgs: Message[]): ReplyFrom {
   const [picked, setPicked] = useState<{ threadId: string; address: string } | null>(null);
   const chosen = picked?.threadId === thread.id && options.includes(picked.address) ? picked.address : null;
   return { options, from: chosen ?? fallback, chosen, setFrom: (address) => setPicked({ threadId: thread.id, address }) };
+}
+
+export interface ReplyAllState {
+  /** Email only: a chat has no one to copy. */
+  available: boolean;
+  all: boolean;
+  setAll: (all: boolean) => void;
+  toText: string;
+  ccText: string;
+  setToText: (text: string) => void;
+  setCcText: (text: string) => void;
+  /** What to send with the reply when Reply All is on. Undefined for a plain Reply, which the worker addresses. */
+  copies: { to: string[]; cc: string[] } | undefined;
+  /** Why Reply All cannot be sent yet. */
+  error: string | null;
+  /** Back to a plain Reply, once the reply is queued. */
+  reset: () => void;
+}
+
+/**
+ * Reply or Reply All. Reply All fills To with the sender of the message being answered and Cc with
+ * everyone else it went to, minus your own addresses; both can be edited. A change of conversation,
+ * of the message being answered or of who it came from starts the lines again.
+ */
+export function useReplyAll(thread: Thread, msgs: Message[], reply: ReplyFrom): ReplyAllState {
+  const { replyTo } = useApp();
+  const target = replyTo[thread.id];
+  const available = thread.channel === "email";
+  const defaults = useMemo(() => replyAllRecipients(msgs, reply.options, target), [msgs, reply.options, target]);
+  const key = `${thread.id}|${target?.id ?? ""}|${defaults.to.join(",")}|${defaults.cc.join(",")}`;
+  const [mode, setMode] = useState<string | null>(null); // the conversation Reply All is on for
+  const [edit, setEdit] = useState<{ key: string; to: string; cc: string } | null>(null);
+  const all = available && mode === thread.id;
+  const toText = edit?.key === key ? edit.to : defaults.to.join(", ");
+  const ccText = edit?.key === key ? edit.cc : defaults.cc.join(", ");
+  const parsed = useMemo(() => ({ to: parseAddresses(toText), cc: parseAddresses(ccText) }), [toText, ccText]);
+  let error: string | null = null;
+  if (all) {
+    const bad = [...parsed.to.invalid, ...parsed.cc.invalid];
+    if (bad.length) error = `Check ${bad.slice(0, 2).join(", ")}${bad.length > 2 ? " and others" : ""}.`;
+    else if (parsed.to.valid.length + parsed.cc.valid.length === 0) error = "Add at least one address.";
+    else if (parsed.to.valid.length > MAX_RECIPIENTS || parsed.cc.valid.length > MAX_RECIPIENTS) error = `Send to ${MAX_RECIPIENTS} people or fewer on each line.`;
+  }
+  return {
+    available,
+    all,
+    setAll: (on) => setMode(on ? thread.id : null),
+    toText,
+    ccText,
+    setToText: (to) => setEdit({ key, to, cc: ccText }),
+    setCcText: (cc) => setEdit({ key, to: toText, cc }),
+    copies: all ? { to: parsed.to.valid, cc: parsed.cc.valid.filter((a) => !parsed.to.valid.includes(a)) } : undefined,
+    error,
+    reset: () => { setMode(null); setEdit(null); },
+  };
 }
 
 interface Recipient {
@@ -68,18 +125,18 @@ function useRecipients(thread: Thread, msgs: Message[], reply: ReplyFrom): Recip
  * The message being replied to, if one was picked, then who the reply goes to on the left and, for email,
  * which of your addresses it goes from on the right.
  */
-export function ReplyHeader({ thread, msgs, reply }: { thread: Thread; msgs: Message[]; reply: ReplyFrom }) {
+export function ReplyHeader({ thread, msgs, reply, all }: { thread: Thread; msgs: Message[]; reply: ReplyFrom; all: ReplyAllState }) {
   const { contactById, replyTo, setReplyTo } = useApp();
   const target = replyTo[thread.id];
   const to = useRecipients(thread, msgs, reply).filter((r) => r.name || r.address);
-  if (to.length === 0 && reply.options.length === 0 && !target) return null;
+  if (to.length === 0 && reply.options.length === 0 && !target && !all.available) return null;
   const email = thread.channel === "email";
   return (
     <>
       {target && <ReplyingTo target={target} author={target.from === "me" ? "You" : contactById(target.from)?.name ?? target.address ?? "Unknown"} onCancel={() => setReplyTo(thread.id, null)} />}
       <div className="mb-3 flex items-center justify-between gap-3">
         {/* Each person by name, with their address after it in angle brackets for email. */}
-        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+        <div className={cn("flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap", all.all && "hidden")}>
           {to.map((r, i) => (
             <Fragment key={i}>
               {r.name && <span className="shrink-0 text-sm font-medium">{r.name}</span>}
@@ -92,9 +149,21 @@ export function ReplyHeader({ thread, msgs, reply }: { thread: Thread; msgs: Mes
             </Fragment>
           ))}
         </div>
+        {all.all && <div className="flex-1" />}
+        {all.available && (
+          <Select value={all.all ? "all" : "reply"} onValueChange={(v) => all.setAll(v === "all")}>
+            <SelectTrigger aria-label="Reply Type" className="shrink-0 data-[size=default]:h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="end">
+              <SelectItem value="reply">Reply</SelectItem>
+              <SelectItem value="all">Reply All</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
         {reply.options.length > 0 && (
           <Select value={reply.from} onValueChange={reply.setFrom}>
-            <SelectTrigger aria-label="From" className="max-w-64 min-w-0 shrink-0 data-[size=default]:h-8">
+            <SelectTrigger aria-label="From" className="max-w-40 min-w-0 data-[size=default]:h-8 sm:max-w-64">
               <SelectValue placeholder="From" />
             </SelectTrigger>
             <SelectContent align="end">
@@ -103,6 +172,19 @@ export function ReplyHeader({ thread, msgs, reply }: { thread: Thread; msgs: Mes
           </Select>
         )}
       </div>
+      {all.all && (
+        <div className="mb-3 grid gap-2">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="reply-to" className="w-7 shrink-0 text-xs text-muted-foreground">To</Label>
+            <Input id="reply-to" className="h-8" value={all.toText} onChange={(e) => all.setToText(e.target.value)} aria-invalid={!!all.error} placeholder="name@example.com" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Label htmlFor="reply-cc" className="w-7 shrink-0 text-xs text-muted-foreground">Cc</Label>
+            <Input id="reply-cc" className="h-8" value={all.ccText} onChange={(e) => all.setCcText(e.target.value)} aria-invalid={!!all.error} placeholder="name@example.com" />
+          </div>
+          {all.error && <p className="text-xs text-destructive">{all.error}</p>}
+        </div>
+      )}
     </>
   );
 }

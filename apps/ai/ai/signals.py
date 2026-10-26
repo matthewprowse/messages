@@ -161,6 +161,7 @@ class Signals:
             {
                 "select": "id,user_id,tone,instruction,decision,decision_kind,status,body,created_at",
                 "status": "in.(active,sent,discarded)",
+                "tone": "neq.edit",  # edits of your own text say nothing about how drafts are written
                 "created_at": f"gte.{since}",
                 "order": "created_at.desc",
                 "limit": "1000",
@@ -176,7 +177,10 @@ class Signals:
             self._next[user_id] = time.monotonic() + RECHECK_S
             for d in mine:  # only users due are opened: most of the rows read are skipped
                 self.vault.open_row(user_id, d, [("instruction", INSTRUCTION), ("decision", INSTRUCTION), ("body", DRAFT)])
-            changed += self._learn(user_id, mine)
+            try:  # one user's failure must not skip the others
+                changed += self._learn(user_id, mine)
+            except Exception as err:
+                log.warn("signal learning errored", user=user_id, code=log.code_of(err))
         return changed
 
     def _learn(self, user_id: str, drafts: list[dict[str, Any]]) -> int:

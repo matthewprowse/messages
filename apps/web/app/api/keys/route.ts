@@ -1,6 +1,5 @@
-import { createClient } from "@supabase/supabase-js";
-import type { Database } from "@messages/db";
-import { dataKeyFor, localWrapper, type KeyStore } from "@messages/crypto/wrap";
+import { dataKey, keysReady } from "@/lib/server/keys";
+import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
 
 // Hands a signed-in user their data key, so the browser can decrypt their messages itself. The caller
 // proves who they are with their Supabase access token; the key is unwrapped here with KEY_WRAPPING_KEY and
@@ -8,36 +7,20 @@ import { dataKeyFor, localWrapper, type KeyStore } from "@messages/crypto/wrap";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const url = process.env.SUPABASE_URL;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const wrappingKey = process.env.KEY_WRAPPING_KEY;
-
-const admin = url && serviceKey ? createClient<Database>(url, serviceKey, { auth: { persistSession: false } }) : null;
-
-const store: KeyStore | null = admin && {
-  async read(userId) {
-    const { data, error } = await admin.from("user_keys").select("wrapped_key, wrapped_by").eq("user_id", userId).maybeSingle();
-    if (error) throw error;
-    return data;
-  },
-  async insertIfAbsent(row) {
-    const { error } = await admin.from("user_keys").upsert(row, { onConflict: "user_id", ignoreDuplicates: true });
-    if (error) throw error;
-  },
-};
-
-const noStore = { "Cache-Control": "no-store" };
+// 30 requests a minute. A browser fetches its key once per session, so anything faster is a script.
+const overLimit = limiter(30, 60_000);
 
 export async function POST(request: Request) {
-  if (!admin || !store || !wrappingKey) return Response.json({ error: "The key service is not set up." }, { status: 503, headers: noStore });
-  const token = request.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
-  if (!token) return Response.json({ error: "Sign in first." }, { status: 401, headers: noStore });
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data.user) return Response.json({ error: "Sign in first." }, { status: 401, headers: noStore });
+  if (!keysReady()) return fail(503, "The key service is not set up.");
+  if (foreignOrigin(request)) return fail(403, "Not allowed from this site.");
+  const user = await signedInUser(request);
+  if (!user) return fail(401, "Sign in first.");
+  const wait = overLimit(user.id);
+  if (wait > 0) return fail(429, "Too many requests. Try again shortly.", { "Retry-After": String(wait) });
   try {
-    const key = await dataKeyFor(store, [await localWrapper(wrappingKey)], data.user.id);
+    const key = await dataKey(user.id);
     return Response.json({ key: Buffer.from(key).toString("base64") }, { headers: noStore });
   } catch {
-    return Response.json({ error: "Could not open your key." }, { status: 500, headers: noStore });
+    return fail(500, "Could not open your key.");
   }
 }

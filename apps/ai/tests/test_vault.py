@@ -4,9 +4,9 @@ import unittest
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from ai.crypto import derive_user_keys, encrypt_field, is_ciphertext
+from ai.crypto import derive_user_keys, encrypt_bytes, encrypt_field, is_ciphertext
 from ai.drafts import Drafts
-from ai.fields import BODY, DRAFT, HTML, INSTRUCTION, SUBJECT, SUMMARY
+from ai.fields import BODY, CHOICES, DRAFT, HTML, INSTRUCTION, SUBJECT, SUMMARY, VOICE_INSTRUCTION
 from ai.learn import Learn
 from ai.triage import Triage
 from ai.vault import Vault
@@ -127,25 +127,35 @@ class EncryptedTriage(unittest.TestCase):
 
 
 class DraftsDb:
-    def __init__(self):
+    def __init__(self, draft: dict | None = None, choices: str | None = None):
         self.updates: list[tuple[str, dict, dict]] = []
+        self.draft = draft or {"id": "d1", "user_id": "u", "thread_id": "t1", "tone": "default", "instruction": enc(INSTRUCTION, "Say Friday works")}
+        self.choices = choices
 
     def first(self, table, params):
-        if table == "user_keys":
-            return wrapped_row("u")
-        if table == "threads":
-            return {"id": "t1", "user_id": "u", "account_id": "a1", "subject": enc(SUBJECT, "Lunch")}
-        return None
+        return wrapped_row("u") if table == "user_keys" else None
 
     def select(self, table, params):
         if table == "drafts":
-            return [{"id": "d1", "user_id": "u", "thread_id": "t1", "tone": "default", "instruction": enc(INSTRUCTION, "Say Friday works")}]
-        if table == "messages" and params.get("direction") == "eq.outbound":
-            return [{"body_text": enc(BODY, "Cheers, Matt"), "body_html": None}]
-        if table == "messages":
-            return [{"id": "m1", "direction": "inbound", "sender_contact_id": None, "subject": enc(SUBJECT, "Lunch"),
-                     "body_text": None, "body_html": enc(HTML, "<p>Free on Friday?</p>"), "sent_at": "2026-10-20T10:00:00+00:00"}]
+            return [self.draft]
         return []
+
+    def rpc(self, function, args):
+        if function != "draft_context":
+            return []
+        return {
+            "thread": {"id": "t1", "user_id": "u", "account_id": "a1", "subject": enc(SUBJECT, "Lunch")},
+            "messages": [{"id": "m1", "direction": "inbound", "sender_contact_id": None, "subject": enc(SUBJECT, "Lunch"),
+                          "body_text": None, "body_html": enc(HTML, "<p>Free on Friday?</p>"), "sent_at": "2026-10-20T10:00:00+00:00"}],
+            "profile": None,
+            "rules": [],
+            "examples": [],
+            "recent": [{"body_text": enc(BODY, "Cheers, Matt"), "body_html": None}],
+            "contact": None,
+            "to_them": [],
+            "choices": enc(CHOICES, self.choices) if self.choices else None,
+            "similar": [{"thread_id": "t9", "similarity": 0.9, "inbound_text": enc(BODY, "Lunch on Tuesday?"), "reply_text": enc(BODY, "Tuesday is good, Matt")}],
+        }
 
     def update(self, table, filters, patch, minimal=False):
         self.updates.append((table, filters, patch))
@@ -170,11 +180,144 @@ class EncryptedDrafts(unittest.TestCase):
         [prompt] = gemini.prompts
         self.assertIn("Free on Friday?", prompt)
         self.assertIn("Cheers, Matt", prompt)
+        self.assertIn("Tuesday is good, Matt", prompt)  # a similar reply found by draft_context, opened
         self.assertIn("Their instruction for this reply: Say Friday works", prompt)
         self.assertNotIn("e1:", prompt)
         [written] = [p for t, f, p in db.updates if t == "drafts" and p.get("status") == "active"]
         self.assertTrue(is_ciphertext(written["body"]))
         self.assertEqual(Vault(db, MASTER_B64).open("u", DRAFT, written["body"]), "Friday works, see you then.")
+
+
+class VoiceDb(DraftsDb):
+    def __init__(self, clip: bytes):
+        super().__init__({"id": "d1", "user_id": "u", "thread_id": "t1", "tone": "default", "status": "pending", "instruction": None, "audio_path": "u/drafts/abc.webm"})
+        self.clip = clip
+        self.removed: list[str] = []
+
+    def download(self, bucket, path):
+        return self.clip
+
+    def remove_files(self, bucket, paths):
+        self.removed += paths
+
+
+class VoiceGemini(DraftsGemini):
+    def json(self, model, system, prompt, schema, usage, **kw):
+        self.prompts.append(prompt)
+        self.audio = kw.get("audio")
+        return {"said": "tell him friday works and I'll bring the keys", "body": "Friday works, I'll bring the keys."}
+
+
+class VoiceDrafts(unittest.TestCase):
+    def test_hears_the_recording_keeps_what_was_said_and_deletes_it(self):
+        db = VoiceDb(b"")
+        db.clip = encrypt_bytes(Vault(db, MASTER_B64).keys_for("u"), VOICE_INSTRUCTION, b"opus audio")
+        gemini = VoiceGemini()
+        drafts = Drafts(db, gemini, "m", None, Vault(db, MASTER_B64, True))
+        drafts._write(db.draft)
+        self.assertEqual(gemini.audio, (b"opus audio", "audio/webm"))
+        self.assertIn("What they want this reply to say is in their recording", gemini.prompts[0])
+        [written] = [p for t, f, p in db.updates if p.get("status") == "active"]
+        opened = Vault(db, MASTER_B64)
+        self.assertEqual(opened.open("u", INSTRUCTION, written["instruction"]), "tell him friday works and I'll bring the keys")
+        self.assertEqual(opened.open("u", DRAFT, written["body"]), "Friday works, I'll bring the keys.")
+        drafts._draft({**db.draft})  # the whole job, with its clean-up
+        self.assertEqual(db.removed, ["u/drafts/abc.webm"])
+        self.assertIn(("drafts", {"id": "eq.d1"}, {"audio_path": None}), db.updates)
+
+    def test_a_recording_that_cannot_be_opened_fails_the_draft(self):
+        db, gemini = VoiceDb(b"e1b:\x00\xffKN" + bytes(40)), VoiceGemini()
+        Drafts(db, gemini, "m", None, Vault(db, MASTER_B64, True))._draft(db.draft)
+        self.assertEqual(gemini.prompts, [])
+        self.assertTrue(any(p.get("status") == "failed" for _, _, p in db.updates))
+        self.assertEqual(db.removed, ["u/drafts/abc.webm"])
+
+
+class ComposeDb(DraftsDb):
+    def __init__(self, draft):
+        super().__init__(draft)
+        self.calls: list[str] = []
+
+    def rpc(self, function, args):
+        self.calls.append(function)
+        if function != "compose_context":
+            return {}
+        return {
+            "account": {"id": "a1", "user_id": "u", "channel": self.channel},
+            "profile": {"display_name": "Matt", "about": None},
+            "rules": [],
+            "facts": [],
+            "examples": [],
+            "recent": [{"body_text": enc(BODY, "Cheers, Matt"), "body_html": None}],
+            "contact": {"id": "c1", "display_name": "Sam", "relationship": "client"},
+            "to_them": [],
+        }
+
+
+class ComposeGemini(DraftsGemini):
+    def json(self, model, system, prompt, schema, usage, **kw):
+        self.prompts.append(prompt)
+        self.schema, self.system = schema, system
+        return {"subject": "Viewing on Thursday", "body": "Hi Sam, are you free to view the flat on Thursday? Matt"}
+
+
+class ComposeDrafts(unittest.TestCase):
+    def run_compose(self, channel, **draft):
+        db = ComposeDb({"id": "d1", "user_id": "u", "thread_id": None, "account_id": "a1", "contact_id": "c1", "tone": "custom",
+                        "status": "pending", "instruction": "ask Sam about viewing the flat on Thursday", **draft})
+        db.channel = channel
+        gemini = ComposeGemini()
+        Drafts(db, gemini, "m", None, Vault(db, MASTER_B64, True))._write(db.draft)
+        return db, gemini
+
+    def test_a_new_email_gets_a_subject_and_no_conversation(self):
+        db, gemini = self.run_compose("email")
+        self.assertEqual(db.calls, ["compose_context"])
+        self.assertIn("Writing to: Sam", gemini.prompts[0])
+        self.assertIn("A new email message, not a reply", gemini.prompts[0])
+        self.assertTrue(gemini.prompts[0].rstrip().endswith("Write their new email message to Sam, with its subject."))
+        self.assertIn("subject", gemini.schema["properties"])
+        self.assertIn("This starts a conversation", gemini.system)
+        [written] = [p for t, f, p in db.updates if p.get("status") == "active"]
+        self.assertEqual(Vault(db, MASTER_B64).open("u", SUBJECT, written["subject"]), "Viewing on Thursday")
+        # Nothing else is replaced: a new message has no conversation.
+        self.assertEqual([f for t, f, p in db.updates if "thread_id" in f], [])
+
+    def test_a_new_whatsapp_message_has_no_subject(self):
+        db, gemini = self.run_compose("whatsapp")
+        self.assertNotIn("subject", gemini.schema["properties"])
+        [written] = [p for t, f, p in db.updates if p.get("status") == "active"]
+        self.assertNotIn("subject", written)
+
+    def test_nothing_to_say_fails_without_asking_the_model(self):
+        db, gemini = self.run_compose("email", instruction=None)
+        self.assertEqual(gemini.prompts, [])
+        self.assertTrue(any(p.get("status") == "failed" for _, _, p in db.updates))
+
+
+class PreDrafts(unittest.TestCase):
+    def run_draft(self, draft, choices=None):
+        db, gemini = DraftsDb({"user_id": "u", "thread_id": "t1", "tone": "default", "auto": True, **draft}, choices), DraftsGemini()
+        drafts = Drafts(db, gemini, "m", None, Vault(db, MASTER_B64, True))
+        drafts.run_once()
+        drafts._runner.shutdown(wait=True)
+        db.updates = [u for u in db.updates if "created_at" not in u[1]]  # not the sweep for drafts pending too long
+        return db, gemini
+
+    def test_written_and_replaces_older_drafts_as_expired(self):
+        db, gemini = self.run_draft({"id": "d2", "for_message_id": "m1"})
+        self.assertEqual(len(gemini.prompts), 1)
+        self.assertEqual([p["status"] for t, f, p in db.updates], ["active", "expired"])
+
+    def test_dropped_without_the_model_when_a_newer_message_came(self):
+        db, gemini = self.run_draft({"id": "d2", "for_message_id": "m0"})
+        self.assertEqual(gemini.prompts, [])
+        self.assertEqual([(f["id"], p["status"]) for t, f, p in db.updates], [("eq.d2", "expired")])
+
+    def test_dropped_when_the_message_has_choices(self):
+        db, gemini = self.run_draft({"id": "d2", "for_message_id": "m1"}, '{"options": [{"kind": "accept", "label": "Yes"}]}')
+        self.assertEqual(gemini.prompts, [])
+        self.assertEqual([p["status"] for t, f, p in db.updates], ["expired"])
 
 
 class LearnDb:

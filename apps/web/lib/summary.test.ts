@@ -21,6 +21,7 @@ function thread(id: string, patch: Partial<Thread> = {}): Thread {
     category: "personal",
     summary: "",
     needsReply: false,
+    lastFromMe: false,
     junk: false,
     subscription: false,
     ...patch,
@@ -91,6 +92,19 @@ test("a needs-reply category without the flag is already answered", () => {
   assert.deepEqual(ids(s.reply), []);
 });
 
+test("a conversation you answered last is left out, whatever its priority", () => {
+  const s = summarise(
+    [
+      thread("answered-urgent", { priority: "urgent", lastFromMe: true }),
+      thread("answered-update", { category: "work", summary: "Signed and sent.", lastFromMe: true }),
+      thread("answered-flagged", { needsReply: true, lastFromMe: true }),
+    ],
+    "none",
+    now,
+  );
+  assert.deepEqual([...s.reply, ...s.priority, ...s.updates], []);
+});
+
 test("the filter narrows every section", () => {
   const s = summarise([thread("mail", { needsReply: true }), thread("chat", { needsReply: true, channel: "whatsapp" })], "whatsapp", now);
   assert.deepEqual(ids(s.reply), ["chat"]);
@@ -108,4 +122,5 @@ test("the digest counts what is there and skips what is not", () => {
   );
   assert.equal(digest(s, 1), "2 Need a Reply, 1 Urgent or Important, 1 Event Today");
   assert.equal(digest(summarise([], "none", now), 0), "");
+  assert.equal(digest(summarise([], "none", now), 0, 2), "2 Tasks");
 });

@@ -10,7 +10,7 @@ function Placeholder() {
   return companies ? (
     <EmptyState icon={Building2} title="Pick a Company" description="People who write from the same work domain, with every conversation from them." />
   ) : (
-    <EmptyState icon={Users} title="Pick a Contact" description="Everyone you have emailed or messaged, most recent first." />
+    <EmptyState icon={Users} title="Pick a Contact" description="Everyone you have emailed or messaged. Pick one from the list to see their details." />
   );
 }
 

@@ -10,9 +10,13 @@ export const MAX_ATTACHMENTS = 10;
 export const ATTACHMENT_LIMITS = {
   icloud: { totalBytes: 20 * MB, label: "iCloud Mail", size: "20 MB" },
   gmail: { totalBytes: 25 * MB, label: "Gmail", size: "25 MB" },
+  // Exchange Online takes up to 35 MB with encoding by default, Outlook.com about 20 MB of files.
+  outlook: { totalBytes: 20 * MB, label: "Outlook", size: "20 MB" },
   // WhatsApp takes 100 MB, but files reach the worker through Supabase Storage, whose Free plan uploads
   // at most 50 MB. Raise this with the plan's upload limit.
   whatsapp: { fileBytes: 50 * MB, label: "WhatsApp", size: "50 MB" },
+  // Any other mailbox: each host sets its own limit, and 20 MB of files fits the common ones.
+  imap: { totalBytes: 20 * MB, label: "Your mail server", size: "20 MB" },
 } as const;
 
 export type AttachmentProvider = keyof typeof ATTACHMENT_LIMITS;

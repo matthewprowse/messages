@@ -29,6 +29,7 @@ export async function openPdf(url: string) {
   if (!worker || worker.destroyed) worker = new pdfjs.PDFWorker();
   // Thumbnails and the first page only need the start of the file; the rest loads as pages are viewed.
   // pdf.js only stops prefetching when streaming is off too. Without range support it reads the whole file.
+  // pdf.js 6 removed the isEvalSupported option (it no longer evaluates font code), so there is nothing to turn off.
   return pdfjs.getDocument({ url, worker, disableAutoFetch: true, disableStream: true }).promise;
 }
 

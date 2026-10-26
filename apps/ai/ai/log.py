@@ -22,3 +22,8 @@ def warn(msg: str, **fields: object) -> None:
 
 def error(msg: str, **fields: object) -> None:
     _write("error", msg, **fields)
+
+
+def code_of(err: BaseException) -> object:
+    """An error's code for a log line (a database or HTTP code, else its type name), never its message."""
+    return getattr(err, "code", None) or type(err).__name__
