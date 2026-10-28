@@ -12,6 +12,9 @@ email already triaged in another of your accounts (the same Message-ID) is copie
 the fast model GROUP at a time, per account, with minimal thinking: the instructions and what is
 known about you are sent once for the group, first, so they are the same at the start of every call.
 
+Each email goes with up to CONTEXT_MESSAGES earlier messages of its conversation, both directions, cut short, so
+the model can tell an open question from one already answered (bulk mail gets none).
+
 The same call offers guided drafting's one-tap choices for a message that needs a decision only you
 can make ("Are you free Thursday at 3?"). Messages triaged before that existed get theirs when there
 is nothing new to triage (backfill_choices), only while they still need a reply."""
@@ -44,6 +47,8 @@ BATCH = 24
 GROUP = 8  # emails per model call
 BODY_CHARS = 2500
 BULK_BODY_CHARS = 1200  # bulk mail (a list-unsubscribe header) fills 2500 characters but classifies the same from 800 to 1200
+CONTEXT_MESSAGES = 4  # earlier messages of the conversation shown with the one being judged
+CONTEXT_CHARS = 300  # each of them is cut to this, so a long thread stays cheap
 SUBJECT_CHARS = 300  # a subject is not a second body: a long one is cut before the prompt
 CONTEXT_TTL_S = 60  # what is known about a user (rules, unsubscribes, corrections) is reread this often
 LATEST_ROWS = 1000
@@ -104,7 +109,7 @@ category: personal, work, needs_reply (a person is asking them something), fyi, 
 
 junk: true for mail that is not written for them: marketing, promotions, sales, cold outreach, mass newsletters, generic automated alerts and digests, surveys, spam. False for anything personal, any reply in a conversation they took part in, receipts, bookings, security codes, bills and notices about accounts they hold. Bulk mail (it has an unsubscribe header) is junk unless it clearly matters to them personally.
 
-needs_reply: true only when a person expects an answer from them.
+needs_reply: true when a real person is waiting on them to say or do something: a question, a request, an invitation or a proposal to answer, plans being made that they have not settled, or a follow-up on something they have not answered. It is also true when the message is phrased as a statement but moves plans forward and a friend or colleague would expect a response (for example "turns out there are student tickets" after they agreed to go). Read the earlier messages of the conversation when they are shown: a question they already answered is not open, and a closing thanks or an acknowledgement ends it. When unsure about a person they know, lean towards true, since a missed message costs more than a false flag. False for automated senders, newsletters, receipts and notices, and for a message that only informs with nothing to respond to.
 
 summary: one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email". Write it to them: call them "you" and never use their own name, even when the email addresses them by name (write "Cindy wants to set up an interview with you", not "with Matthew Prowse"). Their name and own addresses are given; when no name is given, the name in an email's greeting or the name matching their address is theirs. An email from one of their own addresses is one they sent (a copy, or to themselves): summarise it as theirs, such as "Your application for the Business Analyst role, copied to your inbox."
 
@@ -118,7 +123,7 @@ asked_time: when the message asks whether they are free at a specific date and t
 
 Use what you are told about them and their past corrections. Mail styled to look personal but sent to a list is still junk.
 
-Judge each email on its own and return one result for every email, with its number.""" + UNTRUSTED
+Judge each email on its own, though an email may show the earlier messages of its conversation (oldest first, "You" is them, "Them" is the other side): use those only as context. Return one result for every email, with its number.""" + UNTRUSTED
 
 
 # Spelling and language for what is written about their mail. Never American by default: they write British.
@@ -265,11 +270,30 @@ def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]], fence: str | N
             f"Bulk mail with an unsubscribe header: {'yes' if e['bulk'] else 'no'}",
             f"Sent: {sent_label(e.get('sent'), ctx.timezone)}",
             f"Subject: {e['subject'] or '(none)'}",
+            *earlier_lines(e.get("earlier") or []),
             "",
             e["body"],
             f"{fence}>>>",
         ]
     return "\n".join(lines)
+
+
+def earlier_lines(earlier: list[dict[str, Any]]) -> list[str]:
+    """The conversation so far as lines for the prompt, oldest first: "You" is the person whose mail it is."""
+    if not earlier:
+        return []
+    return ["", "Earlier in this conversation, oldest first:"] + [f"{'You' if e['from_me'] else 'Them'}: {e['text']}" for e in earlier] + ["", "Newest message:"]
+
+
+def earlier_messages(rows: list[dict[str, Any]], m: dict[str, Any], count: int = CONTEXT_MESSAGES) -> list[dict[str, Any]]:
+    """The up to `count` messages of m's conversation sent before m, oldest first. rows are messages of
+    several conversations, newest first, with thread_id, id, direction and sent_at."""
+    try:
+        before = datetime.fromisoformat(str(m["sent_at"]).replace("Z", "+00:00"))
+        older = [r for r in rows if r["thread_id"] == m["thread_id"] and r["id"] != m["id"] and datetime.fromisoformat(str(r["sent_at"]).replace("Z", "+00:00")) < before]
+    except (KeyError, ValueError, TypeError):
+        return []
+    return older[:count][::-1]
 
 
 def sent_label(sent_at: str | None, tz: str = "") -> str:
@@ -689,9 +713,11 @@ class Triage:
                 "bodies": lambda: self.db.select("messages", {"select": "id,body_text,body_html", "id": in_list([m["id"] for m in ask])}),
                 "contacts": lambda: self.db.select("contacts", {"select": "id,display_name,relationship", "id": in_list(contact_ids)}) if contact_ids else [],
                 "known": lambda: self._known_senders(contact_ids),
+                "earlier": lambda: self._earlier(ask),
             }
         )
         bodies = {b["id"]: b for b in found["bodies"]}
+        earlier = found["earlier"]
         contacts = {c["id"]: c for c in found["contacts"]}
         for m in ask:
             contact = contacts.get(m.get("sender_contact_id") or "") or {}
@@ -708,8 +734,38 @@ class Triage:
                 "subject": (m.get("subject") or "")[:SUBJECT_CHARS],
                 "sent": m.get("sent_at"),
                 "body": clean(body.get("body_text"), body.get("body_html"), limit=BULK_BODY_CHARS if m.get("list_unsubscribe") or m.get("is_bulk") else BODY_CHARS),
+                "earlier": [
+                    {"from_me": r["direction"] == "outbound", "text": r["text"]}
+                    for r in earlier_messages(earlier, m)
+                    if r["text"]
+                ],
             }
         return groups(ask)
+
+    def _earlier(self, ask: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Recent messages of the conversations being judged, newest first, each with its text opened and
+        cut to CONTEXT_CHARS. Bulk mail gets none: a newsletter is judged on its own. One read for the group."""
+        threads = sorted({m["thread_id"] for m in ask if not (m.get("list_unsubscribe") or m.get("is_bulk"))})
+        if not threads:
+            return []
+        rows = self.db.select(
+            "messages",
+            {
+                "select": "id,user_id,thread_id,direction,sent_at,transcript,body_text,body_html",
+                "thread_id": in_list(threads),
+                "sent_at": f"lte.{max(m['sent_at'] for m in ask)}",
+                "order": "sent_at.desc,id.desc",
+                "limit": str((CONTEXT_MESSAGES + 2) * len(threads)),
+            },
+        )
+        users = {m["thread_id"]: m["user_id"] for m in ask}
+        for r in rows:
+            user_id = users[r["thread_id"]]
+            opened = self.vault.open_row(user_id, r, [("body_text", BODY), ("body_html", HTML)])
+            said = self.vault.open(user_id, TRANSCRIPT, r.get("transcript"))
+            text = f"Voice note: {said}" if said else clean((opened or r).get("body_text"), (opened or r).get("body_html"), limit=CONTEXT_CHARS)
+            r["text"] = " ".join(text.split())[:CONTEXT_CHARS]
+        return rows
 
     def _known_senders(self, contact_ids: list[str]) -> set[str]:
         """The contacts they have written to before, a strong sign the mail is personal: contacts in a

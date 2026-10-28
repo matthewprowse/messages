@@ -2253,6 +2253,11 @@ Decisions made while building the screens, so later work follows them:
   and pictures. The file downloads and is saved in the note.
 - **Profile Photo.** A photo in Settings, General is used for "You" (`profiles.avatar_path`, stored at `<user id>/me`).
 - **Seen on Instagram and LinkedIn.** Their conversations show "Seen" under your last seen message; WhatsApp keeps its ticks.
+- **Needs Reply sees the conversation (28 October 2026).** Triage judged only the newest incoming message with a one line
+  definition, so "turns out there are student tickets" in a plan you had agreed missed Needs Reply. The model now also gets
+  the last 4 earlier messages of the conversation (both directions, 300 characters each, none for bulk mail), and
+  `needs_reply` covers questions, requests, proposals, plans not yet settled and statements that move plans forward, leaning
+  true for people you know. Messages already triaged keep their old answer until they are triaged again.
 - **Updates page (owner only for now).** `public.updates` is the changelog. Record each release as a draft before pushing; mark it
   Published when it is ready to show. Making it public later is one extra read policy.
 

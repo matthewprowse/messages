@@ -23,7 +23,7 @@ from ai.pricing import cost_usd
 from ai.signals import TONE_RULES, plan_signals, tone_counts
 from ai.text import clean
 from ai.triage import SYSTEM as TRIAGE_SYSTEM
-from ai.triage import Triage, UserContext, apply_signals, groups, known_outcome, latest_incoming, matches, pending_query, read_results, sender_outcome, triage_prompt
+from ai.triage import Triage, UserContext, apply_signals, earlier_messages, groups, known_outcome, latest_incoming, matches, pending_query, read_results, sender_outcome, triage_prompt
 from ai.retry import MAX_WAIT_S, Backoff, not_in
 from ai.voice import PROMPT_CHARS, build_prompt, plan_voice, tidy_rule, voice_due
 
@@ -455,6 +455,32 @@ class TriageDecisions(unittest.TestCase):
         self.assertEqual(p1.count(f"{fence1[0]}>>>"), 2)
         self.assertNotEqual(fence1[0], re.findall(r"^<<<(UNTRUSTED-[0-9a-f]{16})$", p2, re.M)[0])
 
+    def test_prompt_shows_the_conversation_so_far_before_the_newest_message(self):
+        email = {"name": "Mike", "sender": "m@x.com", "relationship": "", "known": True, "bulk": False, "subject": "Cricket", "body": "They have student tickets",
+                 "earlier": [{"from_me": False, "text": "Keen to watch the cricket?"}, {"from_me": True, "text": "Ya, only Friday"}]}
+        p = triage_prompt(UserContext(), [email], "UNTRUSTED-x")
+        self.assertIn("Earlier in this conversation, oldest first:\nThem: Keen to watch the cricket?\nYou: Ya, only Friday\n\nNewest message:\n\nThey have student tickets", p)
+        self.assertNotIn("Earlier in this conversation", triage_prompt(UserContext(), [{**email, "earlier": []}], "UNTRUSTED-x"))
+        self.assertNotIn("Earlier in this conversation", triage_prompt(UserContext(), [{k: v for k, v in email.items() if k != "earlier"}], "UNTRUSTED-x"))
+
+    def test_earlier_messages_are_this_conversations_older_ones_oldest_first(self):
+        rows = [
+            {"id": "m5", "thread_id": "t1", "direction": "inbound", "sent_at": "2026-10-28T13:44:00+00:00"},
+            {"id": "x1", "thread_id": "t2", "direction": "inbound", "sent_at": "2026-10-28T13:00:00+00:00"},
+            {"id": "m4", "thread_id": "t1", "direction": "outbound", "sent_at": "2026-10-27T16:55:00+00:00"},
+            {"id": "m3", "thread_id": "t1", "direction": "inbound", "sent_at": "2026-10-27T13:00:00+00:00"},
+            {"id": "m2", "thread_id": "t1", "direction": "inbound", "sent_at": "2026-10-26T13:00:00+00:00"},
+        ]
+        m = {"id": "m5", "thread_id": "t1", "sent_at": "2026-10-28T13:44:00Z"}
+        self.assertEqual([r["id"] for r in earlier_messages(rows, m)], ["m2", "m3", "m4"])
+        self.assertEqual([r["id"] for r in earlier_messages(rows, m, 2)], ["m3", "m4"])
+        self.assertEqual(earlier_messages(rows, {"id": "m5", "thread_id": "t1", "sent_at": "not a date"}), [])
+
+    def test_system_prompt_defines_needs_reply_and_uses_the_conversation(self):
+        self.assertIn("a question, a request, an invitation or a proposal to answer", TRIAGE_SYSTEM)
+        self.assertIn("lean towards true", TRIAGE_SYSTEM)
+        self.assertIn("earlier messages of the conversation", TRIAGE_SYSTEM)
+
     def test_results_by_number(self):
         got = read_results(
             {"results": [
@@ -551,6 +577,24 @@ class TriageRun(unittest.TestCase):
         self.assertEqual((table, by_id["m1"]["model"], by_id["m2"]["model"]), ("message_ai", None, "fast"))
         self.assertEqual(sorted(db.thread_updates), ["t1", "t2"])
         self.assertTrue(db.thread_updates["t1"]["needs_reply"])
+
+    def test_the_model_is_shown_the_conversation_so_far(self):
+        class WithHistory(FakeTriageDb):
+            def select(self, table, params):
+                if table == "messages" and params.get("select", "").startswith("id,user_id,thread_id,direction"):
+                    return [
+                        {"id": "m2", "user_id": "u", "thread_id": "t1", "direction": "inbound", "sent_at": "2026-10-20T10:00:00+00:00", "body_text": "Student tickets exist", "body_html": None, "transcript": None},
+                        {"id": "m1", "user_id": "u", "thread_id": "t1", "direction": "outbound", "sent_at": "2026-10-19T10:00:00+00:00", "body_text": "Only Friday for me", "body_html": None, "transcript": None},
+                    ]
+                return super().select(table, params)
+
+        pending = [self.msg("m2", "t1")]
+        rows = [{"id": "m2", "thread_id": "t1", "direction": "inbound"}, {"id": "m1", "thread_id": "t1", "direction": "outbound"}]
+        gemini = FakeTriageGemini()
+        Triage(WithHistory(pending, rows), gemini, "fast").run_once()
+        prompt = gemini.calls[0][0]
+        self.assertIn("You: Only Friday for me\n\nNewest message:", prompt)
+        self.assertNotIn("Them: Student tickets exist", prompt)  # the newest message is the email itself, not history
 
     def test_labels_keep_their_prompt_and_traits_and_leave_events_without_text(self):
         pending = [self.msg("m2", "t1", list_unsubscribe="<mailto:x>"), self.msg("m1", "t1")]
