@@ -234,6 +234,27 @@ class Lazy(unittest.TestCase):
         self.assertEqual(back[0][0]["status"], "eq.speak_pending")
 
 
+class Sweeping(unittest.TestCase):
+    def test_the_sweep_runs_every_few_minutes_not_on_every_look(self):
+        from ai import brief as brief_module
+
+        db = FakeDb(status="written", script="Good morning.")
+        b = Brief(db, FakeGemini(), "m", "tts", "Kore")
+        with mock.patch.object(brief_module.time, "monotonic", return_value=1000.0):
+            b.run_once()
+            first = len(db.updates)
+            b.run_once()
+            self.assertEqual(len(db.updates), first)  # no sweep the second time
+        with mock.patch.object(brief_module.time, "monotonic", return_value=1000.0 + brief_module.SWEEP_EVERY_S + 1):
+            b.run_once()
+            self.assertGreater(len(db.updates), first)
+
+    def test_audio_is_kept_two_days(self):
+        from ai.brief import KEEP_DAYS
+
+        self.assertEqual(KEEP_DAYS, 2)
+
+
 class Storage(unittest.TestCase):
     def test_path_is_user_brief_and_sequence(self):
         self.assertEqual(audio_path("u1", "b1", 3), "u1/b1/3.wav")

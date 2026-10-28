@@ -27,8 +27,10 @@ export function nextPollDelay(now: number, lastActivity: number, plan: PollPlan)
 }
 
 /**
- * When the worker last saw activity: new mail, or work queued in the app (a reply, a mail action),
- * which means someone is using Konva right now. Shared by every connector.
+ * When the worker last saw work queued in the app (a reply, a mail action, a calendar change), which means
+ * someone is using Konva right now. Only the queue safety-net poll in index.ts follows it; the mail and chat
+ * connectors follow their own account's activity (AccountActivity below), so one busy mailbox never keeps
+ * every other account on fast polling.
  */
 class Activity {
   private last = Date.now();
@@ -47,7 +49,48 @@ class Activity {
 export const activity = new Activity();
 export const markActivity = () => activity.mark();
 
-/** Gmail has no push without Google Cloud Pub/Sub, so it is checked on a timer that backs off when quiet. */
+/**
+ * When each account last had something happen: mail or chats changed at the provider, or the app sent a
+ * reply or applied an action for it. A connector reads its own account's quiet time to pick its next delay,
+ * and is woken early when the app queues work for it. A new connector counts as active, so a fresh or
+ * restarted account is checked quickly at first.
+ */
+export class AccountActivity {
+  private readonly last = new Map<string, number>();
+  private readonly listeners = new Map<string, Set<() => void>>();
+  mark(accountId: string, now = Date.now()) {
+    this.last.set(accountId, now);
+    for (const fn of this.listeners.get(accountId) ?? []) fn();
+  }
+  since(accountId: string, now = Date.now()): number {
+    return this.last.get(accountId) ?? now;
+  }
+  /** How long to wait before this account's next check under `plan`. */
+  delay(accountId: string, plan: PollPlan, now = Date.now()): number {
+    return nextPollDelay(now, this.since(accountId, now), plan);
+  }
+  /** Calls `fn` on every mark for this account. Returns the way to stop. */
+  onMark(accountId: string, fn: () => void): () => void {
+    const set = this.listeners.get(accountId) ?? new Set();
+    set.add(fn);
+    this.listeners.set(accountId, set);
+    return () => {
+      set.delete(fn);
+      if (set.size === 0 && this.listeners.get(accountId) === set) this.listeners.delete(accountId);
+    };
+  }
+  /** Drops an account that stopped, so the maps do not grow with every account ever connected. */
+  forget(accountId: string) {
+    this.last.delete(accountId);
+  }
+}
+export const accountActivity = new AccountActivity();
+
+/**
+ * Gmail has no push without Google Cloud Pub/Sub, so it is checked on a timer that backs off when quiet:
+ * every 5 s for 10 minutes after something happens in that mailbox (or the app acts on it), then every
+ * 30 s, then every 60 s once it has been quiet for an hour.
+ */
 export const GMAIL_POLL: PollPlan = {
   activeMs: ms("GMAIL_POLL_ACTIVE_MS", 5_000),
   idleMs: ms("GMAIL_POLL_IDLE_MS", 30_000),
@@ -56,11 +99,36 @@ export const GMAIL_POLL: PollPlan = {
   deepIdleAfterMs: ms("POLL_DEEP_IDLE_AFTER_MS", 60 * 60_000),
 };
 
-/** The queue safety-net poll. Realtime delivers queued work at once, so this only catches a missed event. */
+/** Outlook's Inbox delta check: the same shape as Gmail's, on its own account's activity. */
+export const OUTLOOK_POLL: PollPlan = { ...GMAIL_POLL };
+
+/** Outlook's other folders (Sent, Archive, Junk, Deleted): read far less often than the Inbox once quiet. */
+export const OUTLOOK_SIDE_POLL: PollPlan = {
+  activeMs: ms("OUTLOOK_SIDE_ACTIVE_MS", 20_000),
+  idleMs: ms("OUTLOOK_SIDE_IDLE_MS", 2 * 60_000),
+  deepIdleMs: ms("OUTLOOK_SIDE_DEEP_IDLE_MS", 5 * 60_000),
+  activeWindowMs: GMAIL_POLL.activeWindowMs,
+  deepIdleAfterMs: GMAIL_POLL.deepIdleAfterMs,
+};
+
+/** Teams has no push here, so the chat list is polled: 15 s while chats are moving, then 30 s, then 60 s. */
+export const TEAMS_POLL: PollPlan = {
+  activeMs: ms("TEAMS_POLL_ACTIVE_MS", 15_000),
+  idleMs: ms("TEAMS_POLL_IDLE_MS", 30_000),
+  deepIdleMs: ms("TEAMS_POLL_DEEP_IDLE_MS", 60_000),
+  activeWindowMs: GMAIL_POLL.activeWindowMs,
+  deepIdleAfterMs: GMAIL_POLL.deepIdleAfterMs,
+};
+
+/**
+ * The queue safety-net poll. Realtime delivers queued work at once, and index.ts reads the queues once
+ * more every time the channel (re)subscribes, which is the real gap; this only catches an event that was
+ * missed some other way. Every 60 s while the app was used in the last 10 minutes, every 5 minutes otherwise.
+ */
 export const QUEUE_POLL: PollPlan = {
-  activeMs: ms("QUEUE_POLL_ACTIVE_MS", 15_000),
-  idleMs: ms("QUEUE_POLL_IDLE_MS", 60_000),
-  deepIdleMs: ms("QUEUE_POLL_DEEP_IDLE_MS", 120_000),
+  activeMs: ms("QUEUE_POLL_ACTIVE_MS", 60_000),
+  idleMs: ms("QUEUE_POLL_IDLE_MS", 5 * 60_000),
+  deepIdleMs: ms("QUEUE_POLL_DEEP_IDLE_MS", 5 * 60_000),
   activeWindowMs: GMAIL_POLL.activeWindowMs,
   deepIdleAfterMs: GMAIL_POLL.deepIdleAfterMs,
 };

@@ -82,6 +82,11 @@ export const sameContact = (a: Contact, b: Contact) =>
   a.organization?.logoPath === b.organization?.logoPath &&
   a.emails.join() === b.emails.join() && a.phones.join() === b.phones.join();
 
+/** Loaded data as state: its contactsLoaded flag is for the store, not part of what is kept. */
+function withoutFlag({ contactsLoaded: _flag, ...rest }: Loaded): Omit<Loaded, "contactsLoaded"> {
+  return rest;
+}
+
 /** The list with these contacts added or updated. The same array when nothing changed, so lookups built on it stay stable. */
 export function withContacts(list: Contact[], incoming: Contact[]): Contact[] {
   if (list.length === 0) return incoming;
@@ -115,7 +120,7 @@ export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case "loaded":
       // Contacts are merged, as a resync after a reconnect brings only the people in the listed threads.
-      return { ...s, ...a.data, contacts: withContacts(s.contacts, a.data.contacts), loading: false };
+      return { ...s, ...withoutFlag(a.data), contacts: withContacts(s.contacts, a.data.contacts), loading: false };
     case "clear":
       return { ...initial, loading: false };
     case "upsertThread": {

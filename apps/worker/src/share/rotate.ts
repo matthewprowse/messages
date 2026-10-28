@@ -25,8 +25,8 @@ import { AI_TEXT, MESSAGE_TEXT, THREAD_TEXT, type RowWrite } from "./reseal";
 //  2. When. A removal makes a new version due: team_key_rotation_due(workspace) is true while somebody has been
 //     removed since the current version was made (workspace_members.left_at against team_keys.created_at, derived,
 //     so remove_member needs no change and nothing can forget it). The next version is made the first time anything
-//     asks for the workspace's keys after that: /api/keys, a worker sealing a shared chat, or the 30 second check
-//     below. A removed member is no longer active, so /api/keys gives them nothing from that moment, and what is
+//     asks for the workspace's keys after that: /api/keys, a worker sealing a shared chat, or the check
+//     below (every 5 minutes, and at once when a member is removed). A removed member is no longer active, so /api/keys gives them nothing from that moment, and what is
 //     sealed from the new version on (workers see it within 30 seconds, the cache time) is unreadable to their copy.
 //  3. Re-sealing. This job opens every "t1:" value of the workspace (shared chats, their messages and AI notes, the
 //     client list) with the version that sealed it and seals it again with the current one, a page at a time, each
@@ -58,7 +58,8 @@ const PAGE = 100;
 /** Files are big, so fewer at a time. */
 const FILE_PAGE = 20;
 const MAX_PASSES = 4;
-const POLL_MS = 30_000;
+/** The safety poll. A removal also runs a pass at once (a Realtime event on workspace_members), and one runs at startup. */
+const POLL_MS = 5 * 60_000;
 /** Longer than the workers' team key cache (TEAM_RECHECK_MS in vault.ts). */
 export const RETIRE_AFTER_MS = 90_000;
 
@@ -401,15 +402,18 @@ async function ring(workspaceId: string): Promise<Ring> {
 }
 
 /**
- * Starts the background check: every 30 seconds it makes the next key version for any workspace a removal is waiting
+ * Starts the background check: at startup, every 5 minutes (it was 30 seconds: 2 queries each, now 0.4 a minute) and
+ * at once when a workspace member row changes (a removal), it makes the next key version for any workspace a removal is waiting
  * on, then re-seals and retires. Work for one workspace at a time; a failure is logged as a code and tried again.
  */
 export function startTeamKeyRotation() {
   const firstSeen = new Map<string, number>();
   let running = false;
+  let again = false;
   let missingUntil = 0;
   const pass = async () => {
-    if (running || Date.now() < missingUntil) return;
+    if (running) { again = true; return; }
+    if (Date.now() < missingUntil) return;
     running = true;
     try {
       // Workspaces with a removal: make their next version now rather than waiting for something to ask for the keys.
@@ -440,7 +444,14 @@ export function startTeamKeyRotation() {
     } finally {
       running = false;
     }
+    // A removal arrived while this pass ran: it may have missed it.
+    if (again) { again = false; void pass(); }
   };
+  db.channel("team-key-rotation")
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "workspace_members" }, (payload) => {
+      if ((payload.new as { status?: string } | null)?.status === "removed") void pass();
+    })
+    .subscribe();
   void pass();
   setInterval(() => void pass(), POLL_MS);
 }

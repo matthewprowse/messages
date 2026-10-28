@@ -1,4 +1,4 @@
-// Every two minutes, and once a minute after startup, ties the meetings the Teams, Zoom and Google Meet
+// Every five minutes (it was two: 1 query a minute when idle, now 0.4), and once a minute after startup, ties the meetings the Teams, Zoom and Google Meet
 // connectors store to the rest of the app. Those connectors only write meetings and meeting_participants;
 // this finds, for meetings from the last LOOKBACK_DAYS:
 //   - each participant's contact, by their email address's blind index, as calendar guests are found;
@@ -17,7 +17,7 @@ import { keysFor, open } from "../vault";
 import { eventEmails, LINK_WINDOW_MS, matchEvent, participantEmail } from "./match";
 
 const FIRST_RUN_MS = 60_000;
-const EVERY_MS = 2 * 60_000;
+const EVERY_MS = 5 * 60_000;
 const LOOKBACK_DAYS = 90;
 const RETRY_MS = 30 * 60_000;
 const MAX_ROWS = 5000; // per kind per run, a safety stop: the rest wait for the next run

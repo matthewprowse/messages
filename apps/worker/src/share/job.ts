@@ -1,6 +1,6 @@
 // Works the share jobs queued when a chat is marked as work or moved back, and the follow-ups queued when new
 // content arrives in a shared chat (20261101120000_shared_chats.sql). A new job arrives through Realtime at once,
-// with a poll as a safety net, and also picks up jobs that failed and are due again or were left working by a crash.
+// with a poll every minute as a safety net (it was every 15 seconds: 4 queries a minute, now 1), and also picks up jobs that failed and are due again or were left working by a crash.
 
 import { db, must } from "../db";
 import { errorCode, log } from "../log";
@@ -9,7 +9,7 @@ import { runShareJob, type ShareJob } from "./process";
 import { keys, supabaseFiles, supabaseStore } from "./store";
 import { clientStore } from "./team-store";
 
-const POLL_MS = 15_000;
+const POLL_MS = 60_000;
 /** How long to leave the queue alone when its function is missing, because the migration has not been applied yet. */
 const MISSING_WAIT_MS = 10 * 60_000;
 

@@ -2,7 +2,8 @@
 // permissions added (pnpm connect:microsoft asks). Your one-to-one, group and meeting chats are stored as
 // conversations like WhatsApp chats, with people matched by their work address like email. Graph's change
 // notifications need a public web address, so chats are polled: the chat list, newest message first, says
-// which chats changed since the last check, and only those are read. A reply queued in the app is posted to
+// which chats changed since the last check, and only those are read. The check runs every 15 s while chats are
+// moving, backing off to 30 s then 60 s when quiet (polling.ts). A reply queued in the app is posted to
 // its chat. Nothing is marked read in Teams unless you open the chat in the app.
 //
 // Meetings: your Outlook Calendar's Teams meetings are found by their join links. Once one ends its
@@ -15,6 +16,7 @@ import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, chatIndex, domainIndex } from "@messages/crypto/addresses";
 import { companyDomain, companyNameForDomain } from "@messages/email-text/company";
 import { Backoff, SerialQueue, Sleeper } from "../backoff";
+import { accountActivity, TEAMS_POLL } from "../polling";
 import { db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -51,7 +53,6 @@ import {
 import { gaveUp, joinUrlFilter, newSpeakers, teamsMeetings, transcriptCheckDue, transcriptsFor, type CallTranscript, type MeetingEvent, type MeetingPerson } from "../teams/meetings";
 import { joinTranscripts, parseVtt } from "../teams/vtt";
 
-const POLL_MS = 15_000;
 const MAX_FAILED_CHECKS = 8; // about two minutes of checks failing in a row
 const CHATS_PAGE = 50; // the most Graph gives per page of chats or messages
 const FIRST_SYNC_MESSAGES = 200; // per chat: the newest ones in the import window
@@ -122,6 +123,7 @@ export class TeamsConnector {
   async stop() {
     this.stopped = true;
     this.sleeper.interrupt();
+    accountActivity.forget(this.id);
   }
 
   private async run() {
@@ -175,26 +177,33 @@ export class TeamsConnector {
     let lastTouch = Date.now();
     let lastMeetings = 0;
     let failures = 0;
-    while (!this.stopped) {
-      if (this.withMeetings && Date.now() - lastMeetings >= MEETINGS_EVERY_MS) {
-        lastMeetings = Date.now();
-        this.meetingsInBackground();
+    accountActivity.mark(this.id); // a new session starts with quick checks
+    const wakeOnActivity = accountActivity.onMark(this.id, () => this.sleeper.interrupt());
+    try {
+      while (!this.stopped) {
+        if (this.withMeetings && Date.now() - lastMeetings >= MEETINGS_EVERY_MS) {
+          lastMeetings = Date.now();
+          this.meetingsInBackground();
+        }
+        // 15 s while chats are moving, backing off to 30 s then 60 s when quiet (polling.ts); a failed check retries at 15 s.
+        await this.sleeper.wait(failures > 0 ? TEAMS_POLL.activeMs : accountActivity.delay(this.id, TEAMS_POLL));
+        if (this.stopped) break;
+        // One failed check (throttling past its retries, a database hiccup) is retried at the next one. A
+        // revoked sign-in or Teams refused ends the session at once, and a run of failures ends it too.
+        try {
+          await this.queue.run(() => this.check());
+          failures = 0;
+        } catch (err) {
+          if (signInRevoked(err) || teamsAccessProblem(err, true) || ++failures >= MAX_FAILED_CHECKS) throw err;
+          log.warn("teams check failed", { account: this.id, code: errorCode(err), failures });
+        }
+        if (Date.now() - lastTouch > TOUCH_MS) {
+          lastTouch = Date.now();
+          await touchAccount(this.id);
+        }
       }
-      await this.sleeper.wait(POLL_MS);
-      if (this.stopped) break;
-      // One failed check (throttling past its retries, a database hiccup) is retried at the next one. A
-      // revoked sign-in or Teams refused ends the session at once, and a run of failures ends it too.
-      try {
-        await this.queue.run(() => this.check());
-        failures = 0;
-      } catch (err) {
-        if (signInRevoked(err) || teamsAccessProblem(err, true) || ++failures >= MAX_FAILED_CHECKS) throw err;
-        log.warn("teams check failed", { account: this.id, code: errorCode(err), failures });
-      }
-      if (Date.now() - lastTouch > TOUCH_MS) {
-        lastTouch = Date.now();
-        await touchAccount(this.id);
-      }
+    } finally {
+      wakeOnActivity();
     }
   }
 
@@ -244,6 +253,7 @@ export class TeamsConnector {
     await this.saveCursor(newest);
     // Chats read in Teams are read here too. Only the most recent page: an older chat read in Teams is rare.
     for (const chat of listed ?? []) await this.applyReadPoint(chat);
+    if (changed.length > 0) accountActivity.mark(this.id); // chats moved: keep checking quickly for a while
     if (inserted > 0 || history) log.info("teams chats synced", { account: this.id, chats: changed.length, inserted, first: history });
   }
 
@@ -411,6 +421,7 @@ export class TeamsConnector {
    * Claimed first, so it can never go out twice. New chats and files are not supported yet.
    */
   async send(queuedRow: OutboxRow) {
+    accountActivity.mark(this.id); // the app is in use: check chats quickly for a while
     if (!this.ready) return; // still connecting: the next poll retries it
     const row = await claimReady(queuedRow);
     if (!row) return;
@@ -473,6 +484,7 @@ export class TeamsConnector {
    * the rest are app-only here, and reactions cannot be sent to Teams yet.
    */
   async applyAction(row: Tables<"mail_actions">) {
+    accountActivity.mark(this.id); // the app is in use: check chats quickly for a while
     if (!this.ready) return; // still connecting: the next poll retries it
     try {
       if (row.action === "react") {

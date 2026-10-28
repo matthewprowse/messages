@@ -18,7 +18,7 @@ const ACTION_BUTTON =
   "ml-auto! h-8! rounded-lg! px-2.5! text-sm! font-medium! bg-secondary! text-secondary-foreground! hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]! focus-visible:ring-3! focus-visible:ring-ring/50!";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-geist", display: "swap" });
-const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", display: "swap" });
+const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", display: "swap", preload: false });
 
 export const metadata: Metadata = {
   title: { default: "Konva", template: "%s · Konva" },
@@ -40,7 +40,7 @@ export const viewport: Viewport = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  // The per-request nonce from middleware.ts: next-themes' inline script needs it, and reading it renders pages per request.
+  // The per-request nonce from middleware.ts: next-themes' inline script needs it, and reading it renders pages per request. Soft navigations skip the middleware, so it can be missing there; the layout does not re-render then.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>

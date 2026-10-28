@@ -6,7 +6,7 @@ therefore runs here, over the user's own vectors opened in memory: cosine simila
 product because every vector is normalised (gemini.normalise). Only the most recent MAX_VECTORS embedded
 messages are searched, which is the mail drafts are written from anyway.
 
-A user's vectors are cached for CACHE_S (a few minutes) so a burst of drafts reads them once, and at most
+A user's vectors are cached for CACHE_S (45 minutes, or until a new embedding is saved for them: forget) so drafts read them once, and at most
 MAX_USERS users are cached at a time. They are never logged or written anywhere. Once the nearest messages
 are known, public.reply_pairs (a plain lookup, no vector) returns each one with the reply the user sent."""
 
@@ -25,9 +25,12 @@ from . import log
 from .crypto import UserKeys, decrypt_bytes, encrypt_bytes
 from .fields import EMBEDDING_DATA
 
-MAX_VECTORS = 3000  # the newest embedded replied-to messages searched per user
-CACHE_S = 300
-MAX_USERS = 16  # users whose vectors are held at once; the least recently used goes first
+# Memory: a vector is 768 float32 = about 3 KB, so the worst case is MAX_USERS x MAX_VECTORS x 3 KB =
+# 32 x 2000 x 3 KB = about 192 MB. Each miss re-reads and opens up to MAX_VECTORS sealed embeddings (about 9 MB),
+# which is why an entry lives long (CACHE_S) and is dropped when its user gets a new embedding (forget).
+MAX_VECTORS = 2000  # the newest embedded replied-to messages searched per user
+CACHE_S = 45 * 60
+MAX_USERS = 32  # users whose vectors are held at once; the least recently used goes first
 PAGE = 1000  # PostgREST returns at most this many rows a request
 CANDIDATE_FACTOR = 4  # nearest messages looked up for replies, per reply wanted: some have none
 MAX_LIMIT = 50

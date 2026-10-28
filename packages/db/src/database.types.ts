@@ -308,6 +308,38 @@ export type Database = {
           },
         ]
       }
+      attachment_fetch_requests: {
+        Row: {
+          attachment_id: string
+          claimed_at: string | null
+          created_at: string
+          error: string | null
+          user_id: string
+        }
+        Insert: {
+          attachment_id: string
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          user_id: string
+        }
+        Update: {
+          attachment_id?: string
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attachment_fetch_requests_attachment_id_fkey"
+            columns: ["attachment_id"]
+            isOneToOne: true
+            referencedRelation: "attachments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       attachments: {
         Row: {
           content_hash: string | null
@@ -329,6 +361,7 @@ export type Database = {
           storage_path: string | null
           team_key_version: number | null
           team_path: string | null
+          thumb_path: string | null
           user_id: string
           workspace_id: string | null
         }
@@ -352,6 +385,7 @@ export type Database = {
           storage_path?: string | null
           team_key_version?: number | null
           team_path?: string | null
+          thumb_path?: string | null
           user_id: string
           workspace_id?: string | null
         }
@@ -375,6 +409,7 @@ export type Database = {
           storage_path?: string | null
           team_key_version?: number | null
           team_path?: string | null
+          thumb_path?: string | null
           user_id?: string
           workspace_id?: string | null
         }
@@ -805,6 +840,7 @@ export type Database = {
           path: string | null
           pick: number | null
           rejected: Json
+          review_cleared_at: string | null
           round: number
           search_urls: string[]
           sheet_path: string | null
@@ -828,6 +864,7 @@ export type Database = {
           path?: string | null
           pick?: number | null
           rejected?: Json
+          review_cleared_at?: string | null
           round?: number
           search_urls?: string[]
           sheet_path?: string | null
@@ -851,6 +888,7 @@ export type Database = {
           path?: string | null
           pick?: number | null
           rejected?: Json
+          review_cleared_at?: string | null
           round?: number
           search_urls?: string[]
           sheet_path?: string | null
@@ -1459,6 +1497,7 @@ export type Database = {
       mail_actions: {
         Row: {
           action: string
+          claimed_at: string | null
           created_at: string
           done_at: string | null
           emoji: string | null
@@ -1471,6 +1510,7 @@ export type Database = {
         }
         Insert: {
           action: string
+          claimed_at?: string | null
           created_at?: string
           done_at?: string | null
           emoji?: string | null
@@ -1483,6 +1523,7 @@ export type Database = {
         }
         Update: {
           action?: string
+          claimed_at?: string | null
           created_at?: string
           done_at?: string | null
           emoji?: string | null
@@ -1699,21 +1740,21 @@ export type Database = {
       message_embeddings: {
         Row: {
           created_at: string
-          embedding: string | null
+          embedding_data: string | null
           message_id: string
           sent_at: string
           user_id: string
         }
         Insert: {
           created_at?: string
-          embedding?: string | null
+          embedding_data?: string | null
           message_id: string
           sent_at: string
           user_id: string
         }
         Update: {
           created_at?: string
-          embedding?: string | null
+          embedding_data?: string | null
           message_id?: string
           sent_at?: string
           user_id?: string
@@ -1733,6 +1774,7 @@ export type Database = {
           account_id: string
           body_html: string | null
           body_marks: string | null
+          body_shrunk_at: string | null
           body_text: string | null
           created_at: string
           direction: string
@@ -1766,6 +1808,7 @@ export type Database = {
           account_id: string
           body_html?: string | null
           body_marks?: string | null
+          body_shrunk_at?: string | null
           body_text?: string | null
           created_at?: string
           direction: string
@@ -1799,6 +1842,7 @@ export type Database = {
           account_id?: string
           body_html?: string | null
           body_marks?: string | null
+          body_shrunk_at?: string | null
           body_text?: string | null
           created_at?: string
           direction?: string
@@ -2973,6 +3017,24 @@ export type Database = {
         }
         Relationships: []
       }
+      worker_leases: {
+        Row: {
+          expires_at: string
+          holder: string
+          name: string
+        }
+        Insert: {
+          expires_at: string
+          holder: string
+          name: string
+        }
+        Update: {
+          expires_at?: string
+          holder?: string
+          name?: string
+        }
+        Relationships: []
+      }
       workspace_activity: {
         Row: {
           chats_moved_back: number
@@ -4093,26 +4155,6 @@ export type Database = {
       set_address_indexes: {
         Args: { p_rows: Json; p_table: string }
         Returns: number
-      }
-      similar_replies: {
-        Args: {
-          p_embedding: string
-          p_exclude_thread?: string
-          p_limit: number
-          p_user: string
-        }
-        Returns: {
-          contact_id: string
-          inbound_message_id: string
-          inbound_sent_at: string
-          inbound_subject: string
-          inbound_text: string
-          reply_message_id: string
-          reply_sent_at: string
-          reply_text: string
-          similarity: number
-          thread_id: string
-        }[]
       }
       split_contact: {
         Args: {

@@ -1,5 +1,8 @@
 // The rules for which files are copied into Konva's storage (docs/PLAN.md, Fair Usage and Storage):
 //   * a video over 25 MB is not copied; the original stays at the provider (not_kept = 'video_link')
+//   * an email attachment over 5 MB, or on a message older than 30 days, is not copied up front (not_kept = 'deferred');
+//     it is fetched from the provider the first time its owner opens it (ingest/fetch-requests.ts). Chat media
+//     (WhatsApp and the like) is always copied up front, since the chat server drops it after a while
 //   * each seat keeps 20 GB. At 100% new files stop being saved (not_kept = 'over_cap') and the original stays
 //     where it is; a message that already has a saved file may finish up to 110%, so a thread never fails midway
 //   * a team pools its seats' storage (seats x 20 GB, from public.team_storage_for)
@@ -12,6 +15,10 @@ const GB = 1024 * MB;
 
 /** Videos over this are kept as a link to the original. VIDEO_COPY_MAX_MB overrides it. */
 export const VIDEO_COPY_MAX_BYTES = (Number(process.env.VIDEO_COPY_MAX_MB) || 25) * MB;
+/** An email attachment up to this size is copied when the mail arrives. EAGER_COPY_MAX_MB overrides it. */
+export const EAGER_COPY_MAX_BYTES = (Number(process.env.EAGER_COPY_MAX_MB) || 5) * MB;
+/** An email attachment on a message younger than this many days is copied when the mail arrives. EAGER_COPY_MAX_DAYS overrides it. */
+export const EAGER_COPY_MAX_DAYS = Number(process.env.EAGER_COPY_MAX_DAYS) || 30;
 /** The storage each seat includes. STORAGE_CAP_GB overrides it. */
 export const SEAT_CAP_BYTES = (Number(process.env.STORAGE_CAP_GB) || 20) * GB;
 /** How far past the cap a message that has already started saving may go. */
@@ -20,7 +27,18 @@ export const GRACE = 0.1;
 const USAGE_TTL_MS = 60_000;
 
 /** Why a file was not copied: stored in attachments.not_kept and shown as "Not Kept Here". */
-export type NotKept = "video_link" | "over_cap";
+export type NotKept = "video_link" | "over_cap" | "deferred" | "unavailable";
+
+/**
+ * Whether an email attachment is left at the provider until its owner opens it: it is over the eager size, or its
+ * message is older than the eager age. A message with no known date counts as new, so the file is copied as before.
+ * Chat media and stickers never come through here.
+ */
+export function isDeferred(sizeBytes: number | null | undefined, sentAt: Date | string | null | undefined, now = Date.now()): boolean {
+  if ((sizeBytes ?? 0) > EAGER_COPY_MAX_BYTES) return true;
+  const sent = sentAt ? new Date(sentAt).getTime() : NaN;
+  return Number.isFinite(sent) && now - sent >= EAGER_COPY_MAX_DAYS * 24 * 60 * 60 * 1000;
+}
 
 /** Whether a video is too big to copy. Other kinds are never kept as links. */
 export function isVideoLink(kind: string | null | undefined, sizeBytes: number | null | undefined): boolean {

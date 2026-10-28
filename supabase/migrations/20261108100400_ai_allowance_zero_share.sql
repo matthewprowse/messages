@@ -4,9 +4,11 @@
 -- week_features.<name> are 100 (never null), and 100 or more means paused to the worker. The result shape is
 -- otherwise the same. A feature missing from shares has no key in the result at all; the worker treats a
 -- missing key as exhausted. ai_allowance_shares_for needs no change: a share of 0 already gives 0 dollars.
--- Body is the workspace-aware version from 20261101100000_workspaces.sql, with only the percent
--- expressions wrapped in coalesce(..., 100). (That version no longer leaves 'logos' out of the spend, unlike
--- 20261031170000; that is kept as it was.) Grants are kept by create or replace.
+-- Body is the workspace-aware version from 20261101100000_workspaces.sql, with the percent expressions
+-- wrapped in coalesce(..., 100). It also puts back the exclusion of the 'logos' feature from the spend that
+-- 20261031170000 made and the workspaces rewrite dropped by accident: company logos are shared by everyone and
+-- filed against the owner, so they are not one person's use (the AI worker exempts them the same way, see
+-- BUDGET_EXEMPT in apps/ai/ai/gemini.py). Grants are kept by create or replace.
 create or replace function public.ai_allowance_for(p_user uuid) returns jsonb
   language sql stable security definer set search_path = ''
 as $$
@@ -27,11 +29,11 @@ as $$
   ),
   mspent as (
     select u.feature, sum(u.cost_usd) as cost from public.ai_usage u, bounds b, pool
-    where u.user_id = any (pool.users) and not u.setup and u.created_at >= b.m group by u.feature
+    where u.user_id = any (pool.users) and not u.setup and u.feature <> 'logos' and u.created_at >= b.m group by u.feature
   ),
   wspent as (
     select u.feature, sum(u.cost_usd) as cost from public.ai_usage u, bounds b, pool
-    where u.user_id = any (pool.users) and not u.setup and u.created_at >= b.w group by u.feature
+    where u.user_id = any (pool.users) and not u.setup and u.feature <> 'logos' and u.created_at >= b.w group by u.feature
   ),
   weekly as (
     select f.key, f.value::numeric as share from cfg, jsonb_each_text(cfg.shares) f where f.key = any (cfg.weekly_features)

@@ -10,6 +10,7 @@ import { supabase } from "./supabase";
 import { useAuth } from "./auth";
 import { open } from "./vault";
 import type { TeamRole } from "./team";
+import { pollWhileVisible } from "./visible-poll";
 
 /** What the person's team means for sharing: which workspace, whether strict sharing is on, and their role. */
 export interface MyTeam {
@@ -108,8 +109,7 @@ export function useSharing(threadId: string, shared: boolean) {
   }, [shared, threadId, check]);
   useEffect(() => {
     if (!sharing) return;
-    const timer = setInterval(() => void check(), POLL_MS);
-    return () => clearInterval(timer);
+    return pollWhileVisible(() => void check(), POLL_MS);
   }, [sharing, check]);
   return { sharing, check };
 }
@@ -160,8 +160,7 @@ export function useSharedChats() {
   const sealing = !!chats?.some((c) => c.state === "sharing");
   useEffect(() => {
     if (!sealing) return;
-    const timer = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(timer);
+    return pollWhileVisible(() => void load(), POLL_MS);
   }, [sealing, load]);
   return { chats, failed, load };
 }

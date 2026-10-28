@@ -2,6 +2,12 @@
 // indexes existed, and rows from writers that do not work them out yet. Only the workers hold the keys, so
 // the database leaves the index empty and this finds it. A changed value clears its index
 // (20261025000400), so it is picked up again here.
+//
+// SCHEDULE: one pass at startup, then every IDLE_MS (an hour) while nothing is left to index. A pass that found
+// work runs again after BUSY_MS, so a backlog drains quickly and then the loop goes quiet. An idle pass is one
+// query per table (8), each served by a partial index on (id) where the index column is null (see the INDEXES
+// list at the bottom). Before: 16 queries a minute, each a walk of its table. After: 8 queries an hour.
+// requestAddressIndexing() runs a pass soon, for a caller that has just written rows without an index.
 
 import { addressIndex, chatIndex, domainIndex, ruleTargetIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
@@ -11,7 +17,10 @@ import { db, must } from "./db";
 import { log, errorCode } from "./log";
 import { keysFor, openStrict as open } from "./vault";
 
-const INDEX_MS = 30_000;
+/** Pause after a pass that indexed something: more may be waiting. */
+export const BUSY_MS = 10_000;
+/** Pause after a pass that found nothing. A value changed in between is picked up within this time. */
+export const IDLE_MS = 60 * 60_000;
 const PAGE = 200;
 
 type Table = "contact_identities" | "messages" | "threads" | "unsubscribes" | "organizations" | "priority_rules" | "accounts" | "address_book_cards";
@@ -165,20 +174,74 @@ export async function indexAddresses(): Promise<number> {
   return total;
 }
 
-export function startAddressIndexer() {
+/** The partial indexes the idle query relies on: create index if not exists <name> on <table> (id) where <column> is null. */
+export const INDEXES = TABLES.map(({ table, todo }) => ({ table, column: todo, name: `${table}_${todo}_todo_idx` }));
+
+export interface Loop {
+  /** Runs a pass soon (or after the current one) instead of waiting out the idle time. */
+  poke(): void;
+  stop(): void;
+}
+
+/**
+ * Runs pass now, then again BUSY_MS after one that returned work and IDLE_MS after one that returned none or failed.
+ * `after` is setTimeout (injectable for tests). Passes never overlap.
+ */
+export function runLoop(pass: () => Promise<number>, after: (fn: () => void, ms: number) => unknown = setTimeout, clear: (t: unknown) => void = (t) => clearTimeout(t as NodeJS.Timeout)): Loop {
+  let timer: unknown = null;
   let running = false;
-  const pass = async () => {
-    if (running) return;
+  let again = false;
+  let stopped = false;
+  const tick = async () => {
+    timer = null;
+    if (stopped) return;
+    if (running) { again = true; return; }
     running = true;
+    let worked = 0;
     try {
-      const indexed = await indexAddresses();
-      if (indexed) log.info("addresses indexed", { rows: indexed });
-    } catch (err) {
-      log.error("address indexing failed", { code: errorCode(err) });
+      worked = await pass();
+    } catch {
+      worked = 0;
     } finally {
       running = false;
     }
+    if (stopped) return;
+    const next = again || worked > 0 ? BUSY_MS : IDLE_MS;
+    again = false;
+    timer = after(() => void tick(), next);
   };
-  void pass();
-  setInterval(pass, INDEX_MS);
+  void tick();
+  return {
+    poke() {
+      if (stopped) return;
+      if (running) { again = true; return; }
+      if (timer) clear(timer);
+      timer = after(() => void tick(), 0);
+    },
+    stop() {
+      stopped = true;
+      if (timer) clear(timer);
+    },
+  };
+}
+
+let loop: Loop | null = null;
+
+export function startAddressIndexer() {
+  if (loop) return;
+  loop = runLoop(async () => {
+    try {
+      const indexed = await indexAddresses();
+      if (indexed) log.info("addresses indexed", { rows: indexed });
+      return indexed;
+    } catch (err) {
+      log.error("address indexing failed", { code: errorCode(err) });
+      return 0;
+    }
+  });
+}
+
+/** Asks for a pass soon. Does nothing before the indexer has started. */
+export function requestAddressIndexing() {
+  loop?.poke();
 }

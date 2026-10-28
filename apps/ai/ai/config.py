@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 
@@ -36,6 +37,7 @@ class Config:
     learn_model: str  # voice, edit and signal learning, and notes on people: the cheaper model unless LEARN_MODEL says otherwise
     brief_model: str  # the brief script: the cheaper model unless BRIEF_MODEL says otherwise
     predraft_model: str  # automatic pre-drafts: the cheaper model unless PREDRAFT_MODEL says otherwise
+    triage_model: str  # triage of each new message: the cheaper model unless TRIAGE_MODEL says otherwise (for an A/B of a cheaper one)
     transcribe_model: str  # meeting recordings: GEMINI_TRANSCRIBE_MODEL, else the full model (see meetings.py)
 
 
@@ -45,6 +47,40 @@ def flag_on(name: str, default: bool = True) -> bool:
     if not raw:
         return default
     return raw not in ("false", "off", "no", "0")
+
+
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+
+
+def thinking_level(name: str, default: str) -> str:
+    """A thinking level for one job from the environment, so the owner can A/B it without a deploy. Anything
+    that is not a level gemini.py knows reads as the default."""
+    raw = os.environ.get(name, "").strip().lower()
+    return raw if raw in THINKING_LEVELS else default
+
+
+def draft_thinking() -> str:
+    """Manual drafts and tones on the full model: DRAFT_THINKING, low unless set."""
+    return thinking_level("DRAFT_THINKING", "low")
+
+
+def edit_thinking() -> str:
+    """Edits of text you wrote (not tone adjustments): EDIT_THINKING, medium unless set (low let typos through)."""
+    return thinking_level("EDIT_THINKING", "medium")
+
+
+def describe_jobs(cfg: Config) -> dict[str, str]:
+    """Each job's model and thinking level, for the startup log. Levels the code fixes are written as they are."""
+    return {
+        "draft": f"{cfg.model}/{draft_thinking()}",
+        "edit": f"{cfg.fast_model}/{edit_thinking()}",
+        "predraft": f"{cfg.predraft_model}/{draft_thinking()}",
+        "triage": f"{cfg.triage_model}/minimal",
+        "learn": f"{cfg.learn_model}/low (people notes minimal)",
+        "brief": f"{cfg.brief_model}",
+        "transcribe": f"{cfg.transcribe_model}/minimal",
+        "chasers": f"{cfg.model}/low",
+    }
 
 
 def production() -> bool:
@@ -74,7 +110,7 @@ def load() -> Config:
     check_encryption(encrypt_content, encrypt_addresses)
     model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
     fast_model = os.environ.get("GEMINI_FAST_MODEL", "gemini-3.5-flash-lite")
-    return Config(
+    cfg = Config(
         supabase_url=required("SUPABASE_URL"),
         service_role_key=required("SUPABASE_SERVICE_ROLE_KEY"),
         gemini_api_key=required("GEMINI_API_KEY"),
@@ -90,5 +126,17 @@ def load() -> Config:
         learn_model=os.environ.get("LEARN_MODEL", "").strip() or fast_model,
         brief_model=os.environ.get("BRIEF_MODEL", "").strip() or fast_model,
         predraft_model=os.environ.get("PREDRAFT_MODEL", "").strip() or fast_model,
+        triage_model=os.environ.get("TRIAGE_MODEL", "").strip() or fast_model,
         transcribe_model=os.environ.get("GEMINI_TRANSCRIBE_MODEL", "").strip() or model,
     )
+    log_cost_settings(cfg)
+    return cfg
+
+
+def log_cost_settings(cfg: Config) -> None:
+    """One info line at startup with every job's model and thinking level and the next price change, so a
+    price rise (the doubling on 2027-01-01) and a model switch are both visible in the logs."""
+    from . import log, pricing
+
+    change = pricing.next_price_change(date.today())
+    log.info("ai jobs", **describe_jobs(cfg), next_price_change=change.isoformat() if change else None)

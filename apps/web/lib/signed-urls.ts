@@ -10,6 +10,7 @@ import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
 import { teamKeyRing, userKeys } from "./vault";
 import { mimeFor } from "./file-types";
+import { ThumbCache } from "./thumb-cache";
 
 export { mimeFor };
 import { BUCKET } from "./outbox-files";
@@ -337,6 +338,56 @@ export function acquireNoteFile(path: string): { promise: Promise<OpenedNoteFile
       }, BLOB_KEEP_MS);
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Sealed thumbnails of photos
+// ---------------------------------------------------------------------------
+// A sealed photo is encrypted, so Storage cannot resize it. The worker stores a small sealed copy beside it
+// (attachments.thumb_path, about 15 KB). Tiles open that instead of the whole photo, and the opened picture is kept here
+// by attachment id for the session, so scrolling away and back downloads nothing. Memory only: nothing decrypted is ever
+// written to IndexedDB, localStorage or sessionStorage.
+
+const thumbCache = new ThumbCache();
+const thumbOpening = new Map<string, Promise<string | null>>();
+
+/** The decrypted thumbnail of an attachment as a blob link, shared by everything showing it; null when it cannot be opened. */
+export function openThumb(id: string, thumbPath: string): Promise<string | null> {
+  const hit = thumbCache.get(id);
+  if (hit) return Promise.resolve(hit);
+  let pending = thumbOpening.get(id);
+  if (!pending) {
+    rememberNoteMime(thumbPath, "image/jpeg");
+    pending = openLimited(thumbPath)
+      .then((opened) => {
+        if (!opened) return null;
+        // An unsealed object comes back as its signed link: shown as it is, and not a blob to revoke or keep.
+        if (opened.sealed) thumbCache.set(id, opened.url);
+        return opened.url;
+      })
+      .finally(() => thumbOpening.delete(id));
+    thumbOpening.set(id, pending);
+  }
+  return pending;
+}
+
+/** The thumbnail already opened for an attachment, if any. */
+export const cachedThumb = (id: string) => thumbCache.get(id);
+
+/**
+ * A sealed photo's thumbnail: undefined while opening, null when there is none or it cannot be opened (the tile then
+ * uses the whole file). Pass no path to stay idle.
+ */
+export function useThumbUrl(id: string, thumbPath: string | undefined): string | null | undefined {
+  const [got, setGot] = useState<{ id: string; path: string; url: string | null } | null>(null);
+  useEffect(() => {
+    if (!thumbPath || cachedThumb(id)) return;
+    let live = true;
+    void openThumb(id, thumbPath).then((url) => { if (live) setGot({ id, path: thumbPath, url }); });
+    return () => { live = false; };
+  }, [id, thumbPath]);
+  if (!thumbPath) return null;
+  return cachedThumb(id) ?? (got?.id === id && got.path === thumbPath ? got.url : undefined);
 }
 
 /** A note file opened for as long as the component is mounted: undefined while opening, null when it cannot be. */

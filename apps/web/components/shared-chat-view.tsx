@@ -15,6 +15,7 @@ import { dayLabel, fullStamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { clientAddress, outboxState, sendInboxReply, sendOwnReply, useMyReplies, useNotes, useReplyingPresence, useSharedChat, type SharedChatInfo, type TimelineMessage } from "@/lib/shared-chat";
 import { supabase } from "@/lib/supabase";
+import { pollWhileVisible } from "@/lib/visible-poll";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -111,13 +112,13 @@ function useQueued(onSent: () => void) {
   useEffect(() => {
     if (!id || state !== "sending") return;
     let alive = true;
-    const timer = setInterval(async () => {
+    const stop = pollWhileVisible(async () => {
       const s = await outboxState(id);
       if (!alive) return;
       if (s.status === "sent") { setState("sent"); sentRef.current(); }
       if (s.status === "failed") { setState("failed"); setError(s.error ?? "It could not be sent."); }
     }, POLL_MS);
-    return () => { alive = false; clearInterval(timer); };
+    return () => { alive = false; stop(); };
   }, [id, state]);
   return { state, error, start: (next: string) => { setId(next); setError(null); setState("sending"); }, reset: () => { setId(null); setState("idle"); setError(null); } };
 }

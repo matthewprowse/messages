@@ -24,6 +24,9 @@ PRICES: list[tuple[str, date, Price]] = [
     ("gemini-3.6-flash", date(2000, 1, 1), Price(0.75, 3.75, 0.075)),
     ("gemini-3.6-flash", date(2027, 1, 1), Price(1.50, 7.50, 0.15)),
     ("gemini-3.5-flash-lite", date(2000, 1, 1), Price(0.30, 2.50, 0.03)),
+    # Text input price; its audio input is $0.50 (see DEFAULT_AUDIO_INPUT_USD_PER_M). Earliest shutdown 2027-05-07,
+    # replaced by gemini-3.5-flash-lite. Checked against Google's pricing page 28 October 2026.
+    ("gemini-3.1-flash-lite", date(2000, 1, 1), Price(0.25, 1.50, 0.025)),
     ("gemini-2.5-flash", date(2000, 1, 1), Price(0.30, 2.50, 0.03)),
     ("gemini-2.5-flash-lite", date(2000, 1, 1), Price(0.10, 0.40, 0.01)),
     ("gemini-embedding-2", date(2000, 1, 1), Price(0.20, 0.0, 0.20)),  # text input only; no output tokens
@@ -54,6 +57,12 @@ def audio_input_rate() -> float:
     except ValueError:
         return DEFAULT_AUDIO_INPUT_USD_PER_M
     return value if value >= 0 else DEFAULT_AUDIO_INPUT_USD_PER_M
+
+
+def next_price_change(on: date) -> date | None:
+    """The first day after `on` on which any model's price changes (2027-01-01 today, when the full model doubles)."""
+    later = [start for _, start, _ in PRICES if start > on]
+    return min(later) if later else None
 
 
 def price_for(model: str, on: date) -> Price | None:

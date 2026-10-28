@@ -4,7 +4,7 @@ shares counting as used up, and the rule that only a user's own drafts folder is
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from ai.chasers import CHASER_MAX_OUTPUT, Chasers
+from ai.chasers import CHASER_MAX_OUTPUT, Chasers, batch_ready
 from ai.gemini import GeminiError
 from tests.test_ai import FakeTriageDb, FakeTriageGemini, TriageRun
 from ai.triage import Triage
@@ -56,6 +56,49 @@ class ChaserRun(unittest.TestCase):
         self.assertIn("last_message_at.lte.", db.thread_params["and"])
 
 
+class ChaserBatching(unittest.TestCase):
+    def test_a_user_is_asked_about_at_five_due_or_when_the_oldest_waited_twelve_hours(self):
+        now = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
+        ago = lambda hours: (now - timedelta(hours=hours)).isoformat()
+        # Due a day after the last message: 25 hours old has been due for one hour.
+        self.assertFalse(batch_ready([ago(25), ago(30)], now))
+        self.assertTrue(batch_ready([ago(25)] * 5, now))
+        self.assertTrue(batch_ready([ago(25), ago(37)], now))  # due 13 hours ago
+        self.assertFalse(batch_ready([ago(35)], now))  # due 11 hours ago
+        self.assertFalse(batch_ready([], now))
+
+    def test_one_recently_due_conversation_waits_for_a_bigger_batch(self):
+        class Fresh(ChaserDb):
+            def select(self, table, params):
+                if table == "threads":
+                    return [{"id": "t1", "user_id": "u", "last_message_at": (datetime.now(timezone.utc) - timedelta(hours=26)).isoformat()}]
+                return super().select(table, params)
+
+        gemini = ChaserGemini()
+        self.assertEqual(Chasers(Fresh(), gemini, "full").run_once(), 0)
+        self.assertIsNone(gemini.kw)  # no call, and no message was read
+
+    def test_ten_due_make_one_call_of_ten(self):
+        class Many(ChaserDb):
+            def select(self, table, params):
+                old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+                if table == "threads":
+                    return [{"id": f"t{i}", "user_id": "u", "last_message_at": old} for i in range(12)]
+                if table == "messages":
+                    return [{"id": f"m{i}", "user_id": "u", "thread_id": f"t{i}", "direction": "outbound", "body_text": "Can you send it?", "body_html": None, "sent_at": old} for i in range(12)]
+                return super().select(table, params)
+
+        class Counting(ChaserGemini):
+            calls = 0
+
+            def json(self, *a, **kw):
+                Counting.calls += 1
+                return {"items": [{"id": str(i), "expects_reply": True} for i in range(1, 11)]}
+
+        self.assertEqual(Chasers(Many(), Counting(), "full").run_once(), 10)
+        self.assertEqual(Counting.calls, 1)  # the other two wait for the next run
+
+
 class SplitOnlyWhenWorthIt(unittest.TestCase):
     def run_with(self, error):
         msg = TriageRun().msg
@@ -104,5 +147,122 @@ class BudgetShares(unittest.TestCase):
             g._check_budget(UsageContext("u", "learn"))
 
 
+class AudioPaths(unittest.TestCase):
+    def test_only_the_users_own_drafts_folder_passes(self):
+        from ai.drafts import own_audio_path
+
+        self.assertTrue(own_audio_path("u1", "u1/drafts/abc.webm"))
+        self.assertTrue(own_audio_path("u1", "u1/drafts/sub/abc-1_2.webm"))
+        for bad in ("u1/drafts/../../u2/x.webm", "u1/drafts/..", "u1/drafts//x", "u1/drafts/./x", "u2/drafts/x.webm", "u1/other/x", "u1/drafts/", "u1/drafts/a b", "u1/drafts/x\n", None, ""):
+            self.assertFalse(own_audio_path("u1", bad), bad)
+        self.assertFalse(own_audio_path("", "/drafts/x"))
+
+    def test_the_download_helper_refuses_dot_dot(self):
+        from ai.supabase import Supabase, SupabaseError
+
+        with self.assertRaises(SupabaseError):
+            Supabase("http://x", "k").download("b", "u/drafts/../../v/x")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TriageRegroup(unittest.TestCase):
+    def test_missing_answers_are_asked_again_as_one_group(self):
+        msg = TriageRun().msg
+        pending = [msg("m1", "t1"), msg("m2", "t2"), msg("m3", "t3")]
+        rows = [{"id": m["id"], "thread_id": m["thread_id"], "direction": "inbound"} for m in pending]
+
+        class Partial(FakeTriageGemini):
+            def json(self, model, system, prompt, schema, usage, **kw):
+                self.calls.append((prompt, usage, kw))
+                n = prompt.count("=== Email ")
+                answered = 1 if len(self.calls) == 1 else n
+                return {"results": [{"email": i, "priority": "normal", "category": "fyi", "junk": False, "needs_reply": False, "summary": "s"} for i in range(1, answered + 1)]}
+
+        gemini = Partial()
+        self.assertEqual(Triage(FakeTriageDb(pending, rows), gemini, "fast").run_once(), 3)
+        self.assertEqual([c[0].count("=== Email ") for c in gemini.calls], [3, 2])  # not 3, then 1, then 1
+
+    def test_bulk_mail_is_cut_shorter(self):
+        from ai.triage import BODY_CHARS, BULK_BODY_CHARS
+
+        self.assertLess(BULK_BODY_CHARS, BODY_CHARS)
+
+
+class CostSettings(unittest.TestCase):
+    def test_thinking_levels_default_and_can_be_set(self):
+        import os
+        from unittest import mock
+
+        from ai import config
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DRAFT_THINKING", None)
+            os.environ.pop("EDIT_THINKING", None)
+            self.assertEqual((config.draft_thinking(), config.edit_thinking()), ("low", "medium"))
+        with mock.patch.dict(os.environ, {"DRAFT_THINKING": "Minimal", "EDIT_THINKING": "nonsense"}):
+            self.assertEqual((config.draft_thinking(), config.edit_thinking()), ("minimal", "medium"))
+
+    def test_the_next_price_change_is_the_new_year(self):
+        from datetime import date
+
+        from ai.pricing import next_price_change
+
+        self.assertEqual(next_price_change(date(2026, 10, 28)), date(2027, 1, 1))
+        self.assertIsNone(next_price_change(date(2027, 1, 1)))
+
+    def test_a_call_with_audio_gets_two_attempts(self):
+        from ai.gemini import AUDIO_ATTEMPTS, Gemini
+
+        g = Gemini.__new__(Gemini)
+        g._no_minimal = set()
+        g._check_budget = lambda *a, **k: 0.0
+        g._release = lambda *a: None
+        seen = []
+        g._send_json = lambda *a: seen.append(a[6]) or {}
+        g.json("m", "s", "p", {}, None, audio=(b"x", "audio/ogg"))
+        g.json("m", "s", "p", {}, None)
+        self.assertEqual(seen, [AUDIO_ATTEMPTS, 4])
+
+    def test_older_messages_are_cut_shorter_in_a_draft(self):
+        from ai.drafts import OLDER_CHARS, describe
+
+        self.assertLess(len(describe({"body_text": "x" * 3000}, OLDER_CHARS)), OLDER_CHARS + 10)
+        self.assertGreater(len(describe({"body_text": "x" * 3000})), 1400)
+
+
+class VoiceProbe(unittest.TestCase):
+    def test_only_users_with_new_sent_mail_are_looked_at(self):
+        from ai.voice import Voice
+
+        class Db:
+            def __init__(self):
+                self.tables = []
+                self.sent = []
+
+            def select(self, table, params):
+                self.tables.append(table)
+                if table == "messages":
+                    return self.sent
+                if table == "accounts":
+                    return [{"id": "a1", "user_id": "u1"}, {"id": "a2", "user_id": "u2"}]
+                return []
+
+            def first(self, table, params):
+                self.tables.append("first:" + table)
+                return None
+
+        db = Db()
+        voice = Voice(db, None, "m")
+        voice.run_once()  # the first pass looks at everyone
+        self.assertEqual(db.tables.count("first:profiles"), 2)
+        db.tables.clear()
+        self.assertEqual(voice.run_once(), 0)
+        self.assertEqual(db.tables, ["messages"])  # nothing new: no accounts, profiles or counts read
+        db.tables.clear()
+        voice._next.clear()
+        db.sent = [{"user_id": "u2"}]
+        voice.run_once()
+        self.assertEqual(db.tables.count("first:profiles"), 1)

@@ -3,10 +3,11 @@
 // Layout for /contacts: loads contacts, companies and merge suggestions for the signed-in user, and reloads them when
 // contactsVersion changes or Retry is pressed. A list that failed shows an error while the others stay on screen.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { listContacts, type ContactSummary } from "@/lib/contacts";
+import { listContactsFromStore } from "@/lib/data";
 import { listCompanies, type CompanySummary } from "@/lib/organizations";
 import { listSuggestions, type MergeSuggestion } from "@/lib/contact-merging";
 import { CompaniesContext, ContactsShell } from "@/components/contacts-shell";
@@ -17,12 +18,40 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
   const { session } = useAuth();
   const userId = session?.user.id;
   // Adding, merging, splitting or deleting a contact anywhere in the app reloads the lists.
-  const { contactsVersion } = useApp();
+  // When the store holds every contact it lends them, so only the small parts it lacks are read again.
+  const { contactsVersion, contactsReady, contacts: stored } = useApp();
+  const storedRef = useRef(stored);
+  storedRef.current = stored;
   const [contacts, setContacts] = useState<ContactSummary[] | null | undefined>(undefined); // undefined while loading, null if it failed
   const [companies, setCompanies] = useState<CompanySummary[] | null | undefined>(undefined);
   const [suggestions, setSuggestions] = useState<MergeSuggestion[] | null | undefined>(undefined);
   // Bumped by Retry after a list failed to load.
   const [attempt, setAttempt] = useState(0);
+
+  // Only what failed shows loading again; what is on screen stays while the rest reloads.
+  useEffect(() => {
+    if (!userId || attempt === 0) return;
+    setContacts((v) => (v === null ? undefined : v));
+    setCompanies((v) => (v === null ? undefined : v));
+    setSuggestions((v) => (v === null ? undefined : v));
+  }, [userId, attempt]);
+
+  // Its own effect, so the store becoming ready reloads only this list and not the other two.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    // Missing someone means the store is behind, so everything is read as before.
+    const read = contactsReady ? listContactsFromStore(storedRef.current).then((rows) => rows ?? listContacts()) : listContacts();
+    read
+      .then((rows) => !cancelled && setContacts(rows))
+      .catch((err) => {
+        console.error(err instanceof Error ? err.message : "Load contacts failed");
+        if (!cancelled) setContacts(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, contactsVersion, contactsReady, attempt]);
 
   useEffect(() => {
     if (!userId) return;
@@ -34,13 +63,6 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
           console.error(err instanceof Error ? err.message : `${label} failed`);
           if (!cancelled) set(null);
         });
-    // Only what failed shows loading again; what is on screen stays while the rest reloads.
-    if (attempt > 0) {
-      setContacts((v) => (v === null ? undefined : v));
-      setCompanies((v) => (v === null ? undefined : v));
-      setSuggestions((v) => (v === null ? undefined : v));
-    }
-    load(listContacts, setContacts, "Load contacts");
     load(listCompanies, setCompanies, "Load companies");
     load(listSuggestions, setSuggestions, "Load suggestions");
     return () => {

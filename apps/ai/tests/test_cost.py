@@ -352,6 +352,8 @@ class LogoDb:
         return self.used
 
     def select(self, table, params):
+        if table == "ai_usage":  # the day's recorded cost: none here
+            return []
         self.selects.append(params)
         return self.rows
 

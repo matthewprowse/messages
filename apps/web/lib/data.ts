@@ -7,10 +7,12 @@ import type { Tables } from "@messages/db";
 import { openAddresses, openDrafts, openExamples, openMessages, openTasks, openThreads } from "./open-rows";
 import { supabase } from "./supabase";
 import type { Account, AccountStatus, Attachment, Category, Contact, Draft, FiledAttachment, Message, Priority, Profile, Provider, Rule, Task, Thread, Unsubscribe, WritingExample } from "./types";
-import { formatPhone, formatSize } from "./format";
+import { formatPhone, formatSize, whenPhoneFormatReady } from "./format";
 import { emailParts, emphasisRuns, type Emphasis } from "./email-text";
 import type { ChoiceKind } from "./choices";
-import { allRows } from "./contacts";
+import { allRows, type ContactSummary } from "./contacts";
+import { summariseStored, type Activity } from "./contact-summaries";
+import { mergeThreads } from "./merge-threads";
 import { mapTask, TASK_COLUMNS } from "./tasks";
 import { withSealedColumns } from "./sealed-columns";
 import { companyLogo, isCompanySender, logoAvatar } from "./people";
@@ -24,7 +26,7 @@ type ThreadRow = Pick<
   | "id" | "account_id" | "channel" | "subject" | "is_group" | "group_name" | "avatar_path" | "provider_thread_id" | "last_message_at"
   | "created_at" | "last_message_preview" | "junk" | "subscription" | "last_sender_contact_id" | "unread_count" | "pinned" | "status" | "priority" | "category" | "summary" | "needs_reply" | "last_from_me"
 > & { workspace_id?: string | null; shared_by?: string | null; share_match?: string | null; share_suggestion?: string | null };
-type AttachmentRow = Pick<Tables<"attachments">, "id" | "message_id" | "filename" | "kind" | "size_bytes" | "storage_path" | "hidden" | "sealed" | "not_kept"> & { team_path?: string | null };
+type AttachmentRow = Pick<Tables<"attachments">, "id" | "message_id" | "filename" | "kind" | "size_bytes" | "storage_path" | "hidden" | "sealed" | "not_kept"> & { team_path?: string | null; thumb_path?: string | null };
 export type MessageRow = Pick<
   Tables<"messages">,
   "id" | "provider_message_id" | "thread_id" | "direction" | "sender_contact_id" | "sender_address" | "to_addresses" | "sent_at" | "subject" | "body_text" | "body_html" | "provider_meta" | "has_original" | "is_bulk" | "body_marks" | "transcript"
@@ -33,9 +35,11 @@ export type MessageRow = Pick<
 // With the company, whose logo stands in for the photo of a sender that writes as the company.
 export const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path, organizations(id, name, logo_path)";
 const THREAD_COLUMNS =
-  "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me";
-// Threads with their account's provider and their people, so the list can draw names in one request.
+  "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me, workspace_id, shared_by, share_match, share_suggestion";
+// One thread with its account's provider and its people in full, for a single conversation that has only just appeared.
 const THREAD_WITH_PEOPLE = `${THREAD_COLUMNS}, accounts(provider), thread_participants(contact_id, contacts(${CONTACT_COLUMNS}, contact_identities(kind, value)))` as const;
+// The list: only the ids of who is in each thread. A person in fifty threads is sent once, by loadContacts, not fifty times here.
+const THREAD_WITH_IDS = `${THREAD_COLUMNS}, accounts(provider), thread_participants(contact_id)` as const;
 // Explicit lists, so a column the app never reads (a WhatsApp QR or pairing code) never reaches every page.
 const ACCOUNT_COLUMNS = "id, provider, label, nickname, address, status, status_detail, last_synced_at, send_addresses";
 const PROFILE_COLUMNS = "display_name, avatar_path, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage, language";
@@ -153,6 +157,13 @@ type ThreadWithPeople = ThreadRow & {
   thread_participants: { contact_id: string; contacts: (ContactRow & { contact_identities: IdentityRow[] }) | null }[];
 };
 
+type ThreadWithIds = ThreadRow & { accounts: { provider: string } | null; thread_participants: { contact_id: string }[] };
+
+/** A listed thread row with the ids of its people. */
+export function threadWithIds(row: ThreadWithIds): Thread {
+  return mapThread(row, row.thread_participants.map((p) => p.contact_id), (row.accounts?.provider as Provider | undefined) ?? "icloud");
+}
+
 /** A thread row with its people embedded, and those people as contacts. */
 function threadWithPeople(row: ThreadWithPeople, contacts: Map<string, Contact>): Thread {
   for (const p of row.thread_participants) {
@@ -183,6 +194,8 @@ export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reaction
 export function mapAttachment(a: Omit<AttachmentRow, "message_id" | "hidden">): Attachment {
   return {
     id: a.id, name: a.filename, kind: a.kind as Attachment["kind"], size: formatSize(a.size_bytes), bytes: a.size_bytes ?? undefined, path: a.team_path ?? a.storage_path ?? undefined,
+    // A team copy has no thumbnail, and an empty thumb_path means a thumbnail was tried and cannot be made.
+    thumbPath: !a.team_path && a.thumb_path ? a.thumb_path : undefined,
     sealed: a.sealed || undefined, notKept: (a.not_kept as Attachment["notKept"]) ?? undefined,
   };
 }
@@ -231,6 +244,8 @@ export function mapMessage(row: MessageRow): Message {
     transcript: row.transcript ?? undefined,
     whatsapp: whatsapp || undefined,
     hasOriginal: row.has_original,
+    // body_shrunk_at is read through a cast: the generated types do not know it until they are regenerated.
+    bodyShrunk: (row as { body_shrunk_at?: string | null }).body_shrunk_at ? true : undefined,
     attachments: files.length ? files : undefined,
   };
 }
@@ -329,8 +344,10 @@ export function mapUnsubscribe(row: UnsubscribeRow): Unsubscribe {
 
 export interface Loaded {
   threads: Thread[];
-  /** Only the people in those threads. Everyone else loads after the list is drawn (see loadContacts). */
+  /** Every contact, from one loadContacts. Empty when that failed, and the store then retries it (see store.tsx). */
   contacts: Contact[];
+  /** Whether contacts holds everyone. False when loading them failed, which the store then retries. */
+  contactsLoaded: boolean;
   accounts: Account[];
   rules: Rule[];
   writingExamples: WritingExample[];
@@ -342,6 +359,8 @@ export interface Loaded {
 
 const THREAD_LIMIT = 1000;
 const TASK_LIMIT = 2000;
+/** The most conversations a catch-up after a dropped connection reads; more than that and everything is reloaded. */
+const CHANGE_LIMIT = 200;
 /** How far back completed tasks are shown in Calendar. Open ones are loaded however old, as they are overdue. */
 const TASK_DAYS = 60;
 
@@ -351,23 +370,10 @@ async function myId(): Promise<string> {
   return (await supabase.auth.getSession()).data.session?.user.id ?? "";
 }
 
-/** A chat's sharing state beyond whether it is shared, from the small query in loadEverything. */
-function shareFields(row: { shared_by: string | null; share_match: string | null; share_suggestion: string | null } | undefined): Pick<Thread, "sharedBy" | "shareMatch" | "shareSuggestion"> {
-  return {
-    sharedBy: (row?.shared_by as Thread["sharedBy"]) ?? undefined,
-    shareMatch: row?.share_match || undefined,
-    shareSuggestion: row?.share_suggestion === "suggested" ? "suggested" : undefined,
-  };
-}
-
-/** Everything the list screens need, in parallel. Messages load per conversation when it is opened. */
-export async function loadEverything(): Promise<Loaded> {
-  const me = await myId();
+/** The small tables behind the list screens: everything except the conversations and contacts. */
+async function loadSmall() {
   const taskSince = new Date(Date.now() - TASK_DAYS * 86_400_000).toISOString();
-  const [threads, accounts, profile, rules, examples, drafts, unsubscribes, followUps, shared, shareState, tasks] = await Promise.all([
-    // Deleted conversations (in the provider's bin) are never shown, so they are not loaded.
-    supabase.from("threads").select(THREAD_WITH_PEOPLE).eq("user_id", me).neq("status", "trash")
-      .order("last_message_at", { ascending: false, nullsFirst: false }).limit(THREAD_LIMIT),
+  const [accounts, profile, rules, examples, drafts, unsubscribes, followUps, tasks] = await Promise.all([
     supabase.from("accounts").select(ACCOUNT_COLUMNS),
     supabase.from("profiles").select(PROFILE_COLUMNS).maybeSingle(),
     supabase.from("priority_rules").select("id, kind, target").order("created_at", { ascending: false }),
@@ -376,32 +382,22 @@ export async function loadEverything(): Promise<Loaded> {
     supabase.from("drafts").select(DRAFT_COLUMNS).eq("status", "active").not("thread_id", "is", null),
     supabase.from("unsubscribes").select(UNSUBSCRIBE_COLUMNS),
     supabase.from("follow_ups").select("thread_id").eq("expects_reply", true),
-    // Which of them are work chats. Its own small query, so the list still loads before that migration is applied.
-    supabase.from("threads").select("id, workspace_id").eq("user_id", me).not("workspace_id", "is", null),
-    // How a work chat was shared and which personal chats Konva suggests as work: another small query, for the same reason.
-    supabase.from("threads").select("id, shared_by, share_match, share_suggestion").eq("user_id", me).or("workspace_id.not.is.null,share_suggestion.eq.suggested"),
     supabase.from("tasks").select(TASK_COLUMNS).not("due_at", "is", null).or(`status.eq.open,due_at.gte.${taskSince}`).order("due_at").limit(TASK_LIMIT),
   ]);
-  const failed = [threads, accounts, profile, rules, examples, drafts, unsubscribes].find((r) => r.error);
+  const failed = [accounts, profile, rules, examples, drafts, unsubscribes].find((r) => r.error);
   if (failed?.error) throw failed.error;
   await Promise.all([
-    openThreads(threads.data ?? []),
     openDrafts(drafts.data ?? []),
     openAddresses([accounts.data ?? [], rules.data ?? [], unsubscribes.data ?? []]),
     openTasks(tasks.data ?? []),
     openExamples(examples.data ?? []),
-    openThreads(shareState.data ?? []),
   ]);
-
   const draftOf = new Map((drafts.data ?? []).map((d) => [d.thread_id, mapDraft(d)]));
   // Not required: without it (the table not there yet) the Waiting filter is just empty.
   const waiting = new Set((followUps.data ?? []).map((f) => f.thread_id));
-  const work = new Map((shared.data ?? []).map((t) => [t.id, t.workspace_id ?? undefined]));
-  const sharing = new Map((shareState.data ?? []).map((t) => [t.id, t]));
-  const contacts = new Map<string, Contact>();
   return {
-    threads: (threads.data ?? []).map((t) => ({ ...threadWithPeople(t, contacts), draft: draftOf.get(t.id), waiting: waiting.has(t.id), workspaceId: work.get(t.id), ...shareFields(sharing.get(t.id)) })),
-    contacts: [...contacts.values()],
+    draftOf,
+    waiting,
     accounts: (accounts.data ?? []).map(mapAccount),
     rules: (rules.data ?? []).map((r) => ({ id: r.id, kind: r.kind as Rule["kind"], target: r.target })),
     writingExamples: (examples.data ?? []).map((w) => ({ id: w.id, context: w.situation, text: w.body })),
@@ -409,6 +405,59 @@ export async function loadEverything(): Promise<Loaded> {
     unsubscribes: (unsubscribes.data ?? []).map(mapUnsubscribe),
     // Not required either: without it (no task account, or the table not there yet) Calendar shows events only.
     tasks: (tasks.data ?? []).map(mapTask),
+  };
+}
+
+/** Everything the list screens need, in parallel. Messages load per conversation when it is opened. */
+export async function loadEverything(): Promise<Loaded> {
+  const me = await myId();
+  const [threads, small, contacts] = await Promise.all([
+    // Deleted conversations (in the provider's bin) are never shown, so they are not loaded.
+    supabase.from("threads").select(THREAD_WITH_IDS).eq("user_id", me).neq("status", "trash")
+      .order("last_message_at", { ascending: false, nullsFirst: false }).limit(THREAD_LIMIT),
+    loadSmall(),
+    // Not required: without them names are missing until the store tries again, but the list still opens.
+    loadContacts().catch(() => null),
+  ]);
+  if (threads.error) throw threads.error;
+  await openThreads(threads.data ?? []);
+  await whenPhoneFormatReady();
+  const { draftOf, waiting, ...rest } = small;
+  return {
+    threads: (threads.data ?? []).map((t) => ({ ...threadWithIds(t), draft: draftOf.get(t.id), waiting: waiting.has(t.id) })),
+    contacts: contacts ?? [],
+    contactsLoaded: !!contacts,
+    ...rest,
+  };
+}
+
+/**
+ * What changed since a time, for catching up after a short dropped connection: the conversations updated since
+ * (with their people) merged into the ones held, and the small tables again. Does not see a conversation deleted
+ * for good in the meantime, so a long gap reloads everything instead. Throws when it cannot say, such as when more
+ * than a page changed.
+ */
+export async function loadChanges(since: string, current: Thread[]): Promise<Loaded> {
+  const me = await myId();
+  const [changed, small] = await Promise.all([
+    // Trash is included, so a conversation moved to the bin leaves the list.
+    supabase.from("threads").select(THREAD_WITH_PEOPLE).eq("user_id", me).gt("updated_at", since).order("updated_at").limit(CHANGE_LIMIT),
+    loadSmall(),
+  ]);
+  if (changed.error) throw changed.error;
+  if ((changed.data?.length ?? 0) >= CHANGE_LIMIT) throw new Error("Too many changes to catch up");
+  await openThreads(changed.data ?? []);
+  await whenPhoneFormatReady();
+  const contacts = new Map<string, Contact>();
+  const rows = changed.data ?? [];
+  const threads = rows.map((t) => threadWithPeople(t, contacts));
+  const gone = new Set(rows.filter((t) => t.status === "trash").map((t) => t.id));
+  const { draftOf, waiting, ...rest } = small;
+  return {
+    threads: mergeThreads(current, threads, gone).map((t) => ({ ...t, draft: draftOf.get(t.id), waiting: waiting.has(t.id) })),
+    contacts: [...contacts.values()],
+    contactsLoaded: false,
+    ...rest,
   };
 }
 
@@ -428,12 +477,28 @@ export async function loadContacts(): Promise<Contact[]> {
   return contacts.map((c) => mapContact(c, identitiesOf.get(c.id) ?? []));
 }
 
+/** The Contacts list from the store's contacts, or null when the store is missing someone. Throws when a read fails. */
+export async function listContactsFromStore(stored: Contact[]): Promise<ContactSummary[] | null> {
+  const [rows, activity, whatsapp] = await Promise.all([
+    allRows("Load contacts", (from, to) => supabase.from("contacts").select("id, hidden").order("id").range(from, to)),
+    allRows("Load contact summaries", (from, to) => supabase.rpc("contact_summaries").order("contact_id").range(from, to)),
+    allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("id, contact_id").eq("kind", "whatsapp").order("id").range(from, to)),
+  ]);
+  return summariseStored(
+    rows,
+    new Map(stored.map((c) => [c.id, c])),
+    new Map(activity.map((a) => [a.contact_id, a as Activity])),
+    new Set(whatsapp.map((w) => w.contact_id)),
+  );
+}
+
 /** One conversation with its people, for one that has only just been created. */
 export async function loadThread(threadId: string): Promise<{ thread: Thread; contacts: Contact[] } | null> {
   const { data, error } = await supabase.from("threads").select(THREAD_WITH_PEOPLE).eq("id", threadId).maybeSingle();
   if (error) throw error;
   if (!data) return null;
   await openThreads([data]);
+  await whenPhoneFormatReady();
   const contacts = new Map<string, Contact>();
   const thread = threadWithPeople(data, contacts);
   return { thread, contacts: [...contacts.values()] };
@@ -449,7 +514,7 @@ export interface MessagePage {
  * A conversation's messages, oldest first. By default the newest page; with before, the page older than
  * that message; with from, every message from that time on, for jumping to an older message.
  */
-export async function loadThreadMessages(threadId: string, at: { before?: Pick<Message, "id" | "sentAt">; from?: string } = {}): Promise<MessagePage> {
+export async function loadThreadMessages(threadId: string, at: { before?: Pick<Message, "id" | "sentAt">; from?: string; limit?: number } = {}): Promise<MessagePage> {
   if (at.from) {
     // Pages back from the newest until the target time, so the result always reaches the target with no gap.
     const out: Message[] = [];
@@ -462,8 +527,22 @@ export async function loadThreadMessages(threadId: string, at: { before?: Pick<M
     }
     return { messages: out.reverse(), more: true };
   }
-  const page = await messagePage(threadId, at.before, undefined, MESSAGE_PAGE);
-  return { messages: page.reverse(), more: page.length === MESSAGE_PAGE };
+  const size = at.limit ?? MESSAGE_PAGE;
+  const page = await messagePage(threadId, at.before, undefined, size);
+  return { messages: page.reverse(), more: page.length === size };
+}
+
+/**
+ * The messages sent after one, oldest first, for catching up on a conversation that is already open.
+ * Null when a whole page came back, as there may be more: the caller then reloads the conversation.
+ */
+export async function loadMessagesAfter(threadId: string, after: Pick<Message, "id" | "sentAt">): Promise<Message[] | null> {
+  const { data, error } = await supabase.from("messages").select(await withSealedColumns(MESSAGE_COLUMNS)).eq("thread_id", threadId)
+    .or(`sent_at.gt."${after.sentAt}",and(sent_at.eq."${after.sentAt}",id.gt.${after.id})`)
+    .order("sent_at").order("id").limit(MESSAGE_PAGE);
+  if (error) throw error;
+  if (data.length >= MESSAGE_PAGE) return null;
+  return (await openMessages(data)).map(mapMessage);
 }
 
 /** Up to limit messages older than before (if given) and no older than from (if given), newest first. */

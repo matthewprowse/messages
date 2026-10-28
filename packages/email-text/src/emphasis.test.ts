@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emphasisRuns } from "./index";
+import { emphasisRuns, originalDoc } from "./index";
 
 const runs = (html: string) => emphasisRuns(html).map((r) => `${r.mark}:${r.text}`);
 
@@ -36,4 +36,27 @@ test("cleanText turns HTML links left in a text part into their label", async ()
     cleanText('apply at <a href="education.github.com">education.github.com</a>.\nSee <a href="https://x.com/docs">the docs</a> or <A HREF=\'https://x.com\'>https://x.com</A>'),
     "apply at education.github.com.\nSee the docs (https://x.com/docs) or https://x.com",
   );
+});
+
+test("hostile HTML finishes quickly and still gives sensible output", () => {
+  const timed = <T>(work: () => T): T => {
+    const t = Date.now();
+    const out = work();
+    assert.ok(Date.now() - t < 500, `took ${Date.now() - t} ms`);
+    return out;
+  };
+  assert.deepEqual(timed(() => emphasisRuns("<a ".repeat(200000))), []);
+  assert.deepEqual(timed(() => emphasisRuns(`<b>Hello there</b>${"<a ".repeat(100000)}`)), [{ text: "Hello there", mark: "bold" }]);
+  assert.deepEqual(timed(() => emphasisRuns(`<b>Hello there</b><script>${"<script ".repeat(50000)}`)), [{ text: "Hello there", mark: "bold" }]);
+  const doc = timed(() => originalDoc(`<p>Hi</p><script>alert(1)${"<script ".repeat(100000)}`, false));
+  assert.ok(doc.srcdoc.includes("<p>Hi</p>") && !/<script/i.test(doc.srcdoc));
+  timed(() => originalDoc("<img ".repeat(200000) + ">", false));
+  timed(() => originalDoc("url(//".repeat(200000), false));
+});
+
+test("HTML over the size limit has no emphasis, and deep nesting never throws", () => {
+  assert.deepEqual(emphasisRuns(`<b>Hello there</b>${" ".repeat(600_000)}`), []);
+  const nested = "<b>".repeat(5000) + "Deep words" + "</b>".repeat(5000);
+  const runs = emphasisRuns(nested);
+  assert.ok(runs.length > 0 && runs.every((r) => r.text === "Deep words" && r.mark === "bold"));
 });

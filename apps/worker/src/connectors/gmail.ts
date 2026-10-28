@@ -1,6 +1,7 @@
 // Gmail through its REST API: Gmail's own conversation IDs, labels for read and Inbox state, and its
-// change history for updates. The history is checked every few seconds, which keeps new mail within
-// the 10-second target without Google Cloud Pub/Sub. Read, unread, archive, delete and junk in the app
+// change history for updates. The history is checked every 5 seconds while the mailbox is active (mail changed, or the app sent or acted
+// on it in the last 10 minutes), every 30 s after that and every 60 s once quiet for an hour (polling.ts),
+// which keeps new mail within the 10-second target in use without Google Cloud Pub/Sub. Read, unread, archive, delete and junk in the app
 // change the labels in Gmail (delete moves mail to the Bin, never deletes it for good). Mail moved to the
 // Bin or Spam in Gmail leaves the app's inbox. Replies are sent through Gmail, which files them in Sent itself.
 
@@ -8,12 +9,12 @@ import { simpleParser } from "mailparser";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { Json, Tables } from "@messages/db";
 import { Backoff, SerialQueue, Sleeper, supervise } from "../backoff";
-import { activity, GMAIL_POLL, markActivity, nextPollDelay } from "../polling";
+import { accountActivity, GMAIL_POLL } from "../polling";
 import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { chunks, mapLimit, push } from "../util";
-import { normalizeEmail, type NormalizedEmail } from "../ingest/normalize-email";
+import { normalizeEmail, type EmailAttachment, type NormalizedEmail } from "../ingest/normalize-email";
 import { storeEmail, storeEmails, type EmailContext } from "../ingest/store-email";
 import { isFailure } from "../ingest/batch-rpc";
 import { saveFilesQuietly } from "../ingest/attachment-files";
@@ -105,6 +106,7 @@ export class GmailConnector {
   async stop() {
     this.stopped = true;
     this.sleeper.interrupt();
+    accountActivity.forget(this.id);
   }
 
   private async run() {
@@ -171,12 +173,14 @@ export class GmailConnector {
     let lastFiles = Date.now();
     let lastTouch = Date.now();
     let failures = 0;
-    // Work queued in the app, or mail seen on another account, ends an idle wait early.
-    const wakeOnActivity = activity.onMark(() => this.sleeper.interrupt());
+    accountActivity.mark(this.id); // a new session starts with quick checks
+    // Work the app does for this account (a send, an action) ends an idle wait early.
+    const wakeOnActivity = accountActivity.onMark(this.id, () => this.sleeper.interrupt());
     try {
       while (!this.stopped) {
-        // 5 s while there has been recent activity, backing off when quiet (see polling.ts); a failed check retries quickly.
-        await this.sleeper.wait(failures > 0 ? GMAIL_POLL.activeMs : nextPollDelay(Date.now(), activity.since(), GMAIL_POLL));
+        // 5 s while this mailbox has had activity recently, backing off to 30 s then 60 s when quiet (see
+        // polling.ts); a failed check retries quickly.
+        await this.sleeper.wait(failures > 0 ? GMAIL_POLL.activeMs : accountActivity.delay(this.id, GMAIL_POLL));
         if (this.stopped) break;
         // One failed check (a Gmail rate limit, a database hiccup) is retried at the next one rather than
         // ending the session. A revoked sign-in ends it at once, and a minute of failures in a row ends it
@@ -282,7 +286,7 @@ export class GmailConnector {
     }
 
     if (records.length > 0) {
-      markActivity(); // something happened in this mailbox: keep checking quickly for a while
+      accountActivity.mark(this.id); // something happened in this mailbox: keep checking quickly for a while
       await this.applyChanges(records);
     }
     if (latest !== startHistoryId) await saveSyncState(this.id, "history", { history_id: latest });
@@ -436,6 +440,13 @@ export class GmailConnector {
     return (await this.parse(msg)).html;
   }
 
+  /** A message's files, fetched again for one the owner opened (ingest/fetch-requests.ts). null when Gmail no longer has the message. */
+  async attachmentsOf(meta: Json): Promise<EmailAttachment[] | null> {
+    const gmailId = (meta as { gmail_id?: string } | null)?.gmail_id;
+    const msg = gmailId ? await this.fetchMessage(gmailId, "raw") : null;
+    return msg?.raw ? (await this.parse(msg)).attachments : null;
+  }
+
   /** One message, or null when Gmail no longer has it. */
   private async fetchMessage(gmailId: string, format: "raw" | "minimal"): Promise<RawMessage | null> {
     try {
@@ -492,7 +503,7 @@ export class GmailConnector {
           "load thread labels",
         ),
         allRows(
-          (from, to) => db.from("mail_actions").select("thread_id").in("thread_id", ids).eq("status", "queued").order("id").range(from, to),
+          (from, to) => db.from("mail_actions").select("thread_id").in("thread_id", ids).in("status", ["queued", "working"]).order("id").range(from, to),
           "check queued actions",
         ),
       ]);
@@ -548,6 +559,7 @@ export class GmailConnector {
    * conversation, then imports the sent copy.
    */
   async send(queuedRow: OutboxRow) {
+    accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
     if (!this.ready) return; // still connecting: the next poll retries it
     const row = await claimReady(queuedRow); // waits for its files, then claims it
     if (!row) return;
@@ -615,6 +627,7 @@ export class GmailConnector {
 
   /** Applies a read, unread, archive, unarchive, delete, undelete, junk or not junk made in the app to the labels in Gmail. */
   async applyAction(row: Tables<"mail_actions">) {
+    accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
     if (!this.ready) return; // still connecting: the next poll retries it
     const run = async () => {
       const change = actionLabels(row.action);
@@ -690,6 +703,7 @@ export class GmailConnector {
 
   /** Unsubscribes from one sender. An unsubscribe email goes out through Gmail. */
   async unsubscribe(row: Tables<"unsubscribes">) {
+    accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
     if (!this.ready) return;
     await carryOutUnsubscribe(this.id, row, (mailto) => this.mailtoUnsubscribe(mailto));
   }

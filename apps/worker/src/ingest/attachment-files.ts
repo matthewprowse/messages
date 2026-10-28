@@ -7,7 +7,7 @@ import { FIELD } from "@messages/crypto/fields";
 import { db, must } from "../db";
 import { keepFile, MAX_FILE_BYTES } from "../file-store";
 import { errorCode, log } from "../log";
-import { isVideoLink, refusing, stateFor } from "../storage-rules";
+import { isDeferred, isVideoLink, refusing, stateFor } from "../storage-rules";
 import { open } from "../vault";
 import { fileHints } from "./file-hints";
 import type { EmailAttachment } from "./normalize-email";
@@ -23,9 +23,19 @@ const NOT_STORED = new Set(["tiny", "junk"]);
  * encrypted, so it is opened to compare). Logos, signature images and tracking pixels are marked hidden on the
  * way (a manual choice is never changed), and tiny or junk files are not uploaded. Returns how many files were
  * saved. Files already saved, too large, over the video or storage limits, or without a match are skipped.
+ * A file over the eager size, or on an old message, is not copied: its row is marked not_kept = 'deferred' and the
+ * file is fetched when its owner opens it. `wanted` names the rows to copy now whatever their size or age (a
+ * request to open one), and then every other row is left alone.
  */
-export async function saveAttachmentFiles(accountId: string, userId: string, messageId: string, files: EmailAttachment[]): Promise<number> {
+export async function saveAttachmentFiles(
+  accountId: string,
+  userId: string,
+  messageId: string,
+  files: EmailAttachment[],
+  opts: { wanted?: ReadonlySet<string> } = {},
+): Promise<number> {
   if (files.length === 0) return 0;
+  const sentAt = opts.wanted ? null : (await db.from("messages").select("sent_at").eq("id", messageId).maybeSingle()).data?.sent_at ?? null;
   const rows = must(
     await db
       .from("attachments")
@@ -38,6 +48,7 @@ export async function saveAttachmentFiles(accountId: string, userId: string, mes
   let saved = 0;
   let started = rows.some((r) => r.storage_path);
   for (const row of rows) {
+    if (opts.wanted && !opts.wanted.has(row.id)) continue;
     const name = await open(userId, FIELD.filename, row.filename);
     const i = unused.findIndex((f) => f.filename === name && f.sizeBytes === row.size_bytes);
     if (i < 0) continue;
@@ -58,6 +69,13 @@ export async function saveAttachmentFiles(accountId: string, userId: string, mes
       must(await db.from("attachments").update({ hidden: true, hidden_reason: reason }).eq("id", row.id), "hide attachment");
     }
     if (row.storage_path || (reason && NOT_STORED.has(reason))) continue;
+
+    // Left at the provider until opened. If the database does not know 'deferred' yet (migration pending), the file is
+    // copied as before rather than lost.
+    if (!opts.wanted && !hints.sticker && isDeferred(row.size_bytes, sentAt)) {
+      const { error } = await db.from("attachments").update({ not_kept: "deferred" }).eq("id", row.id).is("storage_path", null);
+      if (!error) continue;
+    }
 
     const result = await keepFile({
       userId,
@@ -108,6 +126,7 @@ export class MissingFiles {
       .eq("messages.account_id", this.accountId)
       .lte("size_bytes", MAX_FILE_BYTES)
       // A video kept as a link is never fetched; a file refused for a full seat is tried again once there is room.
+      // A deferred file ('deferred') is left out on purpose: it is fetched only when its owner opens it (fetch-requests.ts).
       .or("not_kept.is.null,not_kept.eq.over_cap");
     if (this.cursor) query = query.gt("id", this.cursor);
     const rows = must(await query.order("id").limit(this.pageSize), "load missing attachment files");

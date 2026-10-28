@@ -37,7 +37,10 @@ export function MessageBody({ m, whatsapp, bulk, showFull = false }: { m: Messag
             {m.quoted && <div className="w-full whitespace-pre-wrap wrap-anywhere border-t border-current/20 pt-2 text-xs opacity-70"><Linked text={m.quoted} /></div>}
           </>
         ) : preview.text ? (
-          <EmailText text={preview.text} marks={m.marks} />
+          <>
+            <EmailText text={preview.text} marks={m.marks} />
+            {m.bodyShrunk && <div className="text-xs opacity-70">Older bulk mail is shortened. Use View Original to read it all.</div>}
+          </>
         ) : (
           <div>This email is mostly images. Open the original to read it.</div>
         )}
@@ -59,7 +62,7 @@ export function MessageBody({ m, whatsapp, bulk, showFull = false }: { m: Messag
 
 /** Whether a message shows a short preview that Show Full Text opens up. The toggle sits beside the date, under the bubble. */
 export function hasFullText(m: Message, whatsapp: boolean, bulk: boolean): boolean {
-  if (whatsapp || !bulk) return false;
+  if (whatsapp || !bulk || m.bodyShrunk) return false; // a shortened message has no more text to show
   const preview = bulkPreview(m.body);
   return !!preview && (preview.more || !!m.quoted);
 }
@@ -243,11 +246,29 @@ function awaitAnswer(id: string): Promise<Answer> {
       void supabase.removeChannel(channel);
       resolve(answer);
     }
-    async function check() {
-      const { data: row } = await supabase.from("email_originals").select("status, html, error").eq("id", id).maybeSingle();
+    // The sealed HTML is read once, when the row says it is done: a Realtime payload's copy is never used, and the
+    // checks before that read only the status.
+    let reading = false;
+    let again = false;
+    async function readOnce() {
+      const { data: row } = await supabase.from("email_originals").select("status, error").eq("id", id).maybeSingle();
       if (settled || !row) return;
-      if (row.status === "done" && row.html) finish({ status: "done", html: row.html });
-      else if (row.status === "failed") finish({ status: "failed", error: (row.error && ORIGINAL_ERRORS[row.error]) || row.error || "The original could not be fetched." });
+      if (row.status === "done") {
+        const { data: full } = await supabase.from("email_originals").select("html").eq("id", id).maybeSingle();
+        if (!settled && full?.html) finish({ status: "done", html: full.html });
+      } else if (row.status === "failed") finish({ status: "failed", error: (row.error && ORIGINAL_ERRORS[row.error]) || row.error || "The original could not be fetched." });
+    }
+    async function check() {
+      if (reading) { again = true; return; } // an update landed meanwhile: look again once this read is done
+      reading = true;
+      try {
+        do {
+          again = false;
+          await readOnce();
+        } while (again && !settled);
+      } finally {
+        reading = false;
+      }
     }
     function recheck() {
       timer = setTimeout(async () => {

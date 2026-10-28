@@ -2,6 +2,11 @@
 // phone sends when the device links are stored like email; replies queued in the outbox go out over the
 // link. Nothing is ever sent on its own: no presence, no "online", and read receipts only when you open a
 // chat in the app with read receipts turned on in Settings.
+//
+// Memory and reads: the name, chat, group, privacy ID and download-count maps are size-bounded (least recently
+// used first, ../whatsapp/bounded-map.ts) and re-derived on demand; groups are cleared on reconnect. The
+// ten-minute missing-file catch-up asks the database nothing while the link is down or nothing is missing, and
+// looks for old stickers only when the recent pass found work or once an hour.
 
 import makeWASocket, {
   Browsers,
@@ -40,6 +45,7 @@ import { newChatNumber, outgoingMessages } from "../whatsapp/outgoing";
 import { prepareVoiceNotes } from "../whatsapp/voice-note";
 import { isLinked, useDbAuthState, type DbAuthState } from "../whatsapp/auth-state";
 import { silentLogger } from "../whatsapp/logger";
+import { BoundedMap } from "../whatsapp/bounded-map";
 import { messageFromRef, mediaRef, saveMedia, type MediaRow, type StoredMedia } from "../whatsapp/media";
 import { describe, e164, formatPairingCode, nameMentions, oneLine, pairingDigits, unreadInHistory } from "../whatsapp/normalize";
 import { quietSignalLogs } from "../whatsapp/quiet-signal";
@@ -54,6 +60,15 @@ import { keysFor, open, openAddresses, seal, sealAddress } from "../vault";
 quietSignalLogs();
 
 const MEDIA_CATCH_UP_MS = 10 * 60_000;
+const STICKER_PASS_IDLE_MS = 60 * 60_000; // old stickers are looked for this rarely once a pass finds none missing
+const SPENT_IN_QUERY = 300; // files past their tries named in the catch-up query, newest first, to keep the URL short
+// Memory bounds for the per-account Maps below (least recently used goes first). All of it is worked out again
+// from the database or the socket when needed, so a dropped entry costs a lookup, not correctness.
+const MAX_NAMES = 20_000;
+const MAX_CHATS = 5_000;
+const MAX_GROUPS = 2_000;
+const MAX_LIDS = 20_000;
+const MAX_FILE_TRY_ENTRIES = 5_000;
 const TOUCH_MS = 60_000;
 const SELF = "me"; // who you are in provider_meta.reactions; anyone else is their number's or privacy ID's index
 const MAX_FILE_TRIES = 3; // per file, per worker run
@@ -100,19 +115,21 @@ export class WhatsAppConnector {
   private readonly media = new SerialQueue();
   private timers: NodeJS.Timeout[] = [];
   /** Names by JID: saved on your phone (wins) or set by the person. Also by privacy ID. */
-  private savedNames = new Map<string, string>();
-  private pushNames = new Map<string, string>();
-  private groups = new Map<string, GroupMetadata>();
-  private chats = new Map<string, { name?: string | null; archived?: boolean | null }>();
+  private savedNames = new BoundedMap<string, string>(MAX_NAMES);
+  private pushNames = new BoundedMap<string, string>(MAX_NAMES);
+  private groups = new BoundedMap<string, GroupMetadata>(MAX_GROUPS);
+  private chats = new BoundedMap<string, { name?: string | null; archived?: boolean | null }>(MAX_CHATS);
   /** Download attempts per file this run, so one that cannot be fetched is not retried forever. */
-  private fileTries = new Map<string, number>();
+  private fileTries = new BoundedMap<string, number>(MAX_FILE_TRY_ENTRIES);
   /** Phone JIDs by privacy ID, as the link reports them; null when it did not know one yet. */
-  private pnByLid = new Map<string, string | null>();
+  private pnByLid = new BoundedMap<string, string | null>(MAX_LIDS);
   /** Privacy IDs already mapped in the database this run, so repeated history batches skip the write. */
-  private mappedLids = new Map<string, string>();
+  private mappedLids = new BoundedMap<string, string>(MAX_LIDS);
   private historyBatches = 0;
   private photosRunning = false;
   private lastMediaCatchUp = 0;
+  /** When the sticker pass of the media catch-up last found nothing missing; it then waits STICKER_PASS_IDLE_MS. */
+  private stickersIdleSince = 0;
 
   constructor(private readonly account: AccountRow) {}
 
@@ -171,6 +188,9 @@ export class WhatsAppConnector {
       : pairingDigits(must(await db.from("accounts").select("pairing_phone").eq("id", this.id).single(), "load whatsapp account").pairing_phone);
     await setAccountStatus(this.id, "connecting", linked ? null : "Getting a code from WhatsApp.");
     for (const [lid, pn] of this.pnByLid) if (!pn) this.pnByLid.delete(lid);
+    // Both are rebuilt by the link on open (group list) or by the next history batch (database mapping writes).
+    this.groups.clear();
+    this.mappedLids.clear();
 
     // The bundled WhatsApp Web version goes stale; ask for the current one (kept for a few hours, so a
     // reconnect does not ask again), else use the bundled one.
@@ -813,14 +833,17 @@ export class WhatsAppConnector {
     const sock = this.sock;
     if (!sock || !this.open) return;
     const saved = await saveMedia(sock, msg, { userId: this.account.user_id, accountId: this.id, ...row });
-    if (saved) log.info("whatsapp file saved", { account: this.id, attachment: row.attachmentId });
+    if (saved) {
+      this.fileTries.delete(row.attachmentId); // saved: never asked for again, so the count has no more use
+      log.info("whatsapp file saved", { account: this.id, attachment: row.attachmentId });
+    }
   }
 
   /** Files not saved yet (a failed download, or one the phone had to upload again), within the import window. */
   private async saveMissingMedia() {
     const since = new Date(Date.now() - env.initialSyncDays * 86_400_000).toISOString();
     // Files already past their tries are left out of the query, or they would fill the limit and starve the rest.
-    const spent = [...this.fileTries].filter(([, tries]) => tries >= MAX_FILE_TRIES).map(([id]) => id);
+    const spent = [...this.fileTries].filter(([, tries]) => tries >= MAX_FILE_TRIES).map(([id]) => id).slice(-SPENT_IN_QUERY);
     const missing = () => {
       const query = db
         .from("attachments")
@@ -832,10 +855,17 @@ export class WhatsAppConnector {
         .lte("size_bytes", MAX_FILE_BYTES);
       return (spent.length > 0 ? query.not("id", "in", `(${spent.join(",")})`) : query).limit(100);
     };
-    const [recent, stickers] = await Promise.all([
-      missing().gte("messages.sent_at", since).then((r) => must(r, "load missing whatsapp files")),
-      missing().eq("is_sticker", true).then((r) => must(r, "load missing whatsapp stickers")),
-    ]);
+    // Nothing to fetch with, nothing to ask the database for.
+    if (!this.sock || !this.open) return;
+    const recent = await missing().gte("messages.sent_at", since).then((r) => must(r, "load missing whatsapp files"));
+    // Stickers are kept at any age, but a new one is inside the window above, so older ones are only looked
+    // for when the recent pass found work, or once an hour after a pass that found none.
+    let stickers: typeof recent = [];
+    if (recent.length > 0 || Date.now() - this.stickersIdleSince >= STICKER_PASS_IDLE_MS) {
+      stickers = await missing().eq("is_sticker", true).then((r) => must(r, "load missing whatsapp stickers"));
+      this.stickersIdleSince = stickers.length === 0 ? Date.now() : 0;
+    }
+    if (recent.length === 0 && stickers.length === 0) return;
     const rows = await openAddresses(this.account.user_id, [...new Map([...recent, ...stickers].map((r) => [r.id, r])).values()]);
     for (const r of rows) {
       const tries = this.fileTries.get(r.id) ?? 0;

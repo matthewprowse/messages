@@ -31,7 +31,7 @@ function listen(userId: string, onChange: (deletedId?: string) => void): () => v
     channel = supabase
       .channel(`meetings-${userId}`)
       // Realtime applies a row filter to inserts and updates only; a deletion carries just the id.
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "meetings" }, (payload) => notify((payload.old as { id?: string }).id))
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "meetings" }, (payload) => notify((payload.old as { id?: string } | null)?.id))
       .on("postgres_changes", { event: "*", schema: "public", table: "meetings", filter: `user_id=eq.${userId}` }, (payload) => {
         if (payload.eventType !== "DELETE") notify();
       })

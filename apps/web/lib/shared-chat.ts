@@ -15,11 +15,18 @@ import { open, seal, teamKeys } from "./vault";
 import { sealAddress } from "./address-refs";
 import { loadThreadMessages } from "./data";
 import { useMyTeam } from "./share";
+import { pollWhileVisible } from "./visible-poll";
+import { overlayPage, sameMark, SHARED_PAGE, type ChatMark } from "./shared-chat-merge";
 import { isE164 } from "./new-items";
 import type { Message } from "./types";
 
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";
-const POLL_MS = 10_000;
+/** How often an open chat checks, cheaply, whether it changed. Realtime brings the changes; this catches what it missed. */
+const POLL_MS = 60_000;
+/** A reload after Realtime events waits this long, so a burst of them (a sync, a sealing) is one reload. */
+const RELOAD_MS = 2000;
+/** Every this many checks the whole chat is read anyway, for changes the cheap check cannot see, such as who is assigned. */
+const FULL_EVERY = 5;
 
 // ---------------------------------------------------------------------------
 // Lists
@@ -74,8 +81,7 @@ export function useAssignedChats() {
   }, [userId]);
   useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), 30_000);
-    return () => clearInterval(timer);
+    return pollWhileVisible(() => void load(), 30_000);
   }, [load]);
   return { chats, load };
 }
@@ -106,8 +112,7 @@ export function useInboxChats(accountId: string | null) {
   useEffect(() => {
     setChats(null);
     void first();
-    const timer = setInterval(() => void first(), 30_000);
-    return () => clearInterval(timer);
+    return pollWhileVisible(() => void first(), 30_000);
   }, [first]);
   const loadMore = useCallback(async () => {
     const last = chats?.[chats.length - 1]?.lastMessageAt;
@@ -156,6 +161,14 @@ export interface TimelineMessage extends Message {
   own?: boolean;
 }
 
+/** How many messages a chat has and which is newest: one small request, to tell whether it changed. */
+async function chatMark(threadId: string): Promise<ChatMark> {
+  const { data, count, error } = await supabase.from("messages").select("id, sent_at", { count: "exact" }).eq("thread_id", threadId)
+    .order("sent_at", { ascending: false }).order("id", { ascending: false }).limit(1);
+  if (error) throw error;
+  return { count: count ?? 0, newestId: data?.[0]?.id ?? null, newestAt: data?.[0]?.sent_at ?? null };
+}
+
 /** Their own conversations started from this chat, newest first. */
 async function ownConversations(threadId: string): Promise<{ threadId: string; at: string | null }[]> {
   const { data } = await supabase.from("outbox").select("thread_id, sent_at").eq("for_thread_id", threadId).not("thread_id", "is", null).order("created_at", { ascending: false });
@@ -177,6 +190,9 @@ export function useSharedChat(threadId: string) {
   const [failed, setFailed] = useState(false);
   const logged = useRef<string | null>(null);
   const relogged = useRef(false);
+  // The messages held, and the mark of the chat when they were read, for reloading only what changed.
+  const heldRef = useRef<TimelineMessage[] | null>(null);
+  const markRef = useRef<ChatMark | null>(null);
 
   const load = useCallback(async () => {
     if (team === undefined) return;
@@ -218,28 +234,40 @@ export function useSharedChat(threadId: string) {
     };
     setInfo(next);
     try {
-      const page = await loadThreadMessages(threadId);
+      const mark = await chatMark(threadId);
+      const page = await loadThreadMessages(threadId, { limit: SHARED_PAGE });
       const own = next.reply === "own" ? await ownConversations(threadId) : [];
-      const mine = (await Promise.all(own.map((c) => loadThreadMessages(c.threadId).then((p) => p.messages).catch(() => [] as Message[])))).flat().map((m): TimelineMessage => ({ ...m, own: true }));
-      const all = [...page.messages, ...mine].sort((a, b) => a.sentAt.localeCompare(b.sentAt) || a.id.localeCompare(b.id));
+      const mine = (await Promise.all(own.map((c) => loadThreadMessages(c.threadId, { limit: SHARED_PAGE }).then((p) => p.messages).catch(() => [] as Message[])))).flat().map((m): TimelineMessage => ({ ...m, own: true }));
+      // A reload lays the newest page over what is held, so older messages already loaded stay.
+      const firstRead = !heldRef.current;
+      const held = (heldRef.current ?? []).filter((m) => !m.own);
+      const shared = !firstRead ? overlayPage<TimelineMessage>(held, page.messages) : page.messages;
+      const all = [...shared, ...mine].sort((a, b) => a.sentAt.localeCompare(b.sentAt) || a.id.localeCompare(b.id));
+      heldRef.current = all;
+      markRef.current = mark;
       setMessages(all);
-      setOlder(page.more);
+      if (firstRead) setOlder(page.more);
     } catch {
       setFailed(true);
     }
   }, [threadId, team]);
 
-  useEffect(() => { setInfo(undefined); setMessages(null); logged.current = null; relogged.current = false; }, [threadId]);
+  useEffect(() => { setInfo(undefined); setMessages(null); logged.current = null; relogged.current = false; heldRef.current = null; markRef.current = null; }, [threadId]);
   useEffect(() => {
     void load();
-    const timer = setInterval(() => { if (document.visibilityState === "visible") void load(); }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [load]);
+    // One cheap request says whether anything changed; only then (or every few checks) is the chat read again.
+    let checks = 0;
+    return pollWhileVisible(() => {
+      checks++;
+      if (checks % FULL_EVERY === 0) return void load();
+      void chatMark(threadId).then((mark) => { if (!sameMark(markRef.current, mark)) void load(); }, () => undefined);
+    }, POLL_MS);
+  }, [load, threadId]);
 
   // New messages arrive, and the worker seals them a moment later: either way, read again.
   useEffect(() => {
     let wait: ReturnType<typeof setTimeout> | undefined;
-    const again = () => { clearTimeout(wait); wait = setTimeout(() => void load(), 600); };
+    const again = () => { clearTimeout(wait); wait = setTimeout(() => void load(), RELOAD_MS); };
     const channel = supabase.channel(`shared-messages-${threadId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "messages", filter: `thread_id=eq.${threadId}` }, again)
       .subscribe();

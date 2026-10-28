@@ -24,7 +24,10 @@ from .session import SessionDir
 from .signin import SignInFailed, SignInStopped, open_reminders, sign_in
 from .store import PROVIDER, SignInRow, Store
 
-LOOP_S = 3.0  # ticks are looked for this often; it is a database read until there is one
+LOOP_S = 3.0  # ticks are looked for this often while changes are coming through; it is a database read until there is one
+IDLE_AFTER = 10  # empty passes (30 s) before looking every MID_S, and again before looking every SLOW_S
+MID_S = 15.0
+SLOW_S = 30.0
 FULL_EVERY = timedelta(hours=6)  # a full read at least this often, which catches anything the changes missed
 SESSION_SAVE_S = 600.0
 RELOGIN = "Connect iCloud Reminders again in Settings."
@@ -48,6 +51,13 @@ class Rejected(Exception):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+def loop_wait(empty: int) -> float:
+    """Seconds before the next look for app changes, given the passes in a row that found none: quick while
+    changes are coming, then 15 s, then 30 s, so an idle account costs a few queries a minute. Finding a change
+    (or the sync worker claiming one) sets the count back to 0."""
+    return LOOP_S if empty < IDLE_AFTER else MID_S if empty < 2 * IDLE_AFTER else SLOW_S
 
 
 def update_failure(err: BaseException) -> tuple[str, str]:
@@ -202,10 +212,11 @@ class AccountSync:
         token, _ = self.store.sync_state(self.id)
         if token is None:
             self.store.set_status(self.account, "syncing", "Importing your reminders.")
+        empty = 0  # passes in a row that found no change made in the app
         while not self.stop.is_set():
             try:
                 if self.clock() >= self.paused_until:
-                    self.apply_updates(reminders)
+                    empty = 0 if self.apply_updates(reminders) else empty + 1
                 if self.clock() >= next_sync:
                     self.sync(reminders)
                     if not self.connected:
@@ -241,7 +252,7 @@ class AccountSync:
                 next_sync = self.paused_until = self.clock() + wait
                 self.store.set_detail(self.id, t.detail)
                 log.info("icloud reminders backing off", account=self.id, kind=t.kind, inS=round(wait))
-            self.stop.wait(LOOP_S)
+            self.stop.wait(loop_wait(empty))
 
     # -- reading ----------------------------------------------------------------------------------------
 
@@ -315,15 +326,16 @@ class AccountSync:
             return task.get("account_id") == self.id
         return action in ("update", "delete") and not row.get("task_id")
 
-    def apply_updates(self, reminders: Any) -> None:
+    def apply_updates(self, reminders: Any) -> int:
         """Ticks, unticks, new tasks, edits and deletes made in the app, one at a time and in order. The sync
         worker has claimed each ("updating") and waits for it to settle; settling is done here, with the reason
         when it did not go through. A delete wins over the edits queued before it for the same task."""
-        rows = [row for row in self.store.claimed_updates(self.id, self.user_id) if self.mine(row)]
+        claimed = self.store.claimed_updates(self.id, self.user_id)
+        rows = [row for row in claimed if self.mine(row)]
         last_delete = {row["task_id"]: i for i, row in enumerate(rows) if row["action"] == "delete" and row.get("task_id")}
         for i, row in enumerate(rows):
             if self.stop.is_set():
-                return
+                return len(claimed)
             action = row["action"]
             if action != "delete" and i < last_delete.get(row.get("task_id"), -1):
                 self.store.finish_superseded(row)
@@ -349,6 +361,7 @@ class AccountSync:
                 log.warn("icloud reminders tick failed", account=self.id, update=row["id"], code=log.code_of(err))
                 if not isinstance(err, LookupError):
                     raise  # the loop decides whether it is a wait or the end of the session
+        return len(claimed)
 
     def tick(self, reminders: Any, row: dict[str, Any], reminder_id: str) -> None:
         """Completes (or reopens) one reminder in iCloud. One already as asked is left as it is and counts as done."""

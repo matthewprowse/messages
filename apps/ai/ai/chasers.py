@@ -6,6 +6,9 @@ Waiting filter reads; Draft Follow-Up then writes the nudge (drafts.py, when the
 Each message is read once: a row keeps the message it was about, and a newer message of yours is read
 again. On ten real conversations the fast model called none of them waiting, sent documents and a
 proposed meeting time included; the full model got those right, and once per message costs little.
+A call pays for its instructions and answer overhead on the full model however few conversations it holds,
+and one or two are usually due per run, so a user is asked about once MIN_BATCH are due or the oldest has
+waited MAX_HOLD past its due time, then in one call of up to BATCH.
 Only counts are logged, never what was said."""
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ MAX_AGE = timedelta(days=30)
 PER_RUN = 40
 THREADS = 80  # looked at per run, each with its last few messages
 BATCH = 10
+MIN_BATCH = 5  # a user is only asked about when this many are due, or the oldest has waited MAX_HOLD past its due time
+MAX_HOLD = timedelta(hours=12)  # still inside the two-day Waiting window: read by about a day and a half
 MESSAGE_CHARS = 500
 CHASER_MAX_OUTPUT = 1024  # ten short answers; the schema is a list of id and a boolean
 
@@ -90,6 +95,20 @@ def _changed(thread: dict[str, Any], check: dict[str, Any] | None) -> bool:
         return True
 
 
+def batch_ready(last_message_at: list[str], now: datetime) -> bool:
+    """Whether enough is due for one user to be worth a call: MIN_BATCH conversations, or the oldest has been
+    due (a day after its last message) for MAX_HOLD. last_message_at is that time for each due conversation."""
+    if len(last_message_at) >= MIN_BATCH:
+        return True
+    for value in last_message_at:
+        try:
+            if now - (datetime.fromisoformat(str(value).replace("Z", "+00:00")) + MIN_AGE) >= MAX_HOLD:
+                return True
+        except ValueError:
+            return True  # an unreadable time is not held back
+    return False
+
+
 class Chasers:
     def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
         self.db = db
@@ -122,6 +141,14 @@ class Chasers:
         threads = [t for t in threads if _changed(t, checked.get(t["id"]))][:THREADS]
         if not threads:
             return 0
+        # Users with too little due are left for a later run before any message is read for them.
+        waiting: dict[str, list[str]] = {}
+        for t in threads:
+            waiting.setdefault(t["user_id"], []).append(t["last_message_at"])
+        ready = {u for u, times in waiting.items() if batch_ready(times, now)}
+        threads = [t for t in threads if t["user_id"] in ready]
+        if not threads:
+            return 0
         ids = [t["id"] for t in threads]
         seen = {k: r["message_id"] for k, r in checked.items()}
         messages = self.db.select(
@@ -129,14 +156,17 @@ class Chasers:
             {"select": "id,user_id,thread_id,direction,body_text,body_html,sent_at", "thread_id": in_list(ids), "order": "sent_at.desc", "limit": "1000"},
         )
         owner = {t["id"]: t["user_id"] for t in threads}
+        when = {t["id"]: t["last_message_at"] for t in threads}
         todo = [(thread, pair) for thread, pair in latest_per_thread(messages).items() if seen.get(thread) != pair[1]["id"]][:PER_RUN]
         done = 0
         by_user: dict[str, list[tuple[str, tuple[dict[str, Any] | None, dict[str, Any]]]]] = {}
         for thread, pair in todo:
             by_user.setdefault(owner[thread], []).append((thread, pair))
         for user, items in by_user.items():
-            for i in range(0, len(items), BATCH):
-                done += self._check(user, items[i : i + BATCH])
+            if not batch_ready([when[thread] for thread, _ in items], now):  # what is left once answered ones are dropped
+                continue
+            items.sort(key=lambda item: str(when[item[0]]))  # the longest waiting first
+            done += self._check(user, items[:BATCH])  # one call per user per run; the rest next run
         if done:
             log.info("follow-ups checked", count=done)
         return done

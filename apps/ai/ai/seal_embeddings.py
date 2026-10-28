@@ -1,6 +1,10 @@
-"""One-off backfill: seals the plaintext vectors already in message_embeddings.embedding into
-message_embeddings.embedding_data, so the plaintext column can be dropped
-(20261102800100_drop_plaintext_embeddings, apply only after this has run).
+"""One-off backfill: sealed the plaintext vectors that were in message_embeddings.embedding into
+message_embeddings.embedding_data, so the plaintext column could be dropped
+(20261102800100_drop_plaintext_embeddings, applied only after this had run).
+
+FINISHED on 28 October 2026: all 2,486 vectors were sealed and checked against their plaintext, then the column was dropped.
+It can no longer run against the database, which has no `embedding` column. It stays for its tests, which show how a
+vector is read, sealed and written.
 
     python3 -m ai.seal_embeddings           dry run: counts what would be sealed, writes nothing
     python3 -m ai.seal_embeddings --apply   seals and writes

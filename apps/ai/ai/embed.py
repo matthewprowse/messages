@@ -156,4 +156,6 @@ class Embeddings:
         except Exception as err:
             log.warn("embeddings not saved", messages=len(saved), code=log.code_of(err))
             return set()
+        for user_id in {m["user_id"] for m, _ in saved}:
+            self.index.forget(user_id)  # its cached vectors no longer include this one
         return {m["id"] for m, _ in saved}

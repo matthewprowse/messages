@@ -1,4 +1,7 @@
-// Every 15 minutes, and once at startup, finds contacts that are one person. Certain ones are merged
+// Every 15 minutes, and once at startup, finds contacts that are one person. A run only looks at users whose
+// contacts, identities or address book cards changed since the last one (dirty.ts), plus each user every 6 hours
+// for new email signatures and every user once a day: an idle run is 3 queries in total instead of 10 or more per
+// user and a reload of up to 3,000 messages. Certain ones are merged
 // (merge_contacts with p_automatic, one at a time, each pair checked again just before), likely ones are
 // saved as suggestions for a one-click merge. See match.ts for the rules.
 //
@@ -9,6 +12,7 @@ import { startEvery } from "../backoff";
 import { allRows, db, must } from "../db";
 import { errorCode, log } from "../log";
 import { chunks, push } from "../util";
+import { changedSince, newGate, pickUsers } from "./dirty";
 import { countryCodeFrom } from "./cards-store";
 import { chooseKeep, findMatches, mergeReason, ordered, pairKey, type MatchInput, type Suggestion } from "./match";
 import { ownIdentities } from "./own";
@@ -41,12 +45,31 @@ export function startContactLinker() {
   startEvery(FIRST_RUN_MS, EVERY_MS, runContactLinker, (err) => log.warn("contact linker failed", { code: errorCode(err) }));
 }
 
+const gate = newGate();
+const CHANGE_LIMIT = 5000;
+
+/** Users with a contact, identity or card written since `since`, or "all" when there are more rows than one look reads. */
+async function changedUsers(since: string | null): Promise<Set<string> | "all"> {
+  if (!since) return "all";
+  const [contacts, identities, cards] = await Promise.all([
+    db.from("contacts").select("user_id").gt("updated_at", since).limit(CHANGE_LIMIT),
+    db.from("contact_identities").select("user_id").gt("created_at", since).limit(CHANGE_LIMIT),
+    db.from("address_book_cards").select("user_id").gt("updated_at", since).limit(CHANGE_LIMIT),
+  ]);
+  const lists = [must(contacts, "check changed contacts"), must(identities, "check changed identities"), must(cards, "check changed cards")];
+  if (lists.some((l) => l.length >= CHANGE_LIMIT)) return "all";
+  return new Set(lists.flatMap((l) => l.map((r) => r.user_id)));
+}
+
 async function runContactLinker() {
-  const users = [...new Set(must(await db.from("accounts").select("user_id"), "load linker users").map((a) => a.user_id))];
+  const all = [...new Set(must(await db.from("accounts").select("user_id"), "load linker users").map((a) => a.user_id))];
+  const now = Date.now();
+  const users = pickUsers(gate, all, await changedUsers(changedSince(gate, now)), now);
   for (const user of users) {
     try {
       await linkUser(user);
     } catch (err) {
+      gate.lastRun.delete(user); // not done: due again at the next run
       log.warn("contact linker user failed", { user, code: errorCode(err) });
     }
   }

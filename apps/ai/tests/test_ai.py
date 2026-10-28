@@ -130,11 +130,15 @@ class Voice(unittest.TestCase):
         self.assertEqual(dict(updates), {"a": {"support_count": 2, "enabled": True}, "b": {"support_count": 2}})
         self.assertEqual(inserts, [])
 
-    def test_due_every_ten_sent(self):
+    def test_due_every_thirty_sent_and_a_week_apart(self):
+        old = "2026-10-01T00:00:00Z"
+        now = datetime(2026, 10, 28, tzinfo=timezone.utc)
         self.assertFalse(voice_due(9, 0, None))
         self.assertTrue(voice_due(10, 0, None))
-        self.assertFalse(voice_due(29, 20, "2026-10-01T00:00:00Z"))
-        self.assertTrue(voice_due(30, 20, "2026-10-01T00:00:00Z"))
+        self.assertFalse(voice_due(49, 20, old, now))
+        self.assertTrue(voice_due(50, 20, old, now))
+        self.assertFalse(voice_due(80, 20, "2026-10-25T00:00:00Z", now))  # enough mail, but learned three days ago
+        self.assertTrue(voice_due(80, 20, "2026-10-20T00:00:00Z", now))
 
     def test_turned_off_rules_are_listed(self):
         self.assertIn("Rules they turned off:\n- Uses emojis", build_prompt(["Hi"], [], ["Uses emojis"]))
@@ -273,7 +277,8 @@ class PeopleNotes(unittest.TestCase):
             {"id": "new", "style_updated_at": None},
             {"id": "few", "style_updated_at": None},
         ]
-        inbound = {"fresh": times[4:], "stale": times[4:]}
+        more = [f"2026-10-{d:02d}T00:00:00Z" for d in range(8, 20)]
+        inbound = {"fresh": times[4:] + more[:7], "stale": times[4:] + more[:7]}  # 10 since, ten being the step
         self.assertEqual(people_due(sent, contacts, inbound), ["new", "fresh"])
 
     def test_orgs_due(self):
@@ -288,9 +293,9 @@ class PeopleNotes(unittest.TestCase):
         # d has too few new emails, e was summarised too recently: what a company sends rarely changes.
         self.assertEqual(orgs_due(orgs, mail), ["a", "b"])
 
-    def test_person_notes_wait_a_few_days(self):
-        times = [_days_ago(1)] * 6
-        contacts = [{"id": "recent", "style_updated_at": _days_ago(2)}, {"id": "older", "style_updated_at": _days_ago(4)}]
+    def test_person_notes_wait_a_week(self):
+        times = [_days_ago(1)] * 12
+        contacts = [{"id": "recent", "style_updated_at": _days_ago(5)}, {"id": "older", "style_updated_at": _days_ago(8)}]
         self.assertEqual(people_due({"recent": times, "older": times}, contacts, {}), ["older"])
 
     def test_scan_only_when_something_changed(self):
@@ -387,14 +392,14 @@ class TriageDecisions(unittest.TestCase):
 
         bulk = {"is_bulk": True}
         self.assertIsNone(sender_outcome({"subject": "Hi"}, [answered()] * 3, now))  # not bulk mail
-        self.assertIsNone(sender_outcome(bulk, [answered()] * 2, now))  # too little evidence
+        self.assertIsNone(sender_outcome(bulk, [answered()], now))  # too little evidence
         self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(junk=False)], now))
         self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(needs_reply=True)], now))
         self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(category="personal")], now))
         self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(priority="important")], now))
         self.assertIsNone(sender_outcome(bulk, [answered(), answered(), answered(corrected=True)], now))  # you corrected one
-        self.assertIsNone(sender_outcome(bulk, [answered(20), answered(21), answered(22)], now))  # the model looks again every two weeks
-        self.assertIsNotNone(sender_outcome(bulk, [answered(13), answered(21), answered(22)], now))
+        self.assertIsNone(sender_outcome(bulk, [answered(40), answered(41), answered(42)], now))  # the model looks again every month
+        self.assertIsNotNone(sender_outcome(bulk, [answered(29), answered(41), answered(42)], now))
 
     def test_settled_senders_are_read_once_per_user_and_a_failed_read_settles_nothing(self):
         class Db:
@@ -417,7 +422,7 @@ class TriageDecisions(unittest.TestCase):
         db = Db()
         got = Triage(db, None, "m")._settled_senders(mail)
         self.assertEqual(list(got), ["a"])  # s2 has no history, c is not bulk, d cannot be looked up
-        self.assertEqual(db.calls, [("sender_history", {"p_user": "u1", "p_senders": ["s1", "s2"], "p_keep": 3})])
+        self.assertEqual(db.calls, [("sender_history", {"p_user": "u1", "p_senders": ["s1", "s2"], "p_keep": 2})])
         self.assertEqual(Triage(Db(fail=True), None, "m")._settled_senders(mail), {})
 
     def test_latest_incoming_per_conversation(self):

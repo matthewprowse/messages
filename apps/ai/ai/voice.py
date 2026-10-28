@@ -2,7 +2,9 @@
 rules for a long time. This reads your own latest sent emails and writes down how you write
 (greetings, sign-offs, length, formality) as global style rules, so drafts sound like you from the
 start. It runs again every time you have sent VOICE_STEP more emails, typed replies and edited
-drafts alike, so the rules follow how you write now.
+drafts alike, and at most every VOICE_MIN_DAYS, so the rules follow how you write now. Only users with
+new sent mail since the last pass are looked at (one cheap read of user ids), and the profile is read
+before the count of sent mail, so the count is only made for a user who is otherwise due.
 
 Rules already known gain support instead of being added twice. A rule from your sent mail that the
 newest learning no longer finds is turned off (never deleted) and comes back if your mail shows it
@@ -13,7 +15,7 @@ from __future__ import annotations
 import difflib
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
@@ -24,7 +26,9 @@ from .text import clean
 from .vault import Vault
 
 MIN_EMAILS = 10  # fewer than this says too little about how someone writes
-VOICE_STEP = 10  # learn again once this many more emails have been sent
+VOICE_STEP = 30  # learn again once this many more emails have been sent
+VOICE_MIN_DAYS = 7  # and at least this long after the last time
+PROBE_LIMIT = 1000
 MAX_EMAILS = 40
 EMAIL_CHARS = 800
 PROMPT_CHARS = 24000
@@ -93,11 +97,27 @@ def same_rule(a: str, b: str) -> bool:
     return ka == kb or difflib.SequenceMatcher(None, ka, kb, autojunk=False).ratio() >= SAME_RULE
 
 
-def voice_due(outbound: int, learned_outbound: int, learned_at: str | None) -> bool:
-    """At first run once there is enough sent mail, then each time VOICE_STEP more have been sent."""
+def wait_left(learned_at: str | None, now: datetime | None = None) -> float:
+    """Seconds until VOICE_MIN_DAYS have passed since the last learning; 0 at first and once they have."""
+    if learned_at is None:
+        return 0.0
+    try:
+        then = datetime.fromisoformat(str(learned_at).replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    return max(0.0, VOICE_MIN_DAYS * 86400 - ((now or datetime.now(timezone.utc)) - then).total_seconds())
+
+
+def waited(learned_at: str | None, now: datetime | None = None) -> bool:
+    return wait_left(learned_at, now) == 0.0
+
+
+def voice_due(outbound: int, learned_outbound: int, learned_at: str | None, now: datetime | None = None) -> bool:
+    """At first run once there is enough sent mail, then each time VOICE_STEP more have been sent, and at
+    least VOICE_MIN_DAYS after the last time."""
     if outbound < MIN_EMAILS:
         return False
-    return learned_at is None or outbound - learned_outbound >= VOICE_STEP
+    return learned_at is None or (outbound - learned_outbound >= VOICE_STEP and waited(learned_at, now))
 
 
 def plan_voice(existing: list[dict[str, Any]], learned: list[str]) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
@@ -139,28 +159,54 @@ class Voice:
         self.model = model
         self.vault = vault or Vault(db)  # without one, plaintext passes through
         self._next: dict[str, float] = {}  # user_id -> monotonic time this process may try them again
+        self._probed: str | None = None  # when sent mail was last checked for
+        self._dirty: set[str] = set()  # users with new sent mail (or a wait still to run) since they were last looked at
+        self._keep: set[str] = set()  # users _learn wants looked at again: held by VOICE_MIN_DAYS, or the attempt failed
 
     def run_once(self) -> int:
+        """Looks only at users with sent mail created since the last pass (one read of user ids). The first pass,
+        and one after a full probe, looks at everyone."""
+        started = datetime.now(timezone.utc)
+        params = {"select": "user_id", "direction": "eq.outbound", "limit": str(PROBE_LIMIT)}
+        if self._probed:
+            params["created_at"] = f"gte.{self._probed}"
+        probe = self.db.select("messages", params)
+        everyone = self._probed is None or len(probe) >= PROBE_LIMIT
+        self._probed = (started - timedelta(minutes=1)).isoformat()  # a little back, so a row written during the read is not missed
+        self._dirty |= {r["user_id"] for r in probe}
+        if not self._dirty and not everyone:
+            return 0
         accounts = self.db.select("accounts", {"select": "id,user_id", "provider": "in.(icloud,gmail,outlook)", "status": "neq.disconnected"})
         by_user: dict[str, list[str]] = {}
         for a in accounts:
             by_user.setdefault(a["user_id"], []).append(a["id"])
+        if everyone:
+            self._dirty |= set(by_user)
         done = 0
-        for user_id, account_ids in by_user.items():
+        for user_id in sorted(self._dirty & set(by_user)):
             if time.monotonic() < self._next.get(user_id, 0.0):
-                continue
+                continue  # still dirty: looked at once the wait is over
+            self._dirty.discard(user_id)
             try:  # one user's failure must not skip the others
-                if self._learn(user_id, account_ids):
+                if self._learn(user_id, by_user[user_id]):
                     done += 1
             except Exception as err:
                 self._next[user_id] = time.monotonic() + RETRY_S
+                self._keep.add(user_id)
                 log.warn("voice learning errored", user=user_id, code=log.code_of(err))
+        self._dirty |= self._keep
+        self._keep.clear()
         return done
 
     def _learn(self, user_id: str, account_ids: list[str]) -> bool:
         profile = self.db.first("profiles", {"select": "voice_learned_at,voice_learned_outbound", "user_id": f"eq.{user_id}"})
         if not profile:
             self._next[user_id] = time.monotonic() + RETRY_S
+            return False
+        left = wait_left(profile.get("voice_learned_at"))
+        if left > 0:  # the count is not made until the wait is over, and the user is not looked at before then either
+            self._next[user_id] = time.monotonic() + left
+            self._keep.add(user_id)
             return False
         sent_filter = {"user_id": f"eq.{user_id}", "account_id": in_list(account_ids), "direction": "eq.outbound"}
         outbound = self.db.count("messages", sent_filter)
@@ -190,6 +236,7 @@ class Voice:
             result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"), max_output=LEARN_MAX_OUTPUT)
         except GeminiError as err:
             log.warn("voice learning failed", user=user_id, status=err.status)
+            self._keep.add(user_id)
             return False
 
         learned = [item.get("rule") or "" for item in (result.get("rules") or []) if isinstance(item, dict)]

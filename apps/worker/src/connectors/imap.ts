@@ -4,6 +4,11 @@
 // mail to Trash, never deletes it for good), and mail moved or deleted on another device leaves the app's
 // inbox. Trash and Junk are never imported; they are only looked in for mail that left the Inbox. What differs
 // from one service to the next, where its servers are and how it is named, is in ./mail-service.ts.
+//
+// Cost: the five-minute Inbox reconcile reads the whole Inbox only when the server's UIDVALIDITY, UIDNEXT and
+// message count stop adding up (or an expunge event, or an hour has passed), see ./inbox-check.ts. Memory: a
+// sync batch is stored when it holds 25 messages or about 16 MB of attachments, whichever comes first, and each
+// message's file Buffers are dropped as soon as it is stored.
 
 import { ImapFlow, ImapFlowErrorCode } from "imapflow";
 import nodemailer from "nodemailer";
@@ -12,7 +17,7 @@ import { allRows, db, getSyncState, loadCredentials, must, saveSyncState, setAcc
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { chunks, mapLimit, push } from "../util";
-import { parseEmail, type NormalizedEmail } from "../ingest/normalize-email";
+import { parseEmail, type EmailAttachment, type NormalizedEmail } from "../ingest/normalize-email";
 import { applyReadState, storeEmail, storeEmails, type FolderRole } from "../ingest/store-email";
 import { isFailure } from "../ingest/batch-rpc";
 import { sideFolderDue, type FolderCheck, type FolderStatus } from "../ingest/folder-status";
@@ -28,6 +33,7 @@ import { finishAction } from "../send/actions";
 import { pickFolders } from "../ingest/imap-folders";
 import { sealAddress } from "../vault";
 import { uidSet } from "./uid-set";
+import { reconcileDue, type InboxMark } from "./inbox-check";
 import type { ImapCredentials, MailCredentials, MailService } from "./mail-service";
 
 interface Folder {
@@ -37,8 +43,9 @@ interface Folder {
 
 const SIDE_FOLDER_POLL_MS = 60_000; // every folder is checked each minute (the others by STATUS); the Inbox is also live through IDLE
 const CHECKPOINT_EVERY = 25; // messages stored per database call, then progress saved, so a restart resumes, not repeats
+const CHECKPOINT_BYTES = 16 * 1024 * 1024; // ...or sooner when the parsed messages held in memory (attachments mostly) reach this size
 const LOCATE_AT_ONCE = 25; // Message-IDs looked up in one search of Trash or Junk
-const RECONCILE_EVERY_TICKS = 5; // the Inbox is compared with the app every 5 minutes; expunge events cover quick changes
+const RECONCILE_EVERY_TICKS = 5; // the Inbox is checked every 5 minutes (a full pass only when its numbers moved, see ./inbox-check.ts); expunge events cover quick changes
 const FILES_EVERY_TICKS = 10;
 const WRITE_AT_ONCE = 6; // row updates in flight together
 const THREADS_AT_ONCE = 100; // thread ids in one .in() filter, to keep the request URL short
@@ -74,6 +81,8 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
   private readonly syncStates = new Map<string, { uid_validity: number | null; last_uid: number | null } | null>();
   /** Each folder other than the Inbox: its STATUS just before its last sync this session, and when that was. */
   private readonly sideChecks = new Map<string, FolderCheck>();
+  /** The Inbox numbers and time of the last full reconcile this session; null until the first. */
+  private lastReconcile: { mark: InboxMark; at: number } | null = null;
 
   constructor(
     private readonly account: AccountRow,
@@ -125,6 +134,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     this.creds = creds;
     this.syncStates.clear();
     this.sideChecks.clear();
+    this.lastReconcile = null;
     await this.refreshSelf(creds, { seed: true });
 
     const client = new ImapFlow({
@@ -163,7 +173,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         if (event.path === inbox.path) this.background(() => this.syncFolder(client, inbox));
       });
       client.on("expunge", (event: { path: string }) => {
-        if (event.path === inbox.path) this.background(() => this.reconcileInbox(client));
+        if (event.path === inbox.path) this.background(() => this.reconcileInbox(client, true));
       });
       client.on("flags", (event: { path: string; uid?: number; flags: Set<string> }) => {
         if (event.uid === undefined) return;
@@ -291,11 +301,13 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
       const movedOut = new Set<string>(); // known mail found outside the Inbox: moved on another device
       let seenCount = 0;
       let pending: { uid: number; mail: NormalizedEmail; seen: boolean }[] = [];
+      let pendingBytes = 0; // attachment bytes held by pending
 
       // Stores what has been fetched so far in one call (a first sync), or alone (new mail), in order.
       const flush = async () => {
         const batch = pending;
         pending = [];
+        pendingBytes = 0;
         if (batch.length === 0) return;
         const results = await storeEmails(
           this.account,
@@ -320,6 +332,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
             inserted++;
             if (stored.messageId) await saveFilesQuietly(this.id, this.account.user_id, stored.messageId, mail.attachments);
           }
+          mail.attachments = []; // stored (or skipped): release the file Buffers now, not when the batch array goes
           if (failure === null) lastUid = Math.max(lastUid, uid);
         }
       };
@@ -330,7 +343,8 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         const mail = await parseEmail(msg.source, `${folder.path}:${uidValidity}:${msg.uid}`);
         pending.push({ uid: msg.uid, mail, seen: msg.flags?.has("\\Seen") ?? false });
         seenCount++;
-        if (pending.length >= CHECKPOINT_EVERY) {
+        pendingBytes += mail.attachments.reduce((n, a) => n + a.content.length, 0);
+        if (pending.length >= CHECKPOINT_EVERY || pendingBytes >= CHECKPOINT_BYTES) {
           await flush();
           if (lastUid > savedUid) await this.saveFolderState(folder.path, uidValidity, (savedUid = lastUid));
         }
@@ -529,7 +543,31 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
    * so a conversation deleted on your phone leaves the app's inbox as deleted, and one marked as junk
    * moves to the app's Junk. A conversation with nothing left in the Inbox is archived otherwise.
    */
-  private async reconcileInbox(client: ImapFlow) {
+  private async reconcileInbox(client: ImapFlow, forced = false) {
+    // One look at the numbers the server reports decides whether the full pass is needed (./inbox-check.ts).
+    const mark = await this.inboxMark(client);
+    if (!mark || !reconcileDue(this.lastReconcile, mark, Date.now(), forced)) return;
+    await this.reconcileInboxFully(client);
+    this.lastReconcile = { mark, at: Date.now() };
+  }
+
+  /**
+   * UIDVALIDITY, UIDNEXT and the message count of the open Inbox, with no extra request. imapflow does not
+   * raise UIDNEXT when IDLE reports new mail, so the stored sync position stands in when it is higher.
+   */
+  private async inboxMark(client: ImapFlow): Promise<InboxMark | null> {
+    const lock = await client.getMailboxLock("INBOX");
+    try {
+      const box = client.mailbox;
+      if (!box) return null;
+      const lastUid = (await this.folderState("INBOX"))?.last_uid ?? 0;
+      return { uidValidity: Number(box.uidValidity), uidNext: Math.max(box.uidNext, lastUid + 1), exists: box.exists };
+    } finally {
+      lock.release();
+    }
+  }
+
+  private async reconcileInboxFully(client: ImapFlow) {
     const rows = await allRows(
       (from, to) =>
         db
@@ -626,7 +664,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
       );
       for (const r of rows) push(byThread, r.thread_id, { folder: (r.provider_meta as { folder?: string }).folder, direction: r.direction });
       const queued = await allRows(
-        (from, to) => db.from("mail_actions").select("id, thread_id").in("thread_id", chunk).eq("status", "queued").order("id").range(from, to),
+        (from, to) => db.from("mail_actions").select("id, thread_id").in("thread_id", chunk).in("status", ["queued", "working"]).order("id").range(from, to),
         "check queued actions",
       );
       for (const r of queued) waiting.add(r.thread_id);
@@ -668,6 +706,27 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
       try {
         const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
         if (msg && msg.source) result = (await parseEmail(msg.source, `imap:${folder}:${uid}`)).html;
+      } finally {
+        lock.release();
+      }
+    });
+    return result;
+  }
+
+  /** A message's files, fetched again for one the owner opened (ingest/fetch-requests.ts). null when it is no longer where it was stored. */
+  async attachmentsOf(meta: Json): Promise<EmailAttachment[] | null> {
+    const { folder, uid, uid_validity } = (meta ?? {}) as { folder?: string; uid?: number; uid_validity?: number };
+    if (!folder || !uid) return null;
+    let result: EmailAttachment[] | null = null;
+    await this.queue.run(async () => {
+      const client = this.client;
+      if (!client) throw Object.assign(new Error("not connected"), { code: "NOT_CONNECTED" });
+      const lock = await client.getMailboxLock(folder);
+      try {
+        // A renumbered folder means this UID points at another message now.
+        if (uid_validity && Number(client.mailbox && client.mailbox.uidValidity) !== uid_validity) return;
+        const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+        if (msg && msg.source) result = (await parseEmail(msg.source, `imap:${folder}:${uid}`)).attachments;
       } finally {
         lock.release();
       }

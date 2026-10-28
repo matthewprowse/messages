@@ -48,8 +48,9 @@ export interface Attachment {
   bytes?: number;
   path?: string; // where the file is stored in the private attachments bucket, once it is
   hiddenReason?: "inline" | "tiny" | "junk" | "manual"; // set for files kept out of the attachment lists
+  thumbPath?: string; // a sealed 256 px thumbnail of a photo, which grid tiles open instead of the whole file
   sealed?: boolean; // the stored file is encrypted: it is opened in the browser, not shown from a signed link
-  notKept?: "video_link" | "over_cap"; // why no copy was made: a video left at the provider, or the storage is full
+  notKept?: "video_link" | "over_cap" | "deferred" | "unavailable"; // why no copy was made: a video left at the provider, the storage is full, an old or large email file fetched when opened, or one the mailbox no longer has
 }
 
 /** An attachment with the message it came with, for views that gather files from many messages. */
@@ -86,6 +87,8 @@ export interface Message {
   whatsapp?: boolean;
   /** The email has an HTML version, which View Original fetches from the provider when opened. */
   hasOriginal?: boolean;
+  /** Bulk mail older than 30 days is cut down to a short preview; the full email is still one View Original away. */
+  bodyShrunk?: boolean;
   attachments?: Attachment[];
   /** The message a WhatsApp reply quotes, as it was when quoted. */
   quote?: { id: string; author: string; fromMe: boolean; text: string };

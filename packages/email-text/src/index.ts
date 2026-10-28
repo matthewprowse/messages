@@ -970,7 +970,7 @@ function csp(allowImages: boolean) {
   ].join("; ");
 }
 
-const REMOTE_IMAGE = /<(?:img|image)\b[^>]*?(?:https?:)?\/\/|url\(\s*(?:["']|&quot;|&#39;)?\s*(?:https?:)?\/\/|\sbackground\s*=\s*["']?\s*(?:https?:)?\/\//i;
+const REMOTE_IMAGE = /<(?:img|image)\b[^<>]*?(?:https?:)?\/\/|url\(\s*(?:["']|&quot;|&#39;)?\s*(?:https?:)?\/\/|\sbackground\s*=\s*["']?\s*(?:https?:)?\/\//i;
 
 export interface OriginalDoc {
   srcdoc: string;
@@ -984,6 +984,9 @@ export interface OriginalDoc {
  */
 /** The viewer shows at most this much of one email's HTML: the stripping below must stay quick on hostile input. */
 const MAX_ORIGINAL_HTML = 2_000_000;
+// A tag's text must end in ">" in the same match: unlike a "[^>]*>" pattern, which tries every "<img" in a
+// run of unfinished ones and reads on to the end each time, this refuses a tag that holds another "<".
+const IMG_TAG = /<img\b[^<>]*>/gi;
 const BLOCK_TAGS = new Set(["script", "iframe", "object", "embed", "noscript", "title"]);
 const BARE_TAGS = new Set(["meta", "base", "link"]);
 
@@ -1025,7 +1028,7 @@ export function originalDoc(html: string, allowImages: boolean): OriginalDoc {
     .replace(/(href|src)\s*=\s*(["']?)\s*javascript:[^"'\s>]*\2/gi, '$1=""');
   if (!allowImages) {
     body = body
-      .replace(/<img\b[^>]*>/gi, (tag) =>
+      .replace(IMG_TAG, (tag) =>
         tag
           .replace(/\ssrcset\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
           .replace(/\ssrc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, (attr, value: string) => {
@@ -1036,7 +1039,7 @@ export function originalDoc(html: string, allowImages: boolean): OriginalDoc {
           }),
       )
       .replace(/\sbackground\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-      .replace(/url\(\s*(["']?)\s*(?:https?:)?\/\/[^)]*\)/gi, "url()");
+      .replace(/url\(\s*(["']?)\s*(?:https?:)?\/\/[^()]*\)/gi, "url()");
     // Remote images in forms the rewrite above misses are still stopped by the CSP; count them so Load Images shows.
     if (blocked === 0 && REMOTE_IMAGE.test(html)) blocked = 1;
   }

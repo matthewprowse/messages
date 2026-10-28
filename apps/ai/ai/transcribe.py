@@ -179,7 +179,8 @@ class Transcribe:
             SCHEMA,
             UsageContext(m["user_id"], "transcribe", m.get("account_id"), m.get("thread_id")),
             temperature=0.0,
-            thinking="low",
+            thinking="minimal",  # mechanical; falls back to low in gemini.py on a model that has no minimal
+            attempts=2,  # a slow day must not bill a big audio file four times
             audio=(audio, audio_type(a.get("mime_type"))),
             audio_seconds=seconds,
             max_output=8192,

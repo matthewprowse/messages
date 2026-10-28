@@ -4,13 +4,15 @@
 // a contact's page and a conversation. Labels for kinds and sources live here too.
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { track } from "@/lib/analytics";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, CalendarDays, ExternalLink, File, FileArchive, FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Maximize, Presentation, RotateCw, X, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
+import { FETCH_TEXT, fetchDeferredFile, isDeferredFile, type FetchApi, type FetchOutcome } from "@/lib/attachment-fetch";
 import { withSealedColumns } from "@/lib/sealed-columns";
-import { acquireNoteFile, downloadUrl, isNotePath, mimeFor, rememberNoteMime, reportThumb, signedUrl, thumbsEnabled, useSignedUrl } from "@/lib/signed-urls";
+import { acquireNoteFile, downloadUrl, isNotePath, mimeFor, rememberNoteMime, reportThumb, signedUrl, thumbsEnabled, useSignedUrl, useThumbUrl } from "@/lib/signed-urls";
 import type { Attachment, Contact, FiledAttachment, Provider } from "@/lib/types";
 import { fullDate, stampOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -120,12 +122,20 @@ function Thumb({ attachment: a, onReady }: { attachment: Attachment; /** Called 
   // The browser's own lazy loading is not used: it does not fire in every webview.
   const box = useRef<HTMLSpanElement>(null);
   const seen = useSeen(box);
-  // Images load as small resized copies. If one will not load that way, the original is tried before giving up.
-  const [stage, setStage] = useState<"small" | "original">("small");
+  // A sealed photo with a stored thumbnail opens that small sealed copy; other images load as small resized copies. If one
+  // will not load that way, the original is tried before giving up.
+  const hasThumb = a.kind === "image" && !!a.sealed && !!a.thumbPath && !isNotePath(a.path);
+  const [stage, setStage] = useState<"thumb" | "small" | "original">(hasThumb ? "thumb" : "small");
   const fellBack = useRef(false);
-  // Note files and sealed attachments are encrypted, so they have no resized copies: the picture comes from the opened file.
+  // Note files and sealed attachments are encrypted, so Storage cannot resize them: without a thumbnail the picture comes from the opened file.
   const small = a.kind === "image" && stage === "small" && thumbsEnabled() && !isNotePath(a.path) && !a.sealed;
-  const url = useSignedUrl(BUCKET, pictured && seen ? a.path : undefined, small, a.sealed ? mimeFor(a) : undefined);
+  const sealedThumb = stage === "thumb" && hasThumb;
+  const thumbUrl = useThumbUrl(a.id, sealedThumb && seen ? a.thumbPath : undefined);
+  // The thumbnail could not be opened: the whole file is used instead.
+  const thumbFailed = sealedThumb && seen && thumbUrl === null;
+  useEffect(() => { if (thumbFailed) setStage("original"); }, [thumbFailed]);
+  const fullUrl = useSignedUrl(BUCKET, pictured && seen && !sealedThumb ? a.path : undefined, small, a.sealed ? mimeFor(a) : undefined);
+  const url = sealedThumb ? (thumbFailed ? undefined : thumbUrl) : fullUrl;
   const [broken, setBroken] = useState(false);
   const onError = useCallback(() => setBroken(true), []);
   const glyph = !pictured || broken || (seen && url === null);
@@ -146,7 +156,8 @@ function Thumb({ attachment: a, onReady }: { attachment: Attachment; /** Called 
         else if (fellBack.current) { fellBack.current = false; reportThumb("fell-back"); }
       }}
       onError={() => {
-        if (small) { fellBack.current = true; setStage("original"); }
+        if (sealedThumb) setStage("original");
+        else if (small) { fellBack.current = true; setStage("original"); }
         else onError();
       }}
       className="size-full object-cover"
@@ -189,7 +200,7 @@ export function AttachmentTile({ attachment: a, onOpen, className, showName = tr
       {a.hiddenReason ? (
         <Badge variant="secondary" className="absolute top-1.5 left-1.5">{HIDDEN_LABEL[a.hiddenReason]}</Badge>
       ) : a.notKept && !a.path ? (
-        <Badge variant="secondary" className="absolute top-1.5 left-1.5">Not Kept Here</Badge>
+        <Badge variant="secondary" className="absolute top-1.5 left-1.5">{a.notKept === "deferred" ? "Not Downloaded" : a.notKept === "unavailable" ? "Unavailable" : "Not Kept Here"}</Badge>
       ) : null}
       {source && <span className="sr-only">{SOURCE_LABEL[source]}</span>}
       {/* The sender and date show on hover; on a touch screen there is no hover, so they stay. */}
@@ -257,6 +268,57 @@ function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
     return () => { cancelled = true; release?.(); };
   }, [id, knownPath, name, kind, knownSealed, open]);
   return file?.id === id ? file : null;
+}
+
+/** The calls behind fetchDeferredFile: the request row and the attachment row, read as the signed-in person. */
+const fetchApi: FetchApi = {
+  async request(attachmentId, again) {
+    const db = supabase as unknown as SupabaseClient; // attachment_fetch_requests is not in the generated types yet
+    const { data } = await supabase.auth.getSession();
+    const userId = data.session?.user.id;
+    if (!userId) return false;
+    // A failed request is the only kind a person may remove; for any other this does nothing.
+    if (again) await db.from("attachment_fetch_requests").delete().eq("attachment_id", attachmentId).not("error", "is", null);
+    const { error } = await db.from("attachment_fetch_requests").insert({ attachment_id: attachmentId, user_id: userId });
+    return !error || error.code === "23505"; // already asked: the worker has it
+  },
+  async check(attachmentId) {
+    const db = supabase as unknown as SupabaseClient;
+    const [row, req] = await Promise.all([
+      supabase.from("attachments").select(await withSealedColumns("storage_path, team_path, sealed, not_kept")).eq("id", attachmentId).maybeSingle(),
+      db.from("attachment_fetch_requests").select("error").eq("attachment_id", attachmentId).maybeSingle(),
+    ]);
+    if (row.error) throw new Error("check failed");
+    const d = row.data as { storage_path?: string | null; team_path?: string | null; sealed?: boolean; not_kept?: string | null } | null;
+    return { path: d?.team_path ?? d?.storage_path ?? null, sealed: !!d?.sealed, notKept: d?.not_kept ?? null, error: (req.data as { error?: string | null } | null)?.error ?? null };
+  },
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  visible: () => document.visibilityState === "visible",
+};
+
+/**
+ * For a file left at the mailbox: asks the worker for it when the viewer opens, and reports where that stands.
+ * `path` is set once the file is stored. Other files are left alone (status "none").
+ */
+function useRequestedFile(a: Attachment, open: boolean) {
+  const deferred = isDeferredFile(a);
+  const [tries, setTries] = useState(0);
+  const [result, setResult] = useState<{ id: string; tries: number; outcome: FetchOutcome } | null>(null);
+  useEffect(() => {
+    if (!open || !deferred) return;
+    let stopped = false;
+    void fetchDeferredFile(fetchApi, a.id, tries > 0, () => stopped).then((outcome) => { if (outcome && !stopped) setResult({ id: a.id, tries, outcome }); });
+    return () => { stopped = true; };
+  }, [open, deferred, a.id, tries]);
+  const mine = result?.id === a.id && result.tries === tries ? result.outcome : null;
+  const status = !deferred ? "none" : mine?.kind === "ready" ? "ready" : mine?.kind === "error" ? "error" : "fetching";
+  return {
+    status,
+    path: mine?.kind === "ready" ? mine.path : undefined,
+    sealed: mine?.kind === "ready" ? mine.sealed : undefined,
+    error: mine?.kind === "error" ? mine : null,
+    retry: () => setTries((n) => n + 1),
+  } as const;
 }
 
 const CLOCK = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -439,6 +501,8 @@ function ImageViewer({ url, name, preview, onRatio, onBroken, onSwipe }: { url: 
 
 /** What the viewer says when there is no stored copy. A big video and a full seat each say why. */
 function notKeptMessage(a: Attachment, notStored: boolean): string {
+  if (a.notKept === "unavailable") return FETCH_TEXT.gone;
+  if (a.notKept === "deferred") return "Not Downloaded. It Is Fetched From Your Mailbox When You Open It.";
   if (a.notKept === "video_link") return "Not Kept Here. Large Videos Stay at the Original. Open It in Your Mailbox or Chat.";
   if (a.notKept === "over_cap") return "Not Kept Here. Your Storage Is Full. The Original Is in Your Mailbox or Chat.";
   return notStored ? "Not Kept Here. The Original Is in Your Mailbox or Chat." : "Not Downloaded Yet. If It Stays Empty, the Original Is in Your Mailbox or Chat.";
@@ -479,7 +543,9 @@ export function AttachmentViewer({ attachment, ...rest }: ViewerProps) {
 }
 
 function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClose, items, index, onNavigate }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
-  const file = useStoredFile(a, open);
+  const requested = useRequestedFile(a, open);
+  // Once the worker has stored a requested file the viewer opens it like any other.
+  const file = useStoredFile(requested.path ? { ...a, path: requested.path, sealed: requested.sealed } : a, open && (requested.status === "none" || requested.status === "ready"));
   const [broken, setBroken] = useState<string | null>(null); // id of an image the browser could not draw
   const [saving, setSaving] = useState(false);
   const [hugging, setHugging] = useState<{ id: string; ratio: number } | null>(null);
@@ -538,7 +604,21 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
   };
 
   let body: ReactNode;
-  if (!file || file.state === "loading") body = <Skeleton className={cn("w-full rounded-lg", STAGE_HEIGHT)} />;
+  if (requested.status === "fetching")
+    body = (
+      <div role="status" className="flex flex-col items-center gap-3">
+        <Skeleton className={cn("w-full rounded-lg", STAGE_HEIGHT)} />
+        <span className="text-sm text-muted-foreground">{FETCH_TEXT.fetching}</span>
+      </div>
+    );
+  else if (requested.status === "error" && requested.error)
+    body = (
+      <div className="flex flex-col items-center gap-3">
+        <NoPreview attachment={a} message={requested.error.message} />
+        {requested.error.retry && <Button variant="secondary" className="h-8" onClick={requested.retry}>Retry</Button>}
+      </div>
+    );
+  else if (!file || file.state === "loading") body = <Skeleton className={cn("w-full rounded-lg", STAGE_HEIGHT)} />;
   else if (file.state === "missing")
     body = <NoPreview attachment={a} message={notKeptMessage(a, notStored)} />;
   else if (a.kind === "pdf") body = <PdfViewer key={a.id} url={file.view} name={a.name} />;

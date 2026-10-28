@@ -7,7 +7,7 @@ import { startEvery } from "../backoff";
 import { errorCode, log } from "../log";
 import type { ClientStore } from "./clients";
 import type { OwnAddresses, Participant } from "./people";
-import { isMissingMigration, runRulePass, type Candidate, type RuleStore } from "./rules";
+import { isMissingMigration, runRulePass, SignatureCache, type Candidate, type RuleStore } from "./rules";
 import { keys } from "./store";
 
 const PARTICIPANTS = "thread_id, contacts(display_name, contact_identities(kind, value), organizations(name, domain))";
@@ -62,6 +62,33 @@ export const clientStore: ClientStore = {
   },
 };
 
+/** Row count and newest timestamp of one of a workspace's client tables: changes whenever a client is added, changed or removed. */
+async function tableSignature(table: "workspace_contacts" | "workspace_contact_identities", stamp: "updated_at" | "created_at", workspaceId: string): Promise<string> {
+  const { data, count, error } = await (db.from(table) as unknown as { select(s: string, o: unknown): any })
+    .select(stamp, { count: "exact" })
+    .eq("workspace_id", workspaceId)
+    .order(stamp, { ascending: false })
+    .limit(1);
+  if (error) throw Object.assign(new Error(`${table} signature failed`), { code: error.code });
+  return `${count ?? 0}@${(data as Record<string, string>[])[0]?.[stamp] ?? ""}`;
+}
+
+const clientLists = new SignatureCache<{ identities: Map<string, string> }>();
+
+async function loadClientList(workspaceId: string): Promise<{ identities: Map<string, string> }> {
+  const [identities, clients] = await Promise.all([
+    allRows((f, t) => db.from("workspace_contact_identities").select("value_index, workspace_contact_id").eq("workspace_id", workspaceId).order("value_index").range(f, t), "load client identities"),
+    allRows((f, t) => db.from("workspace_contacts").select("id, name").eq("workspace_id", workspaceId).order("id").range(f, t), "load clients"),
+  ]);
+  const names = new Map(clients.map((c) => [c.id, c.name]));
+  const byIndex = new Map<string, string>();
+  for (const i of identities) {
+    const name = names.get(i.workspace_contact_id);
+    if (name) byIndex.set(i.value_index, name);
+  }
+  return { identities: byIndex };
+}
+
 export const ruleStore: RuleStore = {
   async workspaces() {
     return must(await db.from("workspaces").select("id"), "load workspaces");
@@ -71,19 +98,17 @@ export const ruleStore: RuleStore = {
     return must(await db.from("workspace_members").select("user_id").eq("workspace_id", workspaceId).eq("status", "active"), "load members").map((m) => m.user_id);
   },
 
+  // The client list (contacts and their identities, the big part) is read in full only when a cheap signature of it
+  // changed. The companies are small and have no updated_at (a re-seal of their names would not show), so they are
+  // always read. Before: 3 paged reads per workspace per pass; after: 2 one-row queries, plus the companies.
   async data(workspaceId) {
-    const [identities, clients, companies] = await Promise.all([
-      allRows((f, t) => db.from("workspace_contact_identities").select("value_index, workspace_contact_id").eq("workspace_id", workspaceId).order("value_index").range(f, t), "load client identities"),
-      allRows((f, t) => db.from("workspace_contacts").select("id, name").eq("workspace_id", workspaceId).order("id").range(f, t), "load clients"),
-      allRows((f, t) => db.from("workspace_companies").select("domain_index, name").eq("workspace_id", workspaceId).order("domain_index").range(f, t), "load client companies"),
-    ]);
-    const names = new Map(clients.map((c) => [c.id, c.name]));
-    const byIndex = new Map<string, string>();
-    for (const i of identities) {
-      const name = names.get(i.workspace_contact_id);
-      if (name) byIndex.set(i.value_index, name);
-    }
-    return { identities: byIndex, companies: new Map(companies.map((c) => [c.domain_index, c.name])) };
+    const clients = await clientLists.get(
+      workspaceId,
+      async () => (await Promise.all([tableSignature("workspace_contacts", "updated_at", workspaceId), tableSignature("workspace_contact_identities", "created_at", workspaceId)])).join("|"),
+      () => loadClientList(workspaceId),
+    );
+    const companies = await allRows((f, t) => db.from("workspace_companies").select("domain_index, name").eq("workspace_id", workspaceId).order("domain_index").range(f, t), "load client companies");
+    return { identities: clients.identities, companies: new Map(companies.map((c) => [c.domain_index, c.name])) };
   },
 
   teamOwn,

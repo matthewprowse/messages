@@ -7,12 +7,13 @@ ORG_REFRESH_AFTER more emails and ORG_REFRESH_MIN_DAYS, as what a company sends 
 are done per run, so a backlog is worked through slowly and cheaply.
 
 Working out who is due reads a lot of mail, so a user is only looked at again when they have new
-messages, have more due than one run does, or RESCAN_S has passed."""
+messages, have more due than one run does, or RESCAN_S has passed. New messages are found with one read
+for everyone (the newest created_at per user since the last pass), not one query per user."""
 
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
@@ -25,16 +26,17 @@ from .vault import Vault
 from .voice import tidy_rule
 
 MIN_SENT = 3
-REFRESH_AFTER = 5
-REFRESH_MIN_DAYS = 3
+REFRESH_AFTER = 10
+REFRESH_MIN_DAYS = 7
 ORG_REFRESH_AFTER = 20
 ORG_REFRESH_MIN_DAYS = 30
 RESCAN_S = 6 * 3600
 PEOPLE_PER_RUN = 3
 ORGS_PER_RUN = 10
-EMAILS_PER_PERSON = 16
+EMAILS_PER_PERSON = 10
 EMAIL_CHARS = 700
 PROMPT_CHARS = 14000
+PROBE_LIMIT = 1000
 RETRY_S = 6 * 3600
 ENCRYPTED = [("subject", SUBJECT), ("body_text", BODY), ("body_html", HTML)]
 
@@ -200,8 +202,25 @@ class People:
         self._scanned: dict[str, tuple[str | None, float, bool]] = {}  # user_id -> what scan_due needs
         self._backlog = False  # set during a user's run when more were due than it did
         self._summaries: dict[str, list[Any]] = {}  # user_id -> [day, summaries written that day]
+        self._probed: str | None = None  # when messages were last checked for
+        self._newest: dict[str, str] = {}  # user_id -> created_at of their newest message seen by the probe
 
     def run_once(self) -> int:
+        started = datetime.now(timezone.utc)
+        params = {"select": "user_id,created_at", "order": "created_at.desc", "limit": str(PROBE_LIMIT)}
+        if self._probed:
+            params["created_at"] = f"gte.{self._probed}"
+        probe = self.db.select("messages", params)
+        self._probed = (started - timedelta(minutes=1)).isoformat()  # a little back, so a row written during the read is not missed
+        seen_now: set[str] = set()
+        for r in probe:  # newest first, so the first row of a user is their newest
+            if r["user_id"] not in seen_now:
+                seen_now.add(r["user_id"])
+                self._newest[r["user_id"]] = r["created_at"]
+        if len(probe) >= PROBE_LIMIT:  # more than one read holds: users missing from it may have new mail too, so all are looked at
+            for u in list(self._scanned):
+                if u not in seen_now:
+                    del self._scanned[u]
         accounts = self.db.select("accounts", {"select": "id,user_id,address,send_addresses,provider", "status": "neq.disconnected"})
         by_user: dict[str, list[dict[str, Any]]] = {}
         for a in accounts:
@@ -214,8 +233,7 @@ class People:
             email_ids = [a["id"] for a in accts if a["provider"] in ("icloud", "gmail", "outlook", "imap")]
             if not email_ids:
                 continue
-            newest = self.db.first("messages", {"select": "created_at", "user_id": f"eq.{user_id}", "order": "created_at.desc"})
-            latest = (newest or {}).get("created_at")
+            latest = self._newest.get(user_id)
             if not scan_due(self._scanned.get(user_id), latest, time.monotonic()):
                 continue
             self._backlog = False

@@ -1,6 +1,7 @@
 // Configuration from apps/worker/.env. Fails fast with a readable message rather than half-starting.
 
 import { encryptionOffError, ENCRYPTION_FLAGS, flagOn } from "@messages/crypto/flags";
+import { shardCount, shardError, shardIndex } from "./shard";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -15,6 +16,12 @@ function required(name: string): string {
 const encryptionOff = encryptionOffError(process.env, ENCRYPTION_FLAGS);
 if (encryptionOff) {
   console.error(encryptionOff);
+  process.exit(1);
+}
+
+// Running several workers: which slice of the accounts this one syncs (see shard.ts and the README).
+if (shardError) {
+  console.error(shardError);
   process.exit(1);
 }
 
@@ -51,4 +58,9 @@ export const env = {
   encryptAddresses: flagOn(process.env.ENCRYPT_ADDRESSES),
   /** "true" works the shared company logo queue (src/logos). Off until the logo system is rolled out. */
   companyLogos: process.env.COMPANY_LOGOS === "true",
+  /** This worker's slice of the accounts: shard `shardIndex` of `shardCount`. The defaults (0 of 1) are one worker that owns everything. */
+  shardIndex,
+  shardCount,
+  /** On unless "off": one worker per shard at a time, enforced by a lease in the database (src/lease.ts). "off" is for local development. */
+  lease: process.env.WORKER_LEASE !== "off",
 };

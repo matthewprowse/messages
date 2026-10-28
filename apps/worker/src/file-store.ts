@@ -8,6 +8,8 @@ import { FIELD } from "@messages/crypto/fields";
 import type { TablesUpdate } from "@messages/db";
 import { db, must } from "./db";
 import { env } from "./env";
+import { errorCode, log } from "./log";
+import { canThumbnail, makeThumbnail, thumbPathFor } from "./photos/thumbnail";
 import { ATTACHMENTS_BUCKET, attachmentPath, storedType, uploadObject } from "./storage";
 import { isVideoLink, maySave, noteSaved, stateFor, type CapState, type NotKept } from "./storage-rules";
 import { keysFor } from "./vault";
@@ -39,6 +41,33 @@ export interface KeepDeps {
   upload(path: string, bytes: Buffer, contentType: string): Promise<void>;
   copy(userId: string, accountId: string, hash: string): Promise<{ storage_path: string; sealed: boolean } | null>;
   update(attachmentId: string, patch: TablesUpdate<"attachments">, onlyUnsaved?: boolean): Promise<void>;
+  /** Records where an attachment's thumbnail is (attachments.thumb_path). Optional: without it no thumbnail is made. */
+  setThumb?(attachmentId: string, thumbPath: string): Promise<void>;
+}
+
+/**
+ * Writes the sealed thumbnail beside a just-stored photo and records it. The thumbnail is a nicety: any failure here
+ * (an unreadable image, storage, the column not yet migrated) is logged and ignored, and tiles use the full file.
+ */
+export async function keepThumbnail(
+  file: Pick<FileToKeep, "attachmentId" | "kind" | "mimeType" | "bytes">,
+  keys: UserKeys,
+  path: string,
+  deps: Pick<KeepDeps, "upload" | "setThumb">,
+): Promise<string | null> {
+  if (file.kind !== "image" || !deps.setThumb || !canThumbnail(file.mimeType)) return null;
+  try {
+    const thumb = await makeThumbnail(file.bytes);
+    if (!thumb) return null;
+    const sealed = await encryptBytes(keys, FIELD.attachmentData, new Uint8Array(thumb));
+    const thumbPath = thumbPathFor(path);
+    await deps.upload(thumbPath, Buffer.from(sealed.buffer, sealed.byteOffset, sealed.byteLength), "application/octet-stream");
+    await deps.setThumb(file.attachmentId, thumbPath);
+    return thumbPath;
+  } catch (err) {
+    log.warn("thumbnail not saved", { attachment: file.attachmentId, code: errorCode(err) });
+    return null;
+  }
 }
 
 /** An object this account already holds with the same content, if any. */
@@ -72,6 +101,14 @@ const liveDeps: KeepDeps = {
   async update(attachmentId, patch, onlyUnsaved) {
     const query = db.from("attachments").update(patch).eq("id", attachmentId);
     must(await (onlyUnsaved ? query.is("storage_path", null) : query), "save attachment");
+  },
+  // thumb_path comes with its own migration, and the type file does not know it yet: a failed write is the caller's to ignore.
+  async setThumb(attachmentId, thumbPath) {
+    const { error } = await (db as unknown as { from(t: string): { update(v: object): { eq(c: string, v: string): Promise<{ error: unknown }> } } })
+      .from("attachments")
+      .update({ thumb_path: thumbPath })
+      .eq("id", attachmentId);
+    if (error) throw Object.assign(new Error("save thumbnail path failed"), { code: "THUMB_ROW" });
   },
 };
 
@@ -112,5 +149,6 @@ export async function keepFile(file: FileToKeep, deps: KeepDeps = liveDeps): Pro
   }
   await deps.update(file.attachmentId, { storage_path: path, sealed: sealing, content_hash: hash, size_bytes: size, not_kept: null });
   await deps.saved(file.userId, size);
+  if (sealing && keys) await keepThumbnail(file, keys, path, deps);
   return { saved: true, path, reused: false };
 }

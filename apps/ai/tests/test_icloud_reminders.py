@@ -1077,3 +1077,15 @@ class Reconciling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LoopWait(unittest.TestCase):
+    def test_idle_account_looks_less_often_and_snaps_back(self):
+        from ai.connectors.icloud_reminders.sync import IDLE_AFTER, LOOP_S, MID_S, SLOW_S, loop_wait
+
+        self.assertEqual(loop_wait(0), LOOP_S)
+        self.assertEqual(loop_wait(IDLE_AFTER - 1), LOOP_S)
+        self.assertEqual(loop_wait(IDLE_AFTER), MID_S)
+        self.assertEqual(loop_wait(2 * IDLE_AFTER), SLOW_S)
+        self.assertEqual(loop_wait(1000), SLOW_S)
+        self.assertEqual(loop_wait(0), LOOP_S)  # a claimed row sets the count back to 0

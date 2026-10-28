@@ -43,13 +43,14 @@ VOICE_RECHECK_S = 20
 BATCH = 24
 GROUP = 8  # emails per model call
 BODY_CHARS = 2500
+BULK_BODY_CHARS = 1200  # bulk mail (a list-unsubscribe header) fills 2500 characters but classifies the same from 800 to 1200
 SUBJECT_CHARS = 300  # a subject is not a second body: a long one is cut before the prompt
 CONTEXT_TTL_S = 60  # what is known about a user (rules, unsubscribes, corrections) is reread this often
 LATEST_ROWS = 1000
 OPTION_KINDS = ["accept", "decline", "other_time", "answer"]
 MAX_OPTIONS = 4
-SENDER_KEEP = 3  # the model's last answers about a bulk sender that must all agree before it is skipped
-SENDER_RECHECK_DAYS = 14  # the model looks at a skipped sender again once its last answer is this old
+SENDER_KEEP = 2  # the model's last answers about a bulk sender that must all agree before it is skipped
+SENDER_RECHECK_DAYS = 30  # the model looks at a skipped sender again once its last answer is this old
 BULK_CATEGORIES = ("newsletter", "notification")
 NO_CHOICES = json.dumps({"options": []})  # looked at, nothing to offer: the backfill skips it
 
@@ -706,7 +707,7 @@ class Triage:
                 "bulk": bool(m.get("list_unsubscribe")),
                 "subject": (m.get("subject") or "")[:SUBJECT_CHARS],
                 "sent": m.get("sent_at"),
-                "body": clean(body.get("body_text"), body.get("body_html"), limit=BODY_CHARS),
+                "body": clean(body.get("body_text"), body.get("body_html"), limit=BULK_BODY_CHARS if m.get("list_unsubscribe") or m.get("is_bulk") else BODY_CHARS),
             }
         return groups(ask)
 
@@ -752,8 +753,11 @@ class Triage:
         out = {m["id"]: (got[i], self.model) for i, m in enumerate(chunk, 1) if i in got}
         missing = [m for m in chunk if m["id"] not in out]
         if missing and len(chunk) > 1:
-            for m in missing:
-                out.update(self._ask(ctx, [m]))
+            if len(missing) < len(chunk):  # the others answered: the rest are asked together, one call and one system prompt
+                out.update(self._ask(ctx, missing))
+            else:  # none answered: the group itself is the problem, so one at a time
+                for m in missing:
+                    out.update(self._ask(ctx, [m]))
         elif missing:
             self._failed(missing, None)
         return out

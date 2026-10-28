@@ -8,6 +8,12 @@ sheet. This only asks Gemini, with the fast model:
 - searching: when nothing passed, one call with Google Search grounding finds addresses of the official
   logo, which the sync worker frames and puts to the judge in the same way.
 
+Spend is capped two ways, both shared by everyone: DEFAULT_DAILY_CAP steps a day and DEFAULT_DAILY_USD dollars
+a day (LOGO_DAILY_USD). The dollar cap is read from the cost the logos feature records in ai_usage (at most
+once a minute) and counted up from each step's own usage in between, so it holds across restarts. A grounded
+search costs about $0.014 a query and runs one to three, so it is the dear step: with LOGO_SEARCH_GATE on, it
+only runs for a domain that a non-bulk contact uses or that at least two users have (see search_worthwhile).
+
 Only the company's name and domain are sent, never an address or any mail. Logos are shared by every
 user, so their cost is Konva's own and is filed against the owner's account (feature "logos")."""
 
@@ -25,6 +31,8 @@ from .supabase import Supabase
 
 PER_RUN = 8
 DEFAULT_DAILY_CAP = 200  # Gemini steps a day for logos, shared by everyone (LOGO_DAILY_CAP)
+DEFAULT_DAILY_USD = 2.0  # dollars a day for logos, shared by everyone (LOGO_DAILY_USD); about 140 grounded queries
+MIN_USERS_FOR_SEARCH = 2
 DEFAULT_MAX_TRIES = 3  # failures of one company before it is given up (LOGO_MAX_TRIES)
 RETRY_BACKOFF_S = 600  # after a failure: 10 minutes, then 20, then 40
 GIVE_UP_DAYS = 30
@@ -37,8 +45,33 @@ def env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 MAX_SEARCH_URLS = 6
 COLUMNS = "domain,name,status,round,candidates,sheet_path,rejected,excluded,gemini_calls,gemini_cost_usd,ai_tries"
+# Read only once the migration that adds them has run (LOGO_SEARCH_GATE=true): users_seen is how many users have
+# mail from the domain and personal_seen whether a contact there is not a bulk sender.
+GATE_COLUMNS = ",users_seen,personal_seen"
+
+
+def search_gate_on() -> bool:
+    return os.environ.get("LOGO_SEARCH_GATE", "").strip().lower() == "true"
+
+
+def search_worthwhile(row: dict[str, Any]) -> bool:
+    """Whether a grounded search is worth its cost: the domain is used by a non-bulk contact, or at least
+    MIN_USERS_FOR_SEARCH users have mail from it. A row without the counts (not read) is searched."""
+    if row.get("users_seen") is None and row.get("personal_seen") is None:
+        return True
+    return bool(row.get("personal_seen")) or int(row.get("users_seen") or 0) >= MIN_USERS_FOR_SEARCH
 
 JUDGE_SCHEMA = {
     "type": "object",
@@ -177,7 +210,9 @@ class Logos:
         self._owner: str | None = None
         self._cap = env_int("LOGO_DAILY_CAP", DEFAULT_DAILY_CAP)
         self._max_tries = env_int("LOGO_MAX_TRIES", DEFAULT_MAX_TRIES)
+        self._cap_usd = env_float("LOGO_DAILY_USD", DEFAULT_DAILY_USD)
         self._made: tuple[float, int] | None = None
+        self._dollars: tuple[str, float] | None = None  # (UTC day, dollars spent that day), counted up between reads
 
     def _calls_today(self) -> int:
         """Logo steps made today (UTC), from ai_usage, read at most once a minute and counted up between reads."""
@@ -185,7 +220,18 @@ class Logos:
         if self._made is None or now - self._made[0] > CAP_CHECK_S:
             midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             self._made = (now, self._db.count("ai_usage", {"feature": "eq.logos", "created_at": f"gte.{midnight.isoformat()}"}))
+            rows = self._db.select("ai_usage", {"select": "cost_usd", "feature": "eq.logos", "created_at": f"gte.{midnight.isoformat()}", "limit": "5000"})
+            self._dollars = (midnight.date().isoformat(), sum(float(r.get("cost_usd") or 0) for r in rows))
         return self._made[1]
+
+    def _usd_today(self) -> float:
+        today = datetime.now(timezone.utc).date().isoformat()
+        if self._dollars is None or self._dollars[0] != today:
+            self._dollars = (today, 0.0)  # a new day starts again from the next read
+        return self._dollars[1]
+
+    def _add_spend(self, usd: float) -> None:
+        self._dollars = (self._dollars[0], self._dollars[1] + usd) if self._dollars else (datetime.now(timezone.utc).date().isoformat(), usd)
 
     def _usage(self) -> UsageContext:
         if self._owner is None:
@@ -201,13 +247,13 @@ class Logos:
         except Exception as err:  # the cap cannot be checked: wait, as the allowance checks do
             log.warn("logo cap not checked", code=log.code_of(err))
             return 0
-        if used >= self._cap:
+        if used >= self._cap or self._usd_today() >= self._cap_usd:
             return 0  # the day's share of lookups is used; the queue waits until midnight UTC
         now = datetime.now(timezone.utc).isoformat()
         rows = self._db.select(
             "company_logos",
             {
-                "select": COLUMNS,
+                "select": COLUMNS + (GATE_COLUMNS if search_gate_on() else ""),
                 "status": "in.(judging,searching)",
                 "or": f"(ai_next_try_at.is.null,ai_next_try_at.lte.{now})",
                 "order": "updated_at.asc",
@@ -216,6 +262,8 @@ class Logos:
         )
         done = 0
         for row in rows:
+            if self._usd_today() >= self._cap_usd:
+                break  # spent the day's dollars part way through
             if self._made:
                 self._made = (self._made[0], self._made[1] + 1)
             try:
@@ -286,6 +334,11 @@ class Logos:
         self._save(row, spent, status="judged", pick=pick, verdict=reason, rejected=rejected)
 
     def search(self, row: dict[str, Any]) -> None:
+        if search_gate_on() and not search_worthwhile(row):
+            # Not worth about $0.014 a query: the company keeps its first letter, and is looked at again after GIVE_UP_DAYS.
+            now = datetime.now(timezone.utc)
+            self._patch(row["domain"], {"status": "done", "path": None, "ai_tries": 0, "ai_next_try_at": None, "ai_retry_after": (now + timedelta(days=GIVE_UP_DAYS)).isoformat(), "checked_at": now.isoformat()})
+            return
         spent: list[Usage] = []
         text, pages = self._gemini.search(
             self._model,
@@ -299,6 +352,7 @@ class Logos:
 
     def _save(self, row: dict[str, Any], spent: list[Usage], **patch: Any) -> None:
         cost = float(row.get("gemini_cost_usd") or 0) + sum(u.cost_usd for u in spent)
+        self._add_spend(sum(u.cost_usd for u in spent))
         self._db.update(
             "company_logos",
             {"domain": f"eq.{row['domain']}"},

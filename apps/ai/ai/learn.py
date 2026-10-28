@@ -89,6 +89,10 @@ def rewrite_pairs(
     return pairs
 
 
+SENT_LOOKED_AT = 100  # sent replies checked per run for ones not learned from yet
+SENT_PER_RUN = 20  # of those, how many have their bodies read and learned from in one run
+
+
 class Learn:
     def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
         self.db = db
@@ -100,12 +104,13 @@ class Learn:
     def run_once(self) -> int:
         # Ids first, bodies only for the replies not learned from yet: usually there are none.
         sent = self.db.select(
-            "outbox", {"select": "id,draft_id", "status": "eq.sent", "draft_id": "not.is.null", "order": "sent_at.desc", "limit": "20"}
+            "outbox", {"select": "id,draft_id", "status": "eq.sent", "draft_id": "not.is.null", "order": "sent_at.desc", "limit": str(SENT_LOOKED_AT)}
         )
         done = 0
         if sent:
             seen = {o["draft_id"] for o in self.db.select("draft_outcomes", {"select": "draft_id", "draft_id": in_list([s["draft_id"] for s in sent])})}
-            new = [s["id"] for s in sent if s["draft_id"] not in seen]
+            # Ids are cheap, so many are looked at: an older reply that failed once is not hidden behind newer ones.
+            new = [s["id"] for s in sent if s["draft_id"] not in seen][:SENT_PER_RUN]
             todo = (
                 self.db.select("outbox", {"select": "id,user_id,thread_id,body,draft_id,drafts(body,status)", "id": in_list(new), "order": "sent_at.desc"})
                 if new
@@ -199,6 +204,34 @@ class Learn:
         )
         contact_id = (latest_in or {}).get("sender_contact_id")
 
+        existing: list[dict[str, Any]] = []
+        result: dict[str, Any] = {}
+        if ratio >= LEARN_FROM_RATIO:
+            # The model step comes before the outcome is recorded: the outcome row is what marks this edit as
+            # seen, so a failed call must leave it out and the edit is learned from on a later pass.
+            existing = self.db.select(
+                "style_rules", {"select": "id,rule,scope,contact_id,support_count", "user_id": f"eq.{row['user_id']}", "limit": "100"}
+            )
+            for r in existing:  # rules written sealed are opened here; plain ones pass through
+                r["rule"] = self.vault.open(row["user_id"], STYLE_RULE, r.get("rule")) or ""
+            prompt = "\n".join(
+                ["Existing rules:"]
+                + [f"- {r['rule']}" for r in existing]
+                + ["", "Draft:", draft_body, "", "What they sent:", row["body"]]
+            )
+            try:
+                result = self.gemini.json(
+                    self.model,
+                    SYSTEM,
+                    prompt,
+                    SCHEMA,
+                    UsageContext(row["user_id"], "learn", thread["account_id"], row["thread_id"]),
+                    max_output=LEARN_MAX_OUTPUT,
+                )
+            except GeminiError as err:
+                log.warn("learning failed", draft=row["draft_id"], status=err.status)
+                return
+
         self.db.insert(
             "draft_outcomes",
             {
@@ -215,29 +248,6 @@ class Learn:
             self.db.update("drafts", {"id": f"eq.{draft_id}"}, {"status": "sent"})
         log.info("draft outcome", draft=draft_id, edit_ratio=ratio, rewritten=not mark_sent)
         if ratio < LEARN_FROM_RATIO:
-            return
-
-        existing = self.db.select(
-            "style_rules", {"select": "id,rule,scope,contact_id,support_count", "user_id": f"eq.{row['user_id']}", "limit": "100"}
-        )
-        for r in existing:  # rules written sealed are opened here; plain ones pass through
-            r["rule"] = self.vault.open(row["user_id"], STYLE_RULE, r.get("rule")) or ""
-        prompt = "\n".join(
-            ["Existing rules:"]
-            + [f"- {r['rule']}" for r in existing]
-            + ["", "Draft:", draft_body, "", "What they sent:", row["body"]]
-        )
-        try:
-            result = self.gemini.json(
-                self.model,
-                SYSTEM,
-                prompt,
-                SCHEMA,
-                UsageContext(row["user_id"], "learn", thread["account_id"], row["thread_id"]),
-                max_output=LEARN_MAX_OUTPUT,
-            )
-        except GeminiError as err:
-            log.warn("learning failed", draft=row["draft_id"], status=err.status)
             return
 
         by_text = {(r["rule"].strip().lower(), r["contact_id"]): r for r in existing}

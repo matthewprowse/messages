@@ -9,9 +9,10 @@ Everything before the model call is read in one call to public.draft_context, on
 The prompt puts what is the same for all your drafts first (who you are, your rules, saved examples,
 recent sent mail), then this person, then the conversation, and the tone, the decision picked with
 guided drafting's choices and the instruction last. Gemini
-bills a repeated start of a request at a tenth of the price, but only past about 1,024 tokens, and a
-draft's prompt is about 1,100 in all (measured October 2026), so nothing is cached yet; the order is kept
-for when prompts grow. Tones are cheap another way: they adjust the text on the fast model.
+bills a repeated start of a request at a tenth of the price, but only past about 1,024 tokens. The shared
+start (voice examples cut to VOICE_CHARS, RECENT_VOICE of them, older messages to OLDER_CHARS) is kept short
+on purpose, as every input token is paid for; the prompt was about 1,100 tokens in October 2026 and is
+smaller now, so little is cached. The order is kept for when prompts grow. Tones are cheap another way: they adjust the text on the fast model.
 
 Up to MAX_RUNNING drafts are written at once, one at a time per conversation and oldest first, so the
 newest request is the one left as the live draft. The table is checked every POLL_IDLE_S, and every
@@ -47,8 +48,8 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import re
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
@@ -59,6 +60,7 @@ from .company_voice import COMPANY_SYSTEM, company_lines, pick_company
 from .embed import Embeddings
 from .poll import Backoff
 from .fields import CONTACT_RELATIONSHIP, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, STYLE_RULE, WRITING_BODY, WRITING_SITUATION, BODY, CHOICES, DRAFT, HTML, INSTRUCTION, NAME, NOTE, NOTE_TITLE, QUOTE, SUBJECT, TRANSCRIPT, VOICE_INSTRUCTION
+from .config import edit_thinking, draft_thinking
 from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
 from .retry import not_in
 from .supabase import Supabase, in_list
@@ -69,9 +71,10 @@ SIMILAR_LIMIT = 3
 MIN_SIMILARITY = 0.7  # cosine similarity below this is not "an email like this one"
 SIMILAR_IN_CHARS = 250
 SIMILAR_OUT_CHARS = 500
-VOICE_CHARS = 600
+VOICE_CHARS = 400
+OLDER_CHARS = 600  # of a message older than the last two in the conversation; the last two get 1500
 MAX_VOICE = 6  # similar replies and voice examples together, unless this person's own emails add more
-RECENT_VOICE = 3  # recent sent emails in the part of the prompt that is the same for every draft
+RECENT_VOICE = 2  # recent sent emails in the part of the prompt that is the same for every draft
 TO_THEM_VOICE = 3
 FACT_CHARS = 1500  # of one note marked Use in Drafts
 FACTS_CHARS = 6000  # of them all, so a few long notes cannot crowd out the conversation
@@ -189,7 +192,7 @@ def own_audio_path(user_id: Any, path: Any) -> bool:
     reads and deletes with the service role, so "<uid>/drafts/../../<other user>/x" must never get through."""
     if not user_id or not isinstance(path, str):
         return False
-    return re.fullmatch(re.escape(str(user_id)) + r"/drafts/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", path) is not None and ".." not in path.split("/")
+    return re.fullmatch(re.escape(str(user_id)) + r"/drafts/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", path) is not None and not {"..", "."} & set(path.split("/"))
 
 
 def build_prompt(
@@ -259,7 +262,7 @@ def build_prompt(
         lines.append(f"A new {medium} message, not a reply: there is no conversation yet.")
     else:
         thread = "\n".join(f"--- {who}:\n{text}" for who, text in conversation)
-        lines += ["", "The conversation, oldest first (Me is them), between the marked lines:", fenced(thread, new_fence())]
+        lines += ["", "The conversation, oldest first (Me is them), between the marked lines:", fenced(thread, new_fence(thread))]
     if edit is not None and is_adjust(tone):
         lines += ["", "The reply they have now, to adjust:", f"---\n{edit}\n---", f"Change: {ADJUSTMENTS[tone]}"]
         if instruction:
@@ -528,11 +531,11 @@ class Drafts:
             names.setdefault(contact.get("id"), contact.get("display_name"))
 
         conversation = []
-        for m in messages:
+        for i, m in enumerate(messages):
             who = "Them" if m["direction"] == "inbound" else "Me"
             if m["direction"] == "inbound" and m.get("sender_contact_id") in names:
                 who = names[m["sender_contact_id"]] or "Them"
-            conversation.append((who, describe(m)))
+            conversation.append((who, describe(m, 1500 if i >= len(messages) - 2 else OLDER_CHARS)))
 
         # The team's voice is for a new draft in a work chat. An edit or adjustment only corrects their own text.
         company = self._company(user, d["thread_id"]) if edit is None else None
@@ -677,7 +680,7 @@ class Drafts:
                 temperature=0.4 if adjust else 0.2 if edit else 0.6,  # an edit should come back the same way each time
                 # On low the fast model let typos in all-lowercase text through; medium caught them in 2 to 5s,
                 # where the full model took 2 to 17s.
-                thinking="medium" if edit and not adjust else "low",
+                thinking=edit_thinking() if edit and not adjust else draft_thinking(),
                 attempts=3,  # someone is waiting: fail and let them try again rather than wait minutes
                 timeout=60,
                 max_output=DRAFT_MAX_OUTPUT,
@@ -779,10 +782,10 @@ def pick_facts(notes: list[tuple[str, str]]) -> list[tuple[str, str]]:
 MEDIA = {"imageMessage": "photo", "videoMessage": "video", "stickerMessage": "sticker", "audioMessage": "voice note", "documentMessage": "document"}
 
 
-def describe(m: dict[str, Any]) -> str:
+def describe(m: dict[str, Any], limit: int = 1500) -> str:
     """A message as the prompt shows it: what it carries (attachments, media) and what it quotes, then its
     text. Without these a draft answered "here's the file" as if nothing was attached."""
-    text = clean(m.get("body_text"), m.get("body_html"), limit=1500)
+    text = clean(m.get("body_text"), m.get("body_html"), limit=limit)
     extra = []
     files = [f for f in m.get("files") or [] if f]
     if files:

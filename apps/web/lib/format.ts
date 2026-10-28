@@ -1,14 +1,59 @@
 // Plain display formatting shared across screens: phone numbers, names, relative times and dates, file sizes. Pure apart
-// from reading the clock.
+// from reading the clock and loading the phone library once.
 
-import { parsePhoneNumberFromString } from "libphonenumber-js";
+import { useSyncExternalStore } from "react";
+
+type ParsePhone = typeof import("libphonenumber-js").parsePhoneNumberFromString;
+
+// The phone library is large, so it loads in its own chunk after the first paint instead of with the app. Until it
+// arrives numbers show as they were given; components that format numbers re-render through usePhoneFormatReady.
+let parsePhone: ParsePhone | null = null;
+let loading = false;
+const listeners = new Set<() => void>();
+
+function loadPhoneLibrary() {
+  if (parsePhone || loading) return;
+  loading = true;
+  void import("libphonenumber-js")
+    .then((m) => { parsePhone = m.parsePhoneNumberFromString; listeners.forEach((l) => l()); })
+    .catch(() => { loading = false; });
+}
+
+// Started as soon as this module runs in the browser, in parallel with the rest of the app.
+if (typeof window !== "undefined") loadPhoneLibrary();
+
+/**
+ * Resolves once phone numbers can be formatted, or after a short wait if the library cannot load. Loaders that bake a
+ * formatted number into stored text (data.ts: a WhatsApp chat named by its number) wait on it before mapping, because a
+ * name made before the library arrives would stay unformatted until the store reloads.
+ */
+export function whenPhoneFormatReady(timeoutMs = 3000): Promise<void> {
+  if (parsePhone) return Promise.resolve();
+  loadPhoneLibrary();
+  return new Promise((resolve) => {
+    const done = () => { listeners.delete(done); clearTimeout(timer); resolve(); };
+    const timer = setTimeout(done, timeoutMs);
+    listeners.add(done);
+  });
+}
+
+/** True once phone numbers can be formatted. Call it in a component that shows formatPhone output so it re-renders then. */
+export function usePhoneFormatReady(): boolean {
+  return useSyncExternalStore(
+    (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+    () => parsePhone !== null,
+    () => false,
+  );
+}
 
 /**
  * A phone number written the way its country writes it in international form: "+27 82 416 0503",
- * "+44 7700 900123", "+1 415 555 0132". Anything that is not a valid number stays as it is.
+ * "+44 7700 900123", "+1 415 555 0132". Anything that is not a valid number stays as it is, and so does every number
+ * for the moment before the phone library has loaded.
  */
 export function formatPhone(raw: string): string {
-  const n = parsePhoneNumberFromString(/^\d+$/.test(raw) ? `+${raw}` : raw);
+  if (!parsePhone) { loadPhoneLibrary(); return raw; }
+  const n = parsePhone(/^\d+$/.test(raw) ? `+${raw}` : raw);
   return n?.isValid() ? n.formatInternational() : raw;
 }
 

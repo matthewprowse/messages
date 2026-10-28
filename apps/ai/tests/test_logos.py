@@ -4,7 +4,7 @@ order of search URLs and the price of search queries."""
 import unittest
 from datetime import date
 
-from ai.logos import LAST_LOOK, candidates_text, judge_prompt, read_verdict, search_urls
+from ai.logos import LAST_LOOK, search_worthwhile, candidates_text, judge_prompt, read_verdict, search_urls
 from ai.pricing import SEARCH_QUERY_USD, cost_usd
 
 CANDIDATES = [
@@ -60,6 +60,28 @@ class LogoSearchTest(unittest.TestCase):
     def test_search_queries_are_priced(self):
         self.assertEqual(SEARCH_QUERY_USD, 0.014)
         self.assertAlmostEqual(cost_usd("gemini-3.5-flash-lite", date(2026, 10, 26), 1_000_000, 0, 0), 0.30)
+
+
+class LogoSpendTest(unittest.TestCase):
+    def test_search_is_for_domains_used_by_personal_contacts_or_two_users(self):
+        self.assertTrue(search_worthwhile({"domain": "a.co"}))  # counts not read: searched as before
+        self.assertTrue(search_worthwhile({"users_seen": 1, "personal_seen": True}))
+        self.assertTrue(search_worthwhile({"users_seen": 2, "personal_seen": False}))
+        self.assertFalse(search_worthwhile({"users_seen": 1, "personal_seen": False}))
+
+    def test_the_dollar_cap_stops_the_queue(self):
+        from ai.logos import Logos
+
+        class Db:
+            def count(self, *a):
+                return 3
+
+            def select(self, table, params):
+                if table == "ai_usage":
+                    return [{"cost_usd": 1.2}, {"cost_usd": 0.9}]
+                raise AssertionError("the queue must not be read once the day's dollars are spent")
+
+        self.assertEqual(Logos(Db(), None, "m").run_once(), 0)
 
 
 if __name__ == "__main__":

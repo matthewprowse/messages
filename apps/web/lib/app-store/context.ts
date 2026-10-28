@@ -90,6 +90,8 @@ export interface Ctx extends Omit<State, "byThread"> {
   refreshContacts: (affected: string[]) => Promise<Contact[]>;
   /** Goes up after every merge, split or undo, so pages that load contacts themselves reload. */
   contactsVersion: number;
+  /** Whether contacts holds every contact and is current, so a page can use it instead of reading them again. */
+  contactsReady: boolean;
   /** Ticks a task off (done) or back on. Shown at once; the worker makes it at the provider, and a failure puts it back with a toast. */
   tickTask: (task: Task, done: boolean, via: "calendar" | "details" | "summary") => void;
   /** Makes a task at its provider. It shows at once; a failure takes it away again with a message. */

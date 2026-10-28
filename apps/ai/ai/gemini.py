@@ -42,6 +42,7 @@ FILE_READY_S = 300  # a long recording can take a minute or two to be processed 
 EMBED_DIMENSIONS = 768  # matches messages.embedding
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 MAX_RETRY_WAIT_S = 60  # a longer wait asked for (a daily quota) is not waited out here
+AUDIO_ATTEMPTS = 2  # most tries a call with audio gets: a lost call can still bill the whole file
 
 
 class GeminiError(Exception):
@@ -353,6 +354,8 @@ class Gemini:
         tokens are billed at the cached rate. audio_seconds is the length of a file, for the estimate."""
         if thinking == "minimal" and model in self._no_minimal:
             thinking = "low"
+        if audio and attempts > AUDIO_ATTEMPTS:
+            attempts = AUDIO_ATTEMPTS  # a timed out call may still be billed, and audio input is dear
         config: dict[str, Any] = {
             "responseMimeType": "application/json",
             "responseJsonSchema": schema,
@@ -758,7 +761,10 @@ class Gemini:
             with self._lock:  # counted at once, so a call made before the row is written already sees it
                 key = (ctx.user_id, ctx.feature)
                 self._spent[key] = self._spent.get(key, 0.0) + usage.cost_usd
-        self._usage.submit(self._insert_usage, model, ctx, usage)
+        try:
+            self._usage.submit(self._insert_usage, model, ctx, usage)
+        except RuntimeError:  # closed at shutdown while a late thread was still finishing a call: write it here
+            self._insert_usage(model, ctx, usage)
 
     def _emit(
         self, model: str, ctx: UsageContext, prompt: str, started: float, stats: dict[str, int], used: Usage | None, *, ok: bool = True, code: str | None = None

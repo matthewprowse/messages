@@ -100,11 +100,17 @@ export async function frameAll(found: Found[], excluded: readonly string[] = [])
   return kept.map(({ found, logo }) => ({ found, logo }));
 }
 
-async function clearReview(key: string) {
+export async function clearReview(key: string) {
   const bucket = db.storage.from(LOGOS_BUCKET);
-  const { data } = await bucket.list(`review/${key}`, { limit: 100 });
-  const paths = (data ?? []).map((o) => `review/${key}/${o.name}`);
-  if (paths.length > 0) await bucket.remove(paths);
+  // A company has about 22 pictures; a few rounds make sure none is left even if there are more.
+  for (let round = 0; round < 5; round++) {
+    const { data, error } = await bucket.list(`review/${key}`, { limit: 100 });
+    if (error) throw storageError("list logo review", error);
+    const paths = (data ?? []).map((o) => `review/${key}/${o.name}`);
+    if (paths.length === 0) return;
+    const removed = await bucket.remove(paths);
+    if (removed.error) throw storageError("remove logo review", removed.error);
+  }
 }
 
 async function update(domain: string, patch: Partial<LogoRow>) {

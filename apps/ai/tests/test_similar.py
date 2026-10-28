@@ -137,6 +137,20 @@ class Index(unittest.TestCase):
         expired.replies("u", vec(1, 0), None, 3)
         self.assertEqual(len([c for c in self.db.calls if c[0] == "select"]), 3)
 
+    def test_forget_drops_only_that_users_entry(self):
+        index = SimilarIndex(self.db, self.vault)
+        index.replies("u", vec(1, 0), None, 3)
+        index.forget("u")
+        index.replies("u", vec(1, 0), None, 3)
+        self.assertEqual(len([c for c in self.db.calls if c[0] == "select"]), 2)
+
+    def test_defaults_keep_worst_case_memory_under_200_mb(self):
+        from ai.similar import CACHE_S, MAX_USERS, MAX_VECTORS
+
+        self.assertGreaterEqual(MAX_VECTORS, 2000)
+        self.assertGreaterEqual(CACHE_S, 40 * 60)
+        self.assertLess(MAX_USERS * MAX_VECTORS * 768 * 4, 200 * 1024 * 1024)
+
     def test_most_recent_limit_and_paging(self):
         many = [stored(f"{i:04d}", "t", vec(1, i)) for i in range(25)]
         db = Db(many)
@@ -181,6 +195,14 @@ class EmbeddingStorage(unittest.TestCase):
         self.assertEqual(set(row), {"message_id", "user_id", "sent_at", "embedding_data"})
         self.assertEqual(list(open_vector(KEYS, row["embedding_data"]))[:2], [1.0, 0.0])
         self.assertEqual(store.stored("u", "m1")[:2], [1.0, 0.0])
+
+    def test_saving_an_embedding_drops_that_users_cached_vectors(self):
+        db = Queue()
+        store = Embeddings(db, Gem(), "e", Vault(db, MASTER_B64, True))
+        forgotten = []
+        store.index.forget = forgotten.append
+        store.run_once()
+        self.assertEqual(forgotten, ["u"])
 
     def test_a_user_without_a_key_is_not_embedded(self):
         class NoKeys(Queue):

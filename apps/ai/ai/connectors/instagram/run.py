@@ -28,7 +28,7 @@ from .official import OfficialSync
 from .store import Store
 from .sync import AccountSync, Settings
 
-RECONCILE_S = 15.0
+RECONCILE_S = 60.0  # the first reconcile runs at once on start; accounts are connected or paused rarely
 RESTART_AFTER_S = 600.0  # an account whose thread died on its own is started again after this long
 RUNNING = ("connecting", "syncing", "connected")
 

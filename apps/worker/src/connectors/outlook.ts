@@ -1,5 +1,6 @@
 // Outlook and Microsoft 365 mail through Microsoft Graph. Each folder's delta query says what changed
-// since the last check, which keeps new mail within seconds without Graph's push subscriptions (those
+// since the last check, which keeps new mail within seconds in use (the Inbox every 5 s while the mailbox is
+// active, backing off to 60 s when quiet; polling.ts) without Graph's push subscriptions (those
 // need a public web address). Messages are fetched as MIME, so they are parsed and stored exactly like
 // iCloud and Gmail mail, and Outlook's conversation ID groups the thread. Read, unread, archive, delete
 // and junk in the app move or flag the mail in Outlook (delete moves it to Deleted Items, never deletes it
@@ -9,11 +10,12 @@ import { simpleParser } from "mailparser";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { Json, Tables } from "@messages/db";
 import { Backoff, SerialQueue, Sleeper, sleep, supervise } from "../backoff";
+import { accountActivity, OUTLOOK_POLL, OUTLOOK_SIDE_POLL } from "../polling";
 import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { chunks, mapLimit, push } from "../util";
-import { normalizeEmail, type NormalizedEmail } from "../ingest/normalize-email";
+import { normalizeEmail, type EmailAttachment, type NormalizedEmail } from "../ingest/normalize-email";
 import { storeEmail, storeEmails, type EmailContext } from "../ingest/store-email";
 import { isFailure } from "../ingest/batch-rpc";
 import { MissingFiles, saveFilesQuietly } from "../ingest/attachment-files";
@@ -39,8 +41,6 @@ import {
   type OutlookFolder,
 } from "../microsoft/outlook-place";
 
-const POLL_MS = 5_000;
-const ALL_FOLDERS_EVERY = 4; // every fourth check (20 s) reads every folder; the others only the Inbox
 const MAX_FAILED_CHECKS = 12; // about a minute of checks failing in a row
 const DELTAS_AT_ONCE = 3; // folders whose delta is read together
 const WRITE_AT_ONCE = 6; // row updates in flight together when many messages change at once
@@ -128,6 +128,7 @@ export class OutlookConnector {
   async stop() {
     this.stopped = true;
     this.sleeper.interrupt();
+    accountActivity.forget(this.id);
   }
 
   private async run() {
@@ -155,7 +156,7 @@ export class OutlookConnector {
     }
   }
 
-  /** One session: catch up on every folder, then check the Inbox every few seconds and every folder every 20. */
+  /** One session: catch up on every folder, then check the Inbox (5 s active, 30 s, 60 s) and the other folders (20 s, 2 min, 5 min). */
   private async session() {
     await setAccountStatus(this.id, "connecting");
     const { client, creds } = await openGraphClient(this.id, [MAIL_SCOPE]);
@@ -207,30 +208,42 @@ export class OutlookConnector {
     let lastFiles = Date.now();
     let lastTouch = Date.now();
     let failures = 0;
-    for (let check = 1; !this.stopped; check++) {
-      await this.sleeper.wait(POLL_MS);
-      if (this.stopped) break;
-      const folders: OutlookFolder[] = check % ALL_FOLDERS_EVERY === 0 ? this.folders() : ["inbox"];
-      // One failed check (Graph throttling, a database hiccup) is retried at the next one rather than
-      // ending the session. A revoked sign-in ends it at once, and a minute of failures in a row ends it
-      // too, so the reconnect (with backoff) takes over instead of logging forever.
-      try {
-        await this.queue.run(() => this.catchUp(folders));
-        failures = 0;
-      } catch (err) {
-        if (signInRevoked(err) || ++failures >= MAX_FAILED_CHECKS) throw err;
-        log.warn("outlook delta check failed", { account: this.id, code: errorCode(err), failures });
+    let lastSide = Date.now();
+    accountActivity.mark(this.id); // a new session starts with quick checks
+    // Work the app does for this account (a send, an action) ends an idle wait early.
+    const wakeOnActivity = accountActivity.onMark(this.id, () => this.sleeper.interrupt());
+    try {
+      while (!this.stopped) {
+        // The Inbox every 5 s while this mailbox is active, backing off to 30 s then 60 s; the other folders
+        // every 20 s, 2 minutes, then 5 minutes (polling.ts). A failed check retries quickly.
+        await this.sleeper.wait(failures > 0 ? OUTLOOK_POLL.activeMs : accountActivity.delay(this.id, OUTLOOK_POLL));
+        if (this.stopped) break;
+        const allDue = Date.now() - lastSide >= accountActivity.delay(this.id, OUTLOOK_SIDE_POLL);
+        if (allDue) lastSide = Date.now();
+        const folders: OutlookFolder[] = allDue ? this.folders() : ["inbox"];
+        // One failed check (Graph throttling, a database hiccup) is retried at the next one rather than
+        // ending the session. A revoked sign-in ends it at once, and a minute of failures in a row ends it
+        // too, so the reconnect (with backoff) takes over instead of logging forever.
+        try {
+          await this.queue.run(() => this.catchUp(folders));
+          failures = 0;
+        } catch (err) {
+          if (signInRevoked(err) || ++failures >= MAX_FAILED_CHECKS) throw err;
+          log.warn("outlook delta check failed", { account: this.id, code: errorCode(err), failures });
+        }
+        if (Date.now() - lastTouch > 60_000) {
+          lastTouch = Date.now();
+          await touchAccount(this.id);
+          // A new email whose sent copy arrived through a delta check rather than right after sending.
+          await linkNewEmails(this.id).catch((err) => log.warn("link new emails failed", { account: this.id, code: errorCode(err) }));
+        }
+        if (Date.now() - lastFiles > FILES_EVERY_MS) {
+          lastFiles = Date.now();
+          this.background(() => this.saveMissingFiles());
+        }
       }
-      if (Date.now() - lastTouch > 60_000) {
-        lastTouch = Date.now();
-        await touchAccount(this.id);
-        // A new email whose sent copy arrived through a delta check rather than right after sending.
-        await linkNewEmails(this.id).catch((err) => log.warn("link new emails failed", { account: this.id, code: errorCode(err) }));
-      }
-      if (Date.now() - lastFiles > FILES_EVERY_MS) {
-        lastFiles = Date.now();
-        this.background(() => this.saveMissingFiles());
-      }
+    } finally {
+      wakeOnActivity();
     }
   }
 
@@ -266,7 +279,9 @@ export class OutlookConnector {
     });
     if (this.stopped) return;
     const rounds = read.filter((r) => r !== null);
-    await this.applyChanges(foldDeltas(rounds), fresh);
+    const changes = foldDeltas(rounds);
+    if (changes.seen.size > 0 || changes.left.size > 0) accountActivity.mark(this.id); // mail changed: keep checking quickly for a while
+    await this.applyChanges(changes, fresh);
     for (const [folder, link] of links) {
       if (link === this.deltaLinks.get(folder)) continue;
       await saveSyncState(this.id, `delta:${folder}`, { sync_token: link });
@@ -438,6 +453,13 @@ export class OutlookConnector {
     return inserted;
   }
 
+  /** A message's files, fetched again for one the owner opened (ingest/fetch-requests.ts). null when Outlook no longer has the message. */
+  async attachmentsOf(meta: Json): Promise<EmailAttachment[] | null> {
+    const graphId = (meta as OutlookMeta | null)?.graph_id;
+    const raw = graphId ? await this.fetchMime(graphId) : null;
+    return raw && graphId ? (await this.parse(graphId, raw, null)).attachments : null;
+  }
+
   /** One message as MIME, or null when Outlook no longer has it. */
   private async fetchMime(graphId: string): Promise<Buffer | null> {
     try {
@@ -505,7 +527,7 @@ export class OutlookConnector {
           "load thread folders",
         ),
         allRows(
-          (from, to) => db.from("mail_actions").select("thread_id").in("thread_id", ids).eq("status", "queued").order("id").range(from, to),
+          (from, to) => db.from("mail_actions").select("thread_id").in("thread_id", ids).in("status", ["queued", "working"]).order("id").range(from, to),
           "check queued actions",
         ),
       ]);
@@ -561,6 +583,7 @@ export class OutlookConnector {
    * draft is sent: Graph takes at most 4 MB in one request.
    */
   async send(queuedRow: OutboxRow) {
+    accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
     if (!this.ready) return; // still connecting: the next poll retries it
     const row = await claimReady(queuedRow); // waits for its files, then claims it
     if (!row) return;
@@ -662,6 +685,7 @@ export class OutlookConnector {
 
   /** Applies a read, unread, archive, unarchive, delete, undelete, junk or not junk made in the app to the mail in Outlook. */
   async applyAction(row: Tables<"mail_actions">) {
+    accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
     if (!this.ready) return; // still connecting: the next poll retries it
     const run = async () => {
       const client = this.need();
@@ -723,6 +747,7 @@ export class OutlookConnector {
 
   /** Unsubscribes from one sender. An unsubscribe email goes out through Outlook. */
   async unsubscribe(row: Tables<"unsubscribes">) {
+    accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
     if (!this.ready) return;
     await carryOutUnsubscribe(this.id, row, (mailto) => this.mailtoUnsubscribe(mailto));
   }

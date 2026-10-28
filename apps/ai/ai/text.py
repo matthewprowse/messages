@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import html
 import re
 import secrets
@@ -53,9 +55,16 @@ UNTRUSTED = (
 )
 
 
-def new_fence() -> str:
-    """A random delimiter for one request, so text from outside cannot close its own block early."""
-    return "UNTRUSTED-" + secrets.token_hex(8)
+_SECRET = secrets.token_bytes(16)  # per process, so a code cannot be guessed ahead of time
+
+
+def new_fence(seed: str | None = None) -> str:
+    """A random delimiter for one request, so text from outside cannot close its own block early. With a seed
+    the code is the same for the same text within this process (a prompt asked twice stays identical, which
+    keeps Gemini's cached prefix), yet still unpredictable to whoever wrote the text."""
+    if seed is None:
+        return "UNTRUSTED-" + secrets.token_hex(8)
+    return "UNTRUSTED-" + hmac.new(_SECRET, seed.encode(), hashlib.sha256).hexdigest()[:16]
 
 
 def fenced(text: str, fence: str) -> str:

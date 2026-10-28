@@ -96,6 +96,23 @@ export async function matchChat(keys: Keys, team: TeamKeys, userId: string, peop
   return company ? { sealed: company, by: "company" } : null;
 }
 
+/**
+ * Remembers a value per key until its signature changes. The rule pass uses it for each workspace's client list: the
+ * list is read in full only when a cheap signature of it (row counts and newest timestamps) differs from last time.
+ */
+export class SignatureCache<T> {
+  private readonly entries = new Map<string, { signature: string; value: T }>();
+
+  async get(key: string, signature: () => Promise<string>, load: () => Promise<T>): Promise<T> {
+    const sig = await signature();
+    const hit = this.entries.get(key);
+    if (hit && hit.signature === sig) return hit.value;
+    const value = await load();
+    this.entries.set(key, { signature: sig, value });
+    return value;
+  }
+}
+
 export async function runRulePass(store: RuleStore, keys: Keys, now = new Date()): Promise<RuleOutcome> {
   const out: RuleOutcome = { shared: 0, ruleSuggested: 0, workSuggested: 0, failed: 0 };
   const ruleSince = new Date(now.getTime() - RULE_DAYS * 86_400_000).toISOString();

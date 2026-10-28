@@ -8,9 +8,10 @@ import { toast } from "sonner";
 import type { Tables } from "@messages/db";
 import type { Message, Thread } from "../types";
 import { supabase } from "../supabase";
-import {loadEverything, loadMessage, loadMessageAttachments, loadThread, loadThreadMessages, mapDraft, mapAccount,
+import {loadChanges, loadEverything, loadMessage, loadMessageAttachments, loadMessagesAfter, loadThread, loadThreadMessages, mapDraft, mapAccount,
   mapMessage, mapThread, mapUnsubscribe, type MessageRow, 
 } from "../data";
+import { changesSince, resyncPlan } from "./resync-plan";
 import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "../open-rows";
 import { mapTask } from "../tasks";
 import { track } from "../analytics";
@@ -57,21 +58,60 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       }
     }
 
-    // After a dropped connection, catch up once on what changed while it was down.
-    async function resync() {
-      try {
-        rawDispatch({ type: "loaded", data: await loadEverything() });
-      } catch {
-        return;
+    // When the connection was last known to be up, ticked while it is. A computer that slept stops the ticks, so
+    // the first late tick means it woke: whatever happened meanwhile is caught up then, as the socket may not notice.
+    let aliveAt = Date.now();
+    let lastTick = aliveAt;
+    const alive = setInterval(() => {
+      const now = Date.now();
+      if (now - lastTick > 120_000 && !dropped) {
+        const down = now - aliveAt;
+        const since = changesSince(aliveAt);
+        aliveAt = now;
+        setTimeout(() => { if (!stopped) void resync(down, since); }, 3000);
+      } else if (!dropped && now - lastTick <= 120_000) {
+        aliveAt = now;
       }
+      lastTick = now;
+    }, 10_000);
+
+    /** Messages newer than the newest one held in each open conversation, or its latest page when that cannot be said. */
+    async function catchUpMessages(): Promise<Set<string>> {
       const before = new Set(Object.values(stateRef.current.byThread).flatMap((list) => list.map((m) => m.id)));
       const sentIn = new Set<string>();
       await Promise.all([...loadedRef.current].map(async (threadId) => {
-        const page = await loadThreadMessages(threadId).catch(() => null);
-        if (!page) return;
-        rawDispatch({ type: "mergeMessages", threadId, messages: page.messages });
-        if (page.messages.some((m) => m.from === "me" && !before.has(m.id))) sentIn.add(threadId);
+        const held = stateRef.current.byThread[threadId];
+        const newest = held?.[held.length - 1];
+        const fresh = newest ? await loadMessagesAfter(threadId, newest).catch(() => null) : null;
+        const messages = fresh ?? (await loadThreadMessages(threadId).catch(() => null))?.messages;
+        if (!messages) return;
+        rawDispatch({ type: "mergeMessages", threadId, messages });
+        if (messages.some((m) => m.from === "me" && !before.has(m.id))) sentIn.add(threadId);
       }));
+      return sentIn;
+    }
+
+    // After a dropped connection, catch up on what changed while it was down: nothing after a blip, only what
+    // changed after a short drop, everything after a long one or when the short way fails.
+    async function resync(downMs: number, since: string) {
+      const plan = resyncPlan(downMs);
+      if (plan === "skip") return;
+      let sentIn: Set<string>;
+      try {
+        let delta = false;
+        if (plan === "delta") {
+          try {
+            rawDispatch({ type: "loaded", data: await loadChanges(since, stateRef.current.threads) });
+            delta = true;
+          } catch {
+            delta = false;
+          }
+        }
+        if (!delta) rawDispatch({ type: "loaded", data: await loadEverything() });
+        sentIn = await catchUpMessages();
+      } catch {
+        return;
+      }
       const outboxIds = [...pendingRef.current.map((p) => p.id), ...Object.keys(composedRef.current)];
       const { data } = outboxIds.length ? await supabase.from("outbox").select("id, status, thread_id, error").in("id", outboxIds) : { data: [] };
       const rows = new Map((data ?? []).map((r) => [r.id, r]));
@@ -111,8 +151,10 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
     let dropped = false;
     const channel = supabase
       .channel(`inbox-${userId}`)
+      // Realtime cannot filter deletions by user, so every deletion by anyone arrives: only ids held here are acted on.
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "threads" }, (payload) => {
-        rawDispatch({ type: "removeThread", id: (payload.old as { id: string }).id });
+        const id = (payload.old as { id?: string } | null)?.id;
+        if (id && threadMapRef.current.has(id)) rawDispatch({ type: "removeThread", id });
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "threads", filter: mine }, (payload) => {
         if (payload.eventType === "DELETE") return;
@@ -215,7 +257,8 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         });
       })
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "unsubscribes" }, (payload) => {
-        rawDispatch({ type: "removeUnsubscribe", id: (payload.old as { id: string }).id });
+        const id = (payload.old as { id?: string } | null)?.id;
+        if (id && stateRef.current.unsubscribes.some((u) => u.id === id)) rawDispatch({ type: "removeUnsubscribe", id });
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "unsubscribes", filter: mine }, (payload) => {
         if (payload.eventType === "DELETE") return;
@@ -247,35 +290,20 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
-          if (dropped) void resync();
+          if (dropped) void resync(Date.now() - aliveAt, changesSince(aliveAt));
           dropped = false;
+          aliveAt = Date.now();
         } else {
           dropped = true; // CHANNEL_ERROR, TIMED_OUT or CLOSED; the client rejoins by itself
         }
       });
 
-    // Files saved after their message arrived, such as WhatsApp photos, appear without a reload. On its
-    // own channel, so the inbox keeps working if this table is not published for Realtime.
-    const files = supabase
-      .channel(`files-${userId}`)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "attachments" }, (payload) => {
-        rawDispatch({ type: "removeAttachment", id: (payload.old as { id: string }).id });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "attachments", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const row = payload.new as Tables<"attachments">;
-        // The file's name arrives encrypted.
-        queued(`file:${row.id}`, 1, async () => rawDispatch({ type: "upsertAttachment", row: (await openAddresses([{ ...row }]))[0] }));
-      })
-      // Refused while the table is not published, so it stops instead of rejoining forever. A resync
-      // after a dropped connection reloads files with their messages anyway.
-      .subscribe((status) => { if (status === "CHANNEL_ERROR") void supabase.removeChannel(files); });
-
-    // Tasks the worker stores or changes, on their own channel for the same reason. A resync reloads them too.
+    // Tasks the worker stores or changes, on their own channel, so the inbox keeps working if this table is not published for Realtime. A resync reloads them too.
     const taskChannel = supabase
       .channel(`tasks-${userId}`)
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "tasks" }, (payload) => {
-        rawDispatch({ type: "removeTask", id: (payload.old as { id: string }).id });
+        const id = (payload.old as { id?: string } | null)?.id;
+        if (id && stateRef.current.tasks.some((t) => t.id === id)) rawDispatch({ type: "removeTask", id });
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "tasks", filter: mine }, (payload) => {
         if (payload.eventType === "DELETE") return;
@@ -290,8 +318,8 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
     return () => {
       stopped = true;
       clearTimeout(timer);
+      clearInterval(alive);
       supabase.removeChannel(channel);
-      supabase.removeChannel(files);
       supabase.removeChannel(taskChannel);
     };
   }, [userId, schedulePreDraft]);

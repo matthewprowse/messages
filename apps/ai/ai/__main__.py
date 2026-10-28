@@ -35,6 +35,7 @@ from .vault import Vault
 from .voice import Voice
 
 TRIAGE_IDLE_S = 15
+TRIAGE_IDLE_CEILING_S = 60  # an idle triage looks 15 s, 30 s, then every 60 s, and every 15 s again once it or a job finds work
 LEARN_EVERY_S = 60
 VOICE_EVERY_S = 300  # only checks who is due: a user is relearned once they have sent 10 more emails
 SIGNALS_EVERY_S = 3600  # each user is rechecked hourly at most (signals.RECHECK_S), so reading more often only wastes the read
@@ -74,7 +75,7 @@ def main() -> None:
     gemini = Gemini(cfg.gemini_api_key, db)
     embeddings = Embeddings(db, gemini, cfg.embed_model, vault)
     drafts = Drafts(db, gemini, cfg.model, embeddings, vault, fast_model=cfg.fast_model, predraft_model=cfg.predraft_model)
-    triage = Triage(db, gemini, cfg.fast_model, vault)
+    triage = Triage(db, gemini, cfg.triage_model, vault)
     # (name, every seconds, job): each runs when due, one after another, between triage batches.
     jobs = [
         ("transcribe", TRANSCRIBE_EVERY_S, Transcribe(db, gemini, cfg.model, vault).run_once),
@@ -83,7 +84,7 @@ def main() -> None:
         ("signals", SIGNALS_EVERY_S, Signals(db, gemini, cfg.learn_model, vault).run_once),
         ("people", PEOPLE_EVERY_S, People(db, gemini, cfg.learn_model, cfg.fast_model, vault).run_once),
         ("embed", EMBED_EVERY_S, embeddings.run_once),
-        ("follow_ups", FOLLOW_UPS_EVERY_S, Chasers(db, gemini, cfg.model, vault)  # the full model: the fast one called none of the test conversations waiting.run_once),
+        ("follow_ups", FOLLOW_UPS_EVERY_S, Chasers(db, gemini, cfg.model, vault).run_once),  # the full model: the fast one called none of the test conversations waiting
     ]
     if cfg.company_logos:  # off until the logo system is rolled out (docs/PLAN.md, Company Logos)
         jobs.append(("logos", LOGOS_EVERY_S, Logos(db, gemini, cfg.fast_model).run_once))
@@ -93,19 +94,28 @@ def main() -> None:
         last = {name: 0.0 for name, _, _ in jobs}
         waits = {name: Backoff(every, IDLE_CEILING_S.get(name, every)) for name, every, _ in jobs}
         due = {name: every for name, every, _ in jobs}  # seconds to wait since the job last ran
+        triage_wait = Backoff(TRIAGE_IDLE_S, TRIAGE_IDLE_CEILING_S)
+        triage_at = 0.0  # when triage looks next (time.monotonic)
         while not stop.is_set():
             busy = 0
-            try:
-                busy = triage.run_once()
-            except Exception as err:
-                log.error("triage loop failed", code=log.code_of(err))
+            if time.monotonic() >= triage_at:
+                try:
+                    busy = triage.run_once()
+                    triage_at = time.monotonic() + triage_wait.next(busy > 0)
+                except Exception as err:
+                    triage_at = time.monotonic() + TRIAGE_IDLE_S
+                    log.error("triage loop failed", code=log.code_of(err))
             for name, every, job in jobs:
                 if stop.is_set() or time.monotonic() - last[name] <= due[name]:
                     continue
                 last[name] = time.monotonic()
                 try:
                     found = job()
-                    due[name] = waits[name].next(not isinstance(found, int) or found > 0)
+                    worked = not isinstance(found, int) or found > 0
+                    due[name] = waits[name].next(worked)
+                    if isinstance(found, int) and found > 0:  # a transcript, embedding or note may be what triage is waiting for
+                        triage_wait.reset()
+                        triage_at = 0.0
                 except Exception as err:
                     due[name] = every
                     log.error(f"{name} loop failed", code=log.code_of(err))

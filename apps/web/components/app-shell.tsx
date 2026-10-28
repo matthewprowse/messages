@@ -4,21 +4,27 @@
 // and the dialogs that open over the app (setup, tour, team review).
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useIsOwner } from "@/lib/auth";
-import { SearchCommand, ShortcutsDialog } from "@/components/search-command";
 import { NewMenu } from "@/components/new-menu";
 import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Megaphone, Ellipsis, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
-import { AppTour } from "@/components/tour";
+import { useOnboardingMeta } from "@/lib/onboarding";
+import { useMyTeam } from "@/lib/share";
 import { SyncBar } from "@/components/sync-bar";
-import { SetupDialog } from "@/components/onboarding/setup-dialog";
-import { TeamReview } from "@/components/team-review";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+
+// Search (with cmdk), the tour, setup and team review load in their own chunks, so the first page does not carry them.
+const SearchCommand = dynamic(() => import("@/components/search-command").then((m) => m.SearchCommand), { ssr: false });
+const ShortcutsDialog = dynamic(() => import("@/components/search-command").then((m) => m.ShortcutsDialog), { ssr: false });
+const AppTour = dynamic(() => import("@/components/tour").then((m) => m.AppTour), { ssr: false });
+const SetupDialog = dynamic(() => import("@/components/onboarding/setup-dialog").then((m) => m.SetupDialog), { ssr: false });
+const TeamReview = dynamic(() => import("@/components/team-review").then((m) => m.TeamReview), { ssr: false });
 
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/summary", label: "Summary", icon: Newspaper },
@@ -163,6 +169,22 @@ function BottomBar({ hidden }: { hidden: boolean }) {
   );
 }
 
+/** True once the browser is idle after the first paint, or sooner when `now` is set (a search shortcut or click). */
+function useAfterIdle(now: boolean) {
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    if (idle) return;
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(() => setIdle(true), { timeout: 3000 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(() => setIdle(true), 1500);
+    return () => window.clearTimeout(id);
+  }, [idle]);
+  return idle || now;
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const { session } = useAuth();
@@ -172,6 +194,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const onInvite = pathname.startsWith("/invite/");
   const onOnboarding = pathname === "/onboarding";
   const isDetail = useIsDetailRoute();
+  const meta = useOnboardingMeta();
+  const team = useMyTeam();
+
+  // Search, its G-then-letter shortcuts and the ? dialog load once the page is idle; Cmd/Ctrl+K or a click on Search loads them at once.
+  const [wantSearch, setWantSearch] = useState(false);
+  const searchReady = useAfterIdle(wantSearch);
+  useEffect(() => {
+    if (searchReady) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setWantSearch(true); setSearchOpen(true); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchReady]);
+
+  // The dialogs only when they could show: setup and the tour until they are done, team review for someone in a team.
+  const onboarding = meta.onboarding !== "done" ||meta.tour === "pending";
+  const reviewPending = !!team && meta.teamReview !== team.workspaceId;
 
   // Everything except the sign-in page and an invite link needs a signed-in user: row-level security returns nothing otherwise.
   // An invite page asks someone to sign in itself, so the link they were sent is not lost.
@@ -191,17 +231,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         Skip to Content
       </a>
-      <Rail searchOpen={searchOpen} onSearch={() => setSearchOpen(true)} />
-      <SearchCommand open={searchOpen} onOpenChange={setSearchOpen} />
-      <ShortcutsDialog />
+      <Rail searchOpen={searchOpen} onSearch={() => { setWantSearch(true); setSearchOpen(true); }} />
+      {searchReady && <SearchCommand open={searchOpen} onOpenChange={setSearchOpen} />}
+      {searchReady && <ShortcutsDialog />}
       <main id="content" tabIndex={-1} className={cn("flex h-full min-w-0 flex-1 flex-col outline-none", !isDetail && "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0")}>
         <SyncBar />
         <div className="min-h-0 flex-1">{children}</div>
       </main>
       <BottomBar hidden={isDetail} />
-      <AppTour />
-      <Suspense><SetupDialog /></Suspense>
-      <TeamReview />
+      {onboarding && <AppTour />}
+      {onboarding && <Suspense><SetupDialog /></Suspense>}
+      {reviewPending && <TeamReview />}
     </div>
   );
 }

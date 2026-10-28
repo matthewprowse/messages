@@ -69,6 +69,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const loadingRef = useRef(new Map<string, Promise<void>>());
   const olderRef = useRef(new Set<string>());
   const contactsForRef = useRef<string | null>(null);
+  // Whether the store holds every contact (not just those in the listed threads): see contactsReady in the context.
+  const [contactsReady, setContactsReady] = useState(false);
   // Failed tries at the deferred contacts load, which re-runs it after a pause.
   const [contactsTries, setContactsTries] = useState(0);
 
@@ -124,11 +126,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setComposed({});
       moreRef.current.clear();
       contactsForRef.current = null;
+      setContactsReady(false);
       return;
     }
     let cancelled = false;
     loadEverything()
-      .then((data) => { if (!cancelled) rawDispatch({ type: "loaded", data }); })
+      .then((data) => {
+        if (cancelled) return;
+        rawDispatch({ type: "loaded", data });
+        if (data.contactsLoaded) { contactsForRef.current = userId; setContactsReady(true); }
+      })
       .catch(() => {
         if (cancelled) return;
         rawDispatch({ type: "clear" });
@@ -137,15 +144,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, [ready, userId]);
 
-  // The list arrives with the people in it. Everyone else (for search, reactions and new messages)
-  // loads once the list has been drawn.
+  // The list arrives with every contact. Only when that part failed are they loaded here, with retries.
   useEffect(() => {
     if (state.loading || !userId || contactsForRef.current === userId) return;
     contactsForRef.current = userId;
     let done = false;
     const timer = setTimeout(() => {
       loadContacts()
-        .then((contacts) => { if (!done) rawDispatch({ type: "upsertContacts", contacts }); })
+        .then((contacts) => { if (!done) { rawDispatch({ type: "upsertContacts", contacts }); setContactsReady(true); } })
         .catch(() => {
           contactsForRef.current = null;
           if (done) return;
@@ -742,7 +748,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // After a merge, split or undo: every contact and conversation member again, and the open
   // conversations whose senders or members changed.
   const refreshContacts = useCallback(async (affected: string[]) => {
-    // The change is already saved, so the Contacts lists reload straight away.
+    // The change is already saved, so the Contacts lists reload straight away, from the database until the store has caught up.
+    setContactsReady(false);
     setContactsVersion((v) => v + 1);
     let contacts: Contact[] = stateRef.current.contacts;
     try {
@@ -753,6 +760,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       for (const [threadId, list] of Object.entries(stateRef.current.byThread)) if (loadedRef.current.has(threadId) && list.some((m) => ids.has(m.from))) threadIds.add(threadId);
       for (const [threadId, members] of graph.participants) if (loadedRef.current.has(threadId) && members.some((id) => ids.has(id))) threadIds.add(threadId);
       rawDispatch({ type: "setContactGraph", contacts: graph.contacts, participants: graph.participants });
+      setContactsReady(true);
       // Everything already loaded is fetched again for its new senders, keeping older pages and jumps.
       await Promise.all([...threadIds].map(async (threadId) => {
         const oldest = stateRef.current.byThread[threadId]?.[0];
@@ -919,12 +927,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ...listState(state), dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
     listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
-    contactsVersion, tasks, tickTask, createTask, editTask, deleteTask,
+    contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   }), [
     state, dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
     listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
-    contactsVersion, tasks, tickTask, createTask, editTask, deleteTask,
+    contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   ]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

@@ -18,8 +18,14 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Pages are driven from the in-memory store, so a cached page payload carries no data: keep visited pages for 30 s
+  // in the router cache instead of fetching them from the server on every rail click.
+  experimental: { staleTimes: { dynamic: 30 } },
   headers: async () => [
     { source: "/:path*", headers: securityHeaders },
+    // Voice samples and provider logos rarely change; a day in the cache, a week of serving stale while it refreshes.
+    { source: "/voices/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }] },
+    { source: "/logos/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }] },
   ],
   // The Summary page was at /briefing until 27 October 2026; old links and bookmarks still land on it.
   redirects: async () => [

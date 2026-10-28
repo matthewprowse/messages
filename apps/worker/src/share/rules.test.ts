@@ -9,7 +9,7 @@ import { teamDomainIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
 import { AGENT, client, COLLEAGUE, contact, WS, world, type World } from "./fixtures";
 import type { Participant } from "./people";
-import { isMissingMigration, runRulePass, SUGGEST_DAYS, type Candidate, type RuleData, type RuleStore } from "./rules";
+import { isMissingMigration, runRulePass, SignatureCache, SUGGEST_DAYS, type Candidate, type RuleData, type RuleStore } from "./rules";
 
 interface Chat extends Candidate {
   user_id: string;
@@ -228,4 +228,18 @@ test("a database without the migration stops the pass with a code the sweep wait
   store.apply = async () => { throw Object.assign(new Error("missing"), { code: "PGRST202" }); };
   await assert.rejects(runRulePass(store, w.keys), (err) => isMissingMigration(err));
   assert.ok(!isMissingMigration(Object.assign(new Error("x"), { code: "ECONNRESET" })));
+});
+
+test("SignatureCache loads again only when the signature changes", async () => {
+  const cache = new SignatureCache<number>();
+  let loads = 0;
+  let sig = "a";
+  const get = (key = "ws") => cache.get(key, async () => sig, async () => ++loads);
+  assert.equal(await get(), 1);
+  assert.equal(await get(), 1);
+  assert.equal(loads, 1);
+  sig = "b";
+  assert.equal(await get(), 2);
+  assert.equal(await get("other"), 3);
+  assert.equal(loads, 3);
 });

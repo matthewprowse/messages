@@ -394,6 +394,36 @@ Things to know before linking:
 - Google Contacts needs the `contacts.readonly` scope, which sign-ins from before it was added lack. Run
   `pnpm connect:google` again and leave the contacts box ticked. Until then Google is skipped.
 
+## Running more than one worker
+
+One worker is the default and needs nothing below. To spread the accounts over several workers (several processes or VMs), give each its own slice.
+
+**Settings** (in each worker's `.env`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `WORKER_SHARD_COUNT` | `1` | How many workers there are in total. |
+| `WORKER_SHARD_INDEX` | `0` | This worker's number, `0` to `WORKER_SHARD_COUNT - 1`. Every worker needs a different one. |
+| `WORKER_LEASE` | on | `off` skips the lease below. For local development only. |
+
+**How accounts are split.** An account belongs to the shard `first 8 hex digits of its id (as a number) mod WORKER_SHARD_COUNT`. Ids are random, so the split is even. A worker runs connectors only for the accounts it owns. Queued work (replies, mail actions, unsubscribes, calendar and task changes, View Original) is found through the connector that is running for the account, so a row for an account another worker owns is left queued, not claimed and not failed, and that worker picks it up. Realtime events and the safety-net poll run on every worker and do the same.
+
+**What runs on shard 0 only.** These read or change data across all users and are not written to run twice at once: photo and address-book sync, company logos, outbox file cleanup, the contact linker, the address indexer, the meeting linker, the usage rollup, share jobs, team key rotation, team rules, and the deletion of fetched originals after an hour. Queued rows that belong to no account (a task change whose task is gone, a View Original request for an email that is gone) are also settled by shard 0 only, and only once they are three minutes old.
+
+**Startup recovery.** A sync that was cut off by a restart (an email in `sending`, a calendar event `creating`, an unsubscribe `working`, and so on) is failed rather than repeated, since it may have gone out. Each worker now does this only for rows of accounts it owns, so starting a second worker never fails the first one's live sends. Mail actions left `working` go back to `queued` the same way. See `src/recovery.ts`.
+
+**The lease.** At startup a worker takes the lease `shard-<index>` (table `worker_leases`, migration `20261110100000_worker_leases.sql`), renews it every 30 s (it lasts 90 s) and gives it up on shutdown. If another worker already holds it, the new one logs `LEASE_TAKEN` and exits with status 1, so a supervisor that restarts it will retry until the old one is gone (at most 90 s after a crash). A worker that loses its lease later stops its connectors and exits. A brief database error on renewal is retried until the lease is nearly out. Until the migration is applied the worker logs a warning and runs without a lease, so the code can be deployed first.
+
+**Adding a shard.**
+
+1. Apply the `worker_leases` migration.
+2. Set `WORKER_SHARD_COUNT` to the new total on every worker, and a distinct `WORKER_SHARD_INDEX` on each (the first worker stays `0`).
+3. Give each worker the same `.env` otherwise (same database, same keys) and restart them together.
+
+**Changing the count** moves most accounts to a different shard. Each worker's reconcile (every 30 s) stops the connectors it no longer owns and starts the ones it now owns, so a moved account restarts once. For a minute or two after a staggered change an account can briefly run on two workers; restart all workers close together to keep that short.
+
+**Not covered here.** The Python AI worker (`apps/ai`) is a separate process with its own jobs. Run it as before; this setting does not apply to it.
+
 ## Not yet
 
 - Reply All, new emails, and attachments on replies you send.

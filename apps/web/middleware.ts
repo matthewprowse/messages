@@ -19,11 +19,13 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Pages only: not static files, images, API routes (JSON), or the manifest.
+  // Document requests only: not static files, media, images, API routes (JSON), the manifest, or soft-navigation
+  // (RSC) fetches, which carry no HTML to put a nonce on.
   matcher: [
     {
-      source: "/((?!api|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|xml|woff2?)$).*)",
+      source: "/((?!api|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|xml|json|map|js|css|woff2?|ttf|m4a|mp3|mp4|wav|webm|ogg|pdf)$).*)",
       missing: [
+        { type: "header", key: "rsc" },
         { type: "header", key: "next-router-prefetch" },
         { type: "header", key: "purpose", value: "prefetch" },
       ],

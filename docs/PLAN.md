@@ -2065,6 +2065,146 @@ Other levers:
 5. Batch API for imports, Gmail push, real rate limiting.
 6. Confidential Space at the first paying client.
 
+## Code Review, Bug Fixes and Cost Pass (28 October 2026)
+
+Six read-only reviewers went through the web app, the web routes, the worker, the AI service, the Go helper and the database
+policies, and four more looked at cost. Every finding came from reading the code. The ones marked confirmed were also
+reproduced. High and medium findings were then fixed in code and checked with the unit tests. Nothing was run against real
+LinkedIn, Instagram or provider accounts, and nobody has looked at the changes in a browser yet.
+
+### Fixed
+
+- Email parser: an unclosed HTML tag blocked the single-threaded worker for minutes (confirmed, 60 KB took 2.1 s and grew with
+  the square of the size), and 5,000 nested tags threw a stack overflow so the email could never be stored (confirmed). Both
+  are fixed in `packages/email-text`, with the input capped and the work wrapped so it cannot throw. 1.6 MB of hostile input now
+  takes under 1 ms.
+- Follow-up checks never ran because `CHASER_MAX_OUTPUT` was never defined (confirmed). They now run, on the full model, and
+  filter by age in the query.
+- Calendar Search Events did nothing unless a delete was in flight (confirmed). New LinkedIn conversations could not send
+  because the helper never kept its session after login (confirmed). Both are fixed and tested.
+- Sending and the worker: a send could stay in "sending" forever after a database error, mail actions could run twice (they are
+  now claimed with a `working` state), sync loops could die silently (they now restart with backoff), IMAP read flags ignored
+  UIDVALIDITY, and one failing row aborted a batch.
+- AI and budget: an unpriced model was billed at $0 (now the dearest known price), a zero or missing budget share meant
+  unlimited, the worker wrote plaintext when a key could not be unwrapped (it now raises), voice notes failed for good when the
+  budget was only paused, draft audio paths accepted `..`, and untrusted email text is now fenced in the prompts. The earlier
+  `logos` exclusion from the allowance, dropped by mistake in the workspaces rewrite, is restored.
+- Web: unread state re-arms after a new message, a message arriving mid-load is no longer dropped, no duplicate "Sending" bubble,
+  a failed send no longer reappears, a failed key call no longer leaves Send disabled, the right person shows after a merge,
+  Cmd+K finds text in angle brackets, non-Latin names merge correctly, large contacts load, a failed note save no longer
+  deletes files, and a slow event create no longer invites a duplicate.
+- Web routes: per-IP limits on the credential-probing routes, validated bodies (400, not 500), a separate rate-limit counter per
+  route, compare-and-swap on the code routes, and duplicate-account handling.
+- Network: the logo and autoconfig fetchers connect only to the address they vetted. Invites need a confirmed email.
+
+### Cost Pass
+
+The live database is 176 MB with 148 MB of attachments, and a medium user costs about $4 a month in Gemini, so none of this
+is urgent today. It matters as the number of users grows. The largest fixed cost was idle polling, about 5 million database
+requests a month before any user does anything.
+
+| Change | Effect |
+| --- | --- |
+| Queue poll every 60 s (5 min idle) plus one poll after each Realtime reconnect | 32 to 8 queries a minute while active |
+| Gmail, Outlook and Teams polling per account, backing off when quiet | Gmail and Outlook calls down by about 80 to 90% on quiet mailboxes |
+| Address indexer once at start then hourly (partial indexes) | 16 queries a minute to about 0.1 |
+| Contact linker, logos, share, rotation and meeting jobs gated by what changed | A few queries per 15 minutes instead of per user |
+| IMAP skips the whole-inbox read when nothing changed; batches flush by size | A quiet inbox costs 0 instead of about 20 requests; memory bounded |
+| WhatsApp in-memory maps bounded | No unbounded growth |
+| iCloud Reminders, brief, triage and supervisor loops back off when idle | About 20 queries a minute per account down to about 2 |
+| Embedding cache lasts 45 minutes and clears only on a new embedding | Far fewer 9 MB reloads |
+| Sealed 256 px thumbnails for photo tiles, memory-only cache | About 130 to 300 times less data per tile |
+| Cold start loads participants as ids and folds in small queries; delta resync after a Realtime drop | Several MB less per load; a short drop costs a few KB |
+| Shared chats poll once a minute, only while visible | About 6 full reloads a minute down to about 1 small request |
+| Router cache, middleware skips soft navigation and media, cache headers, lazy search and tour, lazy phone library, font preload off | About 70 to 115 KB gzipped less first-load JavaScript (estimate) and fewer function runs |
+| Chasers batched, thinking minimal for transcription and the brief script, slower learning triggers, shorter draft and bulk prompts, retry caps, a daily logo spend cap | About 10 to 15% of the medium user's Gemini spend (estimate) |
+| Pre-drafts only for mail that needs a reply, capped at 15 a day | Protects the budget meant for drafts people ask for |
+| Daily retention job for finished queue rows and old drafts; analytics raw events kept 200 days | Stops tables growing without limit |
+| Multi-worker support: accounts split by a hash of the account id, shared jobs on shard 0, a lease per shard | A second sync worker can run without doing every account twice |
+
+### Running More Than One Worker
+
+The sync worker can now be split across machines. Set `WORKER_SHARD_COUNT` and `WORKER_SHARD_INDEX` (defaults 1 and 0, which
+behaves as before). Each shard runs the connectors for the accounts whose id hashes to it, and leaves work for other shards'
+accounts alone. Shard 0 also runs the jobs that read or change data across users: photos, company logos, the contact,
+address and meeting linkers, usage rollup, share jobs, key rotation and team rules. A lease (`worker_leases`) stops two
+workers running the same shard, and startup recovery of in-flight rows is limited to a shard's own accounts. Changing the
+shard count reassigns most accounts, so restart the workers close together. Deploying before the lease migration is safe: the
+worker warns and runs without a lease.
+
+The AI worker is separate and is not safe to run as several instances yet. Only the brief claims its rows. Drafts, triage and
+transcription would do the same work twice. The cheapest fix is one instance per job group behind the same lease, or a user-id
+filter per instance. Do this before adding a second AI worker.
+
+### Decided (28 October 2026)
+
+- Old bulk mail: full text is kept for 30 days, then cut to a preview of about 500 characters. A worker job does it, because the
+  text is encrypted. Messages in threads you replied to, from people you wrote to, with a draft or pinned, are never shortened.
+  View Original still fetches the whole email from the provider. The messages table averaged about 33 KB a message, which is
+  the largest database growth driver.
+- Email attachments over 5 MB or older than 30 days are fetched from the mailbox the first time they are opened. WhatsApp and
+  other chat media stay copied at once, because WhatsApp media expires on its servers. Files already stored are not touched.
+- The server keeps asking Supabase Auth to check each login token. Checking locally would save a round trip but a revoked
+  session would work for up to an hour.
+- No Batch API: the owner does not want results to arrive up to a day late. No static pages, because the per-request nonce
+  protects the decrypted data and keys that live in page memory.
+- Triage stays on `gemini-3.5-flash-lite`. There is no "Gemini 3 Flash Lite". `gemini-3.1-flash-lite` ($0.25 in, $1.50 out)
+  would cut triage cost by about 30%, roughly 5% of total spend, but Google lists its earliest shutdown as 7 May 2027.
+  `gemini-2.5-flash-lite` is cheaper but Google now limits it to accounts that already used the 2.5 models. The model is set by
+  `TRIAGE_MODEL` (default unchanged) and `gemini-3.1-flash-lite` has a price entry, so a comparison on a sample of real mail
+  can be run before deciding.
+
+### Not Done
+
+- Binding each encrypted value to its row, retiring old team keys safely, and re-keying the contact card hash: each needs a data
+  migration and a design decision.
+- Soft deletes. Realtime cannot filter deletions by user, so every delete is sent to every connected client. A `deleted_at`
+  update that carries the user filter would fix it.
+- Opus or AAC for the spoken brief (about 12 times smaller than the uncompressed audio), and a raw-bytes brief format.
+- The domain-level skip in triage and the logo search filter need columns that do not exist yet (`users_seen`, `personal_seen`).
+- Restoring the idle-time cache for per-job model tests, and a comparison script for `gemini-3.1-flash-lite`.
+- One LinkedIn account per user was not added, because it would stop someone connecting two profiles.
+- Packing messages so sealed text is stored as bytes, not base64 (it grows by 37%).
+
+### Migrations (28 October 2026)
+
+Applied to the live database and checked in the database itself: invite confirmed email, strict draft audio path, pending draft
+cap, zero budget share (with `logos` restored), unique account address index, poller indexes, the `working` mail action status,
+and then the cost pass: address indexer indexes, the pre-draft gate (needs a reply, 15 a day), the retention job (scheduled daily
+at 03:41), the analytics prune at 200 days, the email original Realtime column list (no `html`), thumbnail path, mail action
+claim time, the follow-up indexes, `worker_leases`, `messages.body_shrunk_at` and `attachment_fetch_requests`. The lease was
+tested in the database: a second holder is refused, the holder renews, a wrong holder cannot release, and an expired lease can be
+taken over.
+
+The three team migrations were applied after that: `team_owner_features`, `team_after_launch` and `team_review_fixes`. They add
+shared inboxes and their access lists, assignee replies, the Compliance open log, cover periods, the company voice, client
+list management, response tracking, the compliance exports, and the stricter shared-chat read policies (`can_read_thread_at`,
+`agent_has_left`). All 87 tables, functions, policies and triggers they define were checked in the live database, row security is
+on for every new table, and the shared thread, message, attachment and message AI policies now use the new functions. The
+database advisor then showed three trigger functions callable over the API, so `revoke_team_trigger_functions` was added and
+applied; `invite_preview` is now the only function callable without signing in, and that is intended (invite links).
+
+Applied last, on 28 October: `drop_plaintext_embeddings`. First the sealed embeddings job
+(`python3 -m ai.seal_embeddings --apply`) sealed all 2,486 vectors in the live database, and every one was decrypted and compared
+with its plaintext copy: none failed to open and the largest difference was 1.5e-8 (float precision). Then the migration removed
+the readable `embedding` column, its two indexes and `similar_replies`, and `embedded_message_count()` now counts sealed vectors.
+The database was checked afterwards: 2,491 rows, 2,486 sealed (the other five are embeddings not made yet). The seal script
+can no longer run against the database, so its docstring says it is finished; its tests stay.
+
+`packages/db/src/database.types.ts` is kept by hand and is not regenerated from the database. The generator marks every RPC
+argument and result as nullable, which breaks typechecking in 14 places in the web app and the worker, so new columns and
+tables are merged into the file instead. The advisor also reports leaked password protection as off in Supabase Auth, which is
+a dashboard setting to turn on.
+
+### Found While Starting The AI Worker (28 October 2026)
+
+The AI worker could not start on this code: a comment placed inside the `jobs` list in `ai/__main__.py` swallowed the end of the
+follow-up checks line, so Python could not parse the file. The 589 tests never import that file, so they passed. It is fixed, and
+`tests/test_entrypoint.py` now compiles and imports the entry point. Once it ran, every Gemini call failed with HTTP 402:
+Google reports `RESOURCE_EXHAUSTED: Your prepayment credits are depleted`, so the AI Studio prepaid balance has to be topped up
+(the key is the one shared with Mendr, so the balance is shared too). The worker was stopped, because a voice note can be marked
+failed for good after a few such errors. In the minute it ran it wrote 17 triage results for senders already settled from history (no model call); it wrote no brief, no embedding or learning result, marked no voice note or draft as failed, and recorded no Gemini spend.
+
 ## Approvals and Risks
 
 These take calendar time no matter how fast the code is written, so start them early:
