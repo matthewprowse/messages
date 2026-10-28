@@ -1,9 +1,9 @@
-import { cleanProps, sizeOf, type EventName, type Events } from "@messages/analytics";
-import { supabase } from "./supabase";
-
 // Content-free product analytics. An event is a name and a few numbers, flags and plain code words
 // (see @messages/analytics); text is dropped here and again by the database. Nothing is sent unless
 // the person is signed in and "Share Usage Data" is on, and the database checks that switch too.
+
+import { cleanProps, sizeOf, type EventName, type Events } from "@messages/analytics";
+import { supabase } from "./supabase";
 
 const FLUSH_MS = 5000;
 const BATCH = 20;

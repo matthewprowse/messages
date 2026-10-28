@@ -1,5 +1,9 @@
 "use client";
 
+// The note editor: formatting appears as you type ("**" for bold, "# " for a heading, "- " for a list,
+// "[ ] " for a checklist) and the note is kept as markdown. HTML in pasted or stored text is only ever
+// turned into the editor's own formatting, never put on the page as it is.
+
 import { useEffect, useRef, useState } from "react";
 import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, useEditorState, type Editor, type ReactNodeViewProps } from "@tiptap/react";
 import { TaskItem } from "@tiptap/extension-list";
@@ -36,10 +40,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-
-// The note editor: formatting appears as you type ("**" for bold, "# " for a heading, "- " for a list,
-// "[ ] " for a checklist) and the note is kept as markdown. HTML in pasted or stored text is only ever
-// turned into the editor's own formatting, never put on the page as it is.
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const MOD = isMac ? "⌘" : "Ctrl+";
@@ -137,7 +137,7 @@ function ToolButton({ label, shortcut, icon: Icon, active, disabled, onClick }: 
       <TooltipTrigger asChild>
         <Button
           variant={active ? "secondary" : "ghost"}
-          size="icon-sm"
+          size="icon"
           aria-label={label}
           aria-pressed={active}
           disabled={disabled}
@@ -231,7 +231,7 @@ function TableMenu({ editor, active }: { editor: Editor; active: boolean }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="secondary" size="icon-sm" aria-label="Table" onMouseDown={(e) => e.preventDefault()}><Table /></Button>
+            <Button variant="secondary" size="icon" aria-label="Table" onMouseDown={(e) => e.preventDefault()}><Table /></Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent>Table</TooltipContent>
@@ -253,7 +253,7 @@ function MoreMenu({ editor, state }: { editor: Editor; state: { quote: boolean; 
         <Tooltip>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
-              <Button variant={active ? "secondary" : "ghost"} size="icon-sm" aria-label="More" onMouseDown={(e) => e.preventDefault()}><MoreHorizontal /></Button>
+              <Button variant={active ? "secondary" : "ghost"} size="icon" aria-label="More" onMouseDown={(e) => e.preventDefault()}><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
           <TooltipContent>More</TooltipContent>
@@ -317,7 +317,7 @@ function LinkButton({ editor, active }: { editor: Editor; active: boolean }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button variant={active ? "secondary" : "ghost"} size="icon-sm" aria-label="Link" onMouseDown={(e) => e.preventDefault()}><Link2 /></Button>
+            <Button variant={active ? "secondary" : "ghost"} size="icon" aria-label="Link" onMouseDown={(e) => e.preventDefault()}><Link2 /></Button>
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent>Link ({MOD}K)</TooltipContent>
@@ -329,11 +329,11 @@ function LinkButton({ editor, active }: { editor: Editor; active: boolean }) {
             {active && (
               <>
                 {SAFE_LINK.test(href.trim()) && (
-                  <Button type="button" variant="outline" asChild>
+                  <Button type="button" variant="secondary" asChild>
                     <a href={href.trim()} target="_blank" rel="noopener noreferrer">Open</a>
                   </Button>
                 )}
-                <Button type="button" variant="outline" onClick={() => { setHref(""); setOpen(false); editor.chain().focus().extendMarkRange("link").unsetLink().run(); }}>Remove</Button>
+                <Button type="button" variant="secondary" onClick={() => { setHref(""); setOpen(false); editor.chain().focus().extendMarkRange("link").unsetLink().run(); }}>Remove</Button>
               </>
             )}
             <Button type="submit">Save</Button>

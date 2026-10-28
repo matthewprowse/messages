@@ -1,3 +1,6 @@
+// Tests for note-markdown.ts against the TipTap schema: markdown reads into the right nodes, files become file blocks,
+// a second save changes nothing, and HTML stays text.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getSchema, type JSONContent } from "@tiptap/react";

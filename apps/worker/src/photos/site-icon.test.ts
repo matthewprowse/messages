@@ -1,3 +1,5 @@
+// Tests for site-icon.ts: the public-address guard, and picking icons and logos from page HTML and web app manifests.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { imageType, isPublicAddress, manifestIcons, pageIcons, pageLogos } from "./site-icon";

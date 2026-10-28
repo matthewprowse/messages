@@ -1,8 +1,9 @@
-import { supabase } from "./supabase";
-
 // The sealed-file columns of attachments (team_path, sealed, not_kept) come with migrations 20261102400000 and
 // 20261103000000. On a database without them, asking for them fails the whole query, and the inbox shows no messages,
 // so the loaders leave them out there. Checked once per load of the app.
+
+import { supabase } from "./supabase";
+
 let present: Promise<boolean> | undefined;
 
 function sealedFileColumns(): Promise<boolean> {

@@ -1,14 +1,14 @@
+// The linked device's WhatsApp session, kept in whatsapp_auth_keys instead of files: the account's
+// credentials plus the Signal keys Baileys creates as it talks to people. Every value is encrypted with
+// the user's own key (vault.ts, credentialSealer) before it leaves the worker, and every change is written straight away, so a crash or
+// restart never loses a key (a lost key means messages that can no longer be decrypted).
+
 import { initAuthCreds, type AuthenticationCreds, type SignalDataSet, type SignalDataTypeMap, type SignalKeyStore } from "baileys";
 import { SerialQueue } from "../backoff";
 import { db, must } from "../db";
 import { credentialSealer } from "../vault";
 import { chunks, push } from "../util";
 import { CREDS, decodeKey, encodeKey } from "./auth-codec";
-
-// The linked device's WhatsApp session, kept in whatsapp_auth_keys instead of files: the account's
-// credentials plus the Signal keys Baileys creates as it talks to people. Every value is encrypted with
-// the user's own key (vault.ts, credentialSealer) before it leaves the worker, and every change is written straight away, so a crash or
-// restart never loses a key (a lost key means messages that can no longer be decrypted).
 
 const ID_BATCH = 100; // keeps each lookup's URL short
 

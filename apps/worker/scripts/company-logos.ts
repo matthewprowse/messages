@@ -1,10 +1,3 @@
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { sleep } from "../src/backoff";
-import { db, must } from "../src/db";
-import { linkOrganizationLogos, queueCompanies, queueDomains, workLogoQueue } from "../src/logos/job";
-
 // Works the shared company logo queue to the end, for the first backfill and for test runs, without
 // waiting on the running workers: the sync worker's steps here, and the Gemini steps by running the AI
 // worker's `python3 -m ai logos` in between. Writes the company_logos table and the "logos" bucket, then
@@ -15,6 +8,13 @@ import { linkOrganizationLogos, queueCompanies, queueDomains, workLogoQueue } fr
 //   add --again to look again at companies already done
 //
 // Prints counts only, never addresses.
+
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { sleep } from "../src/backoff";
+import { db, must } from "../src/db";
+import { linkOrganizationLogos, queueCompanies, queueDomains, workLogoQueue } from "../src/logos/job";
 
 const args = process.argv.slice(2);
 const listFile = args.includes("--list") ? args[args.indexOf("--list") + 1] : null;

@@ -1,8 +1,8 @@
-import { supabase } from "./supabase";
-
 // The shared company logos, for the owner's review page. One logo per company domain, found and judged by
 // the workers (supabase/migrations/20261031100000_company_logos.sql); the database lets only the owner read
 // the rows, the candidates and the judge's sheets, and only the owner run the two actions here.
+
+import { supabase } from "./supabase";
 
 export type LogoSource = "app_store" | "bimi" | "site" | "google" | "wikidata" | "simple_icons" | "search";
 

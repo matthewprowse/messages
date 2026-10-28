@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Team, Cover: set who is away, who covers and for which dates. Members set their own, owners and admins anyone's.
+
 import { useState } from "react";
 import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
@@ -47,7 +49,7 @@ function CoverDialog({ team, userId, open, onClose, onSaved }: { team: TeamState
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && close()}>
       <DialogContent track="set_cover" className="sm:max-w-md">
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="space-y-3">
           <DialogHeader>
             <DialogTitle>Set Cover</DialogTitle>
             <DialogDescription>
@@ -84,7 +86,7 @@ function CoverDialog({ team, userId, open, onClose, onSaved }: { team: TeamState
           </div>
           <div className={DIALOG_BUTTONS}>
             <Button type="button" variant="ghost" disabled={busy} onClick={close}>Cancel</Button>
-            <Button type="submit" disabled={!valid || busy}>{busy ? "Setting" : "Set Cover"}</Button>
+            <Button variant="secondary" type="submit" disabled={!valid || busy}>{busy ? "Setting" : "Set Cover"}</Button>
           </div>
         </form>
       </DialogContent>
@@ -121,7 +123,7 @@ export function CoverSection({ team, userId }: { team: TeamState; userId: string
       title="Cover"
       description="While someone is away, a colleague reads their work chats and answers them from their own account. It starts and ends on the dates you choose, by itself. Personal chats are never covered."
     >
-      <Button size="sm" disabled={!canSet} onClick={() => setSetting(true)}><CalendarClock /> Set Cover</Button>
+      <Button variant="secondary" disabled={!canSet} onClick={() => setSetting(true)}><CalendarClock /> Set Cover</Button>
       {periods === null ? (
         <SettingsEmpty>Cover did not load. Reload the page to try again.</SettingsEmpty>
       ) : periods === undefined ? null : shown.length === 0 ? (
@@ -142,7 +144,7 @@ export function CoverSection({ team, userId }: { team: TeamState; userId: string
                 }
                 description={`${day(p.startsAt)} to ${day(lastDay(p))}`}
               >
-                {mayEnd && <Button size="sm" variant="outline" disabled={busy} onClick={() => void end(p)}>{state === "upcoming" ? "Cancel" : "End Cover"}</Button>}
+                {mayEnd && <Button variant="secondary" disabled={busy} onClick={() => void end(p)}>{state === "upcoming" ? "Cancel" : "End Cover"}</Button>}
               </SettingsRow>
             );
           })}

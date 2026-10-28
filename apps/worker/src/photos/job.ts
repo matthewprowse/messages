@@ -1,3 +1,8 @@
+// Once a day, your own address books (iCloud Contacts and Google Contacts) are imported into Contacts
+// with their saved names (see import.ts), then matched to the people Messages knows, by email address
+// or phone number, so their photos become the contact's photo. WhatsApp profile pictures are fetched
+// by the WhatsApp connector and give way to these.
+
 import type { ICloudCredentials } from "../connectors/icloud";
 import { saveCards } from "../contacts/cards-store";
 import { allRows, db, loadCredentials, must } from "../db";
@@ -14,11 +19,6 @@ import { fetchGooglePhoto, googleCards } from "./google";
 import { fetchICloudPhoto, icloudAuth, icloudCards } from "./icloud";
 import { saveContactPhoto, type PhotoSource } from "./store";
 import { openAddresses } from "../vault";
-
-// Once a day, your own address books (iCloud Contacts and Google Contacts) are imported into Contacts
-// with their saved names (see import.ts), then matched to the people Messages knows, by email address
-// or phone number, so their photos become the contact's photo. WhatsApp profile pictures are fetched
-// by the WhatsApp connector and give way to these.
 
 const FIRST_RUN_MS = 2 * 60_000;
 const EVERY_MS = 24 * 60 * 60_000;
@@ -57,7 +57,7 @@ async function syncAccount(account: { id: string; user_id: string; provider: str
     cards = await icloudCards(auth);
     fetchPhoto = (url) => fetchICloudPhoto(auth, url);
   } else {
-    let google;
+    let google: Awaited<ReturnType<typeof openGoogleClient>>;
     try {
       google = await openGoogleClient(account.id, CONTACTS_SCOPE);
     } catch (err) {

@@ -1,5 +1,7 @@
 "use client";
 
+// The dialog for a first Instagram message to a username. It queues the message; the Instagram connector sends it and opens the conversation.
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -24,8 +26,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
  */
 export async function queueInstagramChat(accountId: string, username: string, body: string): Promise<string | null> {
   const sealed = await seal(FIELD.body, body).catch(() => null);
-  const { data, error } = sealed === null ? { data: null, error: true } : await supabase.from("outbox")
-    .insert({ account_id: accountId, to_addresses: [await sealAddress(username)], body: sealed, attachment_count: 0 })
+  const sealedTo = await sealAddress(username).catch(() => null);
+  const { data, error } = sealed === null || sealedTo === null ? { data: null, error: true } : await supabase.from("outbox")
+    .insert({ account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0 })
     .select("id").single();
   if (error || !data) {
     toast("Could not send. Your message is still in the box.");
@@ -133,6 +136,7 @@ export function NewInstagramDialog({ open, onOpenChange }: { open: boolean; onOp
                 disabled={locked || official}
                 className="max-h-80"
               />
+              <p className="text-xs text-muted-foreground">Instagram only allows a few new conversations each day, so extra ones may be refused.</p>
             </div>
             {sent && <p className="text-xs text-muted-foreground">Sent. The conversation opens here once it is stored.</p>}
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The message could not be sent."}</p>}

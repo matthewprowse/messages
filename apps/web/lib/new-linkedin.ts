@@ -1,7 +1,7 @@
-import type { Contact, Thread } from "./types";
-
 // Pure helpers for starting a LinkedIn conversation from the New menu: who it can be to. The worker finds the
 // person, sends the message through the LinkedIn helper and links the new conversation to the outbox row.
+
+import type { Contact, Thread } from "./types";
 
 const PROFILE_URN = /^urn:li:fsd_profile:[A-Za-z0-9_-]+$/;
 export const LINKEDIN_HINT = "Paste the link to their LinkedIn profile, like linkedin.com/in/jane-doe, or choose someone you already message.";

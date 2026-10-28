@@ -1,3 +1,6 @@
+// Tests for linkedin/avatars.ts: which contacts are due a LinkedIn photo, who is looked up, and that only
+// image bytes from the helper are accepted.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PHOTO_FRESH_MS, RecentTries, fetchPictureBytes, photoDue, withPictures } from "./avatars";

@@ -1,3 +1,6 @@
+// Tests for new-items.ts: phone number normalisation by country code, finding an existing chat, and building calendar
+// event rows and default times.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Contact, Thread } from "./types";

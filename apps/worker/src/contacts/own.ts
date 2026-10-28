@@ -1,3 +1,5 @@
+// Which addresses and numbers are the user's own, so contact matching never treats their card or signature as another person.
+
 import { db, must } from "../db";
 import { openAddresses } from "../vault";
 

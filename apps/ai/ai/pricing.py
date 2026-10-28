@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from datetime import date
 
+from . import log
+
 
 @dataclass(frozen=True)
 class Price:
@@ -59,14 +61,37 @@ def price_for(model: str, on: date) -> Price | None:
     return max(matches, key=lambda m: m[0])[1] if matches else None
 
 
+_WARNED: set[str] = set()
+
+
+def fallback_price() -> Price:
+    """The dearest price in the table on each side. A model with no entry is billed at this, never at zero, so a
+    typo, a dated suffix or a new model cannot make spend unlimited."""
+    return Price(max(p.input for _, _, p in PRICES), max(p.output for _, _, p in PRICES), max(p.cached_input for _, _, p in PRICES))
+
+
+def price_or_fallback(model: str, on: date) -> Price:
+    price = price_for(model, on)
+    if price is not None:
+        return price
+    if model not in _WARNED:
+        _WARNED.add(model)
+        log.error("model has no price, billing at the dearest known price", model=model)
+    return fallback_price()
+
+
+def unpriced(models: list[str]) -> list[str]:
+    """The distinct models among these that have no entry in PRICES."""
+    today = date.today()
+    return sorted({m for m in models if m and price_for(m, today) is None})
+
+
 def cost_usd(
     model: str, on: date, input_tokens: int, cached_tokens: int, output_tokens: int, audio_tokens: int = 0, cached_audio_tokens: int = 0
 ) -> float:
     """audio_tokens is the part of input_tokens that is audio (from the modality breakdown), billed at the audio
     rate when it is fresh and at the cached rate when it was cached."""
-    price = price_for(model, on)
-    if price is None:
-        return 0.0
+    price = price_or_fallback(model, on)
     fresh = max(0, input_tokens - cached_tokens)
     fresh_audio = min(fresh, max(0, audio_tokens - cached_audio_tokens))
     fresh_text = fresh - fresh_audio

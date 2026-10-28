@@ -1,8 +1,8 @@
-import { GoogleApiError, type GoogleClient } from "./client";
-
 // Names and email addresses for Google user IDs (the "users/{id}" of Meet participants and Chat senders),
 // from the People API. It answers for people in your Google contacts (contacts.readonly, part of the Gmail
 // sign-in) and, in a Workspace, for colleagues whose profile your domain shares. Anyone else stays unnamed.
+
+import { GoogleApiError, type GoogleClient } from "./client";
 
 const BATCH = "https://people.googleapis.com/v1/people:batchGet";
 /** The most people one batchGet takes. */

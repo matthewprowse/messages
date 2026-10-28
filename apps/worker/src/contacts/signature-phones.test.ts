@@ -1,3 +1,6 @@
+// Tests for signature-phones.ts: E.164 normalising, country codes, and which numbers in an email count as the
+// sender's own (after a sign-off, labelled, not in quoted replies, not dates or prices).
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { countryCodeOf, ownText, signaturePhones, toE164 } from "./signature-phones";

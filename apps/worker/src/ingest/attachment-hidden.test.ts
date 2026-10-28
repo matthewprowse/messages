@@ -1,3 +1,6 @@
+// Tests for ingest/attachment-hidden.ts. Pin down reading image sizes from headers and which images (inline, tiny,
+// small) are hidden from attachment lists, while documents never are.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { hiddenReasonOf, imageSize } from "./attachment-hidden";

@@ -1,11 +1,12 @@
 "use client";
 
+// Same split as the Conversations page: the Summary a third wide, the open conversation beside it. On phones one shows at a time.
+
 import { Suspense } from "react";
 import { usePathname } from "next/navigation";
 import { SummaryList } from "@/components/summary-list";
 import { cn } from "@/lib/utils";
 
-// Same split as the Conversations page: the Summary a third wide, the open conversation beside it. On phones one shows at a time.
 export default function BriefingLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isDetail = /^\/summary\/[^/]+/.test(pathname);

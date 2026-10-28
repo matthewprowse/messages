@@ -1,5 +1,8 @@
 "use client";
 
+// The worker does the linking and writes the QR code (or a pairing code) to the account as it changes.
+// This starts a link and shows whichever code is current, live through Realtime. Used in Settings and onboarding.
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { Tables } from "@messages/db";
@@ -19,8 +22,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 type LinkRow = Pick<Tables<"accounts">, "id" | "status" | "status_detail" | "qr_code" | "pairing_code" | "address">;
 const COLUMNS = "id, status, status_detail, qr_code, pairing_code, address";
 
-// The worker does the linking and writes the QR code (or a pairing code) to the account as it changes.
-// This starts a link and shows whichever code is current, live through Realtime. Used in Settings and onboarding.
 export function useWhatsAppLink() {
   const { session } = useAuth();
   const userId = session?.user.id;

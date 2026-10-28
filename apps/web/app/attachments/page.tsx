@@ -1,5 +1,8 @@
 "use client";
 
+// Every attachment from the connected chats in one place, filterable by kind, source and date.
+// The kind lives in ?kind= so a reload keeps the tab.
+
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Paperclip, Search } from "lucide-react";
@@ -190,7 +193,7 @@ function AttachmentsPage() {
           <span className="flex h-8 items-center text-sm text-muted-foreground tabular-nums">{files ? filesLabel(shown.length) : "Loading"}</span>
           <span className="flex items-center gap-3">
             {(filtered || query.trim()) && files && <Button variant="ghost" onClick={() => { clearFilters(); search(""); }}>Clear Filters</Button>}
-            {files && <span className="flex h-8 items-center text-sm text-muted-foreground tabular-nums">{formatSize(shown.reduce((sum, f) => sum + (f.bytes ?? 0), 0))}</span>}
+            {files && <span className="flex h-8 items-center text-sm text-muted-foreground tabular-nums">{formatSize(shown.reduce((sum, f) => sum + (f.path ? f.bytes ?? 0 : 0), 0))}</span>}
           </span>
         </header>
         <ScrollArea className="min-h-0 flex-1">

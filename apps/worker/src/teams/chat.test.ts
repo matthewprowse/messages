@@ -1,3 +1,6 @@
+// Tests for teams/chat.ts: Graph chat messages mapped to stored text, read state and members, reply bodies,
+// and postReply and chat-list failures, using a stand-in for Microsoft's token endpoint and Graph.
+
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { GraphApiError, GraphClient } from "../microsoft/client";

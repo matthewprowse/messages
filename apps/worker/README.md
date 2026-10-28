@@ -329,16 +329,10 @@ Things to know before linking:
 
 ### iCloud Reminders
 
-- Through Konva Relay, a small app on the user's Mac (`apps/mac-relay`), because upgraded Reminders lists are
-  not on CalDAV since iOS 13. The relay reads them with EventKit and posts them to this worker, which listens
-  on `RELAY_PORT` (on this machine only, unless `RELAY_HOST` says otherwise). Pair it in Settings, Connected
-  Accounts, iCloud Reminders, which makes a token; only the token's SHA-256 is stored, as the account's
-  credentials.
-- Each sync is the Mac's full set (open reminders and those completed in the last 30 days), stored in `tasks`
-  with the title, notes and list sealed; what is gone is removed. Only rows that changed are written.
-- Ticks made in the app (`task_updates`) reach the relay through a long poll; it applies them in Reminders and
-  reports back, which settles the row and the task. A relay quiet for 30 minutes marks the account as needing
-  attention, and changes queued then fail at once with a reason.
+- This worker does not run iCloud Reminders. Upgraded Reminders lists are not on CalDAV since iOS 13, so the
+  AI worker's connector (`python3 -m ai icloud-reminders`, in `apps/ai`) signs in to iCloud.com with the Apple ID
+  entered in Settings, Connected Accounts, iCloud Reminders, and syncs the lists and settles ticks made in the
+  app (`task_updates`). The worker leaves `icloud_reminders` accounts alone.
 
 ### WhatsApp
 

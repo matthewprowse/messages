@@ -1,3 +1,5 @@
+// Starts the daily job that calls the ai_usage_rollup database function to fold old AI usage rows into monthly totals.
+
 import { db, must } from "./db";
 import { startEvery } from "./backoff";
 import { errorCode, log } from "./log";

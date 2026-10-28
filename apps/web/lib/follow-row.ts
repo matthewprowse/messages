@@ -1,3 +1,6 @@
+// Lets the UI wait for the worker to finish a queued calendar write (calendar_outbox, calendar_deletes) by watching the
+// row, with polling as a fallback.
+
 import { supabase } from "./supabase";
 
 /**

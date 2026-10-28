@@ -1,7 +1,9 @@
 "use client";
 
+// The Usage tab of the Analytics page: activation, retention, and where people spend time, from the UsageReport that derive.ts builds.
+
 import type { Retention, UsageReport } from "./derive";
-import { Bars, CountTile, EmptyState, Section, Share, Table, Tile, Tiles, type Col, ms, nice, num, of, percent, seconds, share, shortDay } from "./parts";
+import { Bars, CountTile, EmptyState, Section, SECTIONS, Share, Table, Tile, Tiles, type Col, ms, nice, num, of, percent, seconds, share, shortDay } from "./parts";
 
 const FOLLOW_UP_WEEKS = 4;
 
@@ -40,7 +42,7 @@ function RetentionTable({ groups }: { groups: Retention[] }) {
 export function UsageTab({ report: r, empty }: { report: UsageReport; empty: boolean }) {
   if (empty) return <EmptyState title="Nothing Captured Yet">Events appear here as people use the app.</EmptyState>;
   return (
-    <div className="space-y-8">
+    <div className={SECTIONS}>
       <Activation c={r.activation} />
 
       <Section title="Retention" description="Groups of people by the week they were first seen, and how many were seen again in each week after.">

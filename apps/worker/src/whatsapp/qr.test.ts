@@ -1,3 +1,5 @@
+// Tests for the @messages/qr encoder as the WhatsApp pairing page uses it (shape only; see the note below).
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { encodeQr, qrToSvgPath, qrToTerminal } from "@messages/qr";

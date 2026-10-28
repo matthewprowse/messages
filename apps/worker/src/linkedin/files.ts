@@ -1,12 +1,12 @@
+// Files for the LinkedIn helper. It reads them from disk, on the same machine, and only from under the temp
+// folder, so each send gets a private folder (mode 0700) with the files in it (0600) that is removed
+// afterwards, sent or not.
+
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OutgoingAttachment } from "../send/compose";
 import type { HelperAttachment } from "./helper";
-
-// Files for the LinkedIn helper. It reads them from disk, on the same machine, and only from under the temp
-// folder, so each send gets a private folder (mode 0700) with the files in it (0600) that is removed
-// afterwards, sent or not.
 
 /** How LinkedIn is told to take a file: photos and MP4 videos as such, everything else as a document. */
 export function helperKind(contentType: string): HelperAttachment["kind"] {

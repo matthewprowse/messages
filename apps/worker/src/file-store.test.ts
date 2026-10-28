@@ -1,3 +1,6 @@
+// Tests for file-store.ts (keepFile): sealing and keyed hashing before upload, one stored copy per account, and the video, cap and
+// 50 MB rules, run against in-memory fakes for storage and the database.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { contentHash, decryptBytes, deriveUserKeys, isSealedBytes, newDataKey } from "@messages/crypto";

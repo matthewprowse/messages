@@ -1,5 +1,7 @@
 "use client";
 
+// Inbox layout: thread list on the left, open conversation on the right. Below the md breakpoint only one shows, depending on whether a thread is open.
+
 import { Suspense } from "react";
 import { usePathname } from "next/navigation";
 import { ThreadList } from "@/components/thread-list";

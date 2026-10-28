@@ -1,5 +1,7 @@
 "use client";
 
+// Audio and video players drawn to match the app: voice notes in chat bubbles and the video player in the attachment viewer, with the clock and media state hook they share.
+
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Maximize, Minimize, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { mimeFor, useSignedUrl } from "@/lib/signed-urls";

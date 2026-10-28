@@ -1,8 +1,8 @@
-import { unescapeXml } from "../photos/cards";
-
 // iCloud Calendar over CalDAV, signed in with an app-specific password. It finds your calendars, reads
 // their events, adds new ones and deletes the ones you ask it to (a whole event, or one occurrence of a
 // repeating event by adding an exception to it). Nothing else is ever changed.
+
+import { unescapeXml } from "../photos/cards";
 
 const ROOT = "https://caldav.icloud.com/";
 const DAV = 'xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/"';

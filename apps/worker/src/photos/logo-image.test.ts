@@ -1,3 +1,6 @@
+// Tests for logo-image.ts: framing company icons into the safe circle (transparency, plain tiles, gradients, white
+// marks, ICO files) and rejecting icons too small to be sharp.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import sharp from "sharp";

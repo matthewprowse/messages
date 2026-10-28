@@ -1,3 +1,5 @@
+// Tests for whatsapp/quiet-signal.ts: libsignal's session dumps are dropped and other console output passes.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { quietSignalLogs } from "./quiet-signal";

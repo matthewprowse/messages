@@ -1,3 +1,6 @@
+// Tests for ingest/folder-status.ts. Pin down when an IMAP side folder is due for a sync: its STATUS changed, the STATUS
+// is unusable, or the ten minute full sync has come round.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SIDE_FOLDER_FULL_SYNC_MS, sideFolderDue } from "./folder-status";

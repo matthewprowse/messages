@@ -1,8 +1,11 @@
 "use client";
 
+// The confirm dialog for deleting a calendar event, with a choice between one occurrence and the series. The worker does the delete;
+// this reports start, done and failure back to the calendar page.
+
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import type { CalendarEvent } from "@/lib/calendar";
+import { GAVE_UP, type CalendarEvent } from "@/lib/calendar";
 import { followRow } from "@/lib/follow-row";
 import { supabase } from "@/lib/supabase";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -11,7 +14,8 @@ import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 export type DeleteScope = "occurrence" | "series";
 type Row = { status: string; error: string | null };
 
-const GIVE_UP: Row = { status: "failed", error: "Deleting the event is taking too long. Check that the worker is running." };
+// Not a failure: the worker may still delete it, so the event stays hidden and the page loads again later.
+const GIVE_UP: Row = { status: GAVE_UP, error: null };
 const finished = (r: Row) => r.status === "done" || r.status === "failed";
 
 /**
@@ -27,6 +31,7 @@ export function DeleteEventDialog({
   onStart,
   onDone,
   onFail,
+  onLate,
 }: {
   /** The event to delete, with the reason an earlier try failed. Null while closed. */
   target: { event: CalendarEvent; error?: string } | null;
@@ -36,6 +41,8 @@ export function DeleteEventDialog({
   onStart: (token: string, event: CalendarEvent, scope: DeleteScope) => void;
   onDone: (token: string) => void;
   onFail: (token: string, event: CalendarEvent, error: string) => void;
+  /** The worker had not answered after a minute. The event may still go, so the page loads again later. */
+  onLate?: (token: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   // What was last asked about stays in the dialog while it fades out.
@@ -63,6 +70,9 @@ export function DeleteEventDialog({
     if (result.status === "done") {
       onDone(token);
       toast("Event deleted.");
+    } else if (result.status === GIVE_UP.status) {
+      toast("The event is still being deleted and may disappear shortly.");
+      onLate?.(token);
     } else {
       onFail(token, event, result.error ?? "The event could not be deleted.");
     }
@@ -89,7 +99,7 @@ export function DeleteEventDialog({
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
           {repeating ? (
             <>
-              <AlertDialogAction variant="outline" disabled={busy} onClick={confirmOn("occurrence")}>Delete This Event</AlertDialogAction>
+              <AlertDialogAction variant="secondary" disabled={busy} onClick={confirmOn("occurrence")}>Delete This Event</AlertDialogAction>
               <AlertDialogAction variant="destructive" disabled={busy} onClick={confirmOn("series")}>Delete All Events</AlertDialogAction>
             </>
           ) : (

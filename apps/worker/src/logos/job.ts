@@ -1,3 +1,7 @@
+// The shared company logo queue, on the sync worker's side (see pipeline.ts): every company domain anyone
+// hears from is queued once, the queue is worked every half minute, and each logo is looked at again after
+// a few months for rebrands (one the owner chose by hand is left alone). Off until COMPANY_LOGOS is "true".
+
 import { allRows, db, must } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -5,10 +9,6 @@ import { startEvery } from "../backoff";
 import { mapLimit } from "../util";
 import { openAddressRows } from "../vault";
 import { gatherCandidates, saveJudged, type LogoRow } from "./pipeline";
-
-// The shared company logo queue, on the sync worker's side (see pipeline.ts): every company domain anyone
-// hears from is queued once, the queue is worked every half minute, and each logo is looked at again after
-// a few months for rebrands (one the owner chose by hand is left alone). Off until COMPANY_LOGOS is "true".
 
 const FIRST_RUN_MS = 60_000;
 const POLL_MS = 30_000;

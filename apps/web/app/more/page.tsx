@@ -1,16 +1,16 @@
 "use client";
 
+// On a phone the bottom bar has room for four places, so everything else is one screen away: the things to start, the
+// places that are not in the bar, and, for the owner, Analytics and Admin. The dialogs open from here the way they do from
+// the rail's New menu (NewMenu stays mounted and listens for NEW_ITEM_EVENT).
+
 import Link from "next/link";
-import { CalendarPlus, ChartColumn, CircleCheck, Mail, MessageCircle, NotebookPen, Paperclip, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
+import { CalendarPlus, ChartColumn, CircleCheck, Mail, Megaphone, MessageCircle, NotebookPen, Paperclip, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
 import { useIsOwner } from "@/lib/auth";
 import { NEW_ITEM_EVENT } from "@/components/new-menu";
 import { PaneHeader } from "@/components/pane";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-
-// On a phone the bottom bar has room for four places, so everything else is one screen away: the things to start, the
-// places that are not in the bar, and, for the owner, Analytics and Admin. The dialogs open from here the way they do from
-// the rail's New menu (NewMenu stays mounted and listens for NEW_ITEM_EVENT).
 
 const NEW_ITEMS: { item: string; label: string; icon: LucideIcon }[] = [
   { item: "email", label: "New Email", icon: Mail },
@@ -56,6 +56,7 @@ export default function MorePage() {
             <>
               <Separator className="my-2" />
               <LinkRow href="/analytics" label="Analytics" icon={ChartColumn} />
+              <LinkRow href="/updates" label="Updates" icon={Megaphone} />
               <LinkRow href="/admin" label="Admin" icon={ShieldCheck} />
             </>
           )}

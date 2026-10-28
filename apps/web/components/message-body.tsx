@@ -1,5 +1,8 @@
 "use client";
 
+// How one message's text is drawn: plain text with rich-text ranges and lists, forwarded emails, and the sandboxed View Original.
+// Sender HTML never enters the page DOM.
+
 import { Fragment, useMemo, useState } from "react";
 import { track } from "@/lib/analytics";
 import type { Message } from "@/lib/types";
@@ -325,7 +328,7 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
           ) : original?.status === "failed" ? (
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-md border text-sm text-muted-foreground">
               <p>{original.error}</p>
-              <Button variant="outline" onClick={load}>Try Again</Button>
+              <Button variant="secondary" onClick={load}>Try Again</Button>
             </div>
           ) : (
             <Skeleton className="min-h-0 w-full flex-1 rounded-md" />

@@ -1,6 +1,7 @@
+// Configuration from apps/worker/.env. Fails fast with a readable message rather than half-starting.
+
 import { encryptionOffError, ENCRYPTION_FLAGS, flagOn } from "@messages/crypto/flags";
 
-// Configuration from apps/worker/.env. Fails fast with a readable message rather than half-starting.
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -50,8 +51,4 @@ export const env = {
   encryptAddresses: flagOn(process.env.ENCRYPT_ADDRESSES),
   /** "true" works the shared company logo queue (src/logos). Off until the logo system is rolled out. */
   companyLogos: process.env.COMPANY_LOGOS === "true",
-  /** The port Konva Relay (apps/mac-relay) reaches the worker on for iCloud Reminders. 0 leaves it off. */
-  relayPort: Number(process.env.RELAY_PORT ?? 0) || 0,
-  /** Where it listens: this machine only by default, so outside access goes through a TLS proxy. */
-  relayHost: process.env.RELAY_HOST || "127.0.0.1",
 };

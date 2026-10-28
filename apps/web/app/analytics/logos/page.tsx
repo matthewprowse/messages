@@ -1,5 +1,9 @@
 "use client";
 
+// The owner's review of the shared company logos: each company's chosen logo, where it came from and the
+// judge's reason. Rejecting one searches again without it, and choosing a candidate by hand keeps it;
+// both apply to every user. The workers do the work: an action here only queues it.
+
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -14,15 +18,10 @@ import { Avatar, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { PaneControls, PaneHeader, PaneSelect, SearchBand } from "@/components/pane";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CountTile, EmptyState, Loading, money, Tile, Tiles } from "@/components/analytics/parts";
-
-// The owner's review of the shared company logos: each company's chosen logo, where it came from and the
-// judge's reason. Rejecting one searches again without it, and choosing a candidate by hand keeps it;
-// both apply to every user. The workers do the work: an action here only queues it.
 
 const FILTERS = { all: "All Companies", letter: "No Logo", changed: "Changed Recently", waiting: "Waiting", manual: "Chosen by Hand" } as const;
 type Filter = keyof typeof FILTERS;
@@ -93,9 +92,9 @@ function Candidates({ logo, onClose, onChanged }: { logo: CompanyLogo; onClose: 
                 </ItemContent>
                 <ItemActions>
                   {chosen ? (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => rejectLogo(logo.domain, c.n), "Searching again without it.")}>Reject</Button>
+                    <Button variant="ghost" disabled={busy} onClick={() => void act(() => rejectLogo(logo.domain, c.n), "Searching again without it.")}>Reject</Button>
                   ) : (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => chooseLogo(logo.domain, c.n), "Saved for every user.")}>Use This</Button>
+                    <Button variant="secondary" disabled={busy} onClick={() => void act(() => chooseLogo(logo.domain, c.n), "Saved for every user.")}>Use This</Button>
                   )}
                 </ItemActions>
               </Item>
@@ -179,7 +178,7 @@ function Logos() {
 
   if (!isOwner) {
     return session ? (
-      <div className="w-full max-w-4xl p-3">
+      <div className="mx-auto w-full max-w-4xl p-3">
         <EmptyState title="Owner Only">Company logos are only for the owner of this app to review.</EmptyState>
       </div>
     ) : null;
@@ -198,80 +197,77 @@ function Logos() {
   };
 
   return (
-    <ScrollArea className="h-full">
-      <div className="w-full max-w-4xl p-3">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="flex h-10 items-center text-lg font-medium">Company Logos</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              One logo for each company, shared by every user. Only company names and domains leave Konva to find them. <Link href="/analytics" className="underline underline-offset-4">Back to Analytics</Link>
-            </p>
-          </div>
-          <Button variant="outline" size="icon" aria-label="Refresh" disabled={busy} onClick={() => void refresh()}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>
-        </div>
-        {failed && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertTitle>Could Not Load The Logos</AlertTitle>
-            <AlertDescription>Check your connection and try again.</AlertDescription>
-            <AlertAction><Button size="sm" variant="outline" disabled={busy} onClick={() => void refresh()}>Retry</Button></AlertAction>
-          </Alert>
-        )}
-        {!logos ? (
-          failed ? null : <Loading />
-        ) : (
-          <div className="space-y-6">
-            <Tiles>
-              <Tile label="Companies" value={String(stats.total)} note={`${stats.total - stats.done} Waiting`} />
-              <CountTile label="With a Logo" part={stats.done - stats.letters} whole={stats.done} />
-              <CountTile label="First Letter" part={stats.letters} whole={stats.done} />
-              <Tile label="Gemini Cost" value={money(stats.cost)} note={`${stats.calls} Calls, Latest Runs`} />
-            </Tiles>
-            {stats.sources.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {stats.sources.map(([label, n]) => <Badge key={label} variant="outline">{label}: {n}</Badge>)}
-              </div>
-            )}
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Input placeholder="Search Companies" value={query} onChange={(e) => setQuery(e.target.value)} className="sm:max-w-xs" aria-label="Search Companies" />
-              <Select value={filter} onValueChange={(v) => setFilter(v as Filter)}>
-                <SelectTrigger className="w-44" aria-label="Show"><SelectValue /></SelectTrigger>
-                <SelectContent>{(Object.keys(FILTERS) as Filter[]).map((f) => <SelectItem key={f} value={f}>{FILTERS[f]}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            {shown.length === 0 ? (
-              <EmptyState title="No Companies">Nothing matches this filter.</EmptyState>
-            ) : (
-              <ItemGroup className="gap-2">
-                {shown.map((l) => (
-                  <Item key={l.domain} variant="outline" size="sm">
-                    <ItemMedia>
-                      <CompanyAvatar logoPath={l.path} className="size-10" />
-                    </ItemMedia>
-                    <ItemContent>
-                      <ItemTitle>
-                        {l.name}
-                        {l.status !== "done" ? (
-                          <Badge variant="outline">{STATUS_LABELS[l.status]}</Badge>
-                        ) : l.path && l.source ? (
-                          <Badge variant="secondary">{SOURCE_LABELS[l.source]}</Badge>
-                        ) : (
-                          <Badge variant="outline">First Letter</Badge>
-                        )}
-                        {l.manual && <Badge variant="outline">Chosen by Hand</Badge>}
-                      </ItemTitle>
-                      <ItemDescription>{l.domain}{l.verdict ? `. ${l.verdict}` : ""}</ItemDescription>
-                    </ItemContent>
-                    <ItemActions>
-                      <Button size="sm" variant="outline" onClick={() => setOpen(l.domain)}>Candidates</Button>
-                      {l.path && <Button size="sm" variant="ghost" onClick={() => setRejecting(l)}>Reject</Button>}
-                    </ItemActions>
-                  </Item>
-                ))}
-              </ItemGroup>
-            )}
-          </div>
-        )}
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0">
+        <PaneHeader
+          title="Company Logos"
+          action={<Button variant="ghost" size="icon" aria-label="Refresh" disabled={busy} onClick={() => void refresh()}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>}
+        >
+          <PaneControls>
+            <Button variant="ghost" asChild className="px-2 text-muted-foreground"><Link href="/analytics">Back to Analytics</Link></Button>
+            <PaneSelect label="Show" value={filter} onChange={(v) => setFilter(v as Filter)} options={(Object.keys(FILTERS) as Filter[]).map((f) => ({ value: f, label: FILTERS[f] }))} className="w-44" />
+          </PaneControls>
+        </PaneHeader>
+        <SearchBand value={query} onChange={setQuery} placeholder="Search Companies" />
       </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 p-3 md:px-4">
+          <p className="text-xs text-muted-foreground">One logo for each company, shared by every user. Only company names and domains leave Konva to find them.</p>
+          {failed && (
+            <Alert variant="destructive">
+              <AlertTitle>Could Not Load The Logos</AlertTitle>
+              <AlertDescription>Check your connection and try again.</AlertDescription>
+              <AlertAction><Button size="sm" variant="secondary" disabled={busy} onClick={() => void refresh()}>Retry</Button></AlertAction>
+            </Alert>
+          )}
+          {!logos ? (
+            failed ? null : <Loading />
+          ) : (
+            <>
+              <Tiles>
+                <Tile label="Companies" value={String(stats.total)} note={`${stats.total - stats.done} Waiting`} />
+                <CountTile label="With a Logo" part={stats.done - stats.letters} whole={stats.done} />
+                <CountTile label="First Letter" part={stats.letters} whole={stats.done} />
+                <Tile label="Gemini Cost" value={money(stats.cost)} note={`${stats.calls} Calls, Latest Runs`} />
+              </Tiles>
+              {stats.sources.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {stats.sources.map(([label, n]) => <Badge key={label} variant="outline">{label}: {n}</Badge>)}
+                </div>
+              )}
+              {shown.length === 0 ? (
+                <EmptyState title="No Companies">Nothing matches this filter.</EmptyState>
+              ) : (
+                <div className="divide-y">
+                  {shown.map((l) => (
+                    <div key={l.domain} className="flex items-center gap-3 py-3">
+                      <CompanyAvatar logoPath={l.path} className="size-8" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                          <span className="truncate">{l.name}</span>
+                          {l.status !== "done" ? (
+                            <Badge variant="outline">{STATUS_LABELS[l.status]}</Badge>
+                          ) : l.path && l.source ? (
+                            <Badge variant="secondary">{SOURCE_LABELS[l.source]}</Badge>
+                          ) : (
+                            <Badge variant="outline">First Letter</Badge>
+                          )}
+                          {l.manual && <Badge variant="outline">Chosen by Hand</Badge>}
+                        </div>
+                        <p className="line-clamp-2 text-xs text-muted-foreground">{l.domain}{l.verdict ? `. ${l.verdict}` : ""}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button variant="secondary" onClick={() => setOpen(l.domain)}>Candidates</Button>
+                        {l.path && <Button variant="ghost" onClick={() => setRejecting(l)}>Reject</Button>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </ScrollArea>
       <Dialog open={!!current} onOpenChange={(o) => !o && setOpen(null)}>
         {current && <Candidates logo={current} onClose={() => setOpen(null)} onChanged={() => void refresh()} />}
       </Dialog>
@@ -285,13 +281,13 @@ function Logos() {
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="secondary" onClick={() => setRejecting(null)}>Cancel</Button>
-              <Button onClick={() => void reject(rejecting)}>Reject</Button>
+              <Button variant="ghost" onClick={() => setRejecting(null)}>Cancel</Button>
+              <Button variant="secondary" onClick={() => void reject(rejecting)}>Reject</Button>
             </DialogFooter>
           </DialogContent>
         )}
       </Dialog>
-    </ScrollArea>
+    </div>
   );
 }
 

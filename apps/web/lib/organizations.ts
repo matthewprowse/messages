@@ -1,12 +1,12 @@
-import { supabase } from "./supabase";
-import { openAddresses, openNestedThreads } from "./open-rows";
-import { allRows, identities, isUuid, latest } from "./contacts";
-import type { Provider } from "./types";
-
 // Companies as the Contacts page needs them. The database files every contact under the organization for
 // its email domain (personal mail providers and your own domains are left out), so a company is the people
 // who write from that domain. Reads go through the signed-in browser client, so row-level security limits
 // them to the user's own rows.
+
+import { supabase } from "./supabase";
+import { openAddresses, openNestedThreads } from "./open-rows";
+import { allRows, identities, isUuid, latest } from "./contacts";
+import type { Provider } from "./types";
 
 export interface CompanySummary {
   id: string;

@@ -1,3 +1,6 @@
+// Tests for packages/analytics/src/index.ts and draft.ts: cleanProps lets only code words, small numbers and flags through, text is dropped,
+// values fall into coarse buckets, and draftEdit describes an edit without its words.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cleanProps, isWord, wordOf, sizeOf, minutesBucket } from "./index";

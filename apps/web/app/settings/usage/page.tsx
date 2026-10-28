@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Usage: how much of the AI allowance is used, per feature, read from the my_ai_allowance function.
+
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -49,19 +51,19 @@ export default function UsagePage() {
         title="Usage"
         description="Your storage and your AI allowance for the month."
         actions={allowance && (
-          <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void load()}>
+          <Button variant="secondary" disabled={refreshing} onClick={() => void load()}>
             <RefreshCw className={refreshing ? "animate-spin" : undefined} /> Refresh
           </Button>
         )}
       />
-      <div className="space-y-8">
+      <div className="space-y-3">
         <StorageSection />
         {failed && (
           <Alert variant="destructive">
             <AlertTitle>Could Not Load Your AI Allowance</AlertTitle>
             <AlertDescription>
               <p>Check your connection and try again.</p>
-              <Button variant="outline" size="sm" className="mt-2" disabled={refreshing} onClick={() => void load()}>Retry</Button>
+              <Button variant="secondary" className="mt-2" disabled={refreshing} onClick={() => void load()}>Retry</Button>
             </AlertDescription>
           </Alert>
         )}
@@ -71,7 +73,7 @@ export default function UsagePage() {
           <SettingsSection id="ai" title="AI Allowance" description="What the AI uses for sorting, drafts and transcripts. Setting up a newly connected account is free and not counted. The week starts again on Monday and the month on the first.">
             <SettingsRows>
               {hasWeek && (
-                <div className="space-y-2 px-4 py-3">
+                <div className="space-y-2 p-3">
                   <div className="flex items-baseline justify-between text-sm">
                     <span className="font-medium">This Week: {pct(100 - week)} left</span>
                     <span className="text-xs text-muted-foreground">Resets {resets(allowance.week_resets_at)}</span>
@@ -79,7 +81,7 @@ export default function UsagePage() {
                   <Progress value={week} aria-label="AI allowance used this week" />
                 </div>
               )}
-              <div className="space-y-2 px-4 py-3">
+              <div className="space-y-2 p-3">
                 <div className="flex items-baseline justify-between text-sm">
                   <span className="font-medium">This Month: {pct(100 - used)} left</span>
                   <span className="text-xs text-muted-foreground">Resets {resets(allowance.resets_at)}</span>

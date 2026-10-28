@@ -1,12 +1,12 @@
-import { sleep } from "../backoff";
-import { retryDelay } from "../google/client";
-import { DEFAULT_API_URL, ZoomAuthError, apiBase, refreshAccessToken } from "./oauth";
-
 // A small authorised fetch for the Zoom REST API, the twin of microsoft/client.ts. Access tokens last an hour;
 // this keeps one and refreshes it shortly before it runs out, or at once if Zoom says it is no longer valid.
 // Each refresh brings a new refresh token, handed to onRotate so it can be kept. A request Zoom turns away for
 // going too fast (429) is tried again after Retry-After, a few times, before it fails with the wait Zoom asked
 // for, so the connector can back off for that long.
+
+import { sleep } from "../backoff";
+import { retryDelay } from "../google/client";
+import { DEFAULT_API_URL, ZoomAuthError, apiBase, refreshAccessToken } from "./oauth";
 
 /** Zoom's own code for an access token it no longer accepts, sent with a 401 or 400. */
 const INVALID_TOKEN = 124;

@@ -27,6 +27,7 @@ PER_RUN = 40
 THREADS = 80  # looked at per run, each with its last few messages
 BATCH = 10
 MESSAGE_CHARS = 500
+CHASER_MAX_OUTPUT = 1024  # ten short answers; the schema is a list of id and a boolean
 
 SYSTEM = """You read the end of some conversations. In each, the person you work for wrote the last message.
 For each conversation, say whether their last message expects an answer from the other person.
@@ -106,14 +107,12 @@ class Chasers:
                 "is_group": "eq.false",
                 "junk": "eq.false",
                 "status": "eq.inbox",
-                "last_message_at": f"gte.{(now - MAX_AGE).isoformat()}",
+                # A day old at least (and no older than MAX_AGE), in the query so newer threads do not crowd out the due ones.
+                "and": f"(last_message_at.gte.{(now - MAX_AGE).isoformat()},last_message_at.lte.{(now - MIN_AGE).isoformat()})",
                 "order": "last_message_at.desc",
                 "limit": "300",
             },
         )
-        # A day old at least, and few enough that the newest messages read below reach every one of them.
-        cutoff = now - MIN_AGE
-        threads = [t for t in threads if datetime.fromisoformat(t["last_message_at"]) <= cutoff]
         if not threads:
             return 0
         checked = {

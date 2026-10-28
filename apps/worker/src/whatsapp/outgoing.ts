@@ -1,9 +1,9 @@
-import type { AnyMessageContent } from "baileys";
-import type { OutgoingAttachment } from "../send/compose";
-
 // A reply with files becomes several WhatsApp messages, one per file, as when you attach them on your
 // phone. The text rides as the caption of the first file that can carry one, else goes first on its
 // own. Pure, so it can be unit tested.
+
+import type { AnyMessageContent } from "baileys";
+import type { OutgoingAttachment } from "../send/compose";
 
 /** Photos WhatsApp shows inline. Others (HEIC, GIF, WebP, BMP) go as documents so nothing is lost. */
 const PHOTO = /^image\/(jpeg|png)$/;

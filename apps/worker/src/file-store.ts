@@ -1,3 +1,8 @@
+// The one way an attachment's bytes are kept: size limits, the video and cap rules, one copy per account, sealing
+// with the user's data key, upload, and the row updated to say what happened. Email, WhatsApp and the catch-up
+// passes all save through here. A file is sealed ("e1b:" header, fields.ts attachmentData) when ENCRYPT_CONTENT is
+// on; the web app opens sealed and plain objects alike.
+
 import { contentHash, encryptBytes, type UserKeys } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import type { TablesUpdate } from "@messages/db";
@@ -6,11 +11,6 @@ import { env } from "./env";
 import { ATTACHMENTS_BUCKET, attachmentPath, storedType, uploadObject } from "./storage";
 import { isVideoLink, maySave, noteSaved, stateFor, type CapState, type NotKept } from "./storage-rules";
 import { keysFor } from "./vault";
-
-// The one way an attachment's bytes are kept: size limits, the video and cap rules, one copy per account, sealing
-// with the user's data key, upload, and the row updated to say what happened. Email, WhatsApp and the catch-up
-// passes all save through here. A file is sealed ("e1b:" header, fields.ts attachmentData) when ENCRYPT_CONTENT is
-// on; the web app opens sealed and plain objects alike.
 
 export const MAX_FILE_BYTES = 50 * 1024 * 1024; // Supabase's default upload limit
 

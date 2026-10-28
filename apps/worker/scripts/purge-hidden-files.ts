@@ -1,7 +1,3 @@
-import { allRows, db, must } from "../src/db";
-import { ATTACHMENTS_BUCKET } from "../src/storage";
-import { chunks } from "../src/util";
-
 // One-off: removes the stored copies of hidden attachments (tiny images and files from junk
 // conversations) from the private attachments bucket, and clears their storage_path. The
 // originals stay in the mailbox; if a file is shown again later, the worker's catch-up fetches it again.
@@ -10,6 +6,10 @@ import { chunks } from "../src/util";
 //   npx tsx --env-file=.env scripts/purge-hidden-files.ts [--reasons=tiny,junk]
 //
 // Prints counts only, never file names.
+
+import { allRows, db, must } from "../src/db";
+import { ATTACHMENTS_BUCKET } from "../src/storage";
+import { chunks } from "../src/util";
 
 const PURGEABLE = ["tiny", "junk"];
 const BATCH = 100;

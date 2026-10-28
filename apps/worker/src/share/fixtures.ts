@@ -1,3 +1,8 @@
+// Real keys and an in-memory client list for the tests of clients.ts and rules.ts. The fake list keeps the rules of
+// public.upsert_workspace_contact (20261101130000_team_contacts.sql, checked against a real Postgres when it was
+// written): a client is the oldest one holding any of the indexes, only missing addresses are added, a company is
+// filled in once, and the agent is linked.
+
 import { deriveTeamKeys, deriveUserKeys, encryptField, newDataKey, type TeamKeys, type UserKeys } from "@messages/crypto";
 import { teamAddressIndex, teamDomainIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
@@ -5,11 +10,6 @@ import { encryptTeamField } from "@messages/crypto";
 import type { ClientStore, ClientUpsert } from "./clients";
 import type { Participant } from "./people";
 import type { Keys } from "./reseal";
-
-// Real keys and an in-memory client list for the tests of clients.ts and rules.ts. The fake list keeps the rules of
-// public.upsert_workspace_contact (20261101130000_team_contacts.sql, checked against a real Postgres when it was
-// written): a client is the oldest one holding any of the indexes, only missing addresses are added, a company is
-// filled in once, and the agent is linked.
 
 export const WS = "ws-1";
 export const AGENT = "agent-1";

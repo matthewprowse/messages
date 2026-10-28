@@ -1,5 +1,11 @@
 "use client";
 
+// The compliance export (supabase/migrations/20261104100000_team_after_launch.sql), from the app's side. begin_client_export
+// writes the content-free log row first and lists the client's shared chats; the messages and notes of each are then read a
+// page at a time while that export is open, still sealed with the team's key. They are opened HERE, in the browser, and the
+// file is built here (export-file.ts), so the server never holds a readable word of it. finish_client_export records how many
+// messages were read. Only Compliance, and only while strict sharing is on; the database checks all of it.
+
 import { encryptTeamField } from "@messages/crypto";
 import { addressKey } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
@@ -9,12 +15,6 @@ import { useAuth } from "./auth";
 import { open, teamKeys } from "./vault";
 import { htmlToText } from "./email-text";
 import type { ExportChat, ExportDoc, ExportMessage, ExportNote } from "./export-file";
-
-// The compliance export (supabase/migrations/20261104100000_team_after_launch.sql), from the app's side. begin_client_export
-// writes the content-free log row first and lists the client's shared chats; the messages and notes of each are then read a
-// page at a time while that export is open, still sealed with the team's key. They are opened HERE, in the browser, and the
-// file is built here (export-file.ts), so the server never holds a readable word of it. finish_client_export records how many
-// messages were read. Only Compliance, and only while strict sharing is on; the database checks all of it.
 
 const PAGE = 200;
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";

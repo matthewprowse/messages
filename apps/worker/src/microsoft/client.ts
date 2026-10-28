@@ -1,11 +1,11 @@
-import { sleep } from "../backoff";
-import { retryDelay } from "../google/client";
-import { MicrosoftAuthError, refreshAccessToken } from "./oauth";
-
 // A small authorised fetch for Microsoft Graph, the twin of google/client.ts. Access tokens last about an
 // hour; this keeps one and refreshes it shortly before it runs out, or at once if Graph says it is no
 // longer valid. Each refresh brings a new refresh token, handed to onRotate so it can be kept. Every
 // request asks for immutable IDs, so a message keeps its ID when it moves between folders.
+
+import { sleep } from "../backoff";
+import { retryDelay } from "../google/client";
+import { MicrosoftAuthError, refreshAccessToken } from "./oauth";
 
 export const GRAPH = "https://graph.microsoft.com/v1.0";
 

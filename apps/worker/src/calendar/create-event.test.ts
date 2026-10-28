@@ -1,3 +1,6 @@
+// Tests for calendar/create-event.ts (Google). Pin down the request built from a calendar_outbox row (time zones, all-day
+// ranges, guests, Meet, recurrence), how a created event is stored, and which failures say it was not made.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

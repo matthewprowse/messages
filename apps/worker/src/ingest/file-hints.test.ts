@@ -1,3 +1,6 @@
+// Tests for ingest/file-hints.ts. Pin down the file extension rules, which names are kept out of Junk (receipts,
+// invoices) and how a WhatsApp sticker is recognised.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileHints } from "./file-hints";

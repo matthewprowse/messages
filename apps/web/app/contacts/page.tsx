@@ -1,5 +1,7 @@
 "use client";
 
+// Contacts index: the empty right-hand pane on desktop, with a prompt only on the Companies view.
+
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Building2 } from "lucide-react";

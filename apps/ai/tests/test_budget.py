@@ -1,3 +1,6 @@
+"""Tests for the spending limits in ai.gemini: per-feature and weekly shares, fail-closed behaviour when the budget cannot
+be read, holds on in-flight calls, usage-row flushing, and the draft and summary caps."""
+
 import unittest
 
 from ai.gemini import Gemini, GeminiError, UsageContext

@@ -1,8 +1,8 @@
+// The compliance export's file: what it says, that nothing from a message can break out of it, and that the JSON carries the same content.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildExportHtml, buildExportJson, exportFileName, stamp, totals, type ExportDoc } from "./export-file";
-
-// The compliance export's file: what it says, that nothing from a message can break out of it, and that the JSON carries the same content.
 
 const doc: ExportDoc = {
   generatedAt: "2026-11-04T09:30:00.000Z",

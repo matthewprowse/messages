@@ -1,5 +1,11 @@
+// iCloud Calendar over CalDAV: the events in a window around today, for the briefing and for triage to
+// know who you are meeting. Every few minutes the window is fetched again from every calendar and replaces
+// what is stored, the same way as Google Calendar. It also creates the events queued in calendar_outbox
+// from the app, deletes the ones queued in calendar_deletes and changes the ones queued in calendar_updates;
+// nothing else is ever changed.
+
 import type { TablesInsert } from "@messages/db";
-import { Backoff, Sleeper } from "../backoff";
+import { Backoff, Sleeper, supervise } from "../backoff";
 import { db, loadCredentials, setAccountStatus, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { mapLimit } from "../util";
@@ -18,12 +24,6 @@ import { icloudUpdateFailure, occurrenceOf, updateIcs } from "../caldav/update-e
 import { SERIES_RULE } from "../calendar/recurrence";
 import { claimEvent, failEvent, settleCreated } from "./google-calendar";
 import type { ICloudCredentials } from "./icloud";
-
-// iCloud Calendar over CalDAV: the events in a window around today, for the briefing and for triage to
-// know who you are meeting. Every few minutes the window is fetched again from every calendar and replaces
-// what is stored, the same way as Google Calendar. It also creates the events queued in calendar_outbox
-// from the app, deletes the ones queued in calendar_deletes and changes the ones queued in calendar_updates;
-// nothing else is ever changed.
 
 const POLL_MS = 5 * 60_000;
 const PAST_DAYS = 7;
@@ -53,7 +53,7 @@ export class ICloudCalendarConnector {
   }
 
   start() {
-    void this.run();
+    void supervise(() => this.run(), () => this.stopped, (err) => log.error("icloud calendar run loop failed", { account: this.id, code: errorCode(err) }));
   }
 
   async stop() {
@@ -69,7 +69,7 @@ export class ICloudCalendarConnector {
         if (this.stopped) break;
         if (signInRejected(err)) {
           log.error("icloud calendar sign-in rejected", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", SIGN_IN_REJECTED);
+          await setAccountStatus(this.id, "error", SIGN_IN_REJECTED).catch(() => undefined);
           return;
         }
         log.warn("icloud calendar sync failed", { account: this.id, code: errorCode(err) });

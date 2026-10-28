@@ -341,9 +341,10 @@ export async function discover(email: string, lookups: Lookups): Promise<Candida
   const preset = matchPreset(domain, mx, ns);
   if (preset) return fromPreset(email, preset.preset, preset.via);
 
-  const urls = autoconfigUrls(domain);
+  // Only a plain host name goes into an address: the email pattern also lets through '/', '?', '#' and ':'.
+  const urls = isHostname(domain) ? autoconfigUrls(domain) : [];
   const mailDomain = mx[0] && baseDomain(mx[0]);
-  if (mailDomain && mailDomain !== domain) urls.push(`${ISPDB}${mailDomain}`);
+  if (mailDomain && mailDomain !== domain && isHostname(mailDomain)) urls.push(`${ISPDB}${mailDomain}`);
   // Fetched together, so a slow host costs one timeout, then read in order.
   const files = await Promise.all(urls.map((url) => lookups.text(url).catch(() => null)));
   for (const xml of files) {

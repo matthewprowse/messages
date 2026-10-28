@@ -1,3 +1,6 @@
+// Filling the team's client list when a chat is shared, over real keys and an in-memory list that keeps the rules of
+// upsert_workspace_contact. Synthetic people only.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decryptTeamField } from "@messages/crypto";
@@ -6,9 +9,6 @@ import { FIELD } from "@messages/crypto/fields";
 import { fillClients, MAX_GROUP_CLIENTS } from "./clients";
 import { AGENT, COLLEAGUE, contact, FakeClients, WS, world } from "./fixtures";
 import type { ThreadRow } from "./reseal";
-
-// Filling the team's client list when a chat is shared, over real keys and an in-memory list that keeps the rules of
-// upsert_workspace_contact. Synthetic people only.
 
 const T = "thread-1";
 const thread = (over: Partial<ThreadRow> = {}) => ({ id: T, user_id: AGENT, workspace_id: WS, is_group: false, ...over });

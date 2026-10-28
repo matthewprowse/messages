@@ -1,27 +1,21 @@
-import { discover, domainOf, ELSEWHERE_TEXT, fromSettings, isEmail, matchPreset, readSettings, type Candidates } from "@messages/mail-servers";
-import { nodeLookups } from "@messages/mail-servers/net";
-import { failureText, findWorking } from "@messages/mail-servers/probe";
-import { accountsReady, ensureProfile, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
-import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
-
 // Connects any IMAP and SMTP mailbox from the app: mail on your own domain at Afrihost, xneelo, Domains.co.za
 // or any cPanel host, and Yahoo, Fastmail, Zoho or GMX. The servers are worked out from the address (or taken
 // as typed under Show Server Settings), then the sign-in is checked with both: an IMAP login, and SMTP
 // authentication, which never sends. It is stored encrypted exactly as pnpm connect:imap stores it. The
 // password is never logged or sent back.
+
+import { discover, domainOf, ELSEWHERE_TEXT, fromSettings, isEmail, matchPreset, readSettings, type Candidates } from "@messages/mail-servers";
+import { nodeLookups } from "@messages/mail-servers/net";
+import { failureText, findWorking } from "@messages/mail-servers/probe";
+import { accountsReady, ensureProfile, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
+import { fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // Each try signs in to someone's mail server, maybe several of them, so few: 5 every 10 minutes.
-const overLimit = limiter(5, 10 * 60_000);
-
-interface Body {
-  email?: string;
-  password?: string;
-  /** Only when they were edited under Show Server Settings. Otherwise the servers are worked out here. */
-  settings?: unknown;
-}
+const overLimit = limiter(5, 10 * 60_000, { name: "connect-imap", perAddress: 20 });
 
 export async function POST(request: Request) {
   if (!accountsReady()) return fail(503, "Connecting email is not set up on this server yet.");
@@ -29,14 +23,17 @@ export async function POST(request: Request) {
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
 
-  const body = (await request.json().catch(() => ({}))) as Body;
-  const email = (body.email ?? "").trim().toLowerCase();
-  const password = typeof body.password === "string" ? body.password : "";
+  const body = await readJson(request);
+  if (!body) return fail(400, "That request could not be read.");
+  const rawEmail = textField(body, "email");
+  const password = textField(body, "password");
+  if (rawEmail === null || password === null) return fail(400, "That request could not be read.");
+  const email = rawEmail.trim().toLowerCase();
   if (!isEmail(email)) return fail(400, "Enter your email address.");
   if (!password || password.length > 1024) return fail(400, "Enter your email password.");
   const typed = body.settings == null ? null : readSettings(body.settings);
   if (typed && "error" in typed) return fail(400, typed.error);
-  const wait = await overLimit(user.id);
+  const wait = await overLimit(user.id, request);
   if (wait > 0) return fail(429, "Too many tries. Wait a few minutes and try again.", { "Retry-After": String(wait) });
 
   let candidates: Candidates;

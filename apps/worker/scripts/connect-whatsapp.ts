@@ -1,11 +1,11 @@
+// Links WhatsApp to Messages as a linked device, from the terminal. The running worker does the linking
+// (one connection only, so the history your phone sends is caught); this shows its QR code here as it
+// changes, or a pairing code to type on your phone. Run with: pnpm connect:whatsapp
+
 import { encodeQr, qrToTerminal } from "@messages/qr";
 import { db, must } from "../src/db";
 import { sleep } from "../src/backoff";
 import { ask, ownerUserId } from "./owner";
-
-// Links WhatsApp to Messages as a linked device, from the terminal. The running worker does the linking
-// (one connection only, so the history your phone sends is caught); this shows its QR code here as it
-// changes, or a pairing code to type on your phone. Run with: pnpm connect:whatsapp
 
 const POLL_MS = 1_500;
 const NO_WORKER_MS = 45_000; // the worker picks up a new link within 30 seconds

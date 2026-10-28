@@ -1,5 +1,7 @@
 "use client";
 
+// Settings page for linking WhatsApp as a linked device. The QR flow is in WhatsAppLinkPanel; notes on staying linked show until it is.
+
 import { useEffect } from "react";
 import Link from "next/link";
 import { track } from "@/lib/analytics";
@@ -19,7 +21,7 @@ export default function WhatsAppSetup() {
 
       <WhatsAppLinkPanel link={link} />
 
-      {account !== undefined && !linked && <div className="mt-8">
+      {account !== undefined && !linked && <div className="mt-3">
         <SettingsSection id="before-you-link" title="Before You Link">
           <SettingsHeading level={3} title="Your Phone Stays in Charge" description={<>
             <p>

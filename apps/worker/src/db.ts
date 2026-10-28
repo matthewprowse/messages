@@ -1,3 +1,6 @@
+// The worker's Supabase client (service role) and the small helpers every connector shares: error-throwing queries, account
+// status and sync-state rows, credential loading, paged reads and retried writes.
+
 import { createClient, type PostgrestSingleResponse } from "@supabase/supabase-js";
 import type { AccountStatus, Database, Tables } from "@messages/db";
 import { env } from "./env";
@@ -46,6 +49,7 @@ export function failureCode(reason: string): string {
   return "send_failed";
 }
 
+/** Sets an account's status. Skips the write when nothing changed (every write reaches open browsers through Realtime) and records the matching analytics events. */
 export async function setAccountStatus(accountId: string, status: AccountStatus, detail: string | null = null) {
   const before = await db.from("accounts").select("user_id, provider, status, status_detail, created_at, last_synced_at").eq("id", accountId).maybeSingle();
   // Nothing changed: the same status and detail is not written again (a write is a realtime event to every open browser).
@@ -68,6 +72,7 @@ export async function setAccountStatus(accountId: string, status: AccountStatus,
   }
 }
 
+/** Opens the stored credentials for an account. Throws with code NO_CREDENTIALS when there are none. */
 export async function loadCredentials<T>(accountId: string): Promise<T> {
   const row = must(
     await db.from("account_credentials").select("ciphertext").eq("account_id", accountId).maybeSingle(),
@@ -79,6 +84,7 @@ export async function loadCredentials<T>(accountId: string): Promise<T> {
   return (await credentialSealer(accountId)).openJson<T>(row.ciphertext);
 }
 
+/** The sync_state row for an account and scope, or null when that scope has never synced. */
 export async function getSyncState(accountId: string, scope: string) {
   return must(
     await db.from("sync_state").select("*").eq("account_id", accountId).eq("scope", scope).maybeSingle(),

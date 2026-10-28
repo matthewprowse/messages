@@ -1,3 +1,5 @@
+// Tests for mapLimit in util.ts: bounded concurrency with results kept in input order.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mapLimit } from "./util";

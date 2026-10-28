@@ -1,3 +1,7 @@
+// Calendar events as the Calendar page needs them. The worker copies events from Google Calendar into
+// calendar_events, and row-level security returns only the signed-in user's own events.
+// All-day events are stored as midnight UTC on their date, with an end date that is not included.
+
 import { addressIndex } from "@messages/crypto/addresses";
 import type { TablesInsert } from "@messages/db";
 import { timeOf } from "./format";
@@ -7,10 +11,6 @@ import type { Contact as AddressBookContact } from "./types";
 import { supabase } from "./supabase";
 import { openEvents } from "./open-rows";
 import { userKeys } from "./vault";
-
-// Calendar events as the Calendar page needs them. The worker copies events from Google Calendar into
-// calendar_events, and row-level security returns only the signed-in user's own events.
-// All-day events are stored as midnight UTC on their date, with an end date that is not included.
 
 export interface EventAttendee {
   name: string;
@@ -378,11 +378,13 @@ export interface UpdateResult {
   error: string | null;
 }
 
-const UPDATE_GIVE_UP: UpdateResult = { status: "failed", error: "Changing the event is taking too long. Check that the worker is running." };
+/** Not a failure: the worker may still finish, so callers say it is still being made rather than invite a retry. */
+export const GAVE_UP = "unknown";
+const UPDATE_GIVE_UP: UpdateResult = { status: GAVE_UP, error: null };
 
 /**
  * Waits for the worker to settle a queued change, by the row's Realtime updates with a poll as a safety net.
- * Resolves with the row at that point (done, or failed with the reason), or as failed after giveUpMs. A done
+ * Resolves with the row at that point (done, or failed with the reason), or with status GAVE_UP after giveUpMs. A done
  * row's error, when it has one, is a note about what was not done.
  */
 export function followUpdate(id: string, { giveUpMs = 60_000, pollMs = 1500 }: { giveUpMs?: number; pollMs?: number } = {}): Promise<UpdateResult> {

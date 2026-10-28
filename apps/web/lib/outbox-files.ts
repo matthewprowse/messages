@@ -1,9 +1,9 @@
-import type { Attachment, Provider } from "./types";
-
 // Files attached to a message you send. They are uploaded to the private "attachments" bucket first, at
 // "<user id>/outbox/<uuid>/<filename>", then the outbox row is queued with attachment_count, then one
 // outbox_attachments row is added per file. The worker sends once it sees every file.
 // This module has no Supabase import so its helpers can be unit tested.
+
+import type { Attachment, Provider } from "./types";
 
 export const BUCKET = "attachments";
 export const MAX_FILES = 10;

@@ -1,3 +1,7 @@
+// Stores a normalized email through public.ingest_email (one) or ingest_email_batch (many). Subject, body, addresses and
+// company names are sealed and blind-indexed with the user's keys here, so plaintext never reaches the database.
+// Also applies read or unread changes made elsewhere to the stored message.
+
 import type { Json } from "@messages/db";
 import { db, must, type AccountRow } from "../db";
 import { BatchRpc, isFailure, type RowFailure, type RpcResponse } from "./batch-rpc";
@@ -144,9 +148,9 @@ async function emailPayload(account: AccountRow, mail: NormalizedEmail, ctx: Ema
 
 /**
  * Applies a read or unread change made elsewhere (your phone, iCloud.com) to the stored message,
- * found by its folder and IMAP UID. A message already in that state is left alone, and so is its thread.
+ * found by its folder, UIDVALIDITY and IMAP UID. A message already in that state is left alone, and so is its thread.
  */
-export async function applyReadState(account: AccountRow, folder: string, uid: number, seen: boolean) {
+export async function applyReadState(account: AccountRow, folder: string, uid: number, seen: boolean, uidValidity: number) {
   const updated = must(
     await db
       .from("messages")
@@ -155,6 +159,7 @@ export async function applyReadState(account: AccountRow, folder: string, uid: n
       .eq("direction", "inbound")
       .eq("provider_meta->>folder", folder)
       .eq("provider_meta->>uid", String(uid))
+      .eq("provider_meta->>uid_validity", String(uidValidity))
       .neq("is_read", seen)
       .select("thread_id"),
     "apply read state",

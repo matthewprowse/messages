@@ -1,10 +1,11 @@
-import { ImapFlow } from "imapflow";
-import { accountsReady, ensureProfile, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
-import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
-
 // Connects iCloud+ Mail, and iCloud Calendar with the same sign-in, from the app. The app-specific password
 // is checked with iCloud here, then stored encrypted exactly as pnpm connect:icloud stores it. It is never
 // logged or sent back.
+
+import { ImapFlow } from "imapflow";
+import { accountsReady, ensureProfile, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
+import { fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -13,16 +14,7 @@ const CALDAV = "https://caldav.icloud.com/";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Each try is a sign-in to iCloud, so few: 5 every 10 minutes.
-const overLimit = limiter(5, 10 * 60_000);
-
-interface Body {
-  /** The iCloud Mail sign-in, usually ending @icloud.com. */
-  username?: string;
-  password?: string;
-  /** The address people email you at, when it is your own domain. Defaults to the sign-in. */
-  address?: string;
-  calendar?: boolean;
-}
+const overLimit = limiter(5, 10 * 60_000, { name: "connect-icloud", perAddress: 20 });
 
 export async function POST(request: Request) {
   if (!accountsReady()) return fail(503, "Connecting iCloud is not set up on this server yet.");
@@ -30,13 +22,18 @@ export async function POST(request: Request) {
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
 
-  const body = (await request.json().catch(() => ({}))) as Body;
-  const username = (body.username ?? "").trim().toLowerCase();
-  const address = (body.address ?? "").trim().toLowerCase() || username;
-  const password = (body.password ?? "").replace(/\s+/g, "");
+  const body = await readJson(request);
+  const rawUsername = body && textField(body, "username");
+  const rawAddress = body && textField(body, "address");
+  const rawPassword = body && textField(body, "password");
+  if (!body || rawUsername === null || rawAddress === null || rawPassword === null) return fail(400, "That request could not be read.");
+  // The iCloud Mail sign-in, usually ending @icloud.com; the address people email you at defaults to it.
+  const username = rawUsername.trim().toLowerCase();
+  const address = rawAddress.trim().toLowerCase() || username;
+  const password = rawPassword.replace(/\s+/g, "");
   if (!EMAIL.test(username) || !EMAIL.test(address)) return fail(400, "Enter your iCloud email address.");
   if (password.length < 16) return fail(400, "An app-specific password is 16 letters, in four groups of four.");
-  const wait = await overLimit(user.id);
+  const wait = await overLimit(user.id, request);
   if (wait > 0) return fail(429, "Too many tries. Wait a few minutes and try again.", { "Retry-After": String(wait) });
 
   const mail = await checkMail(username, password);

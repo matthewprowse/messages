@@ -1,3 +1,6 @@
+// Tests for ingest/imap-place.ts. Pin down how a conversation's place (inbox, archived, trash, spam) is worked out from
+// its messages' folders and how app actions map to IMAP folder moves.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { imapMove, imapThreadPlace } from "./imap-place";

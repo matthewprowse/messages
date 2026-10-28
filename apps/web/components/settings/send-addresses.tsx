@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Send Addresses: the addresses each email account can send from, which the reply box and New Email offer.
+
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { useApp } from "@/lib/store";
@@ -38,13 +40,13 @@ function ListedAddresses({ account }: { account: Account }) {
         <SettingsRow title={own} description="Account Address" />
         {extra.map((a) => (
           <SettingsRow key={a} title={a}>
-            <Button variant="ghost" size="icon-sm" aria-label={`Remove ${a}`} onClick={async () => { if (await save(extra.filter((x) => x !== a))) notify("Address removed", () => void save(extra)); }}><Trash2 /></Button>
+            <Button variant="ghost" size="icon" aria-label={`Remove ${a}`} onClick={async () => { if (await save(extra.filter((x) => x !== a))) notify("Address removed", () => void save(extra)); }}><Trash2 /></Button>
           </SettingsRow>
         ))}
       </SettingsRows>
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); add(); }}>
         <Input value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} placeholder="you@yourdomain.com" aria-invalid={!!error} aria-describedby={error ? errorId : undefined} aria-label="Address to Add" className="flex-1" />
-        <Button type="submit" disabled={!value.trim()}>Add</Button>
+        <Button variant="secondary" type="submit" disabled={!value.trim()}>Add</Button>
       </form>
       {error && <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>}
     </>

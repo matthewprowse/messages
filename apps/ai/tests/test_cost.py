@@ -117,7 +117,16 @@ class AudioPricing(unittest.TestCase):
         small = estimate_cost("gemini-3.8-flash", body, 100)
         large = estimate_cost("gemini-3.8-flash", body, 50_000)
         self.assertGreater(large, small)
-        self.assertEqual(estimate_cost("unknown-model", body, 100), 0.0)
+        self.assertGreater(estimate_cost("unknown-model", body, 100), 0.0)  # never free: the dearest known price
+
+    def test_an_unpriced_model_is_billed_at_the_dearest_price_and_flagged(self):
+        from ai.pricing import fallback_price, unpriced
+
+        cost = cost_usd("gemini-typo", self.day, 1000, 0, 1000)
+        top = fallback_price()
+        self.assertAlmostEqual(cost, (1000 * top.input + 1000 * top.output) / 1_000_000)
+        self.assertGreater(cost, cost_usd("gemini-3.8-flash", self.day, 1000, 0, 1000))
+        self.assertEqual(unpriced(["gemini-3.8-flash", "gemini-typo", ""]), ["gemini-typo"])
 
 
 class Stub(Gemini):

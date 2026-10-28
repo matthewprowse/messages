@@ -1,5 +1,7 @@
 "use client";
 
+// A contact's page under Contacts: their summary, details, conversations and meetings, and the buttons to message them.
+
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -77,7 +79,7 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
   const [email, setEmail] = useState({ open: false, to: "" });
 
   if (!contact) {
-    return <EmptyState icon={Users} title="Contact Not Found" description="They may have been merged or deleted." action={<Button variant="outline" asChild><Link href="/contacts">Back to Contacts</Link></Button>} />;
+    return <EmptyState icon={Users} title="Contact Not Found" description="They may have been merged or deleted." action={<Button variant="secondary" asChild><Link href="/contacts">Back to Contacts</Link></Button>} />;
   }
 
   const copy = (text: string) => {

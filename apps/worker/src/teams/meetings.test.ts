@@ -1,3 +1,6 @@
+// Tests for teams/meetings.ts: which calendar events count as Teams meetings, who was in them, and when a
+// transcript is still looked for.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GIVE_UP_MS, gaveUp, joinUrlFilter, meetingPeople, newSpeakers, teamsMeetings, transcriptCheckDue, transcriptsFor, type MeetingEvent } from "./meetings";

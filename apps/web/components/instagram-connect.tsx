@@ -1,5 +1,7 @@
 "use client";
 
+// Connects a personal Instagram account by username and password in Settings. Handles the code Instagram may ask for.
+
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { track } from "@/lib/analytics";

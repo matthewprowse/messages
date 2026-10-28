@@ -1,3 +1,6 @@
+// Tests for backfill/fields.ts: planRow seals readable values and leaves empty or already sealed ones alone,
+// returns null when a row is already in the wanted form, and errorCodeFor maps stored error text to code words.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { decryptField, deriveUserKeys, isCiphertext, newDataKey } from "@messages/crypto";

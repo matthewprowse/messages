@@ -1,3 +1,6 @@
+// Tests for google/tasks.ts: due dates and all-day handling, subtasks, deleted tasks, paged reads of lists and tasks,
+// the status Google expects when ticking a task, and the wording of rate-limit and failure messages.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { GoogleApiError } from "./client";

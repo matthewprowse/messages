@@ -1,3 +1,6 @@
+// Tests for crypto/flags.ts and related basics: flags are on unless explicitly off, production refuses an off
+// flag, field names are unique, and content hashes are per user.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { contentHash, deriveUserKeys, newDataKey } from "./index";

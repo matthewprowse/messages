@@ -1,3 +1,6 @@
+// Tests for outlook-place.ts: where a conversation sits in Outlook, folder roles, app actions as folder moves,
+// and folding folder deltas into message state.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foldDeltas, outlookMove, outlookThreadPlace, roleOf } from "./outlook-place";

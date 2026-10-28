@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, What Drafts Use: a live overview of everything the AI reads to write a draft, so it is clear what it knows.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import type { Tables } from "@messages/db";
@@ -32,7 +34,7 @@ function Source({ title, blurb, value, href }: { title: string; blurb: string; v
   return (
     <SettingsRow title={title} description={blurb}>
       <Badge variant="secondary">{value}</Badge>
-      {href && <Button variant="ghost" size="sm" asChild><a href={href}>Edit</a></Button>}
+      {href && <Button variant="ghost" asChild><a href={href}>Edit</a></Button>}
     </SettingsRow>
   );
 }
@@ -44,7 +46,7 @@ function Expandable<T>({ items, render }: { items: T[]; render: (item: T) => Rea
     <>
       <SettingsRows>{(all ? items : items.slice(0, SHOWN)).map(render)}</SettingsRows>
       {items.length > SHOWN && (
-        <Button variant="ghost" size="sm" onClick={() => setAll((v) => !v)}>{all ? "Show Fewer" : `Show All ${items.length}`}</Button>
+        <Button variant="ghost" onClick={() => setAll((v) => !v)}>{all ? "Show Fewer" : `Show All ${items.length}`}</Button>
       )}
     </>
   );
@@ -186,7 +188,7 @@ export function DraftsUseSection() {
                           description={[who ? `For ${who}` : "Everyone", r.support_count > 1 ? `Seen ${r.support_count} times` : "", !r.enabled && r.disabled_reason === "unsupported" ? "No Longer Seen In Your Mail" : ""].filter(Boolean).join(" · ")}
                         >
                           <Switch checked={r.enabled} onCheckedChange={(v) => setEnabled(r, v)} aria-label={r.rule} />
-                          <Button variant="ghost" size="icon-sm" aria-label={`Remove Rule: ${r.rule}`} onClick={() => remove(r)}><Trash2 /></Button>
+                          <Button variant="ghost" size="icon" aria-label={`Remove Rule: ${r.rule}`} onClick={() => remove(r)}><Trash2 /></Button>
                         </SettingsRow>
                       );
                     })}

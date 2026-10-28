@@ -1,8 +1,8 @@
-import { BufferJSON, proto } from "baileys";
-import type { CredentialSealer } from "../crypto";
-
 // How one piece of the WhatsApp session is stored: JSON with Buffers kept as base64 (Baileys' BufferJSON),
 // then sealed under the user's key ("v2:", crypto.ts; "v1:" is still read). Kept apart from the database code so it can be unit tested.
+
+import { BufferJSON, proto } from "baileys";
+import type { CredentialSealer } from "../crypto";
 
 /** The row that holds the account's own credentials. Everything else is a Signal key by type and ID. */
 export const CREDS = { type: "creds", id: "creds" } as const;

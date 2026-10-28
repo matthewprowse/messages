@@ -1,18 +1,22 @@
 "use client";
 
+// One open conversation: the message bubbles, header and menus, and the reply box with drafts. Used by /inbox and /summary.
+
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { ArrowDown, ArrowLeft, Check, CheckCheck, ChevronDown, Loader2, MoreHorizontal, X, Inbox, Paperclip } from "lucide-react";
 import { useApp, type DraftPhase } from "@/lib/store";
+import { useAuth } from "@/lib/auth";
 import type { Attachment, Contact, Decision, Draft, FiledAttachment, Message, Thread } from "@/lib/types";
 import { dayLabel, formatPhone, fullStamp, niceName, relTime, timeOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { seenLabelId } from "@/lib/seen";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
@@ -57,9 +61,15 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const backHref = withQuery(basePath);
   const {
     threadById, contactById, contacts, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, loading, markRead, archive, trash, pin, giveFeedback,
-    send, generateDraft, discardDraft, requestAutoDraft, setJunk, drafting, hydrated, setReplyTo, react,
+    send, generateDraft, discardDraft, requestAutoDraft, setJunk, drafting, hydrated, setReplyTo, react, hasOlder, removePending,
   } = useApp();
   const thread = threadById(threadId);
+  const { session } = useAuth();
+  const authUser = session?.user.id ?? null;
+  useEffect(() => {
+    if (remembersFor !== undefined && remembersFor !== authUser) { typedText.clear(); beforeAsk.clear(); }
+    remembersFor = authUser;
+  }, [authUser]);
   // The store keeps one list per conversation, which only changes when this conversation does.
   const stored = messagesFor(threadId);
   // Failed sends you have deleted, or retried as a new send, are hidden here.
@@ -133,9 +143,9 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       clearTimeout(t);
       document.removeEventListener("visibilitychange", arm);
     };
-    // Re-checked once the conversation has loaded, for when it is opened straight from its address.
+    // Re-checked once the conversation has loaded, and when a new message makes it unread again while open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, hydrated, threadExists]);
+  }, [threadId, hydrated, threadExists, thread?.unread, thread?.lastMessageAt]);
 
   // New messages at the bottom scroll into view when you are already near the bottom (or sent them
   // yourself); otherwise a New Messages button offers the jump. Older ones loaded at the top do not scroll.
@@ -190,7 +200,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     if (!el || !loaded) return;
     function onScroll() {
       const first = el?.querySelector("[data-message-id]");
-      if (!el || !first || el.scrollTop > 400 || anchor.current) return;
+      if (!el || !first || el.scrollTop > 400 || anchor.current || !hasOlder(threadId)) return;
       anchor.current = { id: first.getAttribute("data-message-id")!, top: first.getBoundingClientRect().top };
       setLoadingOlder(true);
       loadOlderMessages(threadId)
@@ -203,7 +213,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       anchor.current = null;
       setLoadingOlder(false);
     };
-  }, [threadId, loaded, threadExists, loadOlderMessages]);
+  }, [threadId, loaded, threadExists, loadOlderMessages, hasOlder]);
 
   const [flashId, setFlashId] = useState<string | null>(null);
   const jumpTo = useCallback((id: string, smooth = false) => {
@@ -217,7 +227,11 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   }, [setReplyTo, threadId]);
 
   // Delete hides a failed send. Retry queues the same text again as a new send and hides the failed one.
-  const onDismiss = useCallback((m: Message) => setDismissed((d) => new Set(d).add(m.id)), []);
+  // The failed placeholder leaves the store too, so it does not come back when you return to the conversation.
+  const onDismiss = useCallback((m: Message) => {
+    setDismissed((d) => new Set(d).add(m.id));
+    if (m.id.startsWith("outbox:")) removePending(m.id.slice("outbox:".length));
+  }, [removePending]);
   const onRetry = useCallback(async (m: Message) => {
     if (await send(threadId, m.body, undefined, [], true)) onDismiss(m);
   }, [send, threadId, onDismiss]);
@@ -260,7 +274,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
 
   if (!thread || !header) {
     if (loading) return <ConversationSkeleton />;
-    return <EmptyState icon={Inbox} title="Conversation Not Found" description="It may have been archived or deleted." action={<Button variant="outline" asChild><Link href={basePath}>{basePath === "/inbox" ? "Back to Inbox" : "Go Back"}</Link></Button>} />;
+    return <EmptyState icon={Inbox} title="Conversation Not Found" description="It may have been archived or deleted." action={<Button variant="secondary" asChild><Link href={basePath}>{basePath === "/inbox" ? "Back to Inbox" : "Go Back"}</Link></Button>} />;
   }
   const { primary, title, subtitle } = header;
   // Forward opens a new email with the latest stored message quoted. Files are not carried over.
@@ -272,7 +286,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     // like the Conversations list.
     <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
-        <Button variant="ghost" size="icon" className="size-6 md:hidden" asChild aria-label="Back">
+        <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
           <Link href={backHref}><ArrowLeft /></Link>
         </Button>
         <div className="min-w-0 flex-1">
@@ -332,6 +346,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
                 meetings={meetings}
                 isGroup={!!thread.isGroup}
                 whatsapp={thread.channel === "whatsapp"}
+                seenId={seenLabelId(msgs, thread.channel)}
                 flashId={flashId}
                 senderNames={senderNames}
                 senderContacts={senderContacts}
@@ -512,6 +527,8 @@ interface ListProps {
   meetings: Meeting[];
   isGroup: boolean;
   whatsapp: boolean;
+  /** The one message that shows "Seen" (Instagram and LinkedIn). */
+  seenId: string | null;
   flashId: string | null;
   senderNames: Map<string, string>;
   senderContacts: Map<string, Contact | undefined>;
@@ -546,7 +563,7 @@ function withAlbums(run: Message[]): Message[][] {
 }
 
 /* Every conversation renders as a chat, email included. */
-const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, flashId, senderNames, senderContacts, ...handlers }: ListProps) {
+const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, seenId, flashId, senderNames, senderContacts, ...handlers }: ListProps) {
   // A WhatsApp quote names the quoted message by WhatsApp's own ID.
   const byProviderId = useMemo(() => new Map(msgs.flatMap((m) => (m.providerId ? [[m.providerId, m.id] as const] : []))), [msgs]);
   // Split each day into runs of consecutive messages from the same sender, with a meeting between the messages
@@ -598,6 +615,7 @@ const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, fla
                     sender: isGroup && m.from !== "me" ? senderNames.get(m.from) : undefined,
                     senderContact: isGroup && m.from !== "me" ? senderContacts.get(m.from) : undefined,
                     whatsapp,
+                    seen: m.id === seenId,
                     ...handlers,
                   };
                   return ms.length > 1
@@ -616,6 +634,8 @@ const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, fla
 interface BubbleProps extends Pick<ListProps, "whatsapp" | "nameOf" | "onJump" | "onReply" | "onReact" | "onOpen" | "onRetry" | "onDismiss"> {
   m: Message;
   showMeta: boolean;
+  /** Shows "Seen" under it: the last message you sent that the other person has seen. */
+  seen?: boolean;
   /** The sender's name and photo, shown in groups. */
   sender?: string;
   senderContact?: Contact;
@@ -624,7 +644,7 @@ interface BubbleProps extends Pick<ListProps, "whatsapp" | "nameOf" | "onJump" |
 }
 
 // Memoised with stable props, so a new message or a reaction redraws only the bubbles it changes.
-const Bubble = memo(function Bubble({ m, showMeta, sender, senderContact, whatsapp, flash, quotedId, nameOf, onJump, onReply, onReact, onOpen, onRetry, onDismiss }: BubbleProps) {
+const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderContact, whatsapp, flash, quotedId, nameOf, onJump, onReply, onReact, onOpen, onRetry, onDismiss }: BubbleProps) {
   const touch = useTouchReveal();
   const me = m.from === "me";
   const bulk = !!m.bulk;
@@ -672,7 +692,7 @@ const Bubble = memo(function Bubble({ m, showMeta, sender, senderContact, whatsa
       ) : m.sendState === "sending" ? (
         <div className="px-3 text-xs text-muted-foreground">Sending</div>
       ) : (
-        (showMeta || m.edited || (me && m.receipt)) && (
+        (showMeta || m.edited || (me && (whatsapp ? m.receipt : seen))) && (
           <div className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground">
             <span className="flex min-w-0 items-center gap-1.5">
               {sender && showMeta && <ContactAvatar contact={senderContact} className="size-6" />}
@@ -680,7 +700,7 @@ const Bubble = memo(function Bubble({ m, showMeta, sender, senderContact, whatsa
                 {showMeta ? (sender ? `${sender} · ${timeOf(m.sentAt)}` : timeOf(m.sentAt)) : ""}
                 {m.edited ? (showMeta ? " · Edited" : "Edited") : ""}
               </span>
-              {me && m.receipt && <Ticks receipt={m.receipt} />}
+              {me && (whatsapp ? m.receipt && <Ticks receipt={m.receipt} /> : seen && <span>Seen</span>)}
             </span>
             {!me && showMeta && <ReactionChips m={m} me={false} nameOf={nameOf} onReact={onReact} inline />}
           </div>
@@ -790,6 +810,8 @@ const TONES: { key: Draft["tone"]; label: string }[] = [
 // keeps it; and what the reply box held when you last asked the AI for something there, for Undo.
 const typedText = new Map<string, string>();
 const beforeAsk = new Map<string, { text: string; replacing?: string }>();
+// Whose they are: another person signing in on this tab starts with neither.
+let remembersFor: string | null | undefined;
 
 function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { thread: Thread; msgs: Message[]; phase?: DraftPhase; onDraft: (tone?: Draft["tone"], instruction?: string, decision?: Decision, source?: string, audio?: Blob) => void; onDiscardDraft: () => void; onSend: (body: string, from?: string, files?: OutboxUpload[], copies?: { to: string[]; cc: string[] }) => Promise<boolean> }) {
   const replyFrom = useReplyFrom(thread, msgs);
@@ -891,11 +913,17 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
   const submit = async () => {
     if (!canSend) return;
     setSending(true);
-    const uploaded = await files.upload();
-    if (!uploaded) { setSending(false); return; }
     const sentFrom = thread.id;
-    const queued = await onSend(text, replyFrom.chosen ?? undefined, uploaded, replyAll.copies);
-    setSending(false);
+    let queued = false;
+    try {
+      const uploaded = await files.upload();
+      if (!uploaded) return;
+      queued = await onSend(text, replyFrom.chosen ?? undefined, uploaded, replyAll.copies);
+    } catch {
+      toast("Could not send. Your reply is still in the box.");
+    } finally {
+      setSending(false);
+    }
     if (!queued) return;
     typedText.delete(sentFrom);
     beforeAsk.delete(sentFrom);
@@ -916,13 +944,13 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
             </Hint>
             {editable && (
               <Hint text="Fixes spelling and wording in what you wrote, or changes it the way you ask, keeping your meaning. Nothing is sent.">
-                <Button type="button" variant="outline" disabled={busy} onClick={() => setAsking("edit")}>Edit Text</Button>
+                <Button type="button" variant="secondary" disabled={busy} onClick={() => setAsking("edit")}>Edit Text</Button>
               </Hint>
             )}
             {text.trim() && (
               <DropdownMenu>
                 <Hint text="Rewrites your text to be shorter, more formal or more casual.">
-                  <DropdownMenuTrigger asChild><Button type="button" variant="outline" disabled={busy}>Adjust <ChevronDown /></Button></DropdownMenuTrigger>
+                  <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Adjust <ChevronDown /></Button></DropdownMenuTrigger>
                 </Hint>
                 <DropdownMenuContent align="start">
                   {TONES.map((t) => (
@@ -931,7 +959,7 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {undoable && <Hint text="Puts back what was in the box before the last draft."><Button type="button" variant="outline" onClick={undo}>Undo</Button></Hint>}
+            {undoable && <Hint text="Puts back what was in the box before the last draft."><Button type="button" variant="secondary" onClick={undo}>Undo</Button></Hint>}
             {draft && <Hint text="Removes this draft and empties the box."><Button type="button" variant="ghost" size="icon" className="size-8" aria-label="Discard Draft" disabled={busy} onClick={() => { beforeAsk.delete(thread.id); typedText.delete(thread.id); onDiscardDraft(); setText(""); }}><X /></Button></Hint>}
           </div>
         )}
@@ -994,9 +1022,9 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
             className="resize-none"
           />
           <DialogFooter className="sm:justify-between">
-            <Button type="button" variant="outline" onClick={() => { setAsking(null); speech.start(); }}>Record Instead</Button>
+            <Button type="button" variant="secondary" onClick={() => { setAsking(null); speech.start(); }}>Record Instead</Button>
             <div className="flex flex-col-reverse gap-2 sm:flex-row">
-              <Button type="button" variant="outline" onClick={() => setAsking(null)}>Cancel</Button>
+              <Button type="button" variant="ghost" onClick={() => setAsking(null)}>Cancel</Button>
               <Button type="button" variant="secondary" disabled={busy} onClick={startDraft}>{draftLabel}</Button>
             </div>
           </DialogFooter>
@@ -1019,7 +1047,7 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
             className="resize-none"
           />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setAsking(null)}>Cancel</Button>
+            <Button type="button" variant="ghost" onClick={() => setAsking(null)}>Cancel</Button>
             <Button type="button" variant="secondary" disabled={busy} onClick={startEdit}>Edit Text</Button>
           </DialogFooter>
         </DialogContent>

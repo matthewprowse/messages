@@ -1,10 +1,10 @@
+// One-off: reads the List-Unsubscribe headers of mail imported before they were stored. Only the
+// headers are fetched, not whole messages. Safe to run again.
+
 import { ImapFlow } from "imapflow";
 import { allRows, db, loadCredentials, must } from "../src/db";
 import { parseEmail } from "../src/ingest/normalize-email";
 import { ICLOUD_IMAP, type ICloudCredentials } from "../src/connectors/icloud";
-
-// One-off: reads the List-Unsubscribe headers of mail imported before they were stored. Only the
-// headers are fetched, not whole messages. Safe to run again.
 
 const accounts = must(await db.from("accounts").select("id").eq("provider", "icloud"), "load accounts");
 for (const account of accounts) {

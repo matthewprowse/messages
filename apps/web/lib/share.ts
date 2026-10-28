@@ -1,15 +1,15 @@
 "use client";
 
+// Sharing a chat, from the app's side: whether the signed-in person is in a team, marking a chat as work or moving it
+// back (database functions that check who is asking, in supabase/migrations/20261101120000_shared_chats.sql), and what
+// they share. The chat's rows are re-encrypted by the sync worker afterwards, so a chat is Sharing for a few seconds.
+
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
 import { useAuth } from "./auth";
 import { open } from "./vault";
 import type { TeamRole } from "./team";
-
-// Sharing a chat, from the app's side: whether the signed-in person is in a team, marking a chat as work or moving it
-// back (database functions that check who is asking, in supabase/migrations/20261101120000_shared_chats.sql), and what
-// they share. The chat's rows are re-encrypted by the sync worker afterwards, so a chat is Sharing for a few seconds.
 
 /** What the person's team means for sharing: which workspace, whether strict sharing is on, and their role. */
 export interface MyTeam {

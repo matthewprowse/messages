@@ -1,7 +1,14 @@
+// Outlook and Microsoft 365 mail through Microsoft Graph. Each folder's delta query says what changed
+// since the last check, which keeps new mail within seconds without Graph's push subscriptions (those
+// need a public web address). Messages are fetched as MIME, so they are parsed and stored exactly like
+// iCloud and Gmail mail, and Outlook's conversation ID groups the thread. Read, unread, archive, delete
+// and junk in the app move or flag the mail in Outlook (delete moves it to Deleted Items, never deletes it
+// for good). Replies go out through Graph from your Outlook address; Outlook files them in Sent Items.
+
 import { simpleParser } from "mailparser";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { Json, Tables } from "@messages/db";
-import { Backoff, SerialQueue, Sleeper, sleep } from "../backoff";
+import { Backoff, SerialQueue, Sleeper, sleep, supervise } from "../backoff";
 import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -31,13 +38,6 @@ import {
   type DeltaMessage,
   type OutlookFolder,
 } from "../microsoft/outlook-place";
-
-// Outlook and Microsoft 365 mail through Microsoft Graph. Each folder's delta query says what changed
-// since the last check, which keeps new mail within seconds without Graph's push subscriptions (those
-// need a public web address). Messages are fetched as MIME, so they are parsed and stored exactly like
-// iCloud and Gmail mail, and Outlook's conversation ID groups the thread. Read, unread, archive, delete
-// and junk in the app move or flag the mail in Outlook (delete moves it to Deleted Items, never deletes it
-// for good). Replies go out through Graph from your Outlook address; Outlook files them in Sent Items.
 
 const POLL_MS = 5_000;
 const ALL_FOLDERS_EVERY = 4; // every fourth check (20 s) reads every folder; the others only the Inbox
@@ -122,7 +122,7 @@ export class OutlookConnector {
   }
 
   start() {
-    void this.run();
+    void supervise(() => this.run(), () => this.stopped, (err) => log.error("outlook run loop failed", { account: this.id, code: errorCode(err) }));
   }
 
   async stop() {
@@ -141,7 +141,7 @@ export class OutlookConnector {
         const fatal = microsoftFatalDetail(err, "Mail");
         if (fatal) {
           if (signInRevoked(err)) log.error("outlook sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         log.warn("outlook session failed", { account: this.id, code: errorCode(err) });

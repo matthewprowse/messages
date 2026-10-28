@@ -1,3 +1,5 @@
+// Tests for google/gmail-labels.ts: label to folder mapping, hidden labels, history records folded into changes, and the labels each app action sets.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { actionLabels, applyLabelChange, hidden, historyChanges, roleOf, threadPlace } from "./gmail-labels";

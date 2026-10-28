@@ -1,10 +1,11 @@
-import { randomBytes } from "node:crypto";
-import type { RawBody } from "./client";
-
 // Gmail's JSON send endpoint carries the email base64 encoded inside JSON, which is too small for
 // attachments. The upload endpoint takes the email's own bytes. A reply also needs its Gmail
 // conversation ID, which only a multipart upload can carry next to the bytes.
 
+import { randomBytes } from "node:crypto";
+import type { RawBody } from "./client";
+
+/** The upload endpoint that sends an email from its raw RFC 822 bytes. */
 export const GMAIL_UPLOAD_SEND = "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send";
 
 /** Uploads can be large and slow; allow far longer than an ordinary API call. */

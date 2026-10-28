@@ -1,3 +1,9 @@
+// Changing an event in iCloud: the event's file is read, its VEVENT rewritten with the same UID and a higher
+// SEQUENCE, and put back only if nobody changed it in between (If-Match with the etag it was read at). A change
+// to one occurrence of a repeating event is an override VEVENT with its own RECURRENCE-ID; a change to the whole
+// series edits the series' own VEVENT. Answering an invitation changes the PARTSTAT of your own ATTENDEE line,
+// which iCloud tells the organizer about. Pure, so it can be unit tested.
+
 import { allDayRange, validTimeZone } from "../calendar/create-event";
 import { ONLY_ORGANIZER, NOT_A_GUEST, seriesShift, wallMs, wallString, type Change, type ChangeTime, type SeriesShift } from "../calendar/update-event";
 import type { StoredCalendarEvent } from "../calendar/delete-event";
@@ -5,12 +11,6 @@ import { SERIES_RULE } from "../calendar/recurrence";
 import { fold } from "./create-event";
 import { exceptionLine } from "./delete-event";
 import { icsTimestamp, parseLine } from "./ical";
-
-// Changing an event in iCloud: the event's file is read, its VEVENT rewritten with the same UID and a higher
-// SEQUENCE, and put back only if nobody changed it in between (If-Match with the etag it was read at). A change
-// to one occurrence of a repeating event is an override VEVENT with its own RECURRENCE-ID; a change to the whole
-// series edits the series' own VEVENT. Answering an invitation changes the PARTSTAT of your own ATTENDEE line,
-// which iCloud tells the organizer about. Pure, so it can be unit tested.
 
 /** Text as iCalendar wants it: backslash, semicolon, comma and line breaks escaped. */
 export function escapeText(s: string): string {

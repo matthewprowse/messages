@@ -1,3 +1,6 @@
+// Tests for send/from-address.ts: choosing the From address (requested, then the one the sender was written to), refusing one the account
+// cannot send from, and cleaning and choosing reply recipients.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BAD_RECIPIENTS, FROM_NOT_ALLOWED, chooseFrom, cleanRecipients, fromCandidates, isEmailAddress, outgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";

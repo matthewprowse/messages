@@ -1,3 +1,6 @@
+// The team rule pass: matches members' recent chats against the shared client list and either shares them or suggests
+// sharing. The comment below the imports explains the rules and why it is a sweep.
+
 import type { TeamKeys } from "@messages/crypto";
 import { teamAddressIndex, teamDomainIndex } from "@messages/crypto/addresses";
 import { errorCode, log } from "../log";

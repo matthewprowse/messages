@@ -1,10 +1,10 @@
-import { db, must } from "../db";
-import { uploadObject } from "../storage";
-import { imageType } from "./site-icon";
-
 // Contact and group photos live in the private "avatars" bucket at <user id>/<contact id> (or
 // <user id>/thread-<thread id> for a WhatsApp group). Photos from your own address book (iCloud or Google
 // Contacts) win over WhatsApp profile pictures, which (and LinkedIn profile pictures) only fill in where there is none.
+
+import { db, must } from "../db";
+import { uploadObject } from "../storage";
+import { imageType } from "./site-icon";
 
 const BUCKET = "avatars";
 const MAX_BYTES = 2 * 1024 * 1024;

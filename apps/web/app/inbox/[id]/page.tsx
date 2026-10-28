@@ -1,5 +1,7 @@
 "use client";
 
+// An open conversation in the Inbox, by thread id.
+
 import { useParams } from "next/navigation";
 import { ThreadView } from "@/components/thread-view";
 

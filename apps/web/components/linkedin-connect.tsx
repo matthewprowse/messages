@@ -1,5 +1,7 @@
 "use client";
 
+// Connects LinkedIn by email and password in Settings, and handles the code or app approval LinkedIn may ask for.
+
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { track } from "@/lib/analytics";
@@ -158,7 +160,7 @@ export function LinkedInConnect() {
         {error && <FieldError>{error}</FieldError>}
         {step.canTryAnotherWay && (
           <div>
-            <Button variant="outline" disabled={busy || sent} onClick={() => void answer({ tryAnotherWay: true })}>Try Another Way</Button>
+            <Button variant="secondary" disabled={busy || sent} onClick={() => void answer({ tryAnotherWay: true })}>Try Another Way</Button>
           </div>
         )}
       </div>

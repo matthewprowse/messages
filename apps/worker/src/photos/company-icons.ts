@@ -1,14 +1,14 @@
-import { db, must } from "../db";
-import { uploadObject } from "../storage";
-import { errorCode, log } from "../log";
-import { siteIcon } from "./site-icon";
-import { openAddressRows } from "../vault";
-
 // Company logos, for the Companies list and for conversations with a company's senders: from each
 // company's own website (see site-icon.ts), framed alike (logo-image.ts) and saved as a PNG in the private
 // "avatars" bucket at <user id>/org-<organization id>. Each company is looked at again after a month, so a
 // new logo shows up and a site that had none gets another chance; a site that cannot be reached that day
 // keeps the logo it had.
+
+import { db, must } from "../db";
+import { uploadObject } from "../storage";
+import { errorCode, log } from "../log";
+import { siteIcon } from "./site-icon";
+import { openAddressRows } from "../vault";
 
 const RECHECK_MS = 30 * 24 * 60 * 60_000;
 const AT_ONCE = 4;

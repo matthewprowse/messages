@@ -1,3 +1,6 @@
+// Tests for caldav/create-event.ts. Pin down the iCalendar built from a calendar_outbox row (escaping, folding, all-day
+// dates, invites, rules), that ical.ts reads it back the same, and what each refusal says.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { CalendarOutboxRow } from "../calendar/create-event";

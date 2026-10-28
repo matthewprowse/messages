@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { supabase } from "./supabase";
-import { useAuth } from "./auth";
-
 // Cover, from the app's side (supabase/migrations/20261104100000_team_after_launch.sql). While a period is in force the covering
 // member reads the absent member's work chats as if they were assigned, and answers from their own account. It ends by itself
 // when its end passes (the database compares it with the clock, so nothing runs and nothing can be forgotten) or when someone
 // ends it early. Replying from the absent member's own number is not built.
+
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "./supabase";
+import { useAuth } from "./auth";
 
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";
 

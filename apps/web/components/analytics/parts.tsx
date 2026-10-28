@@ -1,13 +1,28 @@
 "use client";
 
+// Building blocks for the Analytics tabs: sections, tiles, tables, bars and the number, money and time formatters they share.
+
 import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
-import { SettingsSection } from "@/components/settings/sections";
 import type { Stat } from "@messages/analytics/stats";
 
-export { SettingsSection as Section };
+/** A titled block: a small heading, a muted line under it, then the content on a 12px rhythm. */
+export function Section({ title, description, children }: { title: React.ReactNode; description?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <div className="space-y-1">
+        <h2 className="text-sm font-medium">{title}</h2>
+        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** The sections of a tab: 12px apart, each after the first set off by a rule. */
+export const SECTIONS = "flex flex-col gap-3 [&>section+section]:border-t [&>section+section]:pt-3";
 
 const NAMES: Record<string, string> = {
   summary: "Summary",
@@ -39,12 +54,14 @@ export function nice(code: string): string {
 
 export const num = (n: number) => new Intl.NumberFormat("en-GB").format(Math.round(n * 10) / 10);
 export const percent = (n: number) => `${num(n)}%`;
+/** Dollars; under $1 keeps four decimals so a few cents of AI cost does not round to $0.00. */
 export const money = (usd: number) => (usd === 0 ? "$0.00" : usd < 1 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`);
 export function seconds(s: number) {
   if (s < 60) return `${Math.round(s)}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
   return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
 }
+/** Milliseconds, or seconds with one decimal from 1000 up. */
 export const ms = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`);
 /** 12400 as "12.4k", for token counts. */
 export const compact = (n: number) => new Intl.NumberFormat("en-GB", { notation: "compact", maximumFractionDigits: 1 }).format(n);
@@ -56,8 +73,10 @@ export function shortDay(iso: string): string {
 }
 
 /** The count first: "42 of 118", or "No Data" when there was nothing to count against. */
+/** "3 of 10", or "No Data" when the whole is zero. */
 export const of = (part: number, whole: number, fmt: (n: number) => string = num) => (whole === 0 ? "No Data" : `${fmt(part)} of ${fmt(whole)}`);
 /** The share as a percentage, 0 when there is nothing to count against. */
+/** Part as a percentage of the whole; 0 when the whole is zero. */
 export const share = (part: number, whole: number) => (whole === 0 ? 0 : (part / whole) * 100);
 
 /** Below this many in the period before, a percentage change swings too wildly to mean anything, so counts are shown. */
@@ -76,7 +95,7 @@ function change({ value, prev }: Stat, fmt?: (n: number) => string): string {
 /** A figure with its label. `stat` adds the change from the period before (give `fmt` when it is not a plain count). */
 export function Tile({ label, value, stat, note, fmt }: { label: string; value: string; stat?: Stat; note?: string; fmt?: (n: number) => string }) {
   return (
-    <div className="rounded-lg border p-4">
+    <div className="rounded-lg border p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 text-2xl font-medium tabular-nums">{value}</div>
       {(stat || note) && <div className="mt-1 text-xs text-muted-foreground">{stat ? change(stat, fmt) : note}</div>}
@@ -95,13 +114,13 @@ export function Tiles({ children, three }: { children: React.ReactNode; three?: 
 }
 
 export function Note({ children }: { children: React.ReactNode }) {
-  return <p className="rounded-lg border px-4 py-3 text-sm text-muted-foreground">{children}</p>;
+  return <p className="rounded-lg border p-3 text-xs text-muted-foreground">{children}</p>;
 }
 
 /** A whole tab with nothing to show. */
 export function EmptyState({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <Empty className="border">
+    <Empty className="border py-12">
       <EmptyHeader>
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{children}</EmptyDescription>
@@ -127,7 +146,7 @@ export function Table<T>({ cols, rows, empty = "No data yet.", max }: { cols: Co
         <thead>
           <tr className="border-b text-xs text-muted-foreground">
             {cols.map((c, i) => (
-              <th key={c.head} scope="col" className={cn("px-4 py-2 font-normal whitespace-nowrap", c.num ? "text-right" : "text-left", cls(c, i))}>{c.head}</th>
+              <th key={c.head} scope="col" className={cn("px-3 py-2 font-normal whitespace-nowrap", c.num ? "text-right" : "text-left", cls(c, i))}>{c.head}</th>
             ))}
           </tr>
         </thead>
@@ -135,7 +154,7 @@ export function Table<T>({ cols, rows, empty = "No data yet.", max }: { cols: Co
           {rows.slice(0, max ?? rows.length).map((r, i) => (
             <tr key={i}>
               {cols.map((c, j) => (
-                <td key={c.head} className={cn("px-4 py-2", c.num && "text-right tabular-nums", cls(c, j))}>{c.cell(r)}</td>
+                <td key={c.head} className={cn("px-3 py-2", c.num && "text-right tabular-nums", cls(c, j))}>{c.cell(r)}</td>
               ))}
             </tr>
           ))}
@@ -174,7 +193,7 @@ export function Bars({ data, format = num, label }: { data: { label: string; val
 
   if (data.length === 0 || data.every((d) => d.value === 0)) {
     return (
-      <div className="rounded-lg border p-4">
+      <div className="rounded-lg border p-3">
         <div className="mb-3 text-xs text-muted-foreground">{label}</div>
         <EmptyState title="No Data">Nothing was recorded for this period.</EmptyState>
       </div>
@@ -195,7 +214,7 @@ export function Bars({ data, format = num, label }: { data: { label: string; val
   };
 
   return (
-    <div className="rounded-lg border p-4">
+    <div className="rounded-lg border p-3">
       <div className="mb-3 flex h-5 items-center justify-between text-xs text-muted-foreground">
         <span>{label}</span>
         <span className="tabular-nums text-foreground" aria-live="polite">{shown ? `${shown.label}: ${format(shown.value)}` : ""}</span>
@@ -235,14 +254,10 @@ export function Bars({ data, format = num, label }: { data: { label: string; val
   );
 }
 
-/** What shows while the first load runs: the tabs, a row of tiles and a chart, so nothing jumps when it arrives. */
+/** What shows while the first load runs: a row of tiles and a chart, so nothing jumps when it arrives. */
 export function Loading() {
   return (
-    <div className="space-y-6" aria-busy="true" aria-label="Loading">
-      <div className="flex gap-1">
-        <Skeleton className="h-8 w-20 rounded-lg" />
-        <Skeleton className="h-8 w-20 rounded-lg" />
-      </div>
+    <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
       </div>

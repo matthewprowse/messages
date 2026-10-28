@@ -1,3 +1,6 @@
+// Tests for send/compose.ts: reply subjects and message IDs, threading headers, attachments after the text, Cc and Bcc handling,
+// and that line breaks in an address cannot inject a header. Messages are built, then parsed back.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildNewEmail, buildReply, newMessageId, replySubject } from "./compose";

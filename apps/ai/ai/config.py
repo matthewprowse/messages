@@ -34,7 +34,7 @@ class Config:
     company_logos: bool  # the shared company logo queue is worked on only when COMPANY_LOGOS is "true"
     encrypt_addresses: bool  # addresses are sealed unless ENCRYPT_ADDRESSES is "false"
     learn_model: str  # voice, edit and signal learning, and notes on people: the cheaper model unless LEARN_MODEL says otherwise
-    brief_model: str  # the brief script and follow-up chasers: the cheaper model unless BRIEF_MODEL says otherwise
+    brief_model: str  # the brief script: the cheaper model unless BRIEF_MODEL says otherwise
     predraft_model: str  # automatic pre-drafts: the cheaper model unless PREDRAFT_MODEL says otherwise
     transcribe_model: str  # meeting recordings: GEMINI_TRANSCRIBE_MODEL, else the full model (see meetings.py)
 

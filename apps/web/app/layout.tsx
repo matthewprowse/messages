@@ -1,3 +1,5 @@
+// Root layout: fonts, metadata and viewport, with the theme, auth and app providers and the AppShell around every page.
+
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";

@@ -1,3 +1,6 @@
+// Tests for linkedin/helper.ts against a fake transport: the JSON line protocol, error kinds, timeouts and
+// shutdown, sign-in commands, and how a proxy is passed to and vetted for the helper.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Helper, HelperError, helperEnv, vettedProxy, type HelperEvent, type Transport } from "./helper";

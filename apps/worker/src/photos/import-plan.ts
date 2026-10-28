@@ -1,7 +1,7 @@
-import { cardContacts, type Card } from "./cards";
-
 // Which address book cards to import, and as what. Pure, so it can be unit tested; src/photos/import.ts
 // does the database work.
+
+import { cardContacts, type Card } from "./cards";
 
 export type Identity = { contact_id: string; kind: string; value: string };
 export interface ImportRow {

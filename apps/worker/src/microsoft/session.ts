@@ -1,10 +1,3 @@
-import { db, must } from "../db";
-import { env } from "../env";
-import { credentialSealer } from "../vault";
-import { errorCode, log } from "../log";
-import { GraphClient, signInRevoked } from "./client";
-import { optionalGranted, type MicrosoftCredentials } from "./oauth";
-
 // How a Microsoft connector (Outlook, Outlook Calendar, Teams, To Do) starts a session and which failures stop it for good.
 //
 // Microsoft replaces the refresh token on every refresh, and each one expires 90 days after it was issued.
@@ -12,6 +5,13 @@ import { optionalGranted, type MicrosoftCredentials } from "./oauth";
 // "you signed in again" and restarts the connector, and a token refreshed every hour must not. Writes are
 // tied to the sign-in they came from (its updated_at), so a connector that is stopping cannot overwrite a
 // new sign-in with an older token.
+
+import { db, must } from "../db";
+import { env } from "../env";
+import { credentialSealer } from "../vault";
+import { errorCode, log } from "../log";
+import { GraphClient, signInRevoked } from "./client";
+import { optionalGranted, type MicrosoftCredentials } from "./oauth";
 
 /**
  * A client for this account's Microsoft sign-in, once it is known to grant every scope in `scopes`. Throws

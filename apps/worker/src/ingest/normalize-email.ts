@@ -1,7 +1,7 @@
+// Pure conversion of a parsed MIME message into the shape we store. No I/O, so it can be unit tested.
+
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
 import { hiddenReasonOf, type HiddenReason } from "./attachment-hidden";
-
-// Pure conversion of a parsed MIME message into the shape we store. No I/O, so it can be unit tested.
 
 export interface EmailAddress {
   address: string; // lowercase

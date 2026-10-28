@@ -1,6 +1,3 @@
-import { allRows, db, must } from "../src/db";
-import { credentialSealer } from "../src/vault";
-
 // One-off (docs/PLAN.md, Security and Cost Review, item 6): moves every connector sign-in and session from the old
 // static ENCRYPTION_KEY ("v1:") to the owner's own key ("v2:", derived from their data key, the account as additional
 // data; src/crypto.ts). Covers account_credentials (ciphertext and refreshed) and the WhatsApp session in
@@ -16,6 +13,9 @@ import { credentialSealer } from "../src/vault";
 // connector once within seconds, as a new sign-in does. Run it at a quiet time. Resealing `refreshed` and the
 // WhatsApp rows does not restart anything. Once a dry run reports 0 left, ENCRYPTION_KEY can be removed from the
 // worker, the AI worker and the web app, after the 10 minute OAuth cookies and sign-in codes in flight have passed.
+
+import { allRows, db, must } from "../src/db";
+import { credentialSealer } from "../src/vault";
 
 const apply = process.argv.includes("--apply");
 if (process.argv.some((a) => a.startsWith("--") && a !== "--apply" && a !== "--dry-run")) {

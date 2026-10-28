@@ -1,10 +1,10 @@
-import { moveAttachmentFile, type AttachmentRow, type ShareFiles } from "./files";
-import { moveMessage, moveMessageAi, moveThread, shareLabel, type Direction, type Keys, type LabelSource, type MessageAiRow, type MessageRow, type Move, type RowWrite, type ThreadRow } from "./reseal";
-
 // Works one share job: moves the rows of a chat between the agent's key and the team's (reseal.ts has the per-row
 // rules). It reads the rows that still need moving a page at a time, writes each page with the old values it read,
 // and goes round again until a pass finds nothing, so it can be stopped at any point and run again, and a message that
 // arrives while it works is either picked up by the next pass or by the follow-up job that arrival queued.
+
+import { moveAttachmentFile, type AttachmentRow, type ShareFiles } from "./files";
+import { moveMessage, moveMessageAi, moveThread, shareLabel, type Direction, type Keys, type LabelSource, type MessageAiRow, type MessageRow, type Move, type RowWrite, type ThreadRow } from "./reseal";
 
 export type ShareTable = "messages" | "message_ai" | "attachments";
 

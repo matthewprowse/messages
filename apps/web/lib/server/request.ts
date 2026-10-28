@@ -1,8 +1,8 @@
-import { createClient, type User } from "@supabase/supabase-js";
-import type { Database } from "@messages/db";
-
 // What the server routes share: the service-role client, who is asking, where from, and how often.
 // Server only: nothing here may be imported by a page.
+
+import { createClient, type User } from "@supabase/supabase-js";
+import type { Database } from "@messages/db";
 
 const url = process.env.SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -29,6 +29,8 @@ export function appHost(request: Request): string {
 
 /** This app's origin as the browser sees it, e.g. https://app.example.com. */
 export function appOrigin(request: Request): string {
+  const fixed = process.env.APP_URL?.trim().replace(/\/+$/, "");
+  if (fixed && /^https?:\/\/[^/]+$/.test(fixed)) return fixed;
   const proto = request.headers.get("x-forwarded-proto") ?? new URL(request.url).protocol.replace(":", "");
   return `${proto}://${appHost(request)}`;
 }
@@ -72,6 +74,8 @@ interface LimiterOptions {
   name?: string;
   /** When the database call fails, count in this instance's memory instead of refusing. Off by default: a failed check refuses the request. Only for public, low-risk routes. */
   fallbackToMemory?: boolean;
+  /** Also count per client address, with this limit in the same window, when the call passes the request. Stops many accounts from one address using a route as a relay. */
+  perAddress?: number;
 }
 
 /**
@@ -82,20 +86,49 @@ interface LimiterOptions {
  */
 export function limiter(limit: number, windowMs: number, options: LimiterOptions = {}) {
   const memory = memoryLimiter(limit, windowMs);
+  const addressMemory = memoryLimiter(options.perAddress ?? limit, windowMs);
   const seconds = Math.max(1, Math.round(windowMs / 1000));
   const name = options.name ?? `${limit}/${seconds}`;
-  return async (id: string): Promise<number> => {
-    const key = `${name}:${id}`.slice(0, 200);
+  const hit = async (key: string, max: number, inMemory: (key: string) => number): Promise<number> => {
     try {
       if (!admin) throw new Error("no database client");
       const rpc = admin.rpc as unknown as (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
-      const { data, error } = await rpc.call(admin, "rate_limit_hit", { p_key: key, p_limit: limit, p_window_seconds: seconds });
+      const { data, error } = await rpc.call(admin, "rate_limit_hit", { p_key: key, p_limit: max, p_window_seconds: seconds });
       if (error || typeof data !== "number") throw new Error("rate limit call failed");
       return data;
     } catch {
-      return options.fallbackToMemory ? memory(key) : 60;
+      return options.fallbackToMemory ? inMemory(key) : 60;
     }
   };
+  return async (id: string, request?: Request): Promise<number> => {
+    const byUser = await hit(`${name}:${id}`.slice(0, 200), limit, memory);
+    if (!request || !options.perAddress) return byUser;
+    const address = clientAddress(request);
+    if (address === "unknown") return byUser;
+    const byAddress = await hit(`${name}:ip:${address}`.slice(0, 200), options.perAddress, addressMemory);
+    return Math.max(byUser, byAddress);
+  };
+}
+
+const MAX_BODY = 16 * 1024;
+
+/** The JSON object in a request body, or null when it is missing, too big (over 16 KB), not JSON or not an object. */
+export async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const text = await request.text();
+    if (text.length > MAX_BODY) return null;
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A string field of a parsed body: the string, "" when it is missing, or null when it is there but not a string. */
+export function textField(body: Record<string, unknown>, key: string): string | null {
+  const value = body[key];
+  if (value === undefined) return "";
+  return typeof value === "string" ? value : null;
 }
 
 export function fail(status: number, error: string, headers: Record<string, string> = {}) {

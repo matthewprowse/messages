@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": ["apps/web/**", "apps/worker/**", "packages/**", "!**/node_modules", "!**/.next", "!**/database.types.ts", "!**/components/ui/**", "!**/*.css"]
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": false,
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "noUnusedFunctionParameters": "off",
+        "noChildrenProp": "off",
+        "useHookAtTopLevel": "off",
+        "noUndeclaredVariables": "off",
+        "useExhaustiveDependencies": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "noShadowRestrictedNames": "off",
+        "noImplicitAnyLet": "error",
+        "noDebugger": "error",
+        "noDuplicateObjectKeys": "error",
+        "noDoubleEquals": "error",
+        "noThenProperty": "off"
+      },
+      "complexity": { "noUselessFragments": "off" }
+    }
+  }
+}

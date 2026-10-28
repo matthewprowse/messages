@@ -1,3 +1,6 @@
+// Tests for calendar/sync-diff.ts. Pin down that an unchanged event is not written again and that new or changed
+// fields (including notes, link and series) count as a change.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { eventChanged, type StoredEvent } from "./sync-diff";

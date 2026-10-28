@@ -1,3 +1,9 @@
+// The always-on sync worker. Every 30 seconds it reconciles running connectors with the accounts table:
+// new accounts start, disconnected ones stop, and accounts with fresh credentials restart. Work queued
+// in the app (replies and new emails, mail actions, unsubscribes, calendar events, ticked tasks) arrives through
+// Realtime and a poll, and is handed to the account's connector. Alongside run photo sync, the contact
+// linker, and a daily cleanup of files sent with old outbox rows.
+
 import { db, must } from "./db";
 import { log, errorCode } from "./log";
 import { ICloudConnector } from "./connectors/icloud";
@@ -16,9 +22,6 @@ import { ICloudCalendarConnector } from "./connectors/icloud-calendar";
 import { GoogleTasksConnector } from "./connectors/google-tasks";
 import { MicrosoftTodoConnector } from "./connectors/microsoft-todo";
 import { TeamsConnector } from "./connectors/teams";
-import { ICloudRemindersConnector, relayAccount } from "./connectors/icloud-reminders";
-import { startRelayServer } from "./reminders/server";
-import { env } from "./env";
 import { GoogleMeetConnector } from "./connectors/google-meet";
 import { ZoomConnector } from "./connectors/zoom";
 import { LinkedInConnector } from "./connectors/linkedin";
@@ -36,18 +39,13 @@ import { startUsageRollup } from "./usage-rollup";
 import type { Json, Tables } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { openAddressRows, seal } from "./vault";
-import { failInterrupted, type OutboxRow } from "./send/outbox";
+import { failInterrupted, failStuckSend, type OutboxRow } from "./send/outbox";
+import { stillQueued } from "./send/actions";
 import { startOutboxCleanup, withAttachmentSlot } from "./send/outbox-attachments";
 import {
   NOT_SUPPORTED_TICK, NOT_SUPPORTED_WRITE, TASK_GONE, accountsById, accountsOfTasks, claimTaskUpdate, failInterruptedTaskUpdates, failTaskUpdates, finishTaskUpdate, planTaskUpdates, queuedTaskUpdates,
   isTaskWriteAction, queuedTaskUpdateById, queuedTaskUpdatesFor, supersedeTaskUpdates, taskAccountProblem, taskFailure, taskKey, usersWithReminders, type TaskUpdateRow,
 } from "./tasks";
-
-// The always-on sync worker. Every 30 seconds it reconciles running connectors with the accounts table:
-// new accounts start, disconnected ones stop, and accounts with fresh credentials restart. Work queued
-// in the app (replies and new emails, mail actions, unsubscribes, calendar events, ticked tasks) arrives through
-// Realtime and a poll, and is handed to the account's connector. Alongside run photo sync, the contact
-// linker, and a daily cleanup of files sent with old outbox rows.
 
 const RECONCILE_MS = 30_000;
 const ACCOUNT_SETTLE_MS = 1500;
@@ -90,7 +88,6 @@ const CONNECTORS: Record<string, (account: AccountRow) => Connector> = {
   google_tasks: (account) => new GoogleTasksConnector(account),
   microsoft_todo: (account) => new MicrosoftTodoConnector(account),
   teams: (account) => new TeamsConnector(account),
-  icloud_reminders: (account) => new ICloudRemindersConnector(account),
   google_meet: (account) => new GoogleMeetConnector(account),
   zoom: (account) => new ZoomConnector(account),
   linkedin: (account) => new LinkedInConnector(account),
@@ -206,6 +203,9 @@ async function dispatchOnce(id: string, prepare: () => Promise<(() => Promise<vo
   let work: (() => Promise<void>) | null = null;
   try {
     work = await prepare();
+  } catch (err) {
+    // One row that fails to prepare must not abort the rest of the batch.
+    onError(err);
   } finally {
     if (!work) dispatching.delete(id);
   }
@@ -272,7 +272,10 @@ async function dispatchOutbox(rows?: QueuedOutbox[]) {
         const send = connector.send.bind(connector);
         return () => withAttachmentSlot(row, () => send(row));
       },
-      (err) => log.error("send failed", { outbox: row.id, code: errorCode(err) }),
+      (err) => {
+        log.error("send failed", { outbox: row.id, code: errorCode(err) });
+        void failStuckSend(row.id);
+      },
     );
   }
 }
@@ -308,7 +311,9 @@ async function dispatchMailActions(rows?: QueuedAction[]) {
         const connector = accountId ? running.get(accountId)?.connector : undefined;
         if (!connector?.applyAction) return null;
         const apply = connector.applyAction.bind(connector);
-        return () => apply(row);
+        return async () => {
+          if (await stillQueued(row.id)) await apply(row);
+        };
       },
       (err) => log.error("mail action failed", { code: errorCode(err) }),
     );
@@ -607,9 +612,6 @@ async function main() {
       .eq("status", "working")
       .then((result) => must(result, "fail interrupted unsubscribes")),
   ]);
-  // iCloud Reminders arrive from Konva Relay on the user's Mac, which needs somewhere to reach. A port in use
-  // leaves only that off.
-  if (env.relayPort) await startRelayServer({ port: env.relayPort, host: env.relayHost, find: relayAccount }).catch((err) => log.error("reminders relay failed to start", { code: errorCode(err) }));
   await reconcile();
   watchAccounts();
   watchQueues();

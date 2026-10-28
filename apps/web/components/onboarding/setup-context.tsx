@@ -1,13 +1,13 @@
 "use client";
 
+// What the setup dialog's steps share: who you are so far, the first import, and moving between steps.
+
 import { createContext, useContext } from "react";
 import { CircleCheck, RefreshCw } from "lucide-react";
 import type { SetupStep } from "@/lib/onboarding";
 import type { ImportCounts, Role } from "@/lib/onboarding-demo";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-
-// What the setup dialog's steps share: who you are so far, the first import, and moving between steps.
 
 export interface SetupState {
   step: SetupStep;

@@ -1,13 +1,16 @@
 "use client";
 
+// Admin view of AI spend per account: month, week and day in dollars, calls, a share of the budget and a flag when an account stands out.
+// Loaded from Supabase; shows cost figures only, never message content.
+
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Gauge } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { Table, type Col } from "@/components/analytics/parts";
+import { EmptyState } from "@/components/primitives";
+import { AdminHeading, AdminRow } from "@/components/admin/parts";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SettingsSection } from "@/components/settings/sections";
 
 type Row = {
   user_id: string;
@@ -32,56 +35,58 @@ const PROVIDER_LABEL: Record<string, string> = {
 const money = (usd: number) => (usd === 0 ? "$0.00" : usd < 1 ? `$${usd.toFixed(3)}` : `$${usd.toFixed(2)}`);
 
 /** What each person has used this month, in dollars, for the owner. Flagged accounts are marked; a flag blocks nothing. */
-export function AiUsage() {
+export function AiUsage({ version, onBusy }: { version: number; onBusy: (busy: boolean) => void }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    setBusy(true);
+    onBusy(true);
     setFailed(false);
     const { data, error } = await supabase.rpc("ai_usage_by_user");
     if (error) setFailed(true);
     else setRows((data ?? []) as unknown as Row[]);
-    setBusy(false);
-  }, []);
-  useEffect(() => { void load(); }, [load]);
-
-  const cols: Col<Row>[] = [
-    {
-      head: "Sign-In",
-      cell: (r) => (
-        <div>
-          <span className="whitespace-nowrap">{r.email ?? r.user_id.slice(0, 8)}{r.flag && <Badge variant="destructive" className="ml-2">{r.flag}</Badge>}</span>
-          <div className="text-xs text-muted-foreground">{r.accounts.length > 0 ? r.accounts.map((p) => PROVIDER_LABEL[p] ?? p).join(", ") : "No accounts connected"}</div>
-        </div>
-      ),
-    },
-    { head: "This Month", cell: (r) => <span>{money(r.month_usd)} <span className="text-xs text-muted-foreground">{Math.round(r.month_pct)}%</span></span>, num: true },
-    { head: "This Week", cell: (r) => money(r.week_usd), num: true, wide: true },
-    { head: "Today", cell: (r) => money(r.day_usd), num: true, wide: true },
-    { head: "Setup", cell: (r) => money(r.setup_usd), num: true, wide: true },
-    { head: "Calls", cell: (r) => r.calls.toLocaleString(), num: true, wide: true },
-    {
-      head: "By Feature",
-      wide: true,
-      cell: (r) => (
-        <span className="text-xs text-muted-foreground">
-          {Object.entries(r.by_feature).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${FEATURE_LABEL[k] ?? k} ${money(v)}`).join(", ")}
-        </span>
-      ),
-    },
-  ];
+    onBusy(false);
+  }, [onBusy]);
+  useEffect(() => { void load(); }, [load, version]);
 
   return (
-    <SettingsSection
-      title="AI Usage by Person"
-      description="What each person has used this month in dollars. This month and this week leave out setup work, which is shown separately. Flagged accounts passed the amounts set under AI Budget; nothing is blocked automatically."
-    >
-      <div className="flex justify-end">
-        <Button variant="outline" size="icon" aria-label="Refresh AI usage" disabled={busy} onClick={() => void load()}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>
-      </div>
-      {failed ? <p className="text-sm text-muted-foreground">Could not load. Check your connection and refresh.</p> : rows === null ? <Skeleton className="h-32 w-full rounded-lg" /> : <Table cols={cols} rows={rows} empty="No AI use this month yet." />}
-    </SettingsSection>
+    <div className="flex flex-col gap-3">
+      <AdminHeading
+        title="AI Usage by Person"
+        description="What each person has used this month in dollars. This month and this week leave out setup work, which is shown separately. Flagged accounts passed the amounts set under AI Budget; nothing is blocked automatically."
+      />
+      {failed ? (
+        <EmptyState icon={Gauge} title="Could Not Load AI Usage" description="Check your connection and refresh." />
+      ) : rows === null ? (
+        <div className="flex flex-col gap-3"><Skeleton className="h-16 w-full rounded-lg" /><Skeleton className="h-16 w-full rounded-lg" /></div>
+      ) : rows.length === 0 ? (
+        <div className="py-12"><EmptyState icon={Gauge} title="No AI Use Yet" description="No AI use this month yet." /></div>
+      ) : (
+        <div>
+          {rows.map((r, i) => {
+            const features = Object.entries(r.by_feature).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${FEATURE_LABEL[k] ?? k} ${money(v)}`).join(", ");
+            return (
+              <div key={r.user_id}>
+                {i > 0 && <Separator className="ml-3" />}
+                <AdminRow
+                  title={<>{r.email ?? r.user_id.slice(0, 8)}{r.flag && <Badge variant="destructive">{r.flag}</Badge>}</>}
+                  description={
+                    <>
+                      <div>{r.accounts.length > 0 ? r.accounts.map((p) => PROVIDER_LABEL[p] ?? p).join(", ") : "No accounts connected"}</div>
+                      <div>Week {money(r.week_usd)}, Today {money(r.day_usd)}, Setup {money(r.setup_usd)}, {r.calls.toLocaleString()} Calls{features ? `, ${features}` : ""}</div>
+                    </>
+                  }
+                >
+                  <div className="text-right">
+                    <div className="text-sm font-medium tabular-nums">{money(r.month_usd)}</div>
+                    <div className="text-xs text-muted-foreground tabular-nums">{Math.round(r.month_pct)}% This Month</div>
+                  </div>
+                </AdminRow>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

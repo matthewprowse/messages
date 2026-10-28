@@ -1,3 +1,9 @@
+// Every 15 minutes, and once at startup, finds contacts that are one person. Certain ones are merged
+// (merge_contacts with p_automatic, one at a time, each pair checked again just before), likely ones are
+// saved as suggestions for a one-click merge. See match.ts for the rules.
+//
+// CONTACT_AUTOMERGE=0 turns automatic merging off: certain pairs are then suggested instead.
+
 import type { Json } from "@messages/db";
 import { startEvery } from "../backoff";
 import { allRows, db, must } from "../db";
@@ -9,12 +15,6 @@ import { ownIdentities } from "./own";
 import { signaturePhones } from "./signature-phones";
 import { FIELD } from "@messages/crypto/fields";
 import { open, openAddresses } from "../vault";
-
-// Every 15 minutes, and once at startup, finds contacts that are one person. Certain ones are merged
-// (merge_contacts with p_automatic, one at a time, each pair checked again just before), likely ones are
-// saved as suggestions for a one-click merge. See match.ts for the rules.
-//
-// CONTACT_AUTOMERGE=0 turns automatic merging off: certain pairs are then suggested instead.
 
 const FIRST_RUN_MS = 45_000;
 const EVERY_MS = 15 * 60_000;

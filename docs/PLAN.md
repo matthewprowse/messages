@@ -460,43 +460,17 @@ meeting, speech and regenerate calls, the allowance line in Usage, the abuse fla
 3. Should meeting recordings count against the same allowance, or have their own (say 10 hours a month)?
 4. Should the allowance show in dollars, or only as a percentage?
 
-## Marketing Page
+## Admin and the Waitlist
 
-The marketing page lives at `/` in the web app (`apps/web/app/page.tsx`) and is public. Decided 26
-October 2026: start with a basic page whose only goal is waitlist sign-ups, and refine it over the
-coming months. Konva is invite only until then.
-
-The page has five sections, each modelled on a Mobbin reference:
-
-1. Hero (ISO Meet): "Every Client Conversation, in One Place" with the request form.
-2. Works With (Slack): WhatsApp, Gmail, Outlook, iCloud Mail, Google Calendar.
-3. Three feature cards with a small picture of the product (Extra): sorted by client, Needs Reply,
-   drafts in your voice.
-4. Privacy (Campsite and Grain): three claims that are true today, from Where It Stands below.
-5. Final call to action with the request form again (Base), then a small footer.
-
-The request form asks either for a team (company, team size and work email) or for an individual
-(email only). Requests go to `/api/waitlist`, which saves them in the `waitlist` table with the service
-role. Joining twice with one email keeps the first request.
+There is no marketing page. It was removed on 28 October 2026: `/` now redirects to `/inbox`, and anyone
+not signed in goes on to `/login`. The waitlist signup form and `/api/waitlist` went with it, so the
+`waitlist` table has no code that writes to it for now (the table and its migration stay, and `/admin`
+still reads it). A landing page and a signup form can come back when there is something to launch.
 
 `/admin` is owner only, like Analytics, and sits above Settings in the navigation. It lists requests
 by status (Pending, Approved, Rejected), filters teams and individuals, and approves or rejects with
 Undo. The database lets only the owner read or change requests. Approving a team request also makes its
 team (see Teams) and shows an invite link for its owner, and Teams lists each team with its seats.
-
-Next:
-
-- Resend: a confirmation email on joining and an approval email with a link to `/login`. Needs the
-  sending domain verified.
-- Only approved emails can create an account: a Supabase "before user created" auth hook, so it covers
-  Google and the emailed code alike. Existing accounts are unaffected.
-- Rejecting sends nothing.
-- Privacy Policy and Terms pages, linked from the form and footer. POPIA needs the first before the
-  form collects real details, and Google verification for Gmail needs both.
-- Later, as the page is refined: pricing, FAQ (including plainly that WhatsApp is an unofficial
-  connection), real product screenshots.
-- Copy against what is built: the client timeline is still To Do, so "sorted by client" and the first
-  feature card describe where Konva is going, and the privacy claims must stay within Where It Stands.
 
 ## MVP
 
@@ -914,8 +888,8 @@ tasks scope, same Google sign-in) and iCloud Reminders sync into one tasks table
   page: app-specific passwords do not work here, the user signs in again about once a month, and the
   session reaches the whole iCloud account, so Konva only ever calls Reminders and keeps the session
   encrypted. With Advanced Data Protection on, the user first turns on Access iCloud Data on the Web
-  and approves a prompt on their device. The Mac relay (apps/mac-relay) leaves the user's path; the
-  code stays until the owner decides.
+  and approves a prompt on their device. The Mac relay (apps/mac-relay) was removed on 2026-10-28, along with
+  the worker's relay endpoint and connector.
 
 ### Notes
 
@@ -1088,6 +1062,56 @@ How it works:
   service, this moves into Confidential Space with the workers.
 - Brand logos (Google, Microsoft, iCloud, WhatsApp, Gmail, Outlook) are small SVG files in
   `apps/web/public/logos`, from the official artwork, with no icon package.
+
+#### Onboarding Flow: the /onboarding Page (28 October 2026)
+
+A page of its own for joining, as a mock for now (`app/onboarding/page.tsx`, `components/onboarding/flow.tsx`).
+It is one dialog on a `bg-secondary` page with nothing else on it: no close button, Escape and clicking outside
+do nothing, so the only way out is through. It sits outside the app shell (no navigation, no sign-in
+redirect) and everything on it is mock data that is saved nowhere.
+
+Goal: from signing up to a useful Summary page in about three minutes, with every question either answered by
+the import or skippable.
+
+Six steps, each one screen (a Voice step was dropped on 28 October: Konva learns tone, length and sign-off
+from sent mail and from the edits people make, so asking up front added a step without adding accuracy):
+
+1. Welcome (join): no intro text. Continue With Google, Microsoft or Apple, or a name and email address with
+   a code. A Set Up a Passkey switch lets someone sign in with Face ID, Touch ID or a device PIN, so no code
+   is emailed each time. Mock for now: Microsoft and Apple sign-in and the passkey are still to build.
+2. Connect: Google, WhatsApp (QR code inline), iCloud, Microsoft. "Do This Later" shows only while nothing is
+   connected. "Skip, Do Later" shows only while nothing is connected. The first connection starts the import,
+   which keeps running behind every later step, shown as "Processing" beside the step count.
+3. About You: photo, what you do, anything else Konva should know. All optional.
+4. What Konva Found: the totals, shown within seconds (for example 10,000 emails), with an honest estimate
+   of how long reading them all takes (for example about 30 minutes). Nobody waits: Continue is always on,
+   the last 30 days are processed first so Summary and Inbox are useful in minutes, and Konva notifies them
+   when the rest is done and its profile (About You, How You Write, Who Matters Most) is ready to review in
+   Settings.
+5. Daily Brief: the brief time, spoken or not, and which notifications to get (urgent, midday digest).
+6. Ready: what was set up in plain lines, then Show Me Around (the tour) or Start Using Konva.
+
+Rules for every step:
+
+- Back is always at the far left, except on the first step. Nothing is lost going back. There is no
+  coloured footer bar: just the buttons.
+- One decision per screen. Defaults are already the likely answer, so Continue is always enough.
+- Without an account, step 4 says nothing is connected, and step 7 says what is missing.
+- No dashes in the copy and Title Case on labels, as everywhere else.
+
+Mock versus real, so that making it real touches only the data:
+
+| Step | Mock now | Real later |
+| --- | --- | --- |
+| Welcome | Google button fills a sample name and email | `/login` sign-up, then this page opens once per new user |
+| Connect | A timer marks the account connected | The existing `/api/connect/*` routes and WhatsApp link panel |
+| Found | Fixed totals that count up in 2.5 seconds | Provider totals read at connect time (Gmail reports its message count at once) and a time estimate from the workers' measured pace; the first profile is written when processing ends |
+| Brief | Local state | Profile and notification settings |
+
+To finish: send new users here from sign-up, save the step in the sign-in's `onboarding` metadata so it
+resumes on any device, record `onboarding_step` events, replace the two in-app flows (setup dialog and
+tour hand-off) with this one, and move Tidy Up Your Contacts and Try a Reply in as optional steps once the
+contact linker and drafting are connected. Estimated at one to two days of Claude-built work.
 
 To set up before it works for someone new: a Web application client in Google Cloud with the redirect URI
 `<origin>/api/connect/google/callback`, the same client as the Google provider in Supabase Auth, `/login`
@@ -1875,6 +1899,23 @@ After Confidential Space (privacy stage 4), so the server never runs anywhere it
 the data. A prototype limited to the owner's own account can come earlier, on the same footing as the
 workers today.
 
+## Engineering Setup
+
+Decided 28 October 2026, so the codebase stays easy to change by one person and by coding agents.
+
+- **Guides for agents.** `AGENTS.md` at the root (with `CLAUDE.md` pointing to it) maps the repo, lists the commands and the
+  owner's rules. Each of `apps/web`, `apps/worker`, `apps/ai` and `packages` has its own short `AGENTS.md`.
+  `docs/CONVENTIONS.md` is the one place for comment, file and naming rules.
+- **Comments.** Every source file starts with a header comment saying what it is for; `scripts/check-headers.mjs` enforces
+  it as part of `pnpm lint`. Comments explain why, not what.
+- **Checks.** Biome lints web, worker and packages for correctness only; the formatter stays off because the code is
+  hand-formatted and a rewrite would touch 400 files. `pnpm check` runs lint, typecheck, every TypeScript test suite and
+  the Python tests. GitHub Actions runs the same on every push and pull request.
+- **File size.** About 400 lines is the aim and 600 the limit. `lib/store.tsx` and the calendar page were split into
+  `lib/app-store/` and `components/calendar/` on this basis. The provider in `lib/store.tsx` is still the largest file and
+  the next candidate (its mail actions, tasks and contact merging can each become a hook).
+- **Tests.** The web app's `lib` tests now run with `pnpm test` (they were not wired in before).
+
 ## Later
 
 | Integration | Approach | Official |
@@ -2050,6 +2091,53 @@ These take calendar time no matter how fast the code is written, so start them e
   when a session is used from somewhere new or acts like a bot, sometimes until ID is verified.
 - iCloud Reminders through iCloud.com's private endpoints is unofficial: Apple can change them at any
   time, and repeated sign-ins can trigger an Apple account lock.
+
+## App Shell, Navigation and Changelog (28 October 2026)
+
+Decisions made while building the screens, so later work follows them:
+
+- **One header pattern.** Every list or page screen is built from `components/pane.tsx`, copied from the Inbox: a title row
+  (h-8, at most one action on the right), one row of controls (views as text buttons, a small select), then the search in its
+  own band. Buttons, selects and inputs are h-8. No outline buttons (date pickers are the one exception); the main action is
+  secondary, quiet actions are ghost. Dialogs have an X, Cancel is ghost, the main action is secondary.
+- **Mobile bottom bar.** Summary, Calendar, Inbox, Contacts and More. More is its own screen (`/more`): New Email, WhatsApp,
+  LinkedIn and Instagram messages, New Event and New Task, then Notes and Attachments, then Analytics, Updates and Admin for the
+  owner, then Settings.
+- **Connected Accounts shows one row per sign-in.** Google (Gmail, Calendar, Tasks), Microsoft (Outlook, Calendar, To Do,
+  Teams) and iCloud (Mail, Calendar, Reminders) are each one row. The workers still keep one account row per part. A name can be
+  given to a sign-in; it shows beside the logo only once there are two of a service.
+- **Tasks can be created, edited and deleted from the Calendar** for Google Tasks, Microsoft To Do and iCloud Reminders, through
+  the same `task_updates` queue as a tick (the title and notes are sealed in the browser). Every task needs a due date, because
+  the Calendar draws tasks on their day.
+- **Notes export to PDF** in the browser (`lib/pdf-writer.ts`, `lib/note-pdf.ts`): styled text, lists, check boxes, tables, code
+  and pictures. The file downloads and is saved in the note.
+- **Profile Photo.** A photo in Settings, General is used for "You" (`profiles.avatar_path`, stored at `<user id>/me`).
+- **Seen on Instagram and LinkedIn.** Their conversations show "Seen" under your last seen message; WhatsApp keeps its ticks.
+- **Updates page (owner only for now).** `public.updates` is the changelog. Record each release as a draft before pushing; mark it
+  Published when it is ready to show. Making it public later is one extra read policy.
+
+## Private Test Checklist (28 October 2026)
+
+Where the product stands: the core screens and every connector are built, but most of it has only been run by the owner, on
+the owner's Mac. A test with 5 to 10 trusted people is about 2 to 3 weeks of Claude build time away. A wider test with South African
+professionals is a few months away, because of the approvals above.
+
+Before the private test:
+
+1. **Save the work.** Commit often (a version per release) and record each release as a draft on the owner-only Updates page.
+2. **Walk every screen once, signed in, at phone and desktop width,** on real accounts. Most work so far was checked only with
+   fakes or at phone width.
+3. **Host it.** The web app and the workers (sync, AI, Instagram, iCloud Reminders) need an always-on machine with logs and an
+   alert when one stops. Today they run in terminals on one Mac and stop when it sleeps.
+4. **Sign-in limits.** Gmail is a restricted Google scope: until the security review is done, testers must be added as test users
+   (up to 100) and will see the "unverified app" warning. Microsoft and Meta have similar rules.
+5. **Say plainly which connections are risky.** WhatsApp, LinkedIn, Instagram (personal) and iCloud Reminders use unofficial
+   routes. Label them experimental, explain the account risk, and give each a switch to turn it off.
+6. **First-run walkthrough** that shows the value (drafts, AI profile, merges) and handles a failed or slow connection.
+7. **Privacy page** in plain words: what is stored, what is sealed, what the AI sees.
+8. **Backups and a way to delete an account** and all its data.
+
+Core for the test: email, WhatsApp, calendar and tasks. Instagram and LinkedIn are labelled experimental.
 
 ## Timeline
 

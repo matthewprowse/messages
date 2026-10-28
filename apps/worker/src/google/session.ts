@@ -1,9 +1,9 @@
+// How a Google connector (Gmail, Calendar) starts a session and which failures stop it for good.
+
 import { loadCredentials } from "../db";
 import { env } from "../env";
 import { GoogleClient, signInRevoked } from "./client";
 import type { GoogleCredentials } from "./oauth";
-
-// How a Google connector (Gmail, Calendar) starts a session and which failures stop it for good.
 
 /**
  * A client for this account's Google sign-in, once it is known to grant `scope`. Throws NO_CLIENT when the

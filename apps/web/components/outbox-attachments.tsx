@@ -1,5 +1,8 @@
 "use client";
 
+// Files attached to an outgoing message: the hook that holds, checks and uploads them, the paperclip button and the chips that list them.
+// Nothing uploads until Send.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { File as FileIcon, Paperclip, Pause, Play, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";

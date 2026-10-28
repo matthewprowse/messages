@@ -1,7 +1,7 @@
-import { db } from "./db";
-
 // Files the worker keeps in Supabase Storage: attachments and avatars. One list of what a browser may
 // show inline, and one way to upload and to describe a storage failure.
+
+import { db } from "./db";
 
 // Types a browser can show without running anything. Everything else is stored as a plain download.
 const INLINE_TYPES = /^(image\/(png|jpe?g|gif|webp|heic|heif|avif|bmp)|application\/pdf|video\/(mp4|quicktime|webm|3gpp)|audio\/[\w.+-]+|text\/plain)$/i;

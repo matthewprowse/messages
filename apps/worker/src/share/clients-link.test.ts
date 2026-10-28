@@ -1,12 +1,12 @@
+// Linking a shared chat to the clients in it (public.link_thread_clients), which is how a compliance export finds a client's
+// chats. Synthetic people only.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { teamAddressIndex } from "@messages/crypto/addresses";
 import { fillClients } from "./clients";
 import { AGENT, contact, FakeClients, WS, world } from "./fixtures";
 import type { ThreadRow } from "./reseal";
-
-// Linking a shared chat to the clients in it (public.link_thread_clients), which is how a compliance export finds a client's
-// chats. Synthetic people only.
 
 const T = "thread-1";
 const thread = (over: Partial<ThreadRow> = {}) => ({ id: T, user_id: AGENT, workspace_id: WS, is_group: false, ...over });

@@ -1,3 +1,6 @@
+// Tasks layer shared by the Microsoft To Do, Google Tasks and iCloud Reminders connectors: storing tasks and
+// working the queue of ticks made in the app. The long contract comment below spells out the tables and rules.
+
 import type { AccountRow } from "../db";
 import { db, must, recordEvent, retryWrite } from "../db";
 import { log } from "../log";
@@ -56,8 +59,8 @@ export * from "./rows";
 //   - update carries the whole wanted state; the connector writes it to the provider, clearing what is null,
 //     and to the tasks row. delete removes the provider's task (already gone is success) and the tasks row.
 //   - Unlike ticks, these are never superseded: each is made, oldest first, one at a time per task.
-//   - A connector without the handler fails the row as not supported. The iCloud Reminders connector, for an
-//     account signed in on the web, leaves them to the AI worker as it does ticks, and waits for it to settle.
+//   - A connector without the handler fails the row as not supported. iCloud Reminders has no connector here:
+//     the AI worker's connector makes these changes, as it does ticks, and settles the row.
 // ---------------------------------------------------------------------------------------------------------
 
 /** Rows stored in one request. */

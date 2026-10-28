@@ -1,3 +1,5 @@
+// Web app manifest, so Konva can be installed as a standalone app from the browser.
+
 import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {

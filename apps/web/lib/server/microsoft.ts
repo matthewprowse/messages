@@ -1,9 +1,9 @@
-import { createHash, randomBytes } from "node:crypto";
-
 // Microsoft sign-in for connecting Outlook, Outlook Calendar, Microsoft To Do and Teams from the app, with plain
 // HTTPS calls like the worker's apps/worker/src/microsoft/oauth.ts, which this mirrors: the scopes, the sign-in
 // address and the stored credentials must stay the same. The app is a public client (PKCE, no secret), so only
 // MICROSOFT_CLIENT_ID is needed, the same value as in apps/worker/.env.
+
+import { createHash, randomBytes } from "node:crypto";
 
 export const clientId = process.env.MICROSOFT_CLIENT_ID ?? "";
 

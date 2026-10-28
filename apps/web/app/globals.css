@@ -227,7 +227,8 @@
 .note-content .selectedCell::after { @apply pointer-events-none absolute inset-0 bg-primary/10 content-['']; }
 .note-content img { @apply max-w-full rounded-lg; }
 .note-content p.is-editor-empty:first-child::before { @apply pointer-events-none float-left h-0 text-muted-foreground/60 content-[attr(data-placeholder)]; }
-.note-content .ProseMirror-selectednode:not([data-node-view-wrapper]) { @apply rounded ring-2 ring-ring/50; }
+/* A file block draws its own ring around just the file (note-file-node.tsx); the full-width element tiptap wraps it in gets none. */
+.note-content .ProseMirror-selectednode:not([data-node-view-wrapper], .react-renderer) { @apply rounded ring-2 ring-ring/50; }
 
 /* The tour marks the page it is showing in the navigation. */
 [data-tour-active] { @apply rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background transition-shadow; }

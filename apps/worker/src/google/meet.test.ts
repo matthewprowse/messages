@@ -1,3 +1,6 @@
+// Tests for the Meet helpers in google/meet.ts: transcript entries to timed segments, participant naming and address matching,
+// transcript readiness, the calendar event for a meeting, and how Meet read failures are classified.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

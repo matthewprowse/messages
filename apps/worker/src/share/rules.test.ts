@@ -1,3 +1,7 @@
+// The rule pass over a fake database and real keys. The fake's apply keeps the rules of apply_team_rule and
+// suggest_work_chats (20261101130000_team_contacts.sql, checked against a real Postgres when it was written): share or
+// suggest by strictness, and leave alone what is shared, opted out, dismissed, a group or in the trash.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decryptTeamField } from "@messages/crypto";
@@ -6,10 +10,6 @@ import { FIELD } from "@messages/crypto/fields";
 import { AGENT, client, COLLEAGUE, contact, WS, world, type World } from "./fixtures";
 import type { Participant } from "./people";
 import { isMissingMigration, runRulePass, SUGGEST_DAYS, type Candidate, type RuleData, type RuleStore } from "./rules";
-
-// The rule pass over a fake database and real keys. The fake's apply keeps the rules of apply_team_rule and
-// suggest_work_chats (20261101130000_team_contacts.sql, checked against a real Postgres when it was written): share or
-// suggest by strictness, and leave alone what is shared, opted out, dismissed, a group or in the trash.
 
 interface Chat extends Candidate {
   user_id: string;

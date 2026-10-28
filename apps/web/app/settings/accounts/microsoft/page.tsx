@@ -1,5 +1,8 @@
 "use client";
 
+// Settings page for connecting Microsoft (Outlook, Calendar, To Do, Teams): in-app sign-in, per-part status from the worker,
+// and a collapsed owner-only section for the one-time Entra app setup.
+
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -33,7 +36,7 @@ export default function MicrosoftSetup() {
         description="Outlook, Outlook Calendar and Microsoft To Do connect with one Microsoft sign-in, and Teams chats and meeting transcripts with it when you choose, for work or school accounts. The sign-in is stored encrypted and only used to sync."
         back="/settings/accounts"
       />
-      <div className="mb-8"><Suspense><ConnectMicrosoft /></Suspense></div>
+      <div className="mb-3"><Suspense><ConnectMicrosoft /></Suspense></div>
       <Status />
       <OwnerSetup />
     </>
@@ -94,7 +97,7 @@ function ConnectMicrosoft() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <Field orientation="horizontal">
         <Checkbox id="microsoft-teams" checked={teams} disabled={busy} onCheckedChange={(on) => setTeams(on === true)} />
         <FieldContent>
@@ -106,7 +109,7 @@ function ConnectMicrosoft() {
         </FieldContent>
       </Field>
       <div className="space-y-2">
-        <Button disabled={busy} onClick={start}><BrandLogo brand="microsoft" /> Connect Microsoft</Button>
+        <Button variant="secondary" disabled={busy} onClick={start}><BrandLogo brand="microsoft" /> Connect Microsoft</Button>
         {error && <FieldError>{error}</FieldError>}
         {notice && <FieldDescription>{notice}</FieldDescription>}
       </div>
@@ -116,9 +119,9 @@ function ConnectMicrosoft() {
             title="Ask Your IT Admin to Approve"
             description="An admin can approve Konva for everyone by opening this link and accepting. Then connect again. The last page may not load; the approval is saved regardless."
           >
-            <Button size="sm" onClick={copyLink}>Copy Link</Button>
+            <Button variant="secondary" onClick={copyLink}>Copy Link</Button>
           </SettingsRow>
-          <div className="px-4 py-3"><code className="block break-all text-xs text-muted-foreground">{adminLink}</code></div>
+          <div className="p-3"><code className="block break-all text-xs text-muted-foreground">{adminLink}</code></div>
         </SettingsRows>
       )}
     </div>
@@ -152,7 +155,7 @@ function Status() {
               }
               description={problem && first?.statusDetail ? first.statusDetail : part.detail}
             >
-              {live && part.provider === "outlook" && <Button size="sm" asChild><Link href="/inbox">Go to Inbox</Link></Button>}
+              {live && part.provider === "outlook" && <Button variant="secondary" asChild><Link href="/inbox">Go to Inbox</Link></Button>}
             </SettingsRow>
           );
         })}
@@ -166,9 +169,9 @@ function OwnerSetup() {
   const [origin, setOrigin] = useState("your app address");
   useEffect(() => setOrigin(window.location.origin), []);
   return (
-    <details className="group mt-8 rounded-lg border">
-      <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Setup for the Server Owner</summary>
-      <ol className="list-decimal space-y-4 border-t px-4 py-4 pl-8 text-sm text-muted-foreground">
+    <details className="group mt-3">
+      <summary className="cursor-pointer rounded-lg p-3 text-sm font-medium hover:bg-muted/50">Setup for the Server Owner</summary>
+      <ol className="list-decimal space-y-3 p-3 pl-9 text-sm text-muted-foreground">
         <li>
           At entra.microsoft.com, open App Registrations and choose New Registration. Name it Konva. Under Supported Account Types, choose
           Accounts in Any Organizational Directory and Personal Microsoft Accounts.

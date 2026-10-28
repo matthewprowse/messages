@@ -48,6 +48,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import re
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
@@ -61,7 +62,7 @@ from .fields import CONTACT_RELATIONSHIP, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, S
 from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
 from .retry import not_in
 from .supabase import Supabase, in_list
-from .text import UNTRUSTED, clean
+from .text import UNTRUSTED, clean, fenced, new_fence
 from .vault import Vault
 
 SIMILAR_LIMIT = 3
@@ -182,6 +183,15 @@ ADJUSTMENTS = {
 }
 
 
+def own_audio_path(user_id: Any, path: Any) -> bool:
+    """True only for "<user id>/drafts/<name>" (more folders allowed) made of plain name characters. The row's
+    audio_path is written by the app under row-level security that only checks the start of it, and this worker
+    reads and deletes with the service role, so "<uid>/drafts/../../<other user>/x" must never get through."""
+    if not user_id or not isinstance(path, str):
+        return False
+    return re.fullmatch(re.escape(str(user_id)) + r"/drafts/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*", path) is not None and ".." not in path.split("/")
+
+
 def build_prompt(
     *,
     me: str,
@@ -248,7 +258,8 @@ def build_prompt(
     if compose:
         lines.append(f"A new {medium} message, not a reply: there is no conversation yet.")
     else:
-        lines += ["", "The conversation, oldest first (Me is them):"] + [f"--- {who}:\n{text}" for who, text in conversation]
+        thread = "\n".join(f"--- {who}:\n{text}" for who, text in conversation)
+        lines += ["", "The conversation, oldest first (Me is them), between the marked lines:", fenced(thread, new_fence())]
     if edit is not None and is_adjust(tone):
         lines += ["", "The reply they have now, to adjust:", f"---\n{edit}\n---", f"Change: {ADJUSTMENTS[tone]}"]
         if instruction:
@@ -362,10 +373,10 @@ class Drafts:
                 minimal=True,
             )
             # Recordings are kept only until their draft is written: one whose draft never was goes too.
-            left = self.db.select("drafts", {"select": "id,status,audio_path", "status": "neq.pending", "audio_path": "not.is.null", "limit": "50"})
+            left = self.db.select("drafts", {"select": "id,user_id,status,audio_path", "status": "neq.pending", "audio_path": "not.is.null", "limit": "50"})
             left = [r for r in left if r.get("audio_path") and r.get("status") != "pending"]
             if left:
-                self.db.remove_files(BUCKET, [r["audio_path"] for r in left])
+                self.db.remove_files(BUCKET, [r["audio_path"] for r in left if own_audio_path(r.get("user_id"), r["audio_path"])])
                 self.db.update("drafts", {"id": in_list([r["id"] for r in left])}, {"audio_path": None}, minimal=True)
         with self._lock:
             running = dict(self._running)
@@ -622,11 +633,15 @@ class Drafts:
             self._write(d)
         finally:
             if d.get("audio_path"):  # heard or not, a recording is not kept once its draft is done
-                self.db.remove_files(BUCKET, [d["audio_path"]])
+                if own_audio_path(d.get("user_id"), d["audio_path"]):
+                    self.db.remove_files(BUCKET, [d["audio_path"]])
                 self.db.update("drafts", {"id": f"eq.{d['id']}"}, {"audio_path": None}, minimal=True)
 
     def _recording(self, d: dict[str, Any]) -> tuple[bytes, str] | None:
         """The recording of what the draft should say, opened, with its type; None if it cannot be read."""
+        if not own_audio_path(d.get("user_id"), d["audio_path"]):
+            log.warn("draft recording path refused", draft=d["id"])
+            return None
         try:
             data = self.vault.open_bytes(d["user_id"], VOICE_INSTRUCTION, self.db.download(BUCKET, d["audio_path"]))
         except Exception as err:

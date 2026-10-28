@@ -1,5 +1,9 @@
 "use client";
 
+// The parts of a chat bubble beyond its text: the message a reply quotes, reactions, and the Reply and
+// React actions that appear on hover, or on tap or long press on touch screens, which cannot hover. They take
+// what they need as props, not from the store, so a memoised bubble only redraws when its message changes.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronsDownUp, ChevronsUpDown, Reply, SmilePlus } from "lucide-react";
 import type { Contact, Message } from "@/lib/types";
@@ -8,10 +12,6 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ViewOriginal } from "@/components/message-body";
-
-// The parts of a chat bubble beyond its text: the message a reply quotes, reactions, and the Reply and
-// React actions that appear on hover, or on tap or long press on touch screens, which cannot hover. They take
-// what they need as props, not from the store, so a memoised bubble only redraws when its message changes.
 
 /** WhatsApp's own quick reactions, in its order. */
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];

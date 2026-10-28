@@ -1,23 +1,3 @@
-import type { Tables } from "@messages/db";
-import { addressIndex, chatIndex } from "@messages/crypto/addresses";
-import { FIELD } from "@messages/crypto/fields";
-import { Backoff, SerialQueue, Sleeper } from "../backoff";
-import { db, getSyncState, loadCredentials, must, retryWrite, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
-import { env } from "../env";
-import { errorCode, log } from "../log";
-import { finishAction } from "../send/actions";
-import { claimReady, linkThread, markFailed, settleSent, type OutboxRow } from "../send/outbox";
-import { loadAttachmentFiles } from "../send/outbox-attachments";
-import { saveContactPhoto } from "../photos/store";
-import { credentialSealer, keysFor, open, openAddresses, seal, sealAddress } from "../vault";
-import { Helper, HelperError, helperBuilt, spawnTransport, type BrowserHeaders, type Commands, type HelperEvent, type LinkedInConversation, type LinkedInMessage, type LinkedInPerson, type SignInResult, type Transport } from "../linkedin/helper";
-import { NO_FILES, sendTimeoutMs, stageFiles, type StagedFiles } from "../linkedin/files";
-import { RecentTries, fetchPictureBytes, photoDue, withPictures } from "../linkedin/avatars";
-import { ingestPayload, others, skipConversation, stubConversation, unreadUrns, type Sealer } from "../linkedin/mapping";
-import { CODE_TIMED_OUT, NO_COOKIES, NOT_BUILT, PushBack, RECONNECTING, SIGNED_OUT, SIGN_IN_EXPIRED, START_NO_PERSON, checkpointDetail, endsSession, outcomeOf, recipientOf, sendFailure, signInFailure, startFailure, surelyNotSent, type Outcome } from "../linkedin/policy";
-import { waitForReply, type Reply, type SignInStep } from "../linkedin/relay";
-import { readRelay, writeRelay } from "../linkedin/relay-db";
-
 // LinkedIn messages, through the LinkedIn helper (apps/linkedin), a separate program built on mautrix-linkedin
 // that this connector runs and talks to over stdin and stdout. You sign in with your LinkedIn email and password,
 // typed in Konva's own form: the app stores them encrypted, this connector signs in with them through the helper,
@@ -29,6 +9,25 @@ import { readRelay, writeRelay } from "../linkedin/relay-db";
 // conversation is marked read on LinkedIn only when you open it in the app; nothing else is ever sent. Photos,
 // videos and documents go with a reply (each as a message of its own, the text with the first). The profile
 // pictures of the people you talk to become their contact photos where they have none (linkedin/avatars.ts).
+
+import type { Tables } from "@messages/db";
+import { addressIndex, chatIndex } from "@messages/crypto/addresses";
+import { FIELD } from "@messages/crypto/fields";
+import { Backoff, SerialQueue, Sleeper } from "../backoff";
+import { db, getSyncState, loadCredentials, must, retryWrite, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
+import { errorCode, log } from "../log";
+import { finishAction } from "../send/actions";
+import { claimReady, linkThread, markFailed, settleSent, type OutboxRow } from "../send/outbox";
+import { loadAttachmentFiles } from "../send/outbox-attachments";
+import { saveContactPhoto } from "../photos/store";
+import { credentialSealer, keysFor, open, openAddresses, seal, sealAddress } from "../vault";
+import { Helper, HelperError, helperBuilt, spawnTransport, type BrowserHeaders, type Commands, type HelperEvent, type LinkedInConversation, type LinkedInMessage, type LinkedInPerson, type SignInResult, type Transport } from "../linkedin/helper";
+import { NO_FILES, sendTimeoutMs, stageFiles, type StagedFiles } from "../linkedin/files";
+import { RecentTries, fetchPictureBytes, photoDue, withPictures } from "../linkedin/avatars";
+import { ingestPayload, others, seenByOther, skipConversation, stubConversation, unreadUrns, type Sealer } from "../linkedin/mapping";
+import { CODE_TIMED_OUT, NO_COOKIES, NOT_BUILT, PushBack, RECONNECTING, SIGNED_OUT, SIGN_IN_EXPIRED, START_NO_PERSON, checkpointDetail, endsSession, outcomeOf, recipientOf, sendFailure, signInFailure, startFailure, surelyNotSent, type Outcome } from "../linkedin/policy";
+import { waitForReply, type Reply, type SignInStep } from "../linkedin/relay";
+import { readRelay, writeRelay } from "../linkedin/relay-db";
 
 const SYNC_SCOPE = "conversations"; // sync_state.sync_token: LinkedIn's token for "what changed since"
 const CATCH_UP_CONVERSATIONS = 20; // the conversations caught up after connecting, newest first
@@ -395,6 +394,21 @@ export class LinkedInConnector {
     must(await db.rpc("whatsapp_mark_read", { p_account_id: this.id, p_chat_jids: [], p_chat_indexes: indexes }), "mark linkedin read");
   }
 
+  /** Your messages in a conversation that the other person has seen are shown as seen. Nothing is sent back. */
+  private async markSeen(conversationUrn: string, at: number) {
+    const keys = await keysFor(this.account.user_id);
+    const sealed = await sealAddress(this.account.user_id, conversationUrn);
+    must(
+      await db.rpc("mark_seen_up_to", {
+        p_account_id: this.id,
+        p_thread_provider_id: sealed,
+        p_seen_at: new Date(at).toISOString(),
+        p_thread_index: await chatIndex(keys, conversationUrn),
+      }),
+      "mark linkedin seen",
+    );
+  }
+
   private onEvent(event: HelperEvent) {
     switch (event.event) {
       case "message":
@@ -404,6 +418,11 @@ export class LinkedInConnector {
         this.conversations.set(event.conversation.urn, event.conversation);
         this.queue.background(() => this.readElsewhere([event.conversation]), () => undefined);
         return;
+      case "seen": {
+        const at = this.me ? seenByOther(this.conversations.get(event.conversationUrn), event.by, event.at, this.me.id) : null;
+        if (at !== null) this.queue.background(() => this.markSeen(event.conversationUrn, at), (err) => log.warn("linkedin seen failed", { account: this.id, code: errorCode(err) }));
+        return;
+      }
       case "connected":
       case "heartbeat":
         if (Date.now() - this.lastTouch > TOUCH_MS) {

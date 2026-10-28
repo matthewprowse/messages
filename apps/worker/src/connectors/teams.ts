@@ -1,3 +1,14 @@
+// Microsoft Teams through Microsoft Graph, on the same Microsoft sign-in as Outlook with the Teams
+// permissions added (pnpm connect:microsoft asks). Your one-to-one, group and meeting chats are stored as
+// conversations like WhatsApp chats, with people matched by their work address like email. Graph's change
+// notifications need a public web address, so chats are polled: the chat list, newest message first, says
+// which chats changed since the last check, and only those are read. A reply queued in the app is posted to
+// its chat. Nothing is marked read in Teams unless you open the chat in the app.
+//
+// Meetings: your Outlook Calendar's Teams meetings are found by their join links. Once one ends its
+// transcript is looked for, again and again for a few hours since Teams writes it late, and stored in
+// meetings with the people who were there. Summaries and linking to contacts and events happen elsewhere.
+
 import type { Json, Tables, TablesUpdate } from "@messages/db";
 import type { UserKeys } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
@@ -39,17 +50,6 @@ import {
 } from "../teams/chat";
 import { gaveUp, joinUrlFilter, newSpeakers, teamsMeetings, transcriptCheckDue, transcriptsFor, type CallTranscript, type MeetingEvent, type MeetingPerson } from "../teams/meetings";
 import { joinTranscripts, parseVtt } from "../teams/vtt";
-
-// Microsoft Teams through Microsoft Graph, on the same Microsoft sign-in as Outlook with the Teams
-// permissions added (pnpm connect:microsoft asks). Your one-to-one, group and meeting chats are stored as
-// conversations like WhatsApp chats, with people matched by their work address like email. Graph's change
-// notifications need a public web address, so chats are polled: the chat list, newest message first, says
-// which chats changed since the last check, and only those are read. A reply queued in the app is posted to
-// its chat. Nothing is marked read in Teams unless you open the chat in the app.
-//
-// Meetings: your Outlook Calendar's Teams meetings are found by their join links. Once one ends its
-// transcript is looked for, again and again for a few hours since Teams writes it late, and stored in
-// meetings with the people who were there. Summaries and linking to contacts and events happen elsewhere.
 
 const POLL_MS = 15_000;
 const MAX_FAILED_CHECKS = 8; // about two minutes of checks failing in a row
@@ -135,7 +135,7 @@ export class TeamsConnector {
         const fatal = teamsAccessProblem(err, true) ?? microsoftFatalDetail(err, "Teams");
         if (fatal) {
           log.error("teams cannot connect", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         log.warn("teams session failed", { account: this.id, code: errorCode(err) });

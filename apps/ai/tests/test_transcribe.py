@@ -1,3 +1,6 @@
+"""Tests for ai.transcribe: audio type normalisation, the query for saved voice notes without a transcript, the recent
+window, and that a paused budget never fails the note."""
+
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -23,3 +26,23 @@ class Transcribe(unittest.TestCase):
         self.assertTrue(recent((now - timedelta(days=2)).isoformat()))
         self.assertFalse(recent((now - timedelta(days=45)).isoformat()))
         self.assertFalse(recent("not a date"))
+
+
+class BudgetErrors(unittest.TestCase):
+    def test_a_paused_budget_is_not_a_try_and_never_fails_the_note(self):
+        from unittest import mock
+
+        from ai.gemini import GeminiError
+        from ai.transcribe import MAX_TRIES, Transcribe as Worker
+
+        db = mock.Mock()
+        worker = Worker(db, mock.Mock(), "m", mock.Mock())
+        m = {"id": "m1"}
+        for _ in range(MAX_TRIES + 2):
+            worker._failed(m, GeminiError(None, "budget_paused"))
+        worker._failed(m, GeminiError(None, "budget_unknown"))
+        db.update.assert_not_called()  # never marked failed
+        self.assertEqual(worker._tries["m1"][0], 0)
+        self.assertEqual(worker.waiting(), ["m1"])  # waits RETRY_S before the next look
+        worker._failed(m, GeminiError(500, "boom"))
+        self.assertEqual(worker._tries["m1"][0], 1)  # a real failure still counts

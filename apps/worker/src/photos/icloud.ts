@@ -1,8 +1,8 @@
-import type { ICloudCredentials } from "../connectors/icloud";
-import { parseVCard, unescapeXml, vcardsFromMultistatus, type Card } from "./cards";
-
 // iCloud Contacts over CardDAV, signed in with the same app-specific password as iCloud Mail. Read only:
 // it finds your address books and reads their cards, nothing is ever written.
+
+import type { ICloudCredentials } from "../connectors/icloud";
+import { parseVCard, unescapeXml, vcardsFromMultistatus, type Card } from "./cards";
 
 const ROOT = "https://contacts.icloud.com/";
 const DAV = 'xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav"';

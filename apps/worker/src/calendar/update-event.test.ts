@@ -1,3 +1,6 @@
+// Tests for calendar/update-event.ts. Pin down reading a queued change, wall clock arithmetic across time zones and clock
+// changes, series shifts, and the Google and Outlook request bodies and failure texts built from a change.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

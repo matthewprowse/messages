@@ -1,10 +1,10 @@
-import { errorCode, log } from "../log";
-import { chunks } from "../util";
-
 // Bulk storage for first syncs and history imports: a chunk of messages per database call
 // (public.ingest_email_batch, public.ingest_whatsapp_batch) instead of one call each. Until that
 // migration is applied, and whenever a batch call fails as a whole, messages go one call at a time
 // as before.
+
+import { errorCode, log } from "../log";
+import { chunks } from "../util";
 
 /** How often a batch function that was missing is looked for again. */
 export const BATCH_RECHECK_MS = 10 * 60_000;
@@ -16,6 +16,7 @@ export interface RowFailure {
   code: string;
 }
 
+/** Whether one entry of a batch result is a per-row failure rather than a stored result. */
 export function isFailure(row: unknown): row is RowFailure {
   return !!row && typeof row === "object" && (row as RowFailure).failed === true;
 }

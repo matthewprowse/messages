@@ -1,5 +1,7 @@
 "use client";
 
+// React context for the data the Contacts layout loads once (contacts, companies, merge suggestions), so the list and the pages beside it share it.
+
 import { createContext, useContext } from "react";
 import type { ContactSummary } from "@/lib/contacts";
 import type { MergeSuggestion } from "@/lib/contact-merging";

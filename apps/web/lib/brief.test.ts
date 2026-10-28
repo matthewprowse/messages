@@ -1,3 +1,6 @@
+// Tests for brief-pace.ts: the Brief page's daily request allowance, its refresh cooldown, and reading the database's
+// limit error for the next allowed time.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { REFRESH_COOLDOWN_MS, REQUESTS_PER_DAY, cooldownWait, limitReached, nextRequestAt, requestsLeft, whenAllowed } from "./brief-pace";

@@ -1,7 +1,7 @@
-import type { Json, TablesInsert } from "@messages/db";
-
 // Turns an iCalendar event (what iCloud Calendar sends over CalDAV) into a calendar_events row, stored
 // the same way as a Google event. Pure, so it can be unit tested.
+
+import type { Json, TablesInsert } from "@messages/db";
 
 interface Property {
   name: string;

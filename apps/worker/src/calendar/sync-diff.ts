@@ -1,7 +1,7 @@
-import type { Json, TablesInsert } from "@messages/db";
-
 // Which fetched events actually differ from the stored copy, so each sync writes only what changed.
 // Pure, so it can be unit tested.
+
+import type { Json, TablesInsert } from "@messages/db";
 
 export type StoredEvent = {
   provider_event_id: string;

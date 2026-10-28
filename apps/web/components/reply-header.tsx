@@ -1,5 +1,7 @@
 "use client";
 
+// The From, To and Cc rows above the reply box, and the state behind them (which address sends, Reply versus Reply All).
+
 import { Fragment, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { useApp } from "@/lib/store";

@@ -1,13 +1,13 @@
+// The share job over a fake database and real keys. The fake keeps the rules of share_pending_* and share_write
+// (20261101120000_shared_chats.sql, checked against a real Postgres when it was written): the rows still to move,
+// the old values a write must still find, and the chat being in the state the job is for.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decryptField, decryptTeamField, deriveTeamKeys, deriveUserKeys, encryptField, isTeamCiphertext, newDataKey, type TeamKeys, type UserKeys } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import { MAX_PASSES, PAGE_ROWS, runShareJob, type ShareJob, type ShareStore, type ShareTable } from "./process";
 import { moveMessage, moveValue, shareLabel, latestIsShared, type Keys, type LabelSource, type MessageAiRow, type MessageRow, type Move, type RowWrite, type ThreadRow } from "./reseal";
-
-// The share job over a fake database and real keys. The fake keeps the rules of share_pending_* and share_write
-// (20261101120000_shared_chats.sql, checked against a real Postgres when it was written): the rows still to move,
-// the old values a write must still find, and the chat being in the state the job is for.
 
 const WS = "ws-1";
 const AGENT = "agent-1";

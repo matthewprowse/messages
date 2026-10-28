@@ -1,5 +1,7 @@
 "use client";
 
+// Hook that turns a stored contact, group or company-logo path into a signed image link (signed-urls.ts).
+
 import { LOGO_AVATAR } from "./people";
 import { useSignedUrl } from "./signed-urls";
 

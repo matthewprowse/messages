@@ -52,7 +52,7 @@ class Store:
         return creds, session
 
     def kind(self, account_id: str) -> str | None:
-        """What kind of sign-in is saved: "web" for this connector's; the Mac relay's has none."""
+        """What kind of sign-in is saved: "web" for this connector's, none for anything else."""
         try:
             creds, _ = self.credentials(account_id)
         except Exception:

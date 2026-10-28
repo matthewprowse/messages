@@ -1,13 +1,13 @@
-import { createHash } from "node:crypto";
-import { resolveTxt } from "node:dns/promises";
-import { sleep } from "../backoff";
-import { candidatesFor, googleIconUrl, pageIcons, pageLogos, safeGet } from "../photos/site-icon";
-
 // Where a company's logo may be found, all free and keyless: the App Store, BIMI, the company's own site,
 // Google's favicon service, Wikidata (Wikimedia Commons files) and Simple Icons, and, when none of those
 // passes the judge, the addresses Gemini found with Google Search. Each finder returns raw image files;
 // framing and judging happen elsewhere (pipeline.ts). Only a company's name and domain are ever sent,
 // never an address or any mail. Every fetch goes through safeGet: public HTTPS only, small and quick.
+
+import { createHash } from "node:crypto";
+import { resolveTxt } from "node:dns/promises";
+import { sleep } from "../backoff";
+import { candidatesFor, googleIconUrl, pageIcons, pageLogos, safeGet } from "../photos/site-icon";
 
 export type LogoSource = "app_store" | "bimi" | "site" | "google" | "wikidata" | "simple_icons" | "search";
 /** The order candidates are numbered in for the judge: likely best first, single-colour Simple Icons last. */

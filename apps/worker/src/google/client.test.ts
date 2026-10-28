@@ -1,3 +1,5 @@
+// Tests for the retryDelay policy in google/client.ts: what is retried, how long to wait, and that sends are never retried after a server error.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { retryDelay } from "./client";

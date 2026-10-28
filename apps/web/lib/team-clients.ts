@@ -1,13 +1,13 @@
 "use client";
 
+// The team's shared client list (public.workspace_contacts, 20261101130000_team_contacts.sql), from the app's side.
+// Every member reads names, companies and who looks after each client, and never a message: those stay with the chat.
+
 import { useCallback, useEffect, useState } from "react";
 import { FIELD } from "@messages/crypto/fields";
 import { useAuth } from "./auth";
 import { supabase } from "./supabase";
 import { open } from "./vault";
-
-// The team's shared client list (public.workspace_contacts, 20261101130000_team_contacts.sql), from the app's side.
-// Every member reads names, companies and who looks after each client, and never a message: those stay with the chat.
 
 export interface TeamClient {
   id: string;

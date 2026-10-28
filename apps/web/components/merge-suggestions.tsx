@@ -1,5 +1,7 @@
 "use client";
 
+// The Suggested Merges page under Contacts: pairs the linker thinks are one person, to merge one at a time or all at once.
+
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -78,7 +80,7 @@ function SuggestionCard({ suggestion, a, b, query, locked }: { suggestion: Merge
         <Person contact={b} query={query} />
       </div>
       <div className="flex justify-end gap-2 px-4 pb-3">
-        <Button variant="outline" size="sm" className="max-sm:h-10" disabled={busy !== null || locked} onClick={notSame}>Not the Same</Button>
+        <Button variant="secondary" className="max-sm:h-10" disabled={busy !== null || locked} onClick={notSame}>Not the Same</Button>
         <Button size="sm" className="max-sm:h-10" disabled={busy !== null || locked} onClick={() => (namesDiffer(a.name, b.name) ? setAsking(true) : merge())}>{busy === "merging" ? "Merging" : "Merge"}</Button>
       </div>
       <MergeDialog a={a} b={b} open={asking} onOpenChange={setAsking} onConfirm={(name) => merge(name)} />
@@ -163,7 +165,7 @@ export function MergeSuggestions() {
             {!loading && rows.length > 0 && <span className="truncate text-xs text-muted-foreground">People who may be the same person</span>}
           </div>
           {!loading && rows.length > 1 && (
-            <Button variant="outline" disabled={mergingAll} onClick={() => setConfirmingAll(true)}>{mergingAll ? "Merging" : "Merge All"}</Button>
+            <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll(true)}>{mergingAll ? "Merging" : "Merge All"}</Button>
           )}
         </>
       }
@@ -172,7 +174,7 @@ export function MergeSuggestions() {
       {!loading && rows.length === 0 && (
         <div className="py-24">
           {suggestions === null || contacts === null ? (
-            <EmptyState icon={Users} title="Suggestions Did Not Load" description="Check your connection, then try again." action={<Button variant="outline" onClick={reload}>Retry</Button>} />
+            <EmptyState icon={Users} title="Suggestions Did Not Load" description="Check your connection, then try again." action={<Button variant="secondary" onClick={reload}>Retry</Button>} />
           ) : (
             <EmptyState icon={Users} title="No Suggested Merges" description="When two contacts look like the same person, they show here." />
           )}

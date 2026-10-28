@@ -76,6 +76,7 @@ class Thread:
     archived: bool = False
     seen_us: int | None = None  # when you last saw this thread, on any device
     unread: bool = False  # Instagram's own flag, for when it gives no time
+    others_seen_us: int | None = None  # how far everyone else has seen it: the earliest of their times, None if any is unknown
     items: list[Item] = field(default_factory=list)  # newest first, as Instagram sends them
     oldest_cursor: str | None = None
     has_older: bool = False
@@ -278,7 +279,9 @@ def thread(raw: dict[str, Any], viewer_pk: str) -> Thread | None:
     if not thread_id:
         return None
     people = [p for p in (person(u) for u in raw.get("users") or [] if isinstance(u, dict)) if p and p.pk != viewer_pk]
-    seen = (raw.get("last_seen_at") or {}).get(viewer_pk) or {}
+    seen_at = raw.get("last_seen_at") or {}
+    seen = seen_at.get(viewer_pk) or {}
+    others = [_int((seen_at.get(p.pk) or {}).get("timestamp")) for p in people]
     items = [i for i in (describe(r) for r in raw.get("items") or [] if isinstance(r, dict)) if i]
     return Thread(
         id=thread_id,
@@ -288,6 +291,7 @@ def thread(raw: dict[str, Any], viewer_pk: str) -> Thread | None:
         archived=bool(raw.get("archived")),
         seen_us=_int(seen.get("timestamp")) or None,
         unread=_int(raw.get("read_state")) == 1,
+        others_seen_us=min(others) if others and all(others) else None,
         items=sorted(items, key=lambda i: i.timestamp_us, reverse=True),
         oldest_cursor=raw.get("oldest_cursor") or None,
         has_older=bool(raw.get("has_older")),

@@ -1,11 +1,11 @@
+// Team Chat mapping and polling on hand-written replies shaped like Zoom's (GET /chat/users/me/sessions and
+// GET /chat/users/me/messages). Nothing here talks to Zoom.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Json } from "@messages/db";
 import { ZoomApiError, type ZoomApi, type ZoomRequest } from "./client";
 import { ChatSync, chatPayload, chatRef, messageText, sendBody, zoomTime, type ZoomChatMessage, type ZoomChatSession } from "./chat";
-
-// Team Chat mapping and polling on hand-written replies shaped like Zoom's (GET /chat/users/me/sessions and
-// GET /chat/users/me/messages). Nothing here talks to Zoom.
 
 const sealer = {
   seal: async (field: string, value: string | null) => (value == null ? null : `sealed:${field}:${value}`),

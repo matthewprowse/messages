@@ -1,5 +1,7 @@
 "use client";
 
+// The share history in Settings, What You Share: who covered a person's work chats and which of their chats were exported, by day.
+
 import { useCover, coverState, lastDay } from "@/lib/team-cover";
 import { useAuth } from "@/lib/auth";
 import { useExportedChats } from "@/lib/compliance-export";
@@ -22,7 +24,7 @@ export function ShareHistory({ labels }: { labels: Map<string, string> | undefin
   const exports = [...(exported?.entries() ?? [])].flatMap(([thread, days]) => days.map((d) => ({ thread, day: d }))).sort((a, b) => b.day.localeCompare(a.day));
   if (!covered.length && !exports.length) return null;
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {covered.length > 0 && (
         <div className="space-y-2">
           <SettingsHeading level={3} title="Cover" description="Colleagues who read your work chats while you were away." />

@@ -1,3 +1,6 @@
+// Tests for match.ts: how a stored meeting is tied to a calendar event, by join link first, then by time
+// overlap and shared guests.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { eventEmails, joinKey, matchEvent, participantEmail, type EventFacts, type MeetingFacts } from "./match";

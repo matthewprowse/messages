@@ -1,6 +1,3 @@
-import type { Tables } from "@messages/db";
-import type { Task } from "./types";
-
 // Tasks and reminders from Microsoft To Do, Google Tasks and iCloud Reminders, as Calendar and the Summary
 // show them. The sync worker stores them in public.tasks (title, notes and list name sealed); ticking one
 // queues a task_updates row that the worker makes at the provider. Everything here is pure, so it can be
@@ -8,6 +5,9 @@ import type { Task } from "./types";
 //
 // An all-day task is stored at midnight UTC of its date, so its day is read as written, like an all-day
 // event. An open task due before today is overdue and shows on today, not on the day it was due.
+
+import type { Tables } from "@messages/db";
+import type { Task } from "./types";
 
 export const TASK_COLUMNS = "id, account_id, list_name, title, notes, due_at, due_all_day, status, completed_at, priority, contact_id";
 export type TaskRowOf = Pick<Tables<"tasks">, "id" | "account_id" | "list_name" | "title" | "notes" | "due_at" | "due_all_day" | "status" | "completed_at" | "priority" | "contact_id">;

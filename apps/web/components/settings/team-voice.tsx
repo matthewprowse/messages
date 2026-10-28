@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Team, Company Voice: the team's tone, sign-off, templates and facts, read by everyone and edited by owners and admins.
+
 import { useEffect, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -50,7 +52,7 @@ function ProfileSection({ voice, manages, reload }: { voice: CompanyVoice; manag
       description="The AI reads this with each draft in a work chat. A person's own style still decides the wording, and these rules decide what a reply must and must not say."
     >
       {manages ? (
-        <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); if (changed && !busy) void save(); }}>
+        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (changed && !busy) void save(); }}>
           {PROFILE_PARTS.map((p) => (
             <div key={p.slot} className="grid gap-2">
               <Label htmlFor={`voice-${p.slot}`}>{p.label}</Label>
@@ -62,7 +64,7 @@ function ProfileSection({ voice, manages, reload }: { voice: CompanyVoice; manag
               <p className="text-xs text-muted-foreground">{p.hint}</p>
             </div>
           ))}
-          <Button type="submit" disabled={!changed || busy}>{busy ? "Saving" : "Save"}</Button>
+          <Button variant="secondary" type="submit" disabled={!changed || busy}>{busy ? "Saving" : "Save"}</Button>
         </form>
       ) : PROFILE_PARTS.some((p) => voice.profile[p.slot].text) ? (
         <SettingsRows>
@@ -104,7 +106,7 @@ function ItemDialog({ kind, item, open, onClose, onSaved }: { kind: "template" |
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
       <DialogContent track={template ? "company_template" : "company_fact"} className="sm:max-w-md">
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="space-y-3">
           <DialogHeader>
             <DialogTitle>{item ? (template ? "Edit Template" : "Edit Fact") : template ? "Add Template" : "Add Fact"}</DialogTitle>
             <DialogDescription>
@@ -158,7 +160,7 @@ function ItemsSection({ kind, items, manages, reload }: { kind: "template" | "fa
         : "Short entries such as prices, listings, office hours and answers to common questions. The AI quotes them exactly, and only in a work chat."}
     >
       {manages && (
-        <Button size="sm" onClick={() => setEditing("new")}><Plus /> {template ? "Add Template" : "Add Fact"}</Button>
+        <Button variant="secondary" onClick={() => setEditing("new")}><Plus /> {template ? "Add Template" : "Add Fact"}</Button>
       )}
       {items.length === 0 ? (
         <SettingsEmpty>{template ? "No templates yet." : "No company facts yet."}</SettingsEmpty>
@@ -168,8 +170,8 @@ function ItemsSection({ kind, items, manages, reload }: { kind: "template" | "fa
             <SettingsRow key={i.id} title={i.title} description={snip(i.body)}>
               {manages && (
                 <>
-                  <Button variant="ghost" size="icon-sm" aria-label={`Edit ${i.title}`} onClick={() => setEditing(i)}><Pencil /></Button>
-                  <Button variant="ghost" size="icon-sm" aria-label={`Remove ${i.title}`} onClick={() => setRemoving(i)}><Trash2 /></Button>
+                  <Button variant="ghost" size="icon" aria-label={`Edit ${i.title}`} onClick={() => setEditing(i)}><Pencil /></Button>
+                  <Button variant="ghost" size="icon" aria-label={`Remove ${i.title}`} onClick={() => setRemoving(i)}><Trash2 /></Button>
                 </>
               )}
             </SettingsRow>
@@ -187,7 +189,7 @@ function ItemsSection({ kind, items, manages, reload }: { kind: "template" | "fa
           </AlertDialogHeader>
           <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" disabled={busy} onClick={(e) => { e.preventDefault(); void remove(); }}>{busy ? "Removing" : "Remove"}</AlertDialogAction>
+            <AlertDialogAction variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={(e) => { e.preventDefault(); void remove(); }}>{busy ? "Removing" : "Remove"}</AlertDialogAction>
           </div>
         </AlertDialogContent>
       </AlertDialog>
@@ -206,7 +208,7 @@ export function CompanyVoiceSections({ team }: { team: TeamState }) {
         <AlertTitle>Could Not Load the Company Voice</AlertTitle>
         <AlertDescription>
           <p>Check your connection and try again.</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={reload}>Retry</Button>
+          <Button variant="secondary" className="mt-2" onClick={reload}>Retry</Button>
         </AlertDescription>
       </Alert>
     );

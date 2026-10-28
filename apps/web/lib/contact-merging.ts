@@ -1,17 +1,17 @@
-import type { Json, Tables } from "@messages/db";
+// Merging, splitting and undoing, and what the screens read about them. The database functions do the
+// work and check that every contact is yours; reads go through row-level security like everything else.
+
+import type { Json } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { chatIndexFor, companyRef } from "./address-refs";
 import { addressIndex } from "@messages/crypto/addresses";
 import { open, userKeys } from "./vault";
 import { openAddresses } from "./open-rows";
 import { supabase } from "./supabase";
-import { mapContact } from "./data";
+import { CONTACT_COLUMNS, mapContact } from "./data";
 import { allRows, type ContactSummary } from "./contacts";
 import { followMerges, type MergeSide } from "./merging";
 import type { Contact } from "./types";
-
-// Merging, splitting and undoing, and what the screens read about them. The database functions do the
-// work and check that every contact is yours; reads go through row-level security like everything else.
 
 export interface MergeSuggestion {
   id: string;
@@ -143,8 +143,8 @@ export async function keepName(contactId: string, name: string): Promise<void> {
 export async function loadContactGraph(): Promise<{ contacts: Contact[]; participants: Map<string, string[]> }> {
   const [parts, contacts, identities] = await Promise.all([
     allRows("Load contacts", (from, to) => supabase.from("thread_participants").select("thread_id, contact_id").order("thread_id").order("contact_id").range(from, to)),
-    allRows("Load contacts", (from, to) => supabase.from("contacts").select("*, organizations(id, name, logo_path)").order("id").range(from, to)),
-    allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("*").order("id").range(from, to)).then(openAddresses),
+    allRows("Load contacts", (from, to) => supabase.from("contacts").select(CONTACT_COLUMNS).order("id").range(from, to)),
+    allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("id, contact_id, kind, value").order("id").range(from, to)).then(openAddresses),
   ]);
   const participants = new Map<string, string[]>();
   for (const p of parts) {
@@ -152,7 +152,7 @@ export async function loadContactGraph(): Promise<{ contacts: Contact[]; partici
     if (list) list.push(p.contact_id);
     else participants.set(p.thread_id, [p.contact_id]);
   }
-  const identitiesOf = new Map<string, Tables<"contact_identities">[]>();
+  const identitiesOf = new Map<string, typeof identities>();
   for (const i of identities) {
     const list = identitiesOf.get(i.contact_id);
     if (list) list.push(i);

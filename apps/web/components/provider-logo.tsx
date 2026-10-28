@@ -1,11 +1,11 @@
-import { cn } from "@/lib/utils";
-import type { Provider } from "@/lib/types";
-
 // The services' own logos, kept as small SVG files in public/logos (from each brand's official artwork,
 // trimmed of editor metadata). A conversation shows the product it came through (Gmail, Outlook);
 // connecting an account shows the company you sign in with (Google, Microsoft).
 
-export type Brand = "google" | "microsoft" | "icloud" | "whatsapp" | "gmail" | "outlook" | "instagram" | "linkedin";
+import { cn } from "@/lib/utils";
+import type { Provider } from "@/lib/types";
+
+export type Brand = "google" | "microsoft" | "icloud" | "whatsapp" | "gmail" | "outlook" | "instagram" | "linkedin" | "apple";
 
 const NAMES: Record<Brand, string> = {
   google: "Google",
@@ -16,6 +16,7 @@ const NAMES: Record<Brand, string> = {
   outlook: "Outlook",
   instagram: "Instagram",
   linkedin: "LinkedIn",
+  apple: "Apple",
 };
 
 const BY_PROVIDER: Partial<Record<Provider, Brand>> = {
@@ -37,7 +38,7 @@ export function BrandLogo({ brand, className, label = false }: { brand: Brand; c
       width={16}
       height={16}
       draggable={false}
-      className={cn("size-4 shrink-0 object-contain", className)}
+      className={cn("size-4 shrink-0 object-contain", brand === "apple" && "dark:invert", className)}
     />
   );
 }

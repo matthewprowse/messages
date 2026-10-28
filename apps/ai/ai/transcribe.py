@@ -201,6 +201,11 @@ class Transcribe:
         self.db.update("messages", {"id": f"eq.{message_id}"}, {"transcript": transcript, "transcript_status": status}, minimal=True)
 
     def _failed(self, m: dict[str, Any], err: Exception) -> None:
+        if isinstance(err, GeminiError) and "budget_" in str(err):
+            # The share is used up (or could not be read): not this note's fault, so it is not a try. Wait and look again.
+            self._tries[m["id"]] = (self._tries.get(m["id"], (0, 0.0))[0], time.monotonic() + RETRY_S)
+            log.info("voice note waiting on the allowance", message=m["id"])
+            return
         tries = self._tries.get(m["id"], (0, 0.0))[0] + 1
         log.warn("voice note not transcribed", message=m["id"], tries=tries, code=getattr(err, "status", None) or type(err).__name__)
         if tries >= MAX_TRIES:

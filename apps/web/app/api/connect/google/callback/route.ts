@@ -1,13 +1,14 @@
-import { ensureProfile, openJson, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
-import { CALENDAR_SCOPE, CHAT_MESSAGES_SCOPE, GMAIL_SCOPE, GoogleError, MEET_SCOPE, TASKS_SCOPE, exchangeCode, googleGet } from "@/lib/server/google";
-import { appOrigin } from "@/lib/server/request";
-import { GOOGLE_COOKIE, GOOGLE_RETURNS, type GoogleSignIn } from "../shared";
-
 // Google sends the browser back here with a code. The code is traded for a refresh token, which is stored
 // encrypted with the Gmail, Google Calendar and Google Tasks accounts exactly as pnpm connect:google stores it, marked as
 // the web client's. Then back to the page that started it, with ?connected=google or ?connect_error=<reason>.
 // With Meet and Chat granted, a Workspace account also gets its google_meet account; a personal one is sent
 // back with &meet=personal (or connect_error=meet_personal when nothing else was granted), since it has neither.
+
+import { ensureProfile, openJson, saveAccounts } from "@/lib/server/accounts";
+import { CALENDAR_SCOPE, CHAT_MESSAGES_SCOPE, GMAIL_SCOPE, GoogleError, MEET_SCOPE, TASKS_SCOPE, exchangeCode, googleGet } from "@/lib/server/google";
+import { appOrigin } from "@/lib/server/request";
+import { GOOGLE_COOKIE, GOOGLE_RETURNS, type GoogleSignIn } from "../shared";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -48,13 +49,19 @@ export async function GET(request: Request) {
     if (hasMeet && !workspace && !hasGmail && !hasCalendar) return done("connect_error=meet_personal");
 
     await ensureProfile(signIn.userId);
-    if (hasGmail) await saveCredentials(await saveAccountRow(signIn.userId, "gmail", "Gmail", address), credentials);
-    if (hasCalendar) await saveCredentials(await saveAccountRow(signIn.userId, "google_calendar", "Google Calendar", address), credentials);
-    // Google Tasks gives no address of its own, so it is connected alongside Gmail or Calendar.
-    if (tokens.scopes.includes(TASKS_SCOPE)) await saveCredentials(await saveAccountRow(signIn.userId, "google_tasks", "Google Tasks", address), credentials);
-    if (hasMeet && workspace) await saveCredentials(await saveAccountRow(signIn.userId, "google_meet", "Google Meet and Chat", address), credentials);
+    const rows = [
+      ...(hasGmail ? [{ provider: "gmail" as const, label: "Gmail", address }] : []),
+      ...(hasCalendar ? [{ provider: "google_calendar" as const, label: "Google Calendar", address }] : []),
+      // Google Tasks gives no address of its own, so it is connected alongside Gmail or Calendar.
+      ...(tokens.scopes.includes(TASKS_SCOPE) ? [{ provider: "google_tasks" as const, label: "Google Tasks", address }] : []),
+      ...(hasMeet && workspace ? [{ provider: "google_meet" as const, label: "Google Meet and Chat", address }] : []),
+    ];
+    const { saved, failed } = await saveAccounts(signIn.userId, rows, credentials);
+    if (rows.length && !saved.length) return done("connect_error=failed");
+    // Some saved and some not: the saved ones are connected, and the page is told how many were left out.
+    const notSaved = failed.length ? `&not_saved=${failed.length}` : "";
     const partial = hasGmail === hasCalendar ? "" : hasGmail ? "&partial=calendar" : "&partial=gmail";
-    return done(`connected=google${partial}${hasMeet && !workspace ? "&meet=personal" : ""}`);
+    return done(`connected=google${partial}${hasMeet && !workspace ? "&meet=personal" : ""}${notSaved}`);
   } catch (err) {
     const code = err instanceof GoogleError ? err.code : "failed";
     return done(`connect_error=${/^[a-z0-9_]{1,30}$/.test(code) ? code : "failed"}`);

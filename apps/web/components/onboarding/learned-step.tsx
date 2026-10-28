@@ -1,5 +1,8 @@
 "use client";
 
+// 3. What Konva found: how much came in, and the profile it wrote from it, to read, edit and refine
+// before it is used. Kept only when you continue, and only into settings you have not filled in yourself.
+
 import { useEffect, useState } from "react";
 import { Mail, MessagesSquare, Sparkles, Users, X } from "lucide-react";
 import { MOCK_PEOPLE, MOCK_WRITING, mockAbout, mockRefine, peopleText, type Person } from "@/lib/onboarding-demo";
@@ -10,9 +13,6 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { StepFrame, useSetup } from "./setup-context";
-
-// 3. What Konva found: how much came in, and the profile it wrote from it, to read, edit and refine
-// before it is used. Kept only when you continue, and only into settings you have not filled in yourself.
 
 export function LearnedStep() {
   const { next, back, busy, imported, channels, role, extra } = useSetup();

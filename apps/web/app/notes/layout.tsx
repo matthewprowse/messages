@@ -1,12 +1,13 @@
 "use client";
 
+// Laid out like Conversations: the list on the left third and the open note on the right two thirds. On
+// phones the list fills the screen and a note opens over it.
+
 import { usePathname } from "next/navigation";
 import { NoteList } from "@/components/note-list";
 import { NotesProvider } from "@/components/notes-data";
 import { cn } from "@/lib/utils";
 
-// Laid out like Conversations: the list on the left third and the open note on the right two thirds. On
-// phones the list fills the screen and a note opens over it.
 export default function NotesLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isDetail = /^\/notes\/[^/]+/.test(pathname);

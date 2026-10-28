@@ -1,3 +1,6 @@
+"""Tests for ai.crypto against the shared vectors in packages/crypto/vectors.json, so the Python and TypeScript sides stay
+byte-compatible: field encryption, blind indexes, address keys, team keys, sealed files and key unwrapping."""
+
 import json
 import unittest
 from pathlib import Path

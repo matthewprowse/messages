@@ -1,10 +1,10 @@
-import { GoogleApiError, type GoogleClient } from "./client";
-import { GoogleAuthError } from "./oauth";
-import type { TaskWrite } from "../tasks/rows";
-
 // The Google Tasks API, with plain HTTPS calls through GoogleClient: task lists, the tasks in each, and
 // what a task becomes when it is stored. Kept apart from the connector so the mapping can be tested
 // on hand-written responses.
+
+import { GoogleApiError, type GoogleClient } from "./client";
+import { GoogleAuthError } from "./oauth";
+import type { TaskWrite } from "../tasks/rows";
 
 export const API = "https://tasks.googleapis.com/tasks/v1";
 /** The most tasks one tasks.list page returns. */

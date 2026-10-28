@@ -1,5 +1,7 @@
 "use client";
 
+// The Listen button for today's daily brief. Writes the brief first when needed, asks the worker to speak it, and plays the audio parts as they arrive.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Pause, RotateCcw, Volume2 } from "lucide-react";
 import { toast } from "sonner";
@@ -50,6 +52,8 @@ export function BriefPlayer() {
   // Waits in progress, woken early when the brief or its parts change, and a count of those changes so
   // one that lands between a check and the wait is not missed.
   const wakers = useRef(new Set<() => void>());
+  // Ends the wait for the playing part, so stop() does not leave playFrom waiting on events that will never fire.
+  const endWait = useRef<(() => void) | null>(null);
   const changes = useRef(0);
   const limited = useRef(false);
   const allowanceLeft = useRef<number | null>(null);
@@ -149,6 +153,7 @@ export function BriefPlayer() {
     setPart(null);
     setWaiting(false);
     for (const wake of [...wakers.current]) wake();
+    endWait.current?.();
   }, [finishListening]);
   useEffect(() => stop, [stop]);
 
@@ -230,7 +235,13 @@ export function BriefPlayer() {
         break;
       }
       // A part that fails mid-way ends like one that finished, so the rest still play.
-      await new Promise<void>((done) => { el.onended = () => done(); el.onerror = () => done(); el.addEventListener("emptied", () => done(), { once: true }); });
+      await new Promise<void>((done) => {
+        const end = () => { if (endWait.current === end) endWait.current = null; done(); };
+        endWait.current = end;
+        el.onended = end;
+        el.onerror = end;
+        el.addEventListener("emptied", end, { once: true });
+      });
       URL.revokeObjectURL(el.src);
       if (progress.current && run.current === mine) progress.current.base += Number.isFinite(el.duration) ? el.duration : 0;
     }

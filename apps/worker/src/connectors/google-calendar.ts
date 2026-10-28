@@ -1,5 +1,10 @@
+// Google Calendar: the events in a window around today, for the briefing and for triage to know who
+// you are meeting. Every few minutes the window is fetched again and replaces what is stored, which
+// keeps moved and cancelled events right without Google's push channels or sync tokens. It also
+// creates the events queued in calendar_outbox from the app.
+
 import type { TablesInsert } from "@messages/db";
-import { Backoff, Sleeper } from "../backoff";
+import { Backoff, Sleeper, supervise } from "../backoff";
 import { db, must, retryWrite, setAccountStatus, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { mapLimit } from "../util";
@@ -23,11 +28,6 @@ import {
   type CalendarOutboxRow,
   type GoogleEvent,
 } from "../calendar/create-event";
-
-// Google Calendar: the events in a window around today, for the briefing and for triage to know who
-// you are meeting. Every few minutes the window is fetched again and replaces what is stored, which
-// keeps moved and cancelled events right without Google's push channels or sync tokens. It also
-// creates the events queued in calendar_outbox from the app.
 
 const POLL_MS = 5 * 60_000;
 const PAST_DAYS = 7;
@@ -129,7 +129,7 @@ export class GoogleCalendarConnector {
   }
 
   start() {
-    void this.run();
+    void supervise(() => this.run(), () => this.stopped, (err) => log.error("google calendar run loop failed", { account: this.id, code: errorCode(err) }));
   }
 
   async stop() {
@@ -146,7 +146,7 @@ export class GoogleCalendarConnector {
         const fatal = googleFatalDetail(err, "Calendar");
         if (fatal) {
           if (signInRevoked(err)) log.error("calendar sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         log.warn("calendar sync failed", { account: this.id, code: errorCode(err) });

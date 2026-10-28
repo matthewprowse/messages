@@ -1,8 +1,8 @@
-import type { Json, TablesInsert } from "@messages/db";
-
 // Turns an Outlook event from Microsoft Graph into a calendar_events row, stored the same way as a Google
 // event. Pure, so it can be unit tested. Events are read with Prefer: outlook.timezone="UTC", so times
 // come back in UTC without a zone suffix.
+
+import type { Json, TablesInsert } from "@messages/db";
 
 export interface GraphDateTime {
   dateTime?: string;

@@ -1,3 +1,6 @@
+// Tests for ingest/batch-rpc.ts over fake calls. Pin down chunking, the fall back to one call per row when the batch
+// function is missing or fails, distrust of a wrong-length answer, and per-row failures.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BATCH_RECHECK_MS, BatchRpc, functionMissing, isFailure, type RpcResponse } from "./batch-rpc";

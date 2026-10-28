@@ -1,3 +1,7 @@
+// WhatsApp photos, voice notes, videos and documents, saved to the private "attachments" bucket at
+// <user id>/<message id>/<attachment id>, the same layout as email attachments, sealed and subject to the same
+// video and storage rules (file-store.ts).
+
 import { downloadMediaMessage, type proto, type WAMessage, type WASocket } from "baileys";
 import { db, must } from "../db";
 import { keepFile, MAX_FILE_BYTES } from "../file-store";
@@ -5,10 +9,6 @@ import { fileHints } from "../ingest/file-hints";
 import { isVideoLink, refusing, stateFor } from "../storage-rules";
 import type { MediaType } from "./normalize";
 import { silentLogger } from "./logger";
-
-// WhatsApp photos, voice notes, videos and documents, saved to the private "attachments" bucket at
-// <user id>/<message id>/<attachment id>, the same layout as email attachments, sealed and subject to the same
-// video and storage rules (file-store.ts).
 
 /**
  * What is needed to fetch a file again later: WhatsApp's encrypted copy, its key, and the message key so

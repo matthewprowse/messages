@@ -1,3 +1,6 @@
+// Tests for linkedin-cookies.ts: pulling the LinkedIn session cookies out of a bare value, a Cookie header, a cURL command
+// or a paste, and refusing input without a session.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { cleanProxy, fromCookieHeader, fromCurl, fromPaste, fromValues } from "./linkedin-cookies";

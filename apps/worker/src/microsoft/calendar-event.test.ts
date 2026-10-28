@@ -1,3 +1,6 @@
+// Tests for calendar-event.ts: Graph timestamps, Outlook events stored like Google ones, all-day events and
+// the cancelled or start-less events that are left out.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { graphTimestamp, storedOutlookEvent } from "./calendar-event";

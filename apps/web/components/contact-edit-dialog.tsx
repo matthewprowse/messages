@@ -1,5 +1,7 @@
 "use client";
 
+// The Edit Contact dialog on a contact's page. The form fields are shared with New Contact (contact-list.tsx).
+
 import { useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import { useRouter } from "next/navigation";

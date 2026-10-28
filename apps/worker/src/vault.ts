@@ -154,30 +154,38 @@ async function workspacesOf(userId: string): Promise<string[]> {
  * value (e1:) opens with their keys, a team's (t1:) with the keys of the row's `workspaceId`.
  */
 export async function open(userId: string, field: Field, value: string | null | undefined, workspaceId?: string | null): Promise<string | null> {
-  if (value == null || !isCiphertext(value)) return value ?? null;
   try {
-    if (isTeamCiphertext(value)) {
-      // Most queries do not select a row's workspace_id, so without one the user's own workspaces are tried: a team
-      // value in their row can only be from one of them (the worker holds every team's key).
-      for (const id of workspaceId ? [workspaceId] : await workspacesOf(userId)) {
-        // Every readable version, the current one first: a value sealed before the last rotation opens until the
-        // re-seal job has moved it. Another team's value fails all of them and the next team is tried.
-        for (const team of (await teamRingFor(id)).all) {
-          try {
-            return await decryptAny({ team }, field, value);
-          } catch {
-            // another version or team
-          }
-        }
-      }
-      throw Object.assign(new Error("no team key"), { code: "no_team_key" });
-    }
-    const keys: KeySet = { user: await keysFor(userId) };
-    return await decryptAny(keys, field, value);
+    return await openStrict(userId, field, value, workspaceId);
   } catch (err) {
     log.warn("could not open a stored value", { field, code: errorCode(err) });
     return "";
   }
+}
+
+/**
+ * Like open(), but a value that cannot be opened throws instead of coming back as "". For work that writes
+ * something derived from the text (the blind indexes), where "" would be stored as if it were the real value.
+ */
+export async function openStrict(userId: string, field: Field, value: string | null | undefined, workspaceId?: string | null): Promise<string | null> {
+  if (value == null || !isCiphertext(value)) return value ?? null;
+  if (isTeamCiphertext(value)) {
+    // Most queries do not select a row's workspace_id, so without one the user's own workspaces are tried: a team
+    // value in their row can only be from one of them (the worker holds every team's key).
+    for (const id of workspaceId ? [workspaceId] : await workspacesOf(userId)) {
+      // Every readable version, the current one first: a value sealed before the last rotation opens until the
+      // re-seal job has moved it. Another team's value fails all of them and the next team is tried.
+      for (const team of (await teamRingFor(id)).all) {
+        try {
+          return await decryptAny({ team }, field, value);
+        } catch {
+          // another version or team
+        }
+      }
+    }
+    throw Object.assign(new Error("no team key"), { code: "no_team_key" });
+  }
+  const keys: KeySet = { user: await keysFor(userId) };
+  return await decryptAny(keys, field, value);
 }
 
 /** Text to store: encrypted when ENCRYPT_CONTENT is on, as it is otherwise. null stays null. */

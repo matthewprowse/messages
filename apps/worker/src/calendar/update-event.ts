@@ -1,13 +1,13 @@
+// Changing an event from the app: calendar_updates rows are queued by the app, claimed here, carried out by
+// the account's connector, and settled once the stored copy has the change too. A row is either new details
+// for the event (kind update) or the account's own answer to an invitation (kind rsvp). Everything that does
+// not need the network is here as pure functions, so it can be unit tested.
+
 import type { Json, Tables, TablesUpdate } from "@messages/db";
 import { zonedToUtc } from "../caldav/ical";
 import { BAD_TIME_ZONE, BAD_TIMES, addDays, allDayRange, cleanAttendees, localDate, validTimeZone, type GoogleEvent } from "./create-event";
 import type { StoredCalendarEvent } from "./delete-event";
 import { BAD_RULE, validRule, withRule } from "./recurrence";
-
-// Changing an event from the app: calendar_updates rows are queued by the app, claimed here, carried out by
-// the account's connector, and settled once the stored copy has the change too. A row is either new details
-// for the event (kind update) or the account's own answer to an invitation (kind rsvp). Everything that does
-// not need the network is here as pure functions, so it can be unit tested.
 
 export type CalendarUpdateRow = Tables<"calendar_updates">;
 export type UpdateResponse = "accepted" | "tentative" | "declined";

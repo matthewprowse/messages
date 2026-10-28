@@ -1,7 +1,12 @@
+// Google Tasks: every task list and its tasks, for Calendar and the daily brief. Every few minutes each
+// list is asked only for what changed since it was last read (updatedMin), which also reports deleted
+// tasks so they can be removed. Each list is read in full now and then as well, which catches anything
+// the changes missed. It also ticks tasks off, or back on, as queued in task_updates from the app.
+
 import type { Tables, TablesInsert } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { Backoff, Sleeper } from "../backoff";
-import { allRows, db, must, retryWrite, saveSyncState, setAccountStatus, type AccountRow } from "../db";
+import { allRows, db, must, saveSyncState, setAccountStatus, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { chunks } from "../util";
 import { seal } from "../vault";
@@ -25,11 +30,6 @@ import {
   type GoogleTask,
   type GoogleTaskList,
 } from "../google/tasks";
-
-// Google Tasks: every task list and its tasks, for Calendar and the daily brief. Every few minutes each
-// list is asked only for what changed since it was last read (updatedMin), which also reports deleted
-// tasks so they can be removed. Each list is read in full now and then as well, which catches anything
-// the changes missed. It also ticks tasks off, or back on, as queued in task_updates from the app.
 
 const POLL_MS = 3 * 60_000;
 /** A list is read in full at least this often, and on the first sync after the worker starts. */
@@ -83,7 +83,7 @@ export class GoogleTasksConnector {
         const fatal = googleFatalDetail(err, "Tasks");
         if (fatal) {
           if (signInRevoked(err)) log.error("tasks sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         if (apiNotEnabled(err)) {

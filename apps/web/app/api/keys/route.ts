@@ -1,6 +1,3 @@
-import { activeWorkspaceId, dataKey, keysReady, teamKeys } from "@/lib/server/keys";
-import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
-
 // Hands a signed-in user their data key, so the browser can decrypt their messages itself. The caller
 // proves who they are with their Supabase access token; the key is unwrapped here (Cloud KMS, or KEY_WRAPPING_KEY) and
 // never stored on this server. In Phase 2A this moves into Confidential Space with the workers.
@@ -13,11 +10,15 @@ import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/serve
 // until apps/worker/src/share/rotate.ts has re-sealed it, and a browser tries them in order. indexKey is the first
 // version's key, which the team's blind indexes always use (see TeamKeyring in packages/crypto/src/wrap.ts).
 // Asking also makes the next version first when a member has been removed since the current one was made.
+
+import { activeWorkspaceId, dataKey, keysReady, teamKeys } from "@/lib/server/keys";
+import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // 30 requests a minute. A browser fetches its key once per session, so anything faster is a script.
-const overLimit = limiter(30, 60_000);
+const overLimit = limiter(30, 60_000, { name: "keys" });
 
 export async function POST(request: Request) {
   if (!keysReady()) return fail(503, "The key service is not set up.");
@@ -27,8 +28,8 @@ export async function POST(request: Request) {
   const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many requests. Try again shortly.", { "Retry-After": String(wait) });
   try {
-    const key = await dataKey(user.id);
-    return Response.json({ key: Buffer.from(key).toString("base64"), team: await teamOf(user.id) }, { headers: noStore });
+    const [key, team] = await Promise.all([dataKey(user.id), teamOf(user.id)]);
+    return Response.json({ key: Buffer.from(key).toString("base64"), team }, { headers: noStore });
   } catch {
     return fail(500, "Could not open your key.");
   }

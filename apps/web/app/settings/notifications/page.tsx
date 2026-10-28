@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Notifications: browser push permission and the notification preferences kept on the profile.
+
 import { useEffect, useState } from "react";
 import { useApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -24,11 +26,11 @@ export default function NotificationsPage() {
   return (
     <>
       <SettingsHeader title="Notifications" description="Push only for what matters. Everything else waits for you." />
-      <div className="space-y-8">
+      <div className="space-y-3">
         <SettingsSection id="push" title="Push">
           <SettingsRows>
             <SettingsRow title="This Device" description={perm === "granted" ? "Push is enabled here." : "On iPhone, add the app to your Home Screen first, then enable."}>
-              <Button size="sm" variant={perm === "granted" ? "outline" : "default"} disabled={perm === "granted"} onClick={enablePush}>
+              <Button variant="secondary" disabled={perm === "granted"} onClick={enablePush}>
                 {perm === "granted" ? "Enabled" : "Enable Push"}
               </Button>
             </SettingsRow>

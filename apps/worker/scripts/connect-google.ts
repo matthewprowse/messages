@@ -1,3 +1,8 @@
+// Connects Gmail, Google Calendar and Google Tasks from the terminal, and Meet transcripts and Google Chat when asked. Google's sign-in opens in your browser and
+// returns to a one-time local address on this Mac, so the refresh token never passes through the web
+// app. It is encrypted before it is stored, and never printed or logged.
+// Run with: pnpm connect:google
+
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
@@ -25,11 +30,6 @@ import {
 } from "../src/google/oauth";
 import { PERSONAL_ACCOUNT, isWorkspace, type UserInfo } from "../src/google/meet";
 import { ask, ownerUserId, saveAccountRow } from "./owner";
-
-// Connects Gmail, Google Calendar and Google Tasks from the terminal, and Meet transcripts and Google Chat when asked. Google's sign-in opens in your browser and
-// returns to a one-time local address on this Mac, so the refresh token never passes through the web
-// app. It is encrypted before it is stored, and never printed or logged.
-// Run with: pnpm connect:google
 
 const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
 

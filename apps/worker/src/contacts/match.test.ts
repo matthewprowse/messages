@@ -1,3 +1,6 @@
+// Tests for match.ts: name and identity keys, placeholder and role addresses, and which contacts are certain,
+// likely or not one person (address book cards, WhatsApp numbers, signature numbers).
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

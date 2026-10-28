@@ -1,3 +1,6 @@
+// Tests for note-text.ts: file reference lines, referenced and unused files, previews and excerpts, blank notes and
+// search matching.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FILE_LINE, fileLine, isBlankNote, matchesNote, matchingLine, noteExcerpt, notePreview, referencedFiles, sortNotes, unusedFiles } from "./note-text";

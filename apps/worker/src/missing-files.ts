@@ -1,3 +1,6 @@
+// BackoffMissingFiles: the attachment scan that skips files recently tried and gives up on ones that keep failing, with the try counts kept in
+// attachment_fetch_state so a restart does not reset them. Wraps MissingFiles from ingest/attachment-files.ts.
+
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { db, must } from "./db";
 import { MissingFiles } from "./ingest/attachment-files";

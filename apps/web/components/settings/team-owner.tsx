@@ -1,5 +1,7 @@
 "use client";
 
+// The owner's block in Settings, Team: work chats, response times and shared inboxes.
+
 import { ChevronRight } from "lucide-react";
 import type { TeamState } from "@/lib/team";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";

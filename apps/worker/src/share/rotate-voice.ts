@@ -1,12 +1,12 @@
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { db, must } from "../db";
-
 // The team's sealed values that are not a shared chat's rows or the client list, for the key rotation in rotate.ts: the
 // company voice (Settings, Team, Company Voice), the log of compliance exports (the client's name) and the team's notes on
 // a chat. Each is a "t1:" value, so when a member leaves and the key is rotated it must be sealed again with the current
 // key before the old version is retired, or the retired version would take these with it. The rules are the same as for
 // the rest (rotate.ts, "TEAM KEY ROTATION"): each write is guarded by the value that was read, a value nothing opens is
 // counted and left alone, and the job can be stopped and run again.
+
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { db, must } from "../db";
 
 type VoiceTable = "workspace_voice_items" | "compliance_exports" | "thread_notes";
 type Cols = readonly (readonly [string, Field])[];

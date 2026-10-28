@@ -1,12 +1,12 @@
+// Connects your iCloud+ Mail account from the terminal, so the app-specific password is typed only here,
+// checked against iCloud, encrypted, and stored. It is never printed or logged.
+// Run with: pnpm --filter worker connect:icloud
+
 import { ImapFlow } from "imapflow";
 import { db, must } from "../src/db";
 import { credentialSealer } from "../src/vault";
 import { ICLOUD_IMAP, type ICloudCredentials } from "../src/connectors/icloud";
 import { ask, ownerUserId, saveAccountRow } from "./owner";
-
-// Connects your iCloud+ Mail account from the terminal, so the app-specific password is typed only here,
-// checked against iCloud, encrypted, and stored. It is never printed or logged.
-// Run with: pnpm --filter worker connect:icloud
 
 async function main() {
   console.log("\nConnect iCloud+ Mail\n");

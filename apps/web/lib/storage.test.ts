@@ -1,3 +1,5 @@
+// Tests for storage.ts: the storage notice levels at 80% and 100%, the team cap, and mimeFor from file-types.ts.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { STORAGE_CAP_BYTES, bytesLabel, storageLevel } from "./storage";

@@ -1,3 +1,6 @@
+// Tests for crypto/wrap.ts: local and KMS key wrappers, per-user and team data keys, Google access tokens for
+// the KMS call, and sealed credentials, against fakes of the key tables and Google's endpoints.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCipheriv, createDecipheriv, generateKeyPairSync, randomBytes } from "node:crypto";

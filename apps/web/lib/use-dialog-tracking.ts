@@ -1,3 +1,6 @@
+// Dialog usage events: records when a dialog opens, which named fields were touched and whether it was submitted. Field
+// names only, never what was typed (see analytics.ts).
+
 import { useEffect, type RefObject } from "react";
 import { wordOf } from "@messages/analytics";
 import { takeSubmitted, track } from "./analytics";

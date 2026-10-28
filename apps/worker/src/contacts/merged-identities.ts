@@ -1,8 +1,8 @@
-import { db, must } from "../db";
-
 // A merge gives a contact more addresses, but a conversation still belongs to the address it was had
 // with. Replying with no inbound message to answer would otherwise mail every address the merged contact
 // now has, so these are left out.
+
+import { db, must } from "../db";
 
 /**
  * Identity ids that reached these contacts by a merge (not undone) from a contact that was not in this

@@ -1,9 +1,9 @@
+// Turns a queued calendar_outbox row into the request that creates it in Google Calendar, and the
+// created event into a calendar_events row. Pure functions only, so all of it is unit tested.
+
 import type { Json, Tables, TablesInsert } from "@messages/db";
 import { isEmailAddress } from "../send/from-address";
 import { BAD_RULE, ruleOf, validRule } from "./recurrence";
-
-// Turns a queued calendar_outbox row into the request that creates it in Google Calendar, and the
-// created event into a calendar_events row. Pure functions only, so all of it is unit tested.
 
 export const API = "https://www.googleapis.com/calendar/v3";
 export const MAX_ATTENDEES = 50;

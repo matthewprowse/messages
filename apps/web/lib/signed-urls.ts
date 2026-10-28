@@ -1,5 +1,9 @@
 "use client";
 
+// Photos and attachments live in private buckets, so each needs a short-lived signed link. Links asked
+// for in the same tick (a grid of thumbnails, a list of avatars) go out as one request per bucket, and
+// a link is handed out again while it has enough time left.
+
 import { useEffect, useState } from "react";
 import { decryptBytes, decryptTeamBytes, isSealedBytes, SEALED_MAGIC_BYTES } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
@@ -9,10 +13,6 @@ import { mimeFor } from "./file-types";
 
 export { mimeFor };
 import { BUCKET } from "./outbox-files";
-
-// Photos and attachments live in private buckets, so each needs a short-lived signed link. Links asked
-// for in the same tick (a grid of thumbnails, a list of avatars) go out as one request per bucket, and
-// a link is handed out again while it has enough time left.
 
 const LINK_SECONDS = 60 * 60;
 /** A link made for a download is only needed for the click that follows, so it lives five minutes. */

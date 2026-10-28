@@ -1,3 +1,8 @@
+// Attachment files live in the private "attachments" bucket at <user id>/<message id>/<attachment id>, sealed
+// with the user's data key (file-store.ts). The bucket's read policy lets a signed-in user read only paths under
+// their own user ID. Whether a file is copied at all (video limit, seat cap, one copy per account) is decided
+// in file-store.ts and storage-rules.ts.
+
 import { FIELD } from "@messages/crypto/fields";
 import { db, must } from "../db";
 import { keepFile, MAX_FILE_BYTES } from "../file-store";
@@ -6,11 +11,6 @@ import { isVideoLink, refusing, stateFor } from "../storage-rules";
 import { open } from "../vault";
 import { fileHints } from "./file-hints";
 import type { EmailAttachment } from "./normalize-email";
-
-// Attachment files live in the private "attachments" bucket at <user id>/<message id>/<attachment id>, sealed
-// with the user's data key (file-store.ts). The bucket's read policy lets a signed-in user read only paths under
-// their own user ID. Whether a file is copied at all (video limit, seat cap, one copy per account) is decided
-// in file-store.ts and storage-rules.ts.
 
 export { MAX_FILE_BYTES };
 

@@ -1,7 +1,3 @@
-import { viaCompany } from "@messages/email-text/company";
-import { allRows, db, must } from "../src/db";
-import { openAddressRows } from "../src/vault";
-
 // One-off, after "<person> via <Company>" and "<person> on <Company>" senders started being named for the
 // company (senderName in packages/email-text). LinkedIn, Google Docs and the like send everyone's
 // notifications from one address, so the first person it wrote about named the contact and every later
@@ -13,6 +9,10 @@ import { openAddressRows } from "../src/vault";
 //   npx tsx --env-file=.env scripts/rename-shared-senders.ts
 //
 // Prints counts and company names only, never addresses or people's names.
+
+import { viaCompany } from "@messages/email-text/company";
+import { allRows, db, must } from "../src/db";
+import { openAddressRows } from "../src/vault";
 
 const dryRun = process.argv.includes("--dry-run");
 

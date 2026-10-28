@@ -1,3 +1,6 @@
+// Tests for caldav/delete-event.ts. Pin down how one occurrence is excluded from a series (EXDATE, dropped override,
+// line endings kept) and that a file without a series is refused.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { excludeOccurrence, exceptionLine } from "./delete-event";

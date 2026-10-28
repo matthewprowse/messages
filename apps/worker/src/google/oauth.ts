@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
-
 // Google sign-in (OAuth 2.0) with plain HTTPS calls, no Google SDK. The connect command runs the
 // browser sign-in once and stores the refresh token; the connectors trade it for short-lived access tokens.
+
+import { createHash, randomBytes } from "node:crypto";
 
 export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -94,6 +94,7 @@ async function tokenRequest(body: Record<string, string>): Promise<TokenResponse
   return json;
 }
 
+/** Trades an authorisation code and its PKCE verifier for tokens. Throws GoogleAuthError when Google refuses. */
 export function exchangeCode(opts: { clientId: string; clientSecret: string; code: string; redirectUri: string; verifier: string }) {
   return tokenRequest({
     grant_type: "authorization_code",
@@ -105,6 +106,7 @@ export function exchangeCode(opts: { clientId: string; clientSecret: string; cod
   });
 }
 
+/** Trades a refresh token for a new access token. Throws GoogleAuthError when Google refuses, for example after the sign-in is revoked. */
 export function refreshAccessToken(opts: { clientId: string; clientSecret: string; refreshToken: string }) {
   return tokenRequest({
     grant_type: "refresh_token",

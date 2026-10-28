@@ -1,3 +1,10 @@
+// Connects Outlook mail and Outlook Calendar from the terminal, the way connect-google.ts does for Google,
+// and Microsoft Teams and Microsoft To Do too when you choose them. Microsoft's sign-in opens in your browser
+// and returns to a one-time local address on this Mac, so the refresh token never passes through the web app.
+// It is encrypted before it is stored, and never printed or logged. Works for Microsoft 365 work and school
+// accounts and for Outlook.com, Hotmail and Live; Teams needs a work or school account.
+// Run with: pnpm connect:microsoft
+
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
@@ -24,13 +31,6 @@ import {
   type MicrosoftCredentials,
 } from "../src/microsoft/oauth";
 import { ask, ownerUserId, saveAccountRow } from "./owner";
-
-// Connects Outlook mail and Outlook Calendar from the terminal, the way connect-google.ts does for Google,
-// and Microsoft Teams and Microsoft To Do too when you choose them. Microsoft's sign-in opens in your browser
-// and returns to a one-time local address on this Mac, so the refresh token never passes through the web app.
-// It is encrypted before it is stored, and never printed or logged. Works for Microsoft 365 work and school
-// accounts and for Outlook.com, Hotmail and Live; Teams needs a work or school account.
-// Run with: pnpm connect:microsoft
 
 const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
 

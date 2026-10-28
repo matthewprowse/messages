@@ -1,3 +1,6 @@
+// Tests for calendar/recurrence.ts. Pin down which recurrence rules are accepted, how a rule is found in Google's
+// recurrence lines, and that replacing a rule keeps the skipped dates.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ruleOf, validRule, withRule } from "./recurrence";

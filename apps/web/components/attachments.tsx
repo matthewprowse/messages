@@ -1,9 +1,12 @@
 "use client";
 
+// Everything for showing files: tiles and thumbnails, the full-screen viewer with its swipe navigation, and the grid used by the Attachments page,
+// a contact's page and a conversation. Labels for kinds and sources live here too.
+
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { track } from "@/lib/analytics";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, CalendarDays, ExternalLink, File, FileArchive, FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Maximize, Presentation, RotateCw, User, X, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, ExternalLink, File, FileArchive, FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Maximize, Presentation, RotateCw, X, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import { withSealedColumns } from "@/lib/sealed-columns";
@@ -15,8 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ContactAvatar } from "@/components/primitives";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { useAuth } from "@/lib/auth";
+import { MyAvatar } from "@/components/my-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PdfThumbnail, PdfViewer } from "@/components/pdf-viewer";
 import { STAGE_HEIGHT, VideoPlayer, VoiceNote } from "@/components/media-player";
@@ -266,15 +268,7 @@ function viewerStamp(iso: string) {
 
 /** Your own photo, from the account you signed in with, beside files you sent. */
 function MeAvatar({ className }: { className?: string }) {
-  const { session } = useAuth();
-  const meta = (session?.user.user_metadata ?? {}) as { avatar_url?: string; picture?: string };
-  const src = meta.avatar_url ?? meta.picture;
-  return (
-    <Avatar className={className}>
-      {src && <AvatarImage src={src} alt="" referrerPolicy="no-referrer" className="object-cover" />}
-      <AvatarFallback><User className="size-1/2" /></AvatarFallback>
-    </Avatar>
-  );
+  return <MyAvatar className={className} />;
 }
 
 // The tallest a picture is shown, and the widest it can be inside the dialog (its max width less its padding and margins).
@@ -378,8 +372,9 @@ function ImageViewer({ url, name, preview, onRatio, onBroken, onSwipe }: { url: 
       <div
         ref={frame}
         className={cn("relative mx-auto flex max-w-full touch-none items-center justify-center overflow-hidden rounded-lg select-none", !shownRatio && STAGE_HEIGHT, zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in")}
-        // Hugs the picture: as tall as it needs to be, up to the stage height, and no wider than the dialog.
-        style={shownRatio ? { aspectRatio: shownRatio, height: `min(${STAGE}, calc(${STAGE_WIDTH} / ${shownRatio}))` } : { width: "100%" }}
+        // Hugs the picture: as wide as fits, up to the stage height's worth, and no wider than the dialog. Only the width is set, so
+        // when the dialog is narrower the height follows the picture's shape and no bars appear above and below it.
+        style={shownRatio ? { aspectRatio: shownRatio, width: `min(${STAGE_WIDTH}, calc(${STAGE} * ${shownRatio}))` } : { width: "100%" }}
         onDoubleClick={() => zoomTo(current.current > 1 ? 1 : 2.5)}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -529,14 +524,17 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
     track("attachment_used", { action: "download", kind: a.kind });
     setSaving(true);
     // A link made for the click lives five minutes. If it cannot be made, the viewing link told to save does.
-    const url = file.sealed ? file.download : (await downloadUrl(BUCKET, file.path, a.name)) ?? file.download;
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = a.name;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setSaving(false);
+    try {
+      const url = file.sealed ? file.download : (await downloadUrl(BUCKET, file.path, a.name).catch(() => null)) ?? file.download;
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = a.name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+    } finally {
+      setSaving(false);
+    }
   };
 
   let body: ReactNode;
@@ -617,6 +615,7 @@ function MoreSentinel({ onSeen }: { onSeen: () => void }) {
 
 const monthKey = (iso: string) => iso.slice(0, 7);
 const monthTitle = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+/** "1 File" or "2,500 Files", the count in the browser's locale. */
 export const filesLabel = (n: number) => `${n.toLocaleString()} ${n === 1 ? "File" : "Files"}`;
 
 /**

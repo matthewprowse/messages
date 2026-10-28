@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
-
 // Google sign-in for connecting Gmail and Google Calendar from the app, with plain HTTPS calls like the
 // worker's apps/worker/src/google/oauth.ts. The scopes must stay the same as the worker's SCOPES.
+
+import { createHash, randomBytes } from "node:crypto";
 
 export const clientId = process.env.GOOGLE_WEB_CLIENT_ID ?? "";
 const clientSecret = process.env.GOOGLE_WEB_CLIENT_SECRET ?? "";

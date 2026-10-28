@@ -1,3 +1,6 @@
+// Tests for todo-task.ts: how a Graph To Do task becomes a row, mainly due dates across zones, reminders and
+// notes, plus the write payloads and failure mapping.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultTodoList, dueDay, graphInstant, importanceOf, statusPatch, storedTodoTask, taskDue, taskNotes, throttleWait, todoUpdateFailure, todoWriteBody, wallClock, type GraphTodoTask } from "./todo-task";

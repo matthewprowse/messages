@@ -1,3 +1,5 @@
+// Tests for polling.ts: the poll delay as activity fades, the heartbeat gate, and the exponential file retry delay that ends in giving up.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileRetryDelay, HeartbeatGate, nextPollDelay, type PollPlan } from "./polling";

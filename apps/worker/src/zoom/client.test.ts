@@ -1,9 +1,9 @@
+// The Zoom client against a stand-in for fetch: token refresh and rotation, 429 back-off and file downloads.
+
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { ZoomApiError, ZoomClient, meetingUuidPath, retryAfterMs, signInRevoked } from "./client";
 import { TOKEN_URL, ZoomAuthError, apiBase, authUrl, grantedScopes } from "./oauth";
-
-// The Zoom client against a stand-in for fetch: token refresh and rotation, 429 back-off and file downloads.
 
 const realFetch = globalThis.fetch;
 afterEach(() => {

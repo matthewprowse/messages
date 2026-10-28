@@ -1,5 +1,11 @@
 "use client";
 
+// A shared chat from the side of someone who is not its agent (supabase/migrations/20261103100000_team_owner_features.sql):
+// the chats assigned to you, the chats of a shared inbox you use, and one chat open for reading, with the team's notes,
+// who is replying, and the two ways to answer. An assignee has no write access to the agent's rows: they answer from their
+// OWN account, a new conversation linked to the chat (outbox.for_thread_id). A member of a shared inbox answers in the chat,
+// from the shared account. Compliance reads and never answers.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { encryptTeamField } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
@@ -11,12 +17,6 @@ import { loadThreadMessages } from "./data";
 import { useMyTeam } from "./share";
 import { isE164 } from "./new-items";
 import type { Message } from "./types";
-
-// A shared chat from the side of someone who is not its agent (supabase/migrations/20261103100000_team_owner_features.sql):
-// the chats assigned to you, the chats of a shared inbox you use, and one chat open for reading, with the team's notes,
-// who is replying, and the two ways to answer. An assignee has no write access to the agent's rows: they answer from their
-// OWN account, a new conversation linked to the chat (outbox.for_thread_id). A member of a shared inbox answers in the chat,
-// from the shared account. Compliance reads and never answers.
 
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";
 const POLL_MS = 10_000;

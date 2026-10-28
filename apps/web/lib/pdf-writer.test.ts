@@ -1,3 +1,6 @@
+// Tests for pdf-writer.ts and note-pdf.ts: the PDF structure is valid (header, xref offsets, end), text flows onto new
+// pages, and a note keeps its styles, lists, tables and pictures.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PdfDoc } from "./pdf-writer";

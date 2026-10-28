@@ -1,9 +1,3 @@
-import { createHash } from "node:crypto";
-import { decryptField, encryptField, isCiphertext } from "@messages/crypto";
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { db, must } from "../src/db";
-import { keysFor } from "../src/vault";
-
 // One-off: encrypts message text stored before ENCRYPT_CONTENT was switched on (encryption stage 1),
 // or, with --decrypt, turns it back into plain text.
 //
@@ -16,6 +10,12 @@ import { keysFor } from "../src/vault";
 // this read, so a message edited mid-run is left for the next run. It was dropped once the backfill was
 // done (20261024190000): re-apply 20261024180000_encrypt_existing_write.sql before --apply or --decrypt. Values already in the wanted form are
 // skipped, so it is safe to run again. Close the app while it writes: every change is pushed to open tabs.
+
+import { createHash } from "node:crypto";
+import { decryptField, encryptField, isCiphertext } from "@messages/crypto";
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { db, must } from "../src/db";
+import { keysFor } from "../src/vault";
 
 type Mode = "dry-run" | "apply" | "decrypt";
 type Table = "drafts" | "draft_outcomes" | "outbox" | "message_ai" | "threads" | "messages";

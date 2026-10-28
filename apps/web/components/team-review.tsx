@@ -1,5 +1,10 @@
 "use client";
 
+// The first time someone loads the app after joining a team: a one-time dialog over the app with the chats Konva
+// suggests as work, to share or skip in one go. It reads only what is already synced in the browser (the same chats
+// the list shows), so nothing opens a chat on a phone or sends a read receipt. Whether it was answered is kept in the
+// sign-in's user metadata (teamReview), like the setup dialog's progress, so it follows them to every device.
+
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { toast } from "sonner";
@@ -19,18 +24,13 @@ import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { ProviderLogo } from "@/components/provider-logo";
 import { ShareFromField, shareFromOf, type ShareChoice } from "@/components/share-dialog";
 
-// The first time someone loads the app after joining a team: a one-time dialog over the app with the chats Konva
-// suggests as work, to share or skip in one go. It reads only what is already synced in the browser (the same chats
-// the list shows), so nothing opens a chat on a phone or sends a read receipt. Whether it was answered is kept in the
-// sign-in's user metadata (teamReview), like the setup dialog's progress, so it follows them to every device.
-
 /** Only people who joined recently are asked: a suggestion from months later is just a notice on its chat. */
 const RECENT_DAYS = 14;
 /** The list shows the newest of the suggested chats; the rest stay suggested on their own chats. */
 const MAX_LISTED = 100;
 
-/** Pages it stays out of the way on: signing in, the marketing page, and setting up an account in Settings. */
-const AWAY = (path: string) => path === "/" || path === "/login" || path.startsWith("/settings/accounts") || path.startsWith("/invite");
+/** Pages it stays out of the way on: signing in and setting up an account in Settings. */
+const AWAY = (path: string) => path === "/login" || path.startsWith("/settings/accounts") || path.startsWith("/invite");
 
 export function TeamReview() {
   const { session } = useAuth();
@@ -130,7 +130,7 @@ export function TeamReview() {
           </p>
         )}
         <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => void finish()}>Skip for Now</Button>
+          <Button type="button" variant="secondary" disabled={busy} onClick={() => void finish()}>Skip for Now</Button>
           <Button type="button" disabled={!ready} onClick={() => void share()}>{busy ? "Sharing" : "Share Selected"}</Button>
         </div>
       </DialogContent>

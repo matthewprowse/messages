@@ -1,3 +1,6 @@
+// Tests for google/chat.ts: which Chat spaces are read, how Chat messages map to stored messages (direction, previews, quotes,
+// deleted ones), the request to send a reply, and the plain-language classification of read and send failures.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

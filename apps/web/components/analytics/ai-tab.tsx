@@ -1,10 +1,13 @@
 "use client";
 
+// The AI tab of the Analytics page: drafts, labelling accuracy, cost and timings, from the AiReport that derive.ts builds.
+// Presentational only; it does no arithmetic beyond formatting.
+
 import { useState } from "react";
 import { DIMENSIONS, type Dimension, type LabelFieldName } from "@messages/analytics/stats";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { AiReport } from "./derive";
-import { Bars, CountTile, EmptyState, Section, Share, Table, Tile, Tiles, compact, money, ms, nice, num, of, percent, seconds, shortDay, share } from "./parts";
+import { Bars, CountTile, EmptyState, Section, SECTIONS, Share, Table, Tile, Tiles, compact, money, ms, nice, num, of, percent, seconds, shortDay, share } from "./parts";
 
 const DIMENSION_LABEL: Record<Dimension, string> = {
   sender: "Kind Of Sender",
@@ -28,11 +31,11 @@ function Splits({ report }: { report: AiReport }) {
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         <Select value={field} onValueChange={(v) => setField(v as LabelFieldName)}>
-          <SelectTrigger className="w-40" aria-label="Label"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-40 data-[size=default]:h-8" aria-label="Label"><SelectValue /></SelectTrigger>
           <SelectContent>{(Object.keys(FIELD_LABEL) as LabelFieldName[]).map((f) => <SelectItem key={f} value={f}>{FIELD_LABEL[f]}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={dim} onValueChange={(v) => setDim(v as Dimension)}>
-          <SelectTrigger className="w-56" aria-label="Split by"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-56 data-[size=default]:h-8" aria-label="Split by"><SelectValue /></SelectTrigger>
           <SelectContent>{DIMENSIONS.map((d) => <SelectItem key={d} value={d}>{DIMENSION_LABEL[d]}</SelectItem>)}</SelectContent>
         </Select>
       </div>
@@ -56,7 +59,7 @@ export function AiTab({ report: r, empty }: { report: AiReport; empty: boolean }
   const d = r.drafts;
   const k = r.cost;
   return (
-    <div className="space-y-8">
+    <div className={SECTIONS}>
       <Section title="Fix First" description="What the AI said, against what people changed it to. The most common pairs are where to start.">
         <Tiles>
           <Tile label="Labels Made" value={num(r.triaged.value)} stat={r.triaged} />

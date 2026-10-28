@@ -1,5 +1,9 @@
 "use client";
 
+// The owner's and admin's side of the Team Clients page (step 6 of Teams), and the compliance export. Members see none of it:
+// the menu is not drawn for them, and the database refuses every one of these calls from anyone who is not an owner or admin.
+// Removing a client or company stops the sharing rule matching them and never unshares a chat.
+
 import { useState } from "react";
 import { Download, MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
@@ -21,10 +25,6 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-
-// The owner's and admin's side of the Team Clients page (step 6 of Teams), and the compliance export. Members see none of it:
-// the menu is not drawn for them, and the database refuses every one of these calls from anyone who is not an owner or admin.
-// Removing a client or company stops the sharing rule matching them and never unshares a chat.
 
 type Action = "rename" | "company" | "agent" | "merge" | "remove" | "export";
 
@@ -137,7 +137,7 @@ function CompanyDialog({ client, onClose, onDone }: { client: TeamClient; onClos
           </div>
           <div className={DIALOG_BUTTONS}>
             <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-            {client.company && <Button type="button" variant="outline" disabled={busy} onClick={() => void save(null)}>Clear Company</Button>}
+            {client.company && <Button type="button" variant="ghost" disabled={busy} onClick={() => void save(null)}>Clear Company</Button>}
             <Button type="submit" variant="secondary" disabled={busy || !company.trim() || company.trim() === client.company}>{busy ? "Saving" : "Save"}</Button>
           </div>
         </form>
@@ -293,7 +293,7 @@ export function TeamCompanies({ onChanged }: { onChanged: () => void }) {
         {companies.map((c) => (
           <div key={c.domainIndex} className="flex items-center justify-between gap-3 px-4 py-2">
             <span className="min-w-0 truncate text-sm">{c.name}</span>
-            <Button size="sm" variant="outline" onClick={() => setRemoving(c)}>Remove</Button>
+            <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setRemoving(c)}>Remove</Button>
           </div>
         ))}
       </div>
@@ -382,7 +382,7 @@ function ExportDialog({ client, onClose }: { client: TeamClient; onClose: () => 
             )}
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => download(exportFileName(doc, "html"), "text/html;charset=utf-8", buildExportHtml(doc))}><Download /> Download HTML</Button>
-              <Button variant="outline" onClick={() => download(exportFileName(doc, "json"), "application/json", buildExportJson(doc))}><Download /> Download JSON</Button>
+              <Button variant="secondary" onClick={() => download(exportFileName(doc, "json"), "application/json", buildExportJson(doc))}><Download /> Download JSON</Button>
             </div>
             <p className="text-xs text-muted-foreground">Open the HTML file and print it, or save it as a PDF, for a record to keep.</p>
           </div>

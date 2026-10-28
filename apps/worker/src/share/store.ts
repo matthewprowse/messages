@@ -1,3 +1,5 @@
+// The Supabase side of a share job. The functions it calls are in 20261101120000_shared_chats.sql.
+
 import { FIELD } from "@messages/crypto/fields";
 import type { Json } from "@messages/db";
 import { db, must } from "../db";
@@ -6,8 +8,6 @@ import { open, keysFor, teamKeysFor, teamRingFor } from "../vault";
 import type { ShareFiles } from "./files";
 import type { Keys, LabelSource, MessageAiRow, MessageRow, RowWrite, ThreadRow } from "./reseal";
 import type { ShareStore, ShareTable } from "./process";
-
-// The Supabase side of a share job. The functions it calls are in 20261101120000_shared_chats.sql.
 
 export const keys: Keys = { user: keysFor, team: teamKeysFor };
 

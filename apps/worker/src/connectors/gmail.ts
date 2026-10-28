@@ -1,7 +1,13 @@
+// Gmail through its REST API: Gmail's own conversation IDs, labels for read and Inbox state, and its
+// change history for updates. The history is checked every few seconds, which keeps new mail within
+// the 10-second target without Google Cloud Pub/Sub. Read, unread, archive, delete and junk in the app
+// change the labels in Gmail (delete moves mail to the Bin, never deletes it for good). Mail moved to the
+// Bin or Spam in Gmail leaves the app's inbox. Replies are sent through Gmail, which files them in Sent itself.
+
 import { simpleParser } from "mailparser";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { Json, Tables } from "@messages/db";
-import { Backoff, SerialQueue, Sleeper } from "../backoff";
+import { Backoff, SerialQueue, Sleeper, supervise } from "../backoff";
 import { activity, GMAIL_POLL, markActivity, nextPollDelay } from "../polling";
 import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
@@ -24,12 +30,6 @@ import { actionLabels, applyLabelChange, hidden, historyChanges, roleOf, threadP
 import { undoesNotJunk } from "../ingest/junk-undo";
 import { sealAddress } from "../vault";
 import { freshAccount } from "../send/outbox";
-
-// Gmail through its REST API: Gmail's own conversation IDs, labels for read and Inbox state, and its
-// change history for updates. The history is checked every few seconds, which keeps new mail within
-// the 10-second target without Google Cloud Pub/Sub. Read, unread, archive, delete and junk in the app
-// change the labels in Gmail (delete moves mail to the Bin, never deletes it for good). Mail moved to the
-// Bin or Spam in Gmail leaves the app's inbox. Replies are sent through Gmail, which files them in Sent itself.
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const MAX_FAILED_CHECKS = 12; // about a minute of checks failing in a row
@@ -99,7 +99,7 @@ export class GmailConnector {
   }
 
   start() {
-    void this.run();
+    void supervise(() => this.run(), () => this.stopped, (err) => log.error("gmail run loop failed", { account: this.id, code: errorCode(err) }));
   }
 
   async stop() {
@@ -118,7 +118,7 @@ export class GmailConnector {
         const fatal = googleFatalDetail(err, "Gmail");
         if (fatal) {
           if (signInRevoked(err)) log.error("gmail sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         log.warn("gmail session failed", { account: this.id, code: errorCode(err) });

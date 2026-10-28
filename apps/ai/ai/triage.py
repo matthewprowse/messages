@@ -23,6 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Callable
 
 from . import log
@@ -31,7 +32,7 @@ from .fields import ADDRESS, BODY, CHOICES, CONTACT_RELATIONSHIP, FILENAME, HTML
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, not_in
 from .supabase import Supabase, in_list
-from .text import UNTRUSTED, clean
+from .text import UNTRUSTED, clean, new_fence
 from .vault import Vault
 
 PRIORITIES = ["urgent", "important", "normal", "low"]
@@ -239,9 +240,11 @@ def latest_incoming(rows: list[dict[str, Any]], batch: list[dict[str, Any]]) -> 
     }
 
 
-def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]]) -> str:
+def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]], fence: str | None = None) -> str:
     """What is known about them first (the same on every call of theirs), then the numbered emails.
-    Each email has name, sender, relationship, known, bulk, subject and body."""
+    Each email has name, sender, relationship, known, bulk, subject and body. Each sits between lines carrying
+    a random code (fence), so one email's text cannot pass for instructions or for another email."""
+    fence = fence or new_fence()
     lines = [
         f"Their name: {ctx.name or 'not given'}",
         "Their own addresses: " + (", ".join(ctx.own_addresses) or "not given"),
@@ -253,28 +256,35 @@ def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]]) -> str:
     for i, e in enumerate(emails, 1):
         lines += [
             "",
+            f"<<<{fence}",
             f"=== Email {i}",
             f"From: {e['name']} <{e['sender']}>",
             f"Relationship: {e['relationship'] or 'unknown'}",
             f"They have written to this sender before: {'yes' if e['known'] else 'no'}",
             f"Bulk mail with an unsubscribe header: {'yes' if e['bulk'] else 'no'}",
-            f"Sent: {sent_label(e.get('sent'))}",
+            f"Sent: {sent_label(e.get('sent'), ctx.timezone)}",
             f"Subject: {e['subject'] or '(none)'}",
             "",
             e["body"],
+            f"{fence}>>>",
         ]
     return "\n".join(lines)
 
 
-def sent_label(sent_at: str | None) -> str:
-    """"Thursday 29 October 2026, 13:05 UTC", so the model can work out "tomorrow at 3"."""
+def sent_label(sent_at: str | None, tz: str = "") -> str:
+    """"Thursday 29 October 2026, 15:05 SAST", in their time zone (UTC when it is not known or not valid), so
+    the model can work out "tomorrow at 3"."""
     if not sent_at:
         return "unknown"
     try:
         at = datetime.fromisoformat(sent_at.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
         return "unknown"
-    return at.strftime("%A %d %B %Y, %H:%M UTC")
+    try:
+        at = at.astimezone(ZoneInfo(tz)) if tz else at
+    except (ZoneInfoNotFoundError, ValueError):
+        pass
+    return at.strftime("%A %d %B %Y, %H:%M %Z")
 
 
 def read_choices(item: dict[str, Any]) -> str:
@@ -732,7 +742,9 @@ class Triage:
                 max_output=2048 + 256 * len(chunk),  # each answer is about 60 tokens; this only stops a runaway
             )
         except GeminiError as err:
-            if len(chunk) > 1 and err.status in (None, 400):
+            # Only an answer that was not usable (not JSON, blocked or empty, or the request refused) is worth asking
+            # again one by one. A paused budget or a timeout would fail every single call too (a timeout was already billed).
+            if len(chunk) > 1 and (err.status == 400 or "was not JSON" in str(err) or "no candidates" in str(err)):
                 return {k: v for m in chunk for k, v in self._ask(ctx, [m]).items()}
             self._failed(chunk, err.status)
             return {}

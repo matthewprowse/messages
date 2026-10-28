@@ -1,3 +1,6 @@
+// Tests for whatsapp/normalize.ts: how Baileys messages become body, preview, media and quote, plus phone
+// number, pairing code and mention helpers.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { describe, e164, formatPairingCode, nameMentions, oneLine, pairingDigits, unreadInHistory } from "./normalize";

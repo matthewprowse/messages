@@ -1,3 +1,6 @@
+// Shared app types: the shapes the screens read (Thread, Message, Contact, Account, Task, Profile) and the unions they use
+// (Channel, Provider, Priority, Category). data.ts maps database rows into these.
+
 import type { ChoiceKind } from "./choices";
 import type { Emphasis, ForwardedEmail } from "./email-text";
 
@@ -199,6 +202,8 @@ export interface WritingExample {
 
 export interface Profile {
   name: string;
+  /** Path of your own photo in the avatars bucket, or null while you have none. */
+  avatarPath: string | null;
   about: string;
   people: string;
   quietStart: string;

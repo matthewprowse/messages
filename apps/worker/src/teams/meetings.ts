@@ -1,9 +1,9 @@
-import { graphTimestamp, type GraphEvent } from "../microsoft/calendar-event";
-import type { TranscriptSegment } from "./vtt";
-
 // Which of your Outlook Calendar events were Teams meetings, when to look for their transcripts, and who
 // was in them. A transcript appears in Graph a while after the meeting ends, sometimes hours, so a meeting
 // is checked again and again until one turns up or GIVE_UP_MS has passed. Pure, so it can be unit tested.
+
+import { graphTimestamp, type GraphEvent } from "../microsoft/calendar-event";
+import type { TranscriptSegment } from "./vtt";
 
 /** How long after a meeting ends its transcript is still looked for. */
 export const GIVE_UP_MS = 6 * 60 * 60_000;

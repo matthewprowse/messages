@@ -74,6 +74,10 @@ type Event struct {
 	Message      *Message      `json:"message,omitempty"`
 	Conversation *Conversation `json:"conversation,omitempty"`
 	Error        *Error        `json:"error,omitempty"`
+	// A seen event: who (a Person ID) has seen a conversation up to when (Unix ms). It can be you, on another device.
+	ConversationURN string `json:"conversationUrn,omitempty"`
+	By              string `json:"by,omitempty"`
+	At              int64  `json:"at,omitempty"`
 }
 
 // Person is a participant: a member, or a company page.

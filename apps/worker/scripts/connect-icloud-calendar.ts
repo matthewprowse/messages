@@ -1,13 +1,13 @@
+// Connects your iCloud Calendar from the terminal, so the app-specific password is typed only here,
+// checked against iCloud, encrypted, and stored. It is never printed or logged. If iCloud+ Mail is already
+// connected, its sign-in can be reused, so nothing is typed.
+// Run with: pnpm --filter worker connect:icloud-calendar
+
 import { db, loadCredentials, must } from "../src/db";
 import { credentialSealer } from "../src/vault";
 import type { ICloudCredentials } from "../src/connectors/icloud";
 import { basicAuth, calendarHome, listCalendars } from "../src/caldav/client";
 import { ask, ownerUserId, saveAccountRow } from "./owner";
-
-// Connects your iCloud Calendar from the terminal, so the app-specific password is typed only here,
-// checked against iCloud, encrypted, and stored. It is never printed or logged. If iCloud+ Mail is already
-// connected, its sign-in can be reused, so nothing is typed.
-// Run with: pnpm --filter worker connect:icloud-calendar
 
 /** The sign-in of the user's iCloud Mail account, when they have one. */
 async function mailSignIn(userId: string): Promise<ICloudCredentials | null> {

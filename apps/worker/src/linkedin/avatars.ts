@@ -1,10 +1,10 @@
-import { imageType } from "../photos/site-icon";
-import type { Helper } from "./helper";
-
 // LinkedIn profile pictures as contact photos. Which people are due one, and the fetch itself, which the
 // helper makes (through the account's proxy, from LinkedIn's image servers only); the connector looks the
 // contacts up and saves the photo (src/photos/store.ts). Pure apart from the helper call, so it can be unit
 // tested.
+
+import { imageType } from "../photos/site-icon";
+import type { Helper } from "./helper";
 
 export const PHOTO_FRESH_MS = 7 * 24 * 60 * 60_000; // a LinkedIn photo is fetched again after a week
 export const RETRY_MS = 60 * 60_000; // a picture that did not work is not tried again for an hour

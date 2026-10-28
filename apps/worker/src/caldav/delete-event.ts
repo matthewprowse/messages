@@ -1,8 +1,8 @@
-import { icsTimestamp, parseLine } from "./ical";
-
 // Deleting one occurrence of a repeating event in iCloud: the event's file holds the whole series, so the
 // occurrence is taken out by adding an exception (EXDATE) to the series, and by dropping the edited copy of it
 // (a VEVENT with its own RECURRENCE-ID) when it was changed. Pure, so it can be unit tested.
+
+import { icsTimestamp, parseLine } from "./ical";
 
 const compact = (iso: string, allDay: boolean) => (allDay ? iso.slice(0, 10).replace(/-/g, "") : iso.replace(/[-:]/g, "").replace(/\.\d{3}/, ""));
 

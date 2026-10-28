@@ -1,5 +1,7 @@
 "use client";
 
+// The dialog for a first LinkedIn message. It queues the message sealed; the worker sends it and opens the conversation.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -30,8 +32,9 @@ const ITEM = "p-2 [&>svg:last-child]:hidden";
  */
 export async function queueLinkedIn(accountId: string, to: string, body: string, draftId?: string): Promise<string | null> {
   const sealed = await seal(FIELD.body, body).catch(() => null);
-  const { data, error } = sealed === null ? { data: null, error: true } : await supabase.from("outbox")
-    .insert({ account_id: accountId, to_addresses: [await sealAddress(to)], body: sealed, attachment_count: 0, draft_id: draftId ?? null })
+  const sealedTo = await sealAddress(to).catch(() => null);
+  const { data, error } = sealed === null || sealedTo === null ? { data: null, error: true } : await supabase.from("outbox")
+    .insert({ account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0, draft_id: draftId ?? null })
     .select("id").single();
   if (error || !data) {
     toast("Could not send. Your message is still in the box.");

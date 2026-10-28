@@ -1,3 +1,6 @@
+"""Tests for ai.logos: the judging prompt, reading the model's verdict (only a passing pick on the sheet is kept), the
+order of search URLs and the price of search queries."""
+
 import unittest
 from datetime import date
 

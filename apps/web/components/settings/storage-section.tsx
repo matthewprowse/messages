@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Storage: what is stored against the plan's allowance.
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
@@ -68,7 +70,7 @@ export function StorageSection() {
   return (
     <SettingsSection id="storage" title="Storage" description="Pictures, video, PDFs and documents kept from your conversations. Voice notes and stickers stay in their chats and are not counted.">
       <SettingsRows>
-        <div className="space-y-2 px-4 py-3">
+        <div className="space-y-2 p-3">
           <div className="flex items-baseline justify-between text-sm">
             <span className="font-medium">{bytesLabel(held)} of {bytesLabel(cap)}{pool && " (shared by your team)"}</span>
             <span className="text-xs text-muted-foreground">{pool ? `Yours: ${bytesLabel(total)}, ${files(count)}` : files(count)}</span>

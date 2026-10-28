@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Team, Members: the people, their role and status, and the invite and role controls for owners and admins.
+
 import { useState } from "react";
 import { Check, Copy, UserPlus } from "lucide-react";
 import { toast } from "sonner";
@@ -69,14 +71,14 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
             </DialogHeader>
             <div className="flex items-center gap-2">
               <Input readOnly value={link} aria-label="Invite Link" onFocus={(e) => e.currentTarget.select()} />
-              <Button type="button" variant="outline" size="icon" aria-label={copied ? "Copied" : "Copy Link"} onClick={copy}>{copied ? <Check /> : <Copy />}</Button>
+              <Button type="button" variant="secondary" size="icon" aria-label={copied ? "Copied" : "Copy Link"} onClick={copy}>{copied ? <Check /> : <Copy />}</Button>
             </div>
             <div className={DIALOG_BUTTONS}>
-              <Button type="button" onClick={close}>Done</Button>
+              <Button variant="secondary" type="button" onClick={close}>Done</Button>
             </div>
           </>
         ) : (
-          <form onSubmit={submit} className="space-y-4">
+          <form onSubmit={submit} className="space-y-3">
             <DialogHeader>
               <DialogTitle>Invite Person</DialogTitle>
               <DialogDescription>They get a link to join your team. Nothing is emailed from here.</DialogDescription>
@@ -97,7 +99,7 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
             </div>
             <div className={DIALOG_BUTTONS}>
               <Button type="button" variant="ghost" disabled={busy} onClick={close}>Cancel</Button>
-              <Button type="submit" disabled={busy || !email.trim()}>{busy ? "Creating Link" : "Create Invite Link"}</Button>
+              <Button variant="secondary" type="submit" disabled={busy || !email.trim()}>{busy ? "Creating Link" : "Create Invite Link"}</Button>
             </div>
           </form>
         )}
@@ -159,7 +161,7 @@ export function MembersSection({ team, userId, onChanged }: { team: TeamState; u
       description={`${used} of ${workspace.seats} seats in use.${manages ? "" : " Only an owner or admin can make changes."}`}
     >
       {manages && (
-        <Button size="sm" disabled={used >= workspace.seats} onClick={() => setInviting(true)}>
+        <Button variant="secondary" disabled={used >= workspace.seats} onClick={() => setInviting(true)}>
           <UserPlus /> Invite Person
         </Button>
       )}
@@ -174,15 +176,15 @@ export function MembersSection({ team, userId, onChanged }: { team: TeamState; u
             >
               {canChangeRole(p) && (
                 <Select value={p.role} onValueChange={(v) => changeRole(p, v as TeamRole)} disabled={busy}>
-                  <SelectTrigger size="sm" className="w-36" aria-label={`Role for ${label}`}><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-36" aria-label={`Role for ${label}`}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {assignableRoles(myRole, workspace.strictSharing).map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}
                   </SelectContent>
                 </Select>
               )}
-              {canChange(p) && <Button size="sm" variant="outline" disabled={busy} onClick={() => setRemoving(p)}>Remove</Button>}
+              {canChange(p) && <Button variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={() => setRemoving(p)}>Remove</Button>}
               {manages && p.status === "invited" && p.inviteId && (
-                <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => supabase.rpc("revoke_invite", { p_invite: p.inviteId! }), "Invite cancelled")}>Cancel Invite</Button>
+                <Button variant="secondary" disabled={busy} onClick={() => void act(() => supabase.rpc("revoke_invite", { p_invite: p.inviteId! }), "Invite cancelled")}>Cancel Invite</Button>
               )}
             </SettingsRow>
           );
@@ -202,7 +204,7 @@ export function MembersSection({ team, userId, onChanged }: { team: TeamState; u
           <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              variant="destructive"
+              variant="ghost" className="text-destructive hover:text-destructive"
               disabled={busy}
               onClick={(e) => {
                 e.preventDefault();

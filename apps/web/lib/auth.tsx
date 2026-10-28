@@ -1,5 +1,8 @@
 "use client";
 
+// The signed-in session for the whole app: AuthProvider wraps the tree, useAuth reads it, and the owner check gates
+// Analytics. The session is undefined until the stored one has been checked.
+
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
@@ -32,6 +35,7 @@ export function useAuth() {
 /** The one account that sees Analytics. The page's data is locked to it in the database too, once there is any. */
 export const OWNER_EMAIL = "mattprowse03@gmail.com";
 
+/** True when the signed-in email is OWNER_EMAIL. A UI gate only: the database enforces the real limit. */
 export function useIsOwner() {
   const { session } = useAuth();
   return session?.user.email?.toLowerCase() === OWNER_EMAIL;

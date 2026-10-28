@@ -1,16 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { RealtimeChannel } from "@supabase/supabase-js";
-import { useAuth } from "@/lib/auth";
-import { loadMeetingsForEvent, loadMeetingsWith, type Meeting } from "@/lib/meetings";
-import { supabase } from "@/lib/supabase";
-
 // The meetings for a conversation's people, a contact or a calendar event, kept live. Every screen that
 // shows meetings shares one Realtime subscription to the meetings table: any change (a transcript or
 // summary written, people matched, a meeting tied to its event) reloads what each screen shows, a moment
 // later so a burst of changes is one reload. What was loaded is kept per scope, so coming back to a
 // conversation shows its meetings at once while they refresh.
+
+import { useEffect, useMemo, useState } from "react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
+import { useAuth } from "@/lib/auth";
+import { loadMeetingsForEvent, loadMeetingsWith, type Meeting } from "@/lib/meetings";
+import { supabase } from "@/lib/supabase";
 
 const RELOAD_MS = 800;
 

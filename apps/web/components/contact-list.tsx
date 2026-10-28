@@ -1,5 +1,9 @@
 "use client";
 
+// The Contacts list, plus the pieces the Contacts pages share: rows, detail page frame, skeletons, multi-value inputs and the contact form fields.
+// Used by contact-view.tsx, company-view.tsx and merge-suggestions.tsx.
+
+import { toast } from "sonner";
 import { Children, Fragment, isValidElement, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";
@@ -17,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Kbd } from "@/components/ui/kbd";
 import { PaneControls, PaneHeader, PaneSelect, SearchBand, ViewButtons } from "@/components/pane";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,10 +31,6 @@ import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useContactsData } from "@/components/contacts-data";
 import { TeamClientsRow } from "@/components/team-clients";
-
-// ---------------------------------------------------------------------------
-// Pieces shared by the Contacts pages: the list, a contact, a company and Suggested Merges.
-// ---------------------------------------------------------------------------
 
 export function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
@@ -202,7 +203,7 @@ export function LoadFailed({ icon, title, backHref, backLabel, onRetry }: { icon
       description="Check your connection, then try again."
       action={
         <div className="flex items-center gap-2">
-          <Button variant="outline" asChild><Link href={backHref}>{backLabel}</Link></Button>
+          <Button variant="secondary" asChild><Link href={backHref}>{backLabel}</Link></Button>
           <Button onClick={onRetry}>Retry</Button>
         </div>
       }
@@ -216,7 +217,7 @@ export function DetailPage({ backHref, header, children, className = "space-y-8"
     // Solid, with a line under it, like the Summary and Conversations headers; the scrollbar starts below it.
     <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[65px]! data-vertical:h-auto!">
       <header className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background p-3 md:px-4">
-        <Button variant="ghost" size="icon" className="size-6 md:hidden" asChild aria-label="Back">
+        <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
           <Link href={backHref}><ArrowLeft /></Link>
         </Button>
         {header}
@@ -385,20 +386,28 @@ function NewContactForm({ onDone }: { onDone: () => void }) {
     if (!fields.valid || saving) return;
     setSaving(true);
     setFailure(null);
-    const result = await createContact({
-      name: fields.values.name.trim(),
-      emails: fields.emails.map((e) => e.trim().toLowerCase()).filter(Boolean),
-      phones: fields.phoneValues.filter((p): p is string => !!p),
-      company: fields.values.company.trim(),
-      role: fields.values.role.trim(),
-      relationship: fields.values.relationship.trim(),
-    });
-    setSaving(false);
+    let result: Awaited<ReturnType<typeof createContact>>;
+    try {
+      result = await createContact({
+        name: fields.values.name.trim(),
+        emails: fields.emails.map((e) => e.trim().toLowerCase()).filter(Boolean),
+        phones: fields.phoneValues.filter((p): p is string => !!p),
+        company: fields.values.company.trim(),
+        role: fields.values.role.trim(),
+        relationship: fields.values.relationship.trim(),
+      });
+    } catch {
+      setFailure({ text: "Could not add the contact. Check your connection and try again." });
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (!result.ok) {
       setFailure({ text: result.error, existingId: result.existingId });
       return;
     }
     markSubmitted("new_contact");
+    if (result.warning) toast(result.warning);
     open(result.id);
     // The list and the rest of the app pick the new person up in the background.
     void refreshContacts([]);
@@ -512,7 +521,7 @@ function ListBody({ items, label, icon, failed, empty, onRetry, children }: {
     return (
       <div className="py-24">
         {items === null ? (
-          <EmptyState icon={icon} title={failed} description="Check your connection, then try again." action={<Button variant="outline" onClick={onRetry}>Retry</Button>} />
+          <EmptyState icon={icon} title={failed} description="Check your connection, then try again." action={<Button variant="secondary" onClick={onRetry}>Retry</Button>} />
         ) : (
           <EmptyState icon={icon} title={empty.title} description={empty.description} />
         )}
@@ -621,6 +630,8 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
           value={search}
           onChange={setSearch}
           placeholder="Search Contacts"
+          keyShortcut="/"
+          hint={<>Search Contacts <Kbd>/</Kbd></>}
           maxLength={120}
           onKeyDown={(e) => {
             if (e.key === "Escape") {

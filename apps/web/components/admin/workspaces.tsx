@@ -1,17 +1,21 @@
 "use client";
 
+// Admin view of team workspaces: seats, owner and member counts, and making an owner's invite. Nothing is emailed from here;
+// the invite link is shown once for the admin to send themselves.
+
 import { useCallback, useEffect, useState } from "react";
-import { Check, Copy, RefreshCw } from "lucide-react";
+import { Check, Copy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { inviteLink } from "@/lib/team";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { EmptyState } from "@/components/primitives";
+import { AdminHeading, AdminRow } from "@/components/admin/parts";
 
 type Team = { id: string; name: string; seats: number; strict_sharing: boolean; owner_email: string | null; invited_email: string | null; members: number };
 
@@ -48,11 +52,11 @@ export function OwnerInviteDialog({ invite, onClose }: { invite: OwnerInvite | n
         </DialogHeader>
         <div className="flex items-center gap-2">
           <Input readOnly value={shown?.link ?? ""} aria-label="Invite Link" onFocus={(e) => e.currentTarget.select()} />
-          <Button type="button" variant="outline" size="icon" aria-label={copied ? "Copied" : "Copy Link"} onClick={copy}>{copied ? <Check /> : <Copy />}</Button>
+          <Button type="button" variant="ghost" size="icon" aria-label={copied ? "Copied" : "Copy Link"} onClick={copy}>{copied ? <Check /> : <Copy />}</Button>
         </div>
-        <div className={DIALOG_BUTTONS}>
-          <Button type="button" onClick={onClose}>Done</Button>
-        </div>
+        <DialogFooter>
+          <Button type="button" variant="secondary" onClick={onClose}>Done</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -82,52 +86,55 @@ function TeamRow({ team, onChanged, onInvite }: { team: Team; onChanged: () => v
   };
 
   return (
-    <SettingsRow
+    <AdminRow
+      icon={<Users />}
       title={<>{team.name}{team.owner_email ? null : <Badge variant="outline">Owner Not Joined</Badge>}{team.strict_sharing && <Badge variant="secondary">Strict Sharing</Badge>}</>}
       description={`${team.members} of ${team.seats} seats in use. ${team.owner_email ? `Owner: ${team.owner_email}` : `Invited: ${team.invited_email ?? "nobody"}`}`}
     >
-      {!team.owner_email && team.invited_email && <Button size="sm" variant="outline" disabled={busy} onClick={() => void reissue()}>New Invite Link</Button>}
+      {!team.owner_email && team.invited_email && <Button variant="ghost" disabled={busy} onClick={() => void reissue()}>New Invite Link</Button>}
       <Input aria-label={`Seats for ${team.name}`} inputMode="numeric" className="w-16 text-right" value={seats} onChange={(e) => setSeats(e.target.value)} />
-      <Button size="sm" disabled={busy || !valid || next === team.seats} onClick={() => void save()}>Save</Button>
-    </SettingsRow>
+      <Button variant="secondary" disabled={busy || !valid || next === team.seats} onClick={() => void save()}>Save</Button>
+    </AdminRow>
   );
 }
 
 /** Every team and its seats, for the owner. Seats are at least 5 and can be set by hand until billing exists. */
-export function Workspaces({ version, onInvite }: { version: number; onInvite: (invite: OwnerInvite) => void }) {
+export function Workspaces({ version, onInvite, onBusy }: { version: number; onInvite: (invite: OwnerInvite) => void; onBusy: (busy: boolean) => void }) {
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [failed, setFailed] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    setBusy(true);
+    onBusy(true);
     setFailed(false);
     const { data, error } = await supabase.rpc("admin_workspaces");
     if (error) setFailed(true);
     else setTeams(data as Team[]);
-    setBusy(false);
-  }, []);
+    onBusy(false);
+  }, [onBusy]);
   useEffect(() => { void load(); }, [load, version]);
 
   return (
-    <SettingsSection
-      title="Teams"
-      description="Approving a team request makes its team and an invite link for its owner. Seats are what the team pays for: at least 5, shared for storage and the AI allowance. Change them here until billing is built."
-    >
-      <div className="flex justify-end">
-        <Button variant="outline" size="icon" aria-label="Refresh Teams" disabled={busy} onClick={() => void load()}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>
-      </div>
+    <div className="flex flex-col gap-3">
+      <AdminHeading
+        title="Teams"
+        description="Approving a team request makes its team and an invite link for its owner. Seats are what the team pays for: at least 5, shared for storage and the AI allowance. Change them here until billing is built."
+      />
       {failed ? (
-        <p className="text-sm text-muted-foreground">Could not load. Check your connection and refresh.</p>
+        <EmptyState icon={Users} title="Could Not Load Teams" description="Check your connection and refresh." />
       ) : teams === null ? (
         <Skeleton className="h-24 w-full rounded-lg" />
       ) : teams.length === 0 ? (
-        <SettingsEmpty>No teams yet. Approve a team request above to make one.</SettingsEmpty>
+        <div className="py-12"><EmptyState icon={Users} title="No Teams Yet" description="Approve a team request in the waitlist to make one." /></div>
       ) : (
-        <SettingsRows>
-          {teams.map((t) => <TeamRow key={`${t.id}:${t.seats}`} team={t} onChanged={() => void load()} onInvite={onInvite} />)}
-        </SettingsRows>
+        <div>
+          {teams.map((t, i) => (
+            <div key={`${t.id}:${t.seats}`}>
+              {i > 0 && <Separator className="ml-3" />}
+              <TeamRow team={t} onChanged={() => void load()} onInvite={onInvite} />
+            </div>
+          ))}
+        </div>
       )}
-    </SettingsSection>
+    </div>
   );
 }

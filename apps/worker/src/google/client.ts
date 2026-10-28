@@ -1,10 +1,10 @@
-import { sleep } from "../backoff";
-import { GoogleAuthError, refreshAccessToken } from "./oauth";
-
 // A small authorised fetch for Google's REST APIs. Access tokens last an hour; this keeps one and
 // refreshes it shortly before it runs out, or at once if Google says it is no longer valid. A request
 // Google turns away for going too fast, or a read that hits a server error, is tried again after a pause,
 // so one busy moment does not end a whole sync session.
+
+import { sleep } from "../backoff";
+import { GoogleAuthError, refreshAccessToken } from "./oauth";
 
 /** Waits before each retry: 1 s, 2 s, then 4 s, give or take a fifth. */
 const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];

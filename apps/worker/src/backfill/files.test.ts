@@ -1,3 +1,6 @@
+// Tests for backfill/files.ts: planSeal and planOpen turn a stored object into the bytes to upload and its keyed hash,
+// and never seal a sealed object twice.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { contentHash, decryptBytes, deriveUserKeys, isSealedBytes, newDataKey } from "@messages/crypto";

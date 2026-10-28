@@ -1,10 +1,10 @@
-import { DIMENSIONS, type Counted, type Dimension, type LabelFieldName, type Stat } from "@messages/analytics/stats";
-import type { Summary, SummaryGroup } from "@/lib/analytics-data";
-
 // The numbers on the Analytics page, worked out from the database's summary (analytics_summary). The summary groups
 // events by period, name, screen and every non-numeric prop, with the numeric props summed, so counts are sums over
 // groups and medians come from its percentile list. People cannot be added up across groups, so where several groups
 // make up one row the largest group's people are shown.
+
+import { DIMENSIONS, type Counted, type Dimension, type LabelFieldName, type Stat } from "@messages/analytics/stats";
+import type { Summary, SummaryGroup } from "@/lib/analytics-data";
 
 const DAY = 86_400_000;
 

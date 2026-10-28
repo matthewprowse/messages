@@ -1,5 +1,8 @@
 "use client";
 
+// The Summary list looks and behaves like the Conversations list: same header, rows (ThreadRow itself),
+// hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /summary.
+
 import { Children, Fragment, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { track } from "@/lib/analytics";
 import Link from "next/link";
@@ -25,9 +28,6 @@ import { EmptyState, providerLabel } from "@/components/primitives";
 import { useImporting } from "@/components/sync-bar";
 import { SelectionBar, ThreadRow, useSwipedRow, useThreadSelection } from "@/components/thread-list";
 import { BriefPlayer } from "@/components/brief-player";
-
-// The Summary list looks and behaves like the Conversations list: same header, rows (ThreadRow itself),
-// hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /summary.
 
 const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
   { key: "none", label: "All" },
@@ -158,14 +158,14 @@ const NO_END_MINUTES = 60;
  * set while the latest load has failed with nothing loaded to show, and `retry` loads again.
  */
 // Today's events as last loaded, so the section is there at once when the page is opened again.
-let todaysCache: { day: string; events: CalendarEvent[] } | null = null;
+let todaysCache: { userId: string; day: string; events: CalendarEvent[] } | null = null;
 
 function useTodaysEvents(now: Date) {
   const { session } = useAuth();
   const userId = session?.user.id;
   const today = dayKey(now);
   const tick = Math.floor(now.getTime() / (EVENTS_REFRESH_MINUTES * 60_000));
-  const [loaded, setLoaded] = useState<CalendarEvent[] | undefined>(() => (todaysCache?.day === today ? todaysCache.events : undefined));
+  const [loaded, setLoaded] = useState<CalendarEvent[] | undefined>(() => (todaysCache && todaysCache.userId === userId && todaysCache.day === today ? todaysCache.events : undefined));
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -176,7 +176,7 @@ function useTodaysEvents(now: Date) {
     loadEvents(new Date(y, m - 1, d), new Date(y, m - 1, d + 1))
       .then((events) => {
         if (cancelled) return;
-        todaysCache = { day: today, events };
+        todaysCache = { userId, day: today, events };
         setLoaded(events);
         setFailed(false);
       })
@@ -421,7 +421,7 @@ export function SummaryList() {
               icon={CircleCheck}
               title="You're All Caught Up"
               description={filter === "none" ? "Replies waiting on you, urgent conversations, today's events and tasks appear here." : "Nothing that needs you matches this filter."}
-              action={filter !== "none" ? <Button variant="outline" onClick={() => router.push(BASE)}>Clear Filter</Button> : undefined}
+              action={filter !== "none" ? <Button variant="secondary" onClick={() => router.push(BASE)}>Clear Filter</Button> : undefined}
             />
           </div>
         )}
@@ -435,7 +435,7 @@ export function SummaryList() {
                       <CalendarX className="size-4" />
                     </div>
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">Couldn&apos;t Load Calendar</span>
-                    <Button variant="outline" size="sm" onClick={retryCalendar}>Retry</Button>
+                    <Button variant="secondary" onClick={retryCalendar}>Retry</Button>
                   </div>
                 ) : calendarPending ? (
                   <div role="status" aria-busy="true" aria-label="Loading calendar" className="flex items-center gap-3 p-3">

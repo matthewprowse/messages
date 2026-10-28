@@ -1,3 +1,6 @@
+// Opens encrypted columns in rows as they arrive from Supabase, before data.ts maps them. One list of sealed columns per
+// table, so every loader reads old plaintext and new ciphertext rows the same way.
+
 import { FIELD, type Field } from "@messages/crypto/fields";
 import { isCiphertext } from "@messages/crypto";
 import { open, openRows, type TextColumn } from "./vault";
@@ -50,7 +53,6 @@ export async function openAddresses<T>(rows: T): Promise<T> {
 const EVENT_TEXT: TextColumn[] = [["title", FIELD.eventTitle], ["location", FIELD.eventLocation]];
 const EXAMPLE_TEXT: TextColumn[] = [["situation", FIELD.writingSituation], ["body", FIELD.writingBody]];
 const RULE_TEXT: TextColumn[] = [["rule", FIELD.styleRule], ["relationship", FIELD.styleRelationship]];
-const CARD_TEXT: TextColumn[] = [["name", FIELD.cardName]];
 
 /** Calendar events: the title and location. */
 export const openEvents = <T extends object>(rows: T[]) => openRows(rows, EVENT_TEXT);
@@ -58,8 +60,6 @@ export const openEvents = <T extends object>(rows: T[]) => openRows(rows, EVENT_
 export const openExamples = <T extends object>(rows: T[]) => openRows(rows, EXAMPLE_TEXT);
 /** Style rules: the rule and the relationship it is for. */
 export const openRules = <T extends object>(rows: T[]) => openRows(rows, RULE_TEXT);
-/** Address book cards: the name. */
-export const openCards = <T extends object>(rows: T[]) => openRows(rows, CARD_TEXT);
 
 export const openTasks = <T extends object>(rows: T[]) => openRows(rows, TASK_TEXT);
 export const openThreads = async <T extends object>(rows: T[]) => openAddresses(await openRows(rows, THREAD_TEXT));

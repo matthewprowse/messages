@@ -1,12 +1,13 @@
 "use client";
 
+// With no note open, the right-hand pane invites picking one or starting a new one.
+
 import { NotebookPen } from "lucide-react";
 import { useNewNote } from "@/components/notes-data";
 import { EmptyState } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 
-// With no note open, the right-hand pane invites picking one or starting a new one.
 export default function NotesIndex() {
   const { creating, newNote } = useNewNote();
   return (

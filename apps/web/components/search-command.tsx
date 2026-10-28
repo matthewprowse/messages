@@ -1,5 +1,7 @@
 "use client";
 
+// The search palette and the shortcuts dialog. The palette jumps to pages and settings and searches the conversations already loaded in the app.
+
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/lib/store";
@@ -17,8 +19,9 @@ import { formatPhone } from "@/lib/format";
 
 const DEBOUNCE_MS = 150;
 
-function strip(html: string) {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+// Bodies are plain text, so "<jane@x.com>" and "a < b" are content, not tags: only the spacing is tidied.
+function tidy(text: string) {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 // Every word of the query has to appear somewhere in the text, in any order.
@@ -162,9 +165,9 @@ function SearchResults({ onPick }: { onPick: () => void }) {
   // Deleted conversations (in the provider's bin) never show in search.
   const recent = useMemo(() => threads.filter((t) => t.status !== "trash").sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt)), [threads]);
   const live = useMemo(() => new Map(recent.map((t) => [t.id, t])), [recent]);
-  // Stripped and lowercased once per message list rather than on every search.
+  // Tidied and lowercased once per message list rather than on every search.
   const texts = useMemo(() => messages.map((m) => {
-    const text = strip(m.body);
+    const text = tidy(m.body);
     return { m, text, hay: text.toLowerCase() };
   }), [messages]);
 
@@ -361,7 +364,7 @@ export function ShortcutsDialog() {
           ))}
         </div>
         <div className="flex justify-end">
-          <Button variant="outline" onClick={() => setOpen(false)}>Close</Button>
+          <Button variant="secondary" onClick={() => setOpen(false)}>Close</Button>
         </div>
       </DialogContent>
     </Dialog>

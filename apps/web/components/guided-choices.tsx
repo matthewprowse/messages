@@ -1,5 +1,7 @@
 "use client";
 
+// The decision buttons above the reply box, offered when triage found a choice only the user can make. Used by thread-view.tsx.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Message, Thread } from "@/lib/types";
 import { clashes, freeSlots, loadChoices, otherTimeDecision, slotButton, slotLabel, type Busy, type ReplyChoices } from "@/lib/choices";
@@ -78,7 +80,7 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
         {picking ? (
           <>
             {slots.map((slot) => (
-              <Button key={slot.toISOString()} variant="outline" disabled={disabled} onClick={() => pick({ text: otherTimeDecision(slot, value.asked), kind: "other_time" })}>
+              <Button key={slot.toISOString()} variant="secondary" disabled={disabled} onClick={() => pick({ text: otherTimeDecision(slot, value.asked), kind: "other_time" })}>
                 {slotButton(slot)}
               </Button>
             ))}
@@ -87,7 +89,7 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
           </>
         ) : (
           value.options.map((o) => (
-            <Button key={o.label} variant="outline" disabled={disabled} onClick={() => (o.kind === "other_time" ? setPicking(true) : pick({ text: o.decision, kind: o.kind }))}>
+            <Button key={o.label} variant="secondary" disabled={disabled} onClick={() => (o.kind === "other_time" ? setPicking(true) : pick({ text: o.decision, kind: o.kind }))}>
               {o.label}
             </Button>
           ))

@@ -1,8 +1,3 @@
-import { decryptField } from "@messages/crypto";
-import { allRows, db, must } from "../src/db";
-import { errorCodeFor, planRow, SPECS, type Mode } from "../src/backfill/fields";
-import { keysFor } from "../src/vault";
-
 // One-off: encrypts the text fields that were stored readable (docs/PLAN.md, Privacy and Encryption, Code Check):
 // writing examples, style rules, the contact fields company, role, relationship, style note and AI summary, address
 // book card names, calendar titles and locations, meeting participant names, and attachment file names. It also
@@ -21,6 +16,11 @@ import { keysFor } from "../src/vault";
 // counts only, never a value.
 //
 // Error columns cannot be restored by --decrypt: the old text is gone by design.
+
+import { decryptField } from "@messages/crypto";
+import { allRows, db, must } from "../src/db";
+import { errorCodeFor, planRow, SPECS, type Mode } from "../src/backfill/fields";
+import { keysFor } from "../src/vault";
 
 const args = process.argv.slice(2);
 const decrypt = args.includes("--decrypt");

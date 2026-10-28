@@ -1,3 +1,5 @@
+// Tests for send/inbox.ts: who replies for a conversation (its owner, the shared inbox, or nobody) and which accounts a person may use.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mayUseAccount, replyFor } from "./inbox";

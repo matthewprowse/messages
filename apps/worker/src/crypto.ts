@@ -1,9 +1,9 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { CREDENTIAL_PREFIX, openCredential, sealCredential } from "@messages/crypto/wrap";
-
 // AES-256-GCM for credentials and session keys stored in Supabase.
 // "v1:" is the old format, one static key (ENCRYPTION_KEY) for everyone, no additional data:
 // "v1:" + base64(iv[12] | authTag[16] | ciphertext). It is kept for reading old rows and for credentials:reseal.
+
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { CREDENTIAL_PREFIX, openCredential, sealCredential } from "@messages/crypto/wrap";
 
 function key(raw: string): Buffer {
   const buf = Buffer.from(raw, "base64");
@@ -11,6 +11,7 @@ function key(raw: string): Buffer {
   return buf;
 }
 
+/** Seals text in the legacy "v1:" format with the static key. rawKey is base64 and must decode to 32 bytes. */
 export function encrypt(plaintext: string, rawKey: string): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key(rawKey), iv);
@@ -18,6 +19,7 @@ export function encrypt(plaintext: string, rawKey: string): string {
   return "v1:" + Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
 }
 
+/** Opens a "v1:" value. Throws on a different format, a tampered payload or the wrong key. */
 export function decrypt(payload: string, rawKey: string): string {
   if (!payload.startsWith("v1:")) throw new Error("Unknown ciphertext format.");
   const buf = Buffer.from(payload.slice(3), "base64");

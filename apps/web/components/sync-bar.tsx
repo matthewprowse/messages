@@ -1,5 +1,7 @@
 "use client";
 
+// The bar above every page while a new user's accounts are doing their first import, and the hook that lists which ones.
+
 import { RefreshCw } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { useOnboardingMeta } from "@/lib/onboarding";

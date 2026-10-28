@@ -1,8 +1,8 @@
-import { db, must } from "../src/db";
-import { plainLetters } from "../src/ingest/normalize-email";
-
 // One-off: rewrites styled Unicode letters (maths bold, script, full-width) already stored as plain
 // text. New mail is cleaned on import. Safe to run again: unchanged rows are skipped.
+
+import { db, must } from "../src/db";
+import { plainLetters } from "../src/ingest/normalize-email";
 
 const PAGE = 500;
 

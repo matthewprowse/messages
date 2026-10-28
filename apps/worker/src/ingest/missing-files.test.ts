@@ -1,3 +1,6 @@
+// Tests for MissingFiles in ingest/attachment-files.ts over a faked database. Pin down that a big video is marked as a
+// link and not fetched, and that nothing is fetched for a user whose storage is at the cap.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 

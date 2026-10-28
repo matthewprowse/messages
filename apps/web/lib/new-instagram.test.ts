@@ -1,3 +1,5 @@
+// Tests for new-instagram.ts: username cleanup, spotting the official Instagram account, and picking the linked accounts.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { instagramAccounts, instagramLinked, instagramUsername, isOfficialAccount, normaliseUsername } from "./new-instagram";

@@ -1,12 +1,5 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
-import { track } from "@/lib/analytics";
-import { createNote, deleteNote, loadNoteBodies, loadNotes, pinNote, removeNoteFiles, saveNote, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
-import { isBlankNote, noteExcerpt, sortNotes, unusedFiles } from "@/lib/note-text";
-
 // The notes list and saving, shared by the list and the open note. A title changes the note here at once;
 // the text is read from the editor only when a save is due, so each keystroke does not turn the whole note
 // into markdown. A save runs once typing has paused for a moment, and at the latest every half minute, and
@@ -14,6 +7,14 @@ import { isBlankNote, noteExcerpt, sortNotes, unusedFiles } from "@/lib/note-tex
 // the list straight away while it refreshes. The list loads titles and excerpts only; a note's text is
 // downloaded and opened when the note opens, in the background for older notes without an excerpt, and for
 // every note when searching.
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { track } from "@/lib/analytics";
+import { useAuth } from "@/lib/auth";
+import { createNote, deleteNote, loadNoteBodies, loadNotes, pinNote, removeNoteFiles, saveNote, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
+import { isBlankNote, noteExcerpt, sortNotes, unusedFiles } from "@/lib/note-text";
 
 const SAVE_IDLE_MS = 2500;
 const SAVE_MAX_MS = 30_000;
@@ -43,7 +44,7 @@ interface NotesValue {
   /** The text can be a function, read when the save is due. */
   edit: (id: string, fields: { title?: string; body?: string | (() => string) }) => void;
   /** Saves any change still waiting. */
-  flush: (id: string) => Promise<void>;
+  flush: (id: string) => Promise<boolean>;
   pin: (id: string, pinned: boolean) => void;
   /** Whether the AI is given this note with every draft. */
   draftWith: (id: string, on: boolean) => void;
@@ -54,11 +55,17 @@ interface NotesValue {
 
 const NotesContext = createContext<NotesValue | null>(null);
 
-let cached: Note[] | null = null;
+// The notes as last loaded, for the user who loaded them, so reopening Notes shows them at once.
+let cached: { userId: string; notes: Note[] } | null = null;
 
 export function NotesProvider({ children }: { children: React.ReactNode }) {
-  const [notes, setNotes] = useState<Note[]>(() => cached ?? []);
-  const [loading, setLoading] = useState(cached === null);
+  const { session } = useAuth();
+  const userId = session?.user.id ?? null;
+  const userRef = useRef(userId);
+  userRef.current = userId;
+  const own = userId && cached?.userId === userId ? cached.notes : null;
+  const [notes, setNotes] = useState<Note[]>(() => own ?? []);
+  const [loading, setLoading] = useState(own === null);
   const [error, setError] = useState(false);
   const [states, setStates] = useState<Record<string, SaveState>>({});
   const notesRef = useRef(notes);
@@ -77,7 +84,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   const commit = useCallback((next: Note[] | ((prev: Note[]) => Note[])) => {
     setNotes((prev) => {
       const out = typeof next === "function" ? next(prev) : next;
-      cached = out;
+      if (userRef.current) cached = { userId: userRef.current, notes: out };
       return out;
     });
   }, []);
@@ -208,26 +215,28 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     if (!loading && needsExcerpt) loadMore();
   }, [loading, needsExcerpt, loadMore]);
 
-  const save = useCallback(async (id: string): Promise<void> => {
+  /** Saves the note, resolving to false when the save failed (the note is then still changed). */
+  const save = useCallback(async (id: string): Promise<boolean> => {
     resolve(id);
     clearTimeout(timers.current.get(id));
     timers.current.delete(id);
     // One save at a time per note; a change made during it is saved after.
     await running.current.get(id);
     resolve(id);
-    if (!dirty.current.has(id)) return;
+    if (!dirty.current.has(id)) return true;
     const note = current(id);
-    if (!note) { dirty.current.delete(id); return; }
+    if (!note) { dirty.current.delete(id); return true; }
     dirty.current.delete(id);
     firstDirty.current.delete(id);
-    if (note.unloaded) return;
+    if (note.unloaded) return true;
     // Typing that ended where it began costs nothing.
     const key = keyOf(note);
     if (lastSaved.current.get(id) === key) {
       setStates((s) => ({ ...s, [id]: dirty.current.has(id) ? "saving" : "saved" }));
-      return;
+      return true;
     }
     setStates((s) => ({ ...s, [id]: "saving" }));
+    let saved = true;
     const run = saveNote(id, { title: note.title, body: note.body })
       .then((updatedAt) => {
         lastSaved.current.set(id, key);
@@ -235,12 +244,14 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
         setStates((s) => ({ ...s, [id]: dirty.current.has(id) ? "saving" : "saved" }));
       })
       .catch(() => {
+        saved = false;
         dirty.current.add(id);
         setStates((s) => ({ ...s, [id]: "failed" }));
       })
       .finally(() => running.current.delete(id));
     running.current.set(id, run);
     await run;
+    return saved;
   }, [commit, resolve, current]);
 
   // A note stored as plaintext, or without an excerpt, is rewritten sealed when it is opened. The save
@@ -355,7 +366,8 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     const unused = unusedFiles(files, note.body);
-    if (unused.length) void save(id).then(() => removeNoteFiles(unused)).catch(() => {});
+    // Files are deleted only once the body without them is saved; offline, the saved body may still point at them.
+    if (unused.length) void save(id).then((saved) => (saved ? removeNoteFiles(unused) : undefined)).catch(() => {});
   }, [remove, save, resolve, current]);
 
   const sorted = useMemo(() => sortNotes(notes), [notes]);

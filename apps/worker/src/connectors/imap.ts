@@ -1,6 +1,13 @@
+// Any IMAP and SMTP mailbox: iCloud+ Mail (./icloud.ts), and mail on your own domain at any host (Afrihost,
+// xneelo, cPanel and Dovecot servers, Yahoo, Fastmail, Zoho). IMAP to sync both ways, SMTP to send replies and
+// unsubscribe emails. Read, unread, archive, delete and junk in the app are applied to the server (delete moves
+// mail to Trash, never deletes it for good), and mail moved or deleted on another device leaves the app's
+// inbox. Trash and Junk are never imported; they are only looked in for mail that left the Inbox. What differs
+// from one service to the next, where its servers are and how it is named, is in ./mail-service.ts.
+
 import { ImapFlow, ImapFlowErrorCode } from "imapflow";
 import nodemailer from "nodemailer";
-import { Backoff, SerialQueue, sleep } from "../backoff";
+import { Backoff, SerialQueue, sleep, supervise } from "../backoff";
 import { allRows, db, getSyncState, loadCredentials, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -20,14 +27,8 @@ import { undoesNotJunk } from "../ingest/junk-undo";
 import { finishAction } from "../send/actions";
 import { pickFolders } from "../ingest/imap-folders";
 import { sealAddress } from "../vault";
+import { uidSet } from "./uid-set";
 import type { ImapCredentials, MailCredentials, MailService } from "./mail-service";
-
-// Any IMAP and SMTP mailbox: iCloud+ Mail (./icloud.ts), and mail on your own domain at any host (Afrihost,
-// xneelo, cPanel and Dovecot servers, Yahoo, Fastmail, Zoho). IMAP to sync both ways, SMTP to send replies and
-// unsubscribe emails. Read, unread, archive, delete and junk in the app are applied to the server (delete moves
-// mail to Trash, never deletes it for good), and mail moved or deleted on another device leaves the app's
-// inbox. Trash and Junk are never imported; they are only looked in for mail that left the Inbox. What differs
-// from one service to the next, where its servers are and how it is named, is in ./mail-service.ts.
 
 interface Folder {
   path: string;
@@ -41,19 +42,6 @@ const RECONCILE_EVERY_TICKS = 5; // the Inbox is compared with the app every 5 m
 const FILES_EVERY_TICKS = 10;
 const WRITE_AT_ONCE = 6; // row updates in flight together
 const THREADS_AT_ONCE = 100; // thread ids in one .in() filter, to keep the request URL short
-
-/** UIDs as an IMAP sequence set, runs written as ranges ("1:4,9"), so a big Inbox is a short command. */
-export function uidSet(uids: number[]): string {
-  const sorted = [...new Set(uids)].sort((a, b) => a - b);
-  const parts: string[] = [];
-  for (let i = 0; i < sorted.length; ) {
-    let j = i;
-    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++;
-    parts.push(j > i ? `${sorted[i]}:${sorted[j]}` : String(sorted[i]));
-    i = j + 1;
-  }
-  return parts.join(",");
-}
 
 const IMAP_CODES = new Set<string>(Object.values(ImapFlowErrorCode));
 
@@ -99,7 +87,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
   }
 
   start() {
-    void this.run();
+    void supervise(() => this.run(), () => this.stopped, (err) => log.error("imap run loop failed", { account: this.id, code: errorCode(err) }));
   }
 
   async stop() {
@@ -117,7 +105,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         if ((err as { authenticationFailed?: boolean }).authenticationFailed) {
           // Retrying a rejected password risks the provider locking the account. Wait for new credentials instead.
           log.error(`${this.service.tag} sign-in rejected`, { account: this.id });
-          await setAccountStatus(this.id, "error", this.creds ? this.service.rejected(this.creds) : `${this.service.name} rejected the ${this.service.password}. Reconnect in Settings.`);
+          await setAccountStatus(this.id, "error", this.creds ? this.service.rejected(this.creds) : `${this.service.name} rejected the ${this.service.password}. Reconnect in Settings.`).catch(() => undefined);
           return;
         }
         log.warn(`${this.service.tag} session failed`, { account: this.id, code: errorCode(err) });
@@ -180,7 +168,11 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
       client.on("flags", (event: { path: string; uid?: number; flags: Set<string> }) => {
         if (event.uid === undefined) return;
         const uid = event.uid;
-        this.background(() => applyReadState(this.account, event.path, uid, event.flags.has("\\Seen")));
+        // The UID only means something within one UIDVALIDITY. Unknown: skip rather than flip another message.
+        const mailbox = client.mailbox && client.mailbox.path === event.path ? Number(client.mailbox.uidValidity) : this.syncStates.get(event.path)?.uid_validity;
+        if (mailbox === undefined || mailbox === null || !Number.isFinite(mailbox)) return;
+        const uidValidity = mailbox;
+        this.background(() => applyReadState(this.account, event.path, uid, event.flags.has("\\Seen"), uidValidity));
       });
       let ticking = false;
       let ticks = 0;
@@ -556,10 +548,12 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     try {
       const uidValidity = Number(client.mailbox && client.mailbox.uidValidity);
       // Rows from an older UIDVALIDITY count as gone: their UIDs now point at other messages, if any.
-      const current = new Set(rows.filter((r) => (r.provider_meta as { uid_validity?: number }).uid_validity === uidValidity));
+      // Rows with no recorded UIDVALIDITY are unknown, not gone: they are left alone.
+      const validityOf = (r: (typeof rows)[number]) => (r.provider_meta as { uid_validity?: number } | null)?.uid_validity;
+      const current = new Set(rows.filter((r) => validityOf(r) === uidValidity));
       const uids = [...current].map((r) => (r.provider_meta as { uid: number }).uid);
       const present = new Set<number>(uids.length ? ((await client.search({ uid: uidSet(uids) }, { uid: true })) || []) : []);
-      gone = rows.filter((r) => !current.has(r) || !present.has((r.provider_meta as { uid?: number }).uid ?? -1));
+      gone = rows.filter((r) => validityOf(r) !== undefined && (!current.has(r) || !present.has((r.provider_meta as { uid?: number }).uid ?? -1)));
     } finally {
       lock.release();
     }

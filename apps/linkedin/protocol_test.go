@@ -219,6 +219,21 @@ func TestEventFrom(t *testing.T) {
 	if ev := EventFrom(msg); ev == nil || ev.Event != "message" || ev.Message.Text != "Hello" {
 		t.Errorf("message event %+v", ev)
 	}
+	seen := &linkedingo.DecoratedEvent{}
+	receipt := `{"result": {"seenAt": 1700000000000,
+	  "message": {"conversationUrn": "urn:li:msg_conversation:(urn:li:fsd_profile:ME,2-abc)"},
+	  "seenByParticipant": {"entityUrn": "urn:li:msg_messagingParticipant:urn:li:fsd_profile:SAM"}}}`
+	seen.Payload.Data.DecoratedSeenReceipt = &linkedingo.DecoratedSeenReceipt{}
+	if err := json.Unmarshal([]byte(receipt), seen.Payload.Data.DecoratedSeenReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if ev := EventFrom(seen); ev == nil || ev.Event != "seen" || ev.By != "SAM" || ev.At != 1700000000000 || ev.ConversationURN != "urn:li:msg_conversation:(urn:li:fsd_profile:ME,2-abc)" {
+		t.Errorf("seen event %+v", ev)
+	}
+	seen.Payload.Data.DecoratedSeenReceipt = &linkedingo.DecoratedSeenReceipt{}
+	if ev := EventFrom(seen); ev != nil {
+		t.Errorf("a receipt naming nobody is dropped: %+v", ev)
+	}
 	typing := &linkedingo.DecoratedEvent{}
 	typing.Payload.Data.DecoratedTypingIndicator = &linkedingo.DecoratedTypingIndicator{}
 	if ev := EventFrom(typing); ev != nil {
@@ -494,5 +509,95 @@ func TestStartNeedsWhatItNeeds(t *testing.T) {
 		if resp.OK || resp.Error.Kind != KindBadRequest {
 			t.Errorf("start %s: %+v", args, resp)
 		}
+	}
+}
+
+// A start goes through the real login handler: it fails before a login, works after one, and fails again
+// once the login is dropped or replaced by one that does not work.
+func TestStartAfterLogin(t *testing.T) {
+	var sentBody []byte
+	var sentHeader http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sentBody, _ = io.ReadAll(r.Body)
+		sentHeader = r.Header.Clone()
+		fmt.Fprint(w, `{"value": {"entityUrn": "urn:li:msg_message:(urn:li:fsd_profile:ACoAAME,2-TXNn)", "deliveredAt": 1761480000000,
+			"body": {"text": "Hello Sam"}, "backendConversationUrn": "urn:li:messagingThread:2-Q29udg==",
+			"conversation": {"entityUrn": "urn:li:msg_conversation:(urn:li:fsd_profile:ACoAAME,2-Q29udg==)"}}}`)
+	}))
+	defer srv.Close()
+
+	profileOK := true
+	var seen loginArgs
+	h := &Helper{out: NewWriter(io.Discard), startEndpoint: srv.URL}
+	h.probeProfile = func(_ context.Context, _ *linkedingo.StringCookieJar, args loginArgs) (*linkedingo.UserProfile, error) {
+		seen = args
+		if !profileOK {
+			return nil, &linkedingo.ResponseError{StatusCode: http.StatusUnauthorized}
+		}
+		var p linkedingo.UserProfile
+		p.MiniProfile.EntityURN = linkedingo.NewURN("urn:li:fs_miniProfile:ACoAAME")
+		return &p, nil
+	}
+	ctx := context.Background()
+	startArgs := json.RawMessage(`{"profile":"urn:li:fsd_profile:ACoAAOTHER","text":"Hello Sam","token":"outbox-1"}`)
+
+	resp, _ := h.Handle(ctx, Request{ID: 1, Cmd: "start", Args: startArgs})
+	if resp.OK || resp.Error.Kind != KindBadRequest || sentBody != nil {
+		t.Fatalf("a start before login is refused and sends nothing: %+v", resp)
+	}
+
+	login := json.RawMessage(`{"cookies":"li_at=secret; JSESSIONID=\"ajax:123\"","pageInstance":"urn:li:page:x;1","headers":{"User-Agent":["Mozilla/5.0 Login"]}}`)
+	resp, _ = h.Handle(ctx, Request{ID: 2, Cmd: "login", Args: login})
+	if !resp.OK || h.client == nil || h.session == nil || h.session.me.ID != "ACoAAME" || h.session.jar == nil {
+		t.Fatalf("login: %+v session %+v", resp, h.session)
+	}
+	if seen.Headers.Get("User-Agent") != "Mozilla/5.0 Login" {
+		t.Errorf("the probe got the browser headers: %+v", seen)
+	}
+	resp, _ = h.Handle(ctx, Request{ID: 3, Cmd: "start", Args: startArgs})
+	if !resp.OK {
+		t.Fatalf("start after login: %+v", resp.Error)
+	}
+	if sentHeader.Get("User-Agent") != "Mozilla/5.0 Login" || sentHeader.Get("Csrf-Token") != "ajax:123" {
+		t.Errorf("start replays the login's headers and csrf token: %+v", sentHeader)
+	}
+	if !strings.Contains(string(sentBody), "ACoAAME") || !strings.Contains(string(sentBody), "ACoAAOTHER") {
+		t.Errorf("body %s", sentBody)
+	}
+
+	profileOK = false
+	resp, _ = h.Handle(ctx, Request{ID: 4, Cmd: "login", Args: login})
+	if resp.OK || resp.Error.Kind != KindBadCredentials || h.session != nil || h.client != nil {
+		t.Errorf("a failed login leaves no session: %+v", resp)
+	}
+	resp, _ = h.Handle(ctx, Request{ID: 5, Cmd: "start", Args: startArgs})
+	if resp.OK {
+		t.Errorf("start after a failed login: %+v", resp)
+	}
+
+	profileOK = true
+	h.Handle(ctx, Request{ID: 6, Cmd: "login", Args: login})
+	h.Handle(ctx, Request{ID: 7, Cmd: "stop"})
+	if h.session != nil || h.client != nil {
+		t.Errorf("stop clears the login")
+	}
+}
+
+func TestSessionRequestWithoutLogin(t *testing.T) {
+	var s *session
+	_, err := s.request(context.Background(), StartPayload("a", "b", "t", "k", "tr"))
+	if e := Classify(err); e.Kind != KindBadCredentials {
+		t.Errorf("nil session: %+v", e)
+	}
+	s = &session{}
+	_, err = s.request(context.Background(), StartPayload("a", "b", "t", "k", "tr"))
+	if e := Classify(err); e.Kind != KindBadCredentials {
+		t.Errorf("nil jar: %+v", e)
+	}
+	// Nil headers with a jar do not panic either; the library's defaults are used.
+	jar, _ := linkedingo.NewJarFromCookieHeader(`li_at=x; JSESSIONID="ajax:1"`)
+	s = &session{jar: jar, endpoint: "http://127.0.0.1:1/"}
+	if _, err = s.request(context.Background(), StartPayload("a", "b", "t", "k", "tr")); err == nil {
+		t.Errorf("an unreachable endpoint fails")
 	}
 }

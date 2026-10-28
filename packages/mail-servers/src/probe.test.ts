@@ -1,3 +1,6 @@
+// Tests for packages/mail-servers/src/probe.ts. Pin down how IMAP and SMTP errors are classified (rejected, certificate,
+// tls, unreachable), which working server is chosen, and the failure text shown to the user.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classify, failureText, findWorking, type CheckResult } from "./probe";

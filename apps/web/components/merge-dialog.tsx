@@ -1,5 +1,7 @@
 "use client";
 
+// The confirm dialog for merging two people, and the dialog button row and overlay-close hook other dialogs reuse.
+
 import { useEffect, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import { namesDiffer } from "@/lib/merging";
@@ -81,7 +83,7 @@ export function MergeDialog({
           <AlertDialogCancel disabled={busy !== null}>Cancel</AlertDialogCancel>
           {ask ? (
             <>
-              <AlertDialogAction variant="outline" className="max-w-full min-w-0" disabled={busy !== null} onClick={(e) => run(e, "b", b.name.trim())}>{label("b", b.name)}</AlertDialogAction>
+              <AlertDialogAction variant="secondary" className="max-w-full min-w-0" disabled={busy !== null} onClick={(e) => run(e, "b", b.name.trim())}>{label("b", b.name)}</AlertDialogAction>
               <AlertDialogAction className="max-w-full min-w-0" disabled={busy !== null} onClick={(e) => run(e, "a", a.name.trim())}>{label("a", a.name)}</AlertDialogAction>
             </>
           ) : (

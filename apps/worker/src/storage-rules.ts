@@ -1,11 +1,11 @@
-import { db } from "./db";
-
 // The rules for which files are copied into Konva's storage (docs/PLAN.md, Fair Usage and Storage):
 //   * a video over 25 MB is not copied; the original stays at the provider (not_kept = 'video_link')
 //   * each seat keeps 20 GB. At 100% new files stop being saved (not_kept = 'over_cap') and the original stays
 //     where it is; a message that already has a saved file may finish up to 110%, so a thread never fails midway
 //   * a team pools its seats' storage (seats x 20 GB, from public.team_storage_for)
 // Nothing is ever deleted because of the cap. The numbers are sizes only.
+
+import { db } from "./db";
 
 const MB = 1024 * 1024;
 const GB = 1024 * MB;

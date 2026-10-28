@@ -1,11 +1,12 @@
+// Zoom sends the browser back here with a code. The code is traded for a refresh token, which is stored
+// encrypted with the Zoom account in the shape the worker reads (apps/worker/src/zoom/oauth.ts,
+// ZoomCredentials). Then back to Settings, with ?connected=zoom or ?connect_error=<reason>.
+
 import { ensureProfile, openJson, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
 import { CHAT_SCOPES, RECORDINGS_SCOPE, ZoomError, exchangeCode, zoomUser } from "@/lib/server/zoom";
 import { appOrigin } from "@/lib/server/request";
 import { ZOOM_COOKIE, ZOOM_RETURN, type ZoomSignIn } from "../shared";
 
-// Zoom sends the browser back here with a code. The code is traded for a refresh token, which is stored
-// encrypted with the Zoom account in the shape the worker reads (apps/worker/src/zoom/oauth.ts,
-// ZoomCredentials). Then back to Settings, with ?connected=zoom or ?connect_error=<reason>.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 

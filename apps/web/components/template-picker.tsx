@@ -1,5 +1,7 @@
 "use client";
 
+// The button in the reply box that inserts a team template. Hidden outside work chats and when the team has none.
+
 import { FileText } from "lucide-react";
 import { useTemplates } from "@/lib/company-voice";
 import { Button } from "@/components/ui/button";

@@ -1,3 +1,8 @@
+// Meetings from Teams, Zoom and Google Meet as the meeting cards need them. The platform connectors store
+// them, the sync worker ties their people to contacts and the meeting to its calendar event
+// (apps/worker/src/meetings), and the AI worker transcribes recordings and writes the summary and action
+// items (apps/ai/ai/meetings.py). The transcript, which can be long, is fetched only when it is opened.
+
 import { FIELD } from "@messages/crypto/fields";
 import type { Tables } from "@messages/db";
 import { supabase } from "./supabase";
@@ -5,11 +10,6 @@ import { open, openRows } from "./vault";
 import { parseActions, parseTranscript, type Meeting, type MeetingPlatform, type MeetingStatus, type TranscriptSegment } from "./meeting-text";
 
 export * from "./meeting-text";
-
-// Meetings from Teams, Zoom and Google Meet as the meeting cards need them. The platform connectors store
-// them, the sync worker ties their people to contacts and the meeting to its calendar event
-// (apps/worker/src/meetings), and the AI worker transcribes recordings and writes the summary and action
-// items (apps/ai/ai/meetings.py). The transcript, which can be long, is fetched only when it is opened.
 
 const COLUMNS = "id, platform, title, started_at, ended_at, status, error, summary, action_items, calendar_event_id, transcript_source, meeting_participants(name, contact_id, is_self)";
 const LIMIT = 200;

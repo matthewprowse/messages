@@ -1,3 +1,6 @@
+// Tests for crypto.ts: the v1 static-key format (round trip, fresh IV, tamper and wrong-key rejection) and the sealer
+// that writes v2 under the user's key, reads both versions and ties a value to its account.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";

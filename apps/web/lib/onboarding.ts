@@ -1,10 +1,10 @@
 "use client";
 
-import { useAuth } from "./auth";
-import { supabase } from "./supabase";
-
 // Where a new user is in setup, the tour and the page hints. Kept in the sign-in's user metadata, so it
 // follows them to every device without a table of its own. It holds only these flags, never content.
+
+import { useAuth } from "./auth";
+import { supabase } from "./supabase";
 
 /** The setup dialog's steps in order, then "done". */
 export const SETUP_STEPS = ["accounts", "about", "learned", "contacts", "draft", "ready"] as const;

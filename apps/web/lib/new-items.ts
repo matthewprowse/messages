@@ -1,9 +1,9 @@
+// Pure helpers for starting something new from the New menu: a WhatsApp chat with a phone number, and
+// a Google Calendar event. The dialogs use these; the database and the worker check the same limits.
+
 import type { CalendarEvent } from "./calendar";
 import type { Account, Contact, Thread } from "./types";
 import { isEmail } from "./send-from";
-
-// Pure helpers for starting something new from the New menu: a WhatsApp chat with a phone number, and
-// a Google Calendar event. The dialogs use these; the database and the worker check the same limits.
 
 // ---------------------------------------------------------------------------
 // Phone numbers
@@ -130,7 +130,6 @@ export const MAX_GUESTS = 50;
 export const MAX_TITLE = 300;
 export const MAX_LOCATION = 500;
 export const MAX_DESCRIPTION = 8000;
-export const RECONNECT_MESSAGE = "Reconnect Google to allow creating events. Run pnpm connect:google.";
 
 export interface EventForm {
   title: string;

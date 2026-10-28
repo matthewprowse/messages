@@ -26,6 +26,7 @@ from .logos import Logos
 from .meetings import Meetings
 from .people import People
 from .poll import Backoff
+from .pricing import unpriced
 from .signals import Signals
 from .supabase import Supabase, missing_relation
 from .transcribe import Transcribe
@@ -66,6 +67,8 @@ def main() -> None:
         logos()
         return
     cfg = config.load()
+    for model in unpriced([cfg.model, cfg.fast_model, cfg.embed_model, cfg.tts_model, cfg.learn_model, cfg.brief_model, cfg.predraft_model, cfg.transcribe_model]):
+        log.error("configured model has no entry in pricing.PRICES, its calls are billed at the dearest known price", model=model)
     db = Supabase(cfg.supabase_url, cfg.service_role_key)
     vault = Vault(db, cfg.key_wrapping_key, cfg.encrypt_content)  # one key cache shared by every job
     gemini = Gemini(cfg.gemini_api_key, db)
@@ -80,7 +83,7 @@ def main() -> None:
         ("signals", SIGNALS_EVERY_S, Signals(db, gemini, cfg.learn_model, vault).run_once),
         ("people", PEOPLE_EVERY_S, People(db, gemini, cfg.learn_model, cfg.fast_model, vault).run_once),
         ("embed", EMBED_EVERY_S, embeddings.run_once),
-        ("follow_ups", FOLLOW_UPS_EVERY_S, Chasers(db, gemini, cfg.brief_model, vault).run_once),
+        ("follow_ups", FOLLOW_UPS_EVERY_S, Chasers(db, gemini, cfg.model, vault)  # the full model: the fast one called none of the test conversations waiting.run_once),
     ]
     if cfg.company_logos:  # off until the logo system is rolled out (docs/PLAN.md, Company Logos)
         jobs.append(("logos", LOGOS_EVERY_S, Logos(db, gemini, cfg.fast_model).run_once))

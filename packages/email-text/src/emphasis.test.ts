@@ -1,3 +1,6 @@
+// Tests for emphasisRuns in packages/email-text/src/index.ts: bold, italic, underline, strike and code runs read from
+// tags and inline styles in document order.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { emphasisRuns } from "./index";

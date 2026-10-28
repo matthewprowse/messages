@@ -1,11 +1,11 @@
+// The recordings sync on hand-written replies shaped like Zoom's (GET /users/me/recordings, GET /meetings/{id},
+// GET /past_meetings/{uuid}/participants), with an in-memory store in place of the database.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TablesInsert, TablesUpdate } from "@messages/db";
 import { ZoomApiError, type ZoomApi, type ZoomRequest } from "./client";
 import { MAX_RECORDING_BYTES, RecordingSync, TRANSCRIPT_GRACE_MS, planMeeting, type MeetingStore, type StoredMeeting, type ZoomRecordingFile, type ZoomRecordingMeeting } from "./recordings";
-
-// The recordings sync on hand-written replies shaped like Zoom's (GET /users/me/recordings, GET /meetings/{id},
-// GET /past_meetings/{uuid}/participants), with an in-memory store in place of the database.
 
 const NOW = Date.parse("2026-10-26T12:00:00Z");
 const HOUR = 60 * 60_000;

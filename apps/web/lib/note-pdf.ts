@@ -1,7 +1,7 @@
-import { PdfDoc, MARGIN, PAGE_W, type Picture, type Run, type Style } from "./pdf-writer";
-
 // The editor's document laid out as a PDF the way the note reads: headings, styled text, lists with bullets, numbers
 // and check boxes, quotes, shaded code, rules, bordered tables and pictures. Files that are not pictures are listed by name.
+
+import { PdfDoc, MARGIN, PAGE_W, type Picture, type Run, type Style } from "./pdf-writer";
 
 interface Mark { type: string; attrs?: Record<string, unknown> }
 interface Node {

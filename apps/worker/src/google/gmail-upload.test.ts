@@ -1,3 +1,5 @@
+// Tests for gmailUploadRequest in google/gmail-upload.ts: a new email is a media upload, a reply is a multipart upload carrying the conversation ID.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { gmailUploadRequest } from "./gmail-upload";

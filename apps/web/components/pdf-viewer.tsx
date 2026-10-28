@@ -1,15 +1,13 @@
 "use client";
 
+// PDF rendering with pdf.js: first-page thumbnails for tiles (cached, loaded a few at a time) and the full viewer.
+
 import { useCallback, useEffect, useRef, useState, type RefObject, type TouchEvent as ReactTouchEvent } from "react";
 import { ArrowLeft, ArrowRight, MoveHorizontal, ZoomIn, ZoomOut } from "lucide-react";
 import { openPdf, renderPage, type PDFDocumentProxy } from "@/lib/pdf";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-
-// ---------------------------------------------------------------------------
-// First-page thumbnails for attachment tiles
-// ---------------------------------------------------------------------------
 
 const THUMB_WIDTH = 240;
 // Each first page is a data URL of a few KB, so only the 200 most recently used are kept.

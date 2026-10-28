@@ -1,5 +1,3 @@
-import sharp from "sharp";
-
 // Turns a company's icon (PNG, JPEG, WebP, GIF, SVG or ICO, from its website, the App Store or anywhere
 // else) into one tidy square picture for a round avatar, so every company's picture looks alike:
 // - a mark on a plain colour, on a tile or disc of one colour, or on transparency is found, centred on
@@ -9,6 +7,8 @@ import sharp from "sharp";
 //   would reach the circle's edge, when it is drawn smaller inside it.
 // Nothing touches or crosses the circle's edge. Icons too small to look sharp are turned down rather than
 // blown up. Pure apart from sharp, so it can be tested.
+
+import sharp from "sharp";
 
 /** The side of the stored picture, in pixels: sharp at 40px on a 3x screen and in the larger views. */
 export const LOGO_SIZE = 256;

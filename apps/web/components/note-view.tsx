@@ -1,5 +1,8 @@
 "use client";
 
+// An open note, laid out like a conversation: a header, then the toolbar, then the note in the same 672px
+// column as chat bubbles. Files picked, dropped or pasted show in the note at once and fill in as they upload.
+
 import { notePdf, pdfName } from "@/lib/note-pdf";
 import { jpegPicture } from "@/lib/note-pdf-images";
 import { acquireNoteFile } from "@/lib/signed-urls";
@@ -13,20 +16,17 @@ import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/format";
 import { displayName, mimeOf, pastedName, UploadError } from "@/lib/outbox-files";
-import { loadNoteFiles, noteAttachment, noteFileError, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
+import { loadNoteFiles, noteAttachment, noteFileError, removeNoteFiles, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
 import { useNotes } from "@/components/notes-data";
 import { NoteToolbar, useKeyboardInset, useNoteEditor } from "@/components/note-editor";
 import { NoteFilesContext, type NoteFilesValue } from "@/components/note-file-node";
-import { DeleteNoteDialog, noteTitle } from "@/components/note-list";
+import { DeleteNoteDialog } from "@/components/note-list";
 import { AttachmentViewer } from "@/components/attachments";
 import { EmptyState } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-
-// An open note, laid out like a conversation: a header, then the toolbar, then the note in the same 672px
-// column as chat bubbles. Files picked, dropped or pasted show in the note at once and fill in as they upload.
 
 const MAX_FILES_AT_ONCE = 20;
 // Kinds of image every browser draws, shown in the note itself; others (HEIC) show as a file.
@@ -44,7 +44,7 @@ export function NoteView({ noteId }: { noteId: string }) {
   if (!note || note.unloaded) {
     if (note?.failed) return <EmptyState icon={NotebookPen} title="Could Not Open Note" description="Check your connection and try again." action={<Button variant="link" size="sm" onClick={() => void ensureBody(noteId)}>Try Again</Button>} />;
     if (loading || note) return <NoteSkeleton />;
-    return <EmptyState icon={NotebookPen} title="Note Not Found" description="It may have been deleted." action={<Button variant="outline" asChild><Link href="/notes">Back to Notes</Link></Button>} />;
+    return <EmptyState icon={NotebookPen} title="Note Not Found" description="It may have been deleted." action={<Button variant="secondary" asChild><Link href="/notes">Back to Notes</Link></Button>} />;
   }
   return <OpenNote key={noteId} note={note} />;
 }
@@ -67,6 +67,11 @@ function OpenNote({ note }: { note: Note }) {
   filesRef.current = files;
   const uploadsRef = useRef(uploads);
   uploadsRef.current = uploads;
+  const openRef = useRef(true);
+  useEffect(() => {
+    openRef.current = true;
+    return () => { openRef.current = false; };
+  }, []);
   const pickerRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -105,6 +110,8 @@ function OpenNote({ note }: { note: Note }) {
     const progress = (fraction: number) => setUploads((m) => new Map(m).set(item.key, fraction));
     uploadNoteFile(id, item.file, item.name, progress)
       .then((saved) => {
+        // The note was closed meanwhile, so the file is in no saved text: delete it rather than leave it unreachable.
+        if (!openRef.current) { void removeNoteFiles([saved]).catch(() => {}); return; }
         setFiles((m) => new Map(m).set(saved.id, saved));
         track("feature_used", { feature: "note_file_attached", detail: noteAttachment(saved).kind });
         replaceUpload(editorRef.current, item.key, saved.id);
@@ -197,16 +204,14 @@ function OpenNote({ note }: { note: Note }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
-        <Button variant="ghost" size="icon" className="size-6 md:hidden" asChild aria-label="Back">
+      <header className="flex h-[57px] shrink-0 items-center gap-2 border-b bg-background px-3 md:px-4">
+        <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
           <Link href="/notes"><ArrowLeft /></Link>
         </Button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-live="polite">
-            <span className={state === "failed" ? "text-destructive" : undefined}>{status}</span>
-            {state === "failed" && <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => void flush(id)}>Try Again</Button>}
-          </div>
+        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
+        <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+          <span className={state === "failed" ? "text-destructive" : undefined}>{status}</span>
+          {state === "failed" && <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => void flush(id)}>Try Again</Button>}
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
@@ -225,14 +230,14 @@ function OpenNote({ note }: { note: Note }) {
       {/* On phones the toolbar is pinned just above the on-screen keyboard (or the screen's bottom edge). */}
       <div
         className={cn(
-          "bg-background px-3 py-2 md:static md:z-auto md:shrink-0 md:border-b md:px-4 md:pb-2",
+          "bg-background p-3 md:static md:z-auto md:shrink-0 md:border-b md:px-4",
           "max-md:fixed max-md:inset-x-0 max-md:z-30 max-md:border-t",
-          keyboard === 0 && "max-md:pb-[calc(0.5rem+env(safe-area-inset-bottom))]",
+          keyboard === 0 && "max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
         )}
         style={{ bottom: keyboard }}
       >
         <div className="@container mx-auto w-full max-w-2xl">
-          {editor ? <NoteToolbar editor={editor} onAttach={attach} /> : <Skeleton className="h-7 w-full max-w-md" />}
+          {editor ? <NoteToolbar editor={editor} onAttach={attach} /> : <Skeleton className="h-8 w-full max-w-md" />}
         </div>
       </div>
 
@@ -312,7 +317,7 @@ function NoteSkeleton() {
         <Skeleton className="ml-auto size-8 rounded-md" />
       </div>
       <div className="shrink-0 border-b px-3 py-2 md:px-4">
-        <div className="mx-auto w-full max-w-2xl"><Skeleton className="h-7 w-full max-w-md" /></div>
+        <div className="mx-auto w-full max-w-2xl"><Skeleton className="h-8 w-full max-w-md" /></div>
       </div>
       <div className="min-h-0 flex-1 p-3 md:px-4">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-3">

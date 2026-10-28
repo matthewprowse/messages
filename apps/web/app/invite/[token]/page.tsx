@@ -1,5 +1,8 @@
 "use client";
 
+// Someone opens the link they were sent. Signed out, they sign in first (the sign-in page brings them back here).
+// Signed in, they read what a team shares and what stays private, and press Join Team to accept.
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -21,8 +24,6 @@ const remember = (token: string | null) => {
   }
 };
 
-// Someone opens the link they were sent. Signed out, they sign in first (the sign-in page brings them back here).
-// Signed in, they read what a team shares and what stays private, and press Join Team to accept.
 export default function InvitePage() {
   const router = useRouter();
   const { session } = useAuth();
@@ -76,7 +77,7 @@ export default function InvitePage() {
               <h1 className="flex h-10 items-center text-lg font-medium">Invite Not Valid</h1>
               <p className="text-sm text-muted-foreground">This invite link has been used, has expired or was cancelled. Ask the person who invited you for a new one.</p>
             </div>
-            <Button variant="outline" asChild><Link href="/summary">Open Konva</Link></Button>
+            <Button variant="secondary" asChild><Link href="/summary">Open Konva</Link></Button>
           </>
         ) : (
           <>
@@ -117,11 +118,11 @@ export default function InvitePage() {
             ) : wrongAddress ? (
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">You are signed in as {email}. This invite was sent to {preview.email}.</p>
-                <Button variant="outline" className="w-full" onClick={async () => { remember(token); await signOut(); router.push("/login"); }}>Sign In With a Different Account</Button>
+                <Button variant="secondary" className="w-full" onClick={async () => { remember(token); await signOut(); router.push("/login"); }}>Sign In With a Different Account</Button>
               </div>
             ) : (
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <Button variant="outline" disabled={busy} asChild><Link href="/summary">Not Now</Link></Button>
+                <Button variant="ghost" disabled={busy} asChild><Link href="/summary">Not Now</Link></Button>
                 <Button disabled={busy} onClick={join}>{busy ? "Joining" : "Join Team"}</Button>
               </div>
             )}

@@ -1,3 +1,6 @@
+// Tests for send/attachment-rules.ts: per-provider size limits on encoded size, the ten file cap, the wait-or-error rule for missing file rows,
+// the sender's own outbox folder check, storage path encoding, and safe names and types.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_ATTACHMENTS, TOO_MANY, attachmentProgress, encodedEmailBytes, limitError, ownOutboxPath, safeFilename, safeMimeType, storageUrlPath } from "./attachment-rules";

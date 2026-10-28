@@ -1,3 +1,6 @@
+// Turns a queued calendar_outbox row into the iCalendar file that creates it in iCloud Calendar, and says
+// what a refusal means. Pure functions only, so all of it is unit tested.
+
 import { isEmailAddress } from "../send/from-address";
 import {
   BAD_TIMES,
@@ -10,9 +13,6 @@ import {
 } from "../calendar/create-event";
 import { BAD_RULE, validRule } from "../calendar/recurrence";
 import { wallMs, wallString } from "../calendar/update-event";
-
-// Turns a queued calendar_outbox row into the iCalendar file that creates it in iCloud Calendar, and says
-// what a refusal means. Pure functions only, so all of it is unit tested.
 
 export const MAYBE_CREATED = "The event may have been created. Check iCloud Calendar before trying again.";
 export const SIGN_IN_REJECTED = "iCloud rejected the sign-in. Run pnpm connect:icloud-calendar to reconnect.";

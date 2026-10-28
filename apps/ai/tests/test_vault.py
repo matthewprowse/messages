@@ -1,3 +1,6 @@
+"""Tests for ai.vault: key unwrapping and caching, plaintext pass-through, never writing around a key that cannot be
+unwrapped, team and rotated keys, and that Triage, Drafts and Learn open what they read and seal what they write."""
+
 import base64
 import os
 import unittest
@@ -69,6 +72,20 @@ class VaultTests(unittest.TestCase):
         self.assertEqual(vault.seal("u2", SUMMARY, "A summary"), "A summary")
         self.assertEqual(vault.seal("u2", SUMMARY, "Again"), "Again")
         self.assertEqual(db.reads, ["u2"])  # not asked again until MISSING_RECHECK_S has passed
+
+    def test_a_key_that_cannot_be_unwrapped_is_not_written_around(self):
+        from ai.vault import KeyUnavailable
+
+        db = KeysDb({"u1": wrapped_row("u1", os.urandom(32))})  # wrapped with a different master key
+        vault = Vault(db, MASTER_B64, True)
+        with self.assertRaises(KeyUnavailable):
+            vault.seal("u1", SUMMARY, "secret")
+        with self.assertRaises(KeyUnavailable):
+            vault.seal("u1", SUMMARY, "secret")  # still refused, not remembered as "no key"
+        self.assertNotIn("u1", vault._missing)
+        db.rows["u1"] = wrapped_row("u1")  # the key setup is fixed
+        vault._unwrap_failed["u1"] = 0.0001  # the short retry window has passed
+        self.assertTrue(is_ciphertext(vault.seal("u1", SUMMARY, "secret")))
 
     def test_failed_decrypt_is_empty(self):
         vault = Vault(KeysDb({"u1": wrapped_row("u1")}), MASTER_B64, True)

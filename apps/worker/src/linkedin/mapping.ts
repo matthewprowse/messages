@@ -1,11 +1,11 @@
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { oneLine } from "../whatsapp/normalize";
-import type { LinkedInConversation, LinkedInFile, LinkedInMessage, LinkedInPerson } from "./helper";
-
 // LinkedIn conversations and messages, as the helper reports them, turned into what public.ingest_linkedin
 // stores: the payload of public.ingest_whatsapp with chat_id for chat_jid, and people as public.linkedin_contact
 // takes them. A person's profile URN is their contact identity; a conversation's URN is its thread ID. Pure
 // apart from the sealer, so it can be unit tested on hand-written data.
+
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { oneLine } from "../whatsapp/normalize";
+import type { LinkedInConversation, LinkedInFile, LinkedInMessage, LinkedInPerson } from "./helper";
 
 export const DELETED_TEXT = "This message was deleted.";
 const PLACEHOLDER_NAME = "LinkedIn Member";
@@ -66,6 +66,16 @@ export function unreadUrns(conv: LinkedInConversation, messages: LinkedInMessage
   if (conv.read) return new Set();
   const after = conv.lastReadAt ?? 0;
   return new Set(messages.filter((m) => m.sender?.id !== meId && m.deliveredAt > after).map((m) => m.urn));
+}
+
+/**
+ * When the other person has seen a one-to-one conversation, in Unix milliseconds, so your messages up to then
+ * show as seen. Null for a group (who has seen what is not shown), a conversation not known yet, or a receipt
+ * that is your own, from another device.
+ */
+export function seenByOther(conv: LinkedInConversation | undefined, by: string, at: number, meId: string): number | null {
+  if (!conv || isGroup(conv, meId) || by === meId || !(at > 0)) return null;
+  return conv.participants.some((p) => p.id === by) ? at : null;
 }
 
 function kindOf(mimeType: string): "image" | "pdf" | "video" | "audio" | "file" {

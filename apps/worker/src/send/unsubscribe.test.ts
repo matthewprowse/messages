@@ -1,3 +1,5 @@
+// Tests for send/unsubscribe.ts: List-Unsubscribe parsing (https and mailto only), body link detection, private address refusal and the one-click request.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bodyUnsubscribeLink, isPrivateAddress, oneClickUnsubscribe, parseListUnsubscribe } from "./unsubscribe";

@@ -1,5 +1,7 @@
 "use client";
 
+// One contact (/contacts/[id]) in the right-hand pane. Reloads when a merge, split or undo changes it, and offers Retry when the read fails.
+
 import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";

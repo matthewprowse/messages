@@ -1,3 +1,6 @@
+"""Tests for ai.analytics: only code words and small numbers become event properties, traits and buckets hold no text,
+and a Gemini call leaves one content-free event (with a failure code when it fails) and never raises."""
+
 import time
 import unittest
 

@@ -1,3 +1,6 @@
+// The Supabase side of step 4 of Teams: the shared client list, the rule pass and its schedule. The tables and
+// functions are in 20261101130000_team_contacts.sql; link_thread_clients is in 20261104100000_team_after_launch.sql.
+
 import { allRows, db, must } from "../db";
 import { ownIdentitiesCached } from "../contacts/own";
 import { startEvery } from "../backoff";
@@ -6,9 +9,6 @@ import type { ClientStore } from "./clients";
 import type { OwnAddresses, Participant } from "./people";
 import { isMissingMigration, runRulePass, type Candidate, type RuleStore } from "./rules";
 import { keys } from "./store";
-
-// The Supabase side of step 4 of Teams: the shared client list, the rule pass and its schedule. The tables and
-// functions are in 20261101130000_team_contacts.sql; link_thread_clients is in 20261104100000_team_after_launch.sql.
 
 const PARTICIPANTS = "thread_id, contacts(display_name, contact_identities(kind, value), organizations(name, domain))";
 

@@ -1,8 +1,8 @@
-import type { Account, Provider } from "./types";
-
 // One sign-in connects several parts (Gmail, Calendar and Tasks), each its own account row for the workers.
 // The person has one Google, so Settings shows one row per sign-in. Rows are paired by order within a family
 // when there are several sign-ins of one family.
+
+import type { Account, Provider } from "./types";
 
 export type Family = "google" | "microsoft" | "apple" | Provider;
 

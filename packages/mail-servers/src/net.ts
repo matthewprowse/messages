@@ -1,10 +1,12 @@
-import { lookup, resolveMx, resolveNs } from "node:dns/promises";
-import { BlockList, isIP } from "node:net";
-import type { Lookups } from "./index";
-
 // DNS and HTTP for working out mail servers, on the server only. The servers come from what someone typed,
 // so nothing here connects to a private address: a mailbox on 10.0.0.5 or localhost would let anyone probe
 // the network the app or worker runs in.
+
+import { lookup, resolveMx, resolveNs } from "node:dns/promises";
+import { request as httpsRequest } from "node:https";
+import { BlockList, isIP } from "node:net";
+import type { LookupAddress } from "node:dns";
+import type { Lookups } from "./index";
 
 const PRIVATE = new BlockList();
 for (const [net, prefix] of [
@@ -61,40 +63,92 @@ export async function publicAddress(host: string): Promise<string | null> {
 
 const bare = (host: string) => host.toLowerCase().replace(/\.$/, "");
 
+/** Resolves a host name to all its addresses. Injectable so tests need no network. */
+export type Resolver = (host: string) => Promise<LookupAddress[]>;
+const systemResolver: Resolver = (host) => lookup(host, { all: true, verbatim: true });
+
+/**
+ * A socket lookup that only ever answers with a vetted public address: the address connected to is the one
+ * checked here, so a second lookup (DNS rebinding) cannot swap in a private one. Errors when any address the
+ * host resolves to is private.
+ */
+export function vettedLookup(resolve: Resolver = systemResolver) {
+  return (host: string, options: { all?: boolean }, callback: (err: Error | null, address?: string | LookupAddress[], family?: number) => void) => {
+    resolve(host).then(
+      (found) => {
+        if (found.length === 0 || !found.every((a) => isPublicAddress(a.address))) return callback(Object.assign(new Error("not a public address"), { code: "ENOTPUBLIC" }));
+        if (options?.all) return callback(null, found);
+        callback(null, found[0].address, found[0].family);
+      },
+      (err) => callback(err instanceof Error ? err : new Error("lookup failed")),
+    );
+  };
+}
+
+export interface PinnedResponse {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  /** The body, read as it arrives. */
+  body: AsyncIterable<Buffer>;
+  /** Stops the download. */
+  destroy(): void;
+}
+
+/**
+ * One HTTPS GET on port 443 whose connection goes only to a vetted public address (see vettedLookup). Does not
+ * follow redirects: the caller vets each hop by calling this again. Rejects on a bad address, port or timeout.
+ */
+export function pinnedGet(url: URL, timeoutMs: number, headers: Record<string, string> = {}, resolve?: Resolver): Promise<PinnedResponse> {
+  return new Promise((done, fail) => {
+    if (url.protocol !== "https:" || (url.port && url.port !== "443") || url.username || url.password) return fail(new Error("not an allowed address"));
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    if (isIP(host) && !isPublicAddress(host)) return fail(new Error("not a public address"));
+    const req = httpsRequest(
+      { protocol: "https:", hostname: host, port: 443, path: `${url.pathname}${url.search}`, method: "GET", headers, lookup: vettedLookup(resolve) as never, timeout: timeoutMs, servername: isIP(host) ? undefined : host },
+      (res) => done({ status: res.statusCode ?? 0, headers: res.headers, body: res as AsyncIterable<Buffer>, destroy: () => res.destroy() }),
+    );
+    const timer = setTimeout(() => req.destroy(new Error("timeout")), timeoutMs);
+    req.on("close", () => clearTimeout(timer));
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", fail);
+    req.end();
+  });
+}
+
 const MAX_BYTES = 64 * 1024; // autoconfig files are a few kilobytes
 const MAX_REDIRECTS = 3;
 
-/** An https body of at most MAX_BYTES, following a few redirects, each checked to be public, or null. */
-async function fetchText(url: string, timeoutMs: number): Promise<string | null> {
-  let next = new URL(url);
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    if (next.protocol !== "https:" || !(await publicAddress(next.hostname))) return null;
-    const response = await fetch(next, { redirect: "manual", signal: AbortSignal.timeout(timeoutMs), headers: { accept: "application/xml, text/xml" } });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      await response.body?.cancel();
-      if (!location) return null;
-      next = new URL(location, next);
-      continue;
-    }
-    if (!response.ok || !response.body) {
-      await response.body?.cancel();
-      return null;
-    }
-    const reader = response.body.getReader();
-    const parts: Uint8Array[] = [];
-    let size = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_BYTES) {
-        await reader.cancel();
+/** An https body of at most MAX_BYTES, following a few redirects, each connected to a vetted public address, or null. */
+export async function fetchText(url: string, timeoutMs: number, resolve?: Resolver): Promise<string | null> {
+  try {
+    let next = new URL(url);
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const response = await pinnedGet(next, timeoutMs, { accept: "application/xml, text/xml" }, resolve);
+      if (response.status >= 300 && response.status < 400) {
+        response.destroy();
+        const location = response.headers.location;
+        if (typeof location !== "string" || !location) return null;
+        next = new URL(location, next);
+        continue;
+      }
+      if (response.status < 200 || response.status >= 300) {
+        response.destroy();
         return null;
       }
-      parts.push(value);
+      const parts: Buffer[] = [];
+      let size = 0;
+      for await (const chunk of response.body) {
+        size += chunk.length;
+        if (size > MAX_BYTES) {
+          response.destroy();
+          return null;
+        }
+        parts.push(chunk);
+      }
+      return Buffer.concat(parts).toString("utf8");
     }
-    return Buffer.concat(parts).toString("utf8");
+  } catch {
+    // an unreachable, private or slow host: no file
   }
   return null;
 }

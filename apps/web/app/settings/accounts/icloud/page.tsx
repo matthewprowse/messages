@@ -1,5 +1,8 @@
 "use client";
 
+// One page for everything iCloud: Mail and Calendar share an app-specific password, and Reminders is the one
+// part Apple only opens to a full Apple ID sign-in, so it is the second form here, not a separate setup.
+
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { track } from "@/lib/analytics";
@@ -9,8 +12,6 @@ import { SettingsSection } from "@/components/settings/sections";
 import { ICloudConnectForm } from "@/components/icloud-connect";
 import { ICloudRemindersConnect } from "@/components/icloud-reminders-connect";
 
-// One page for everything iCloud: Mail and Calendar share an app-specific password, and Reminders is the one
-// part Apple only opens to a full Apple ID sign-in, so it is the second form here, not a separate setup.
 export default function ICloudSetup() {
   const { session } = useAuth();
   useEffect(() => { track("account_connect", { provider: "icloud", step: "setup", outcome: "start" }); }, []);

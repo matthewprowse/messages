@@ -1,5 +1,7 @@
 "use client";
 
+// The dialog for a first WhatsApp message to a number or contact. It queues the message and opens the chat once the worker has sent it.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";

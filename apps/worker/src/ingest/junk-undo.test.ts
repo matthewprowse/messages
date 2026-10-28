@@ -1,3 +1,6 @@
+// Tests for isUndoOfUnspam in ingest/junk-undo.ts: a spam action straight after a Not Junk is its undo, anything
+// later or unrelated is not.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { isUndoOfUnspam } from "./junk-undo";

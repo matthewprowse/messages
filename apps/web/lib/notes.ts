@@ -1,14 +1,5 @@
 "use client";
 
-import { encryptBytes, encryptField, isCiphertext } from "@messages/crypto";
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { supabase } from "./supabase";
-import { open, openRows, userKeys } from "./vault";
-import { noteExcerpt as excerptOf } from "./note-text";
-import { BUCKET, formatBytes, mimeOf, uploadFile, displayName } from "./outbox-files";
-import { rememberNoteMime } from "./signed-urls";
-import type { Attachment } from "./types";
-
 // Notes and the files attached to them. The title, text, excerpt and file names are always sealed with the
 // user's keys, whatever the content-encryption switch says; older plaintext notes still open, and are
 // sealed the next time they are saved. The list loads titles and excerpts only: a note's text is downloaded
@@ -18,6 +9,15 @@ import type { Attachment } from "./types";
 // The bytes are sealed in the browser before upload (see sealNoteBytes) and uploaded as
 // application/octet-stream; the real content type is kept in the row and the bytes are opened when the
 // file is viewed or saved (lib/signed-urls.ts). Files uploaded before sealing began are still read as they are.
+
+import { encryptBytes, encryptField, isCiphertext } from "@messages/crypto";
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { supabase } from "./supabase";
+import { open, openRows, userKeys } from "./vault";
+import { noteExcerpt as excerptOf } from "./note-text";
+import { BUCKET, formatBytes, mimeOf, uploadFile, displayName } from "./outbox-files";
+import { rememberNoteMime } from "./signed-urls";
+import type { Attachment } from "./types";
 
 export interface Note {
   id: string;
@@ -132,9 +132,11 @@ export async function deleteNote(id: string): Promise<void> {
   const { data, error: filesError } = await supabase.from("note_attachments").select("storage_path").eq("note_id", id);
   if (filesError) throw filesError;
   const paths = data.map((r) => r.storage_path);
-  if (paths.length) await supabase.storage.from(BUCKET).remove(paths);
+  // The row goes first (its attachment rows go with it), so a failed delete leaves the note with its files. Removing
+  // the stored files after is best effort: a miss leaves unreachable files, not a note that has lost them.
   const { error } = await supabase.from("notes").delete().eq("id", id);
   if (error) throw error;
+  if (paths.length) await supabase.storage.from(BUCKET).remove(paths).catch(() => {});
 }
 
 export async function loadNoteFiles(noteId: string): Promise<NoteFile[]> {

@@ -3,8 +3,7 @@ as accounts are connected, paused and connected again in the app. Stop with Ctrl
 
 An account runs while its status is connecting, syncing or connected and a web sign-in (kind "web") is saved
 for it. When the app saves a new sign-in (Connect in Settings), its account_credentials.updated_at moves and
-the account starts again with it. An account in error stays stopped until then. An account paired with the
-Mac relay (no kind) is left to the sync worker."""
+the account starts again with it. An account in error stays stopped until then."""
 
 from __future__ import annotations
 
@@ -78,7 +77,7 @@ class Accounts:
         self.kinds: dict[str, tuple[str, bool]] = {}  # per account: the sign-in last looked at, and whether it is a web one
 
     def is_web(self, account_id: str, updated: str) -> bool:
-        """Whether the saved sign-in is this connector's (kind "web") and not the Mac relay's. Read once per saved sign-in."""
+        """Whether the saved sign-in is this connector's (kind "web"). Read once per saved sign-in."""
         known = self.kinds.get(account_id)
         if known and known[0] == updated:
             return known[1]

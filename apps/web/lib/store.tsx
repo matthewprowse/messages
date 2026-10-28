@@ -1,529 +1,38 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
+// The app store: AppProvider loads conversations, contacts and tasks, keeps them live, and exposes every action the
+// screens call (read, archive, draft, send) through useApp. Helpers live in app-store/.
+
+
+import { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { Tables } from "@messages/db";
-import type { Account, Attachment, Contact, Decision, Draft, ListFilter, Message, Priority, Profile, Rule, Task, Thread, ThreadStatus, Unsubscribe, View, WritingExample } from "./types";
+import type { Contact, Decision, Draft, ListFilter, Message, Task, Thread, ThreadStatus, View } from "./types";
 import { useAuth } from "./auth";
 import { supabase } from "./supabase";
-import { attachmentRows, pendingAttachments, type OutboxUpload } from "./outbox-files";
+import { pendingAttachments, type OutboxUpload } from "./outbox-files";
 import { keepName, loadContactGraph, mergeContactsRpc, mergeErrorText, splitContactRpc, undoMergeRpc } from "./contact-merging";
 import { followMerges } from "./merging";
-import {
-  EMPTY_PROFILE, loadContacts, loadEverything, loadMessage, loadMessageAttachments, loadThread, loadThreadMessages, mapAttachment, mapDraft, mapAccount,
-  mapMessage, mapThread, mapUnsubscribe, messageSentAt, patchMessage, profilePatch, type Loaded, type MessageRow, UNSUBSCRIBE_COLUMNS,
+import {loadContacts, loadEverything, loadThread, loadThreadMessages, mapUnsubscribe, messageSentAt, profilePatch, UNSUBSCRIBE_COLUMNS,
 } from "./data";
-import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "./open-rows";
-import { isOverdue, isTempTask, mapTask, taskOfWrite, taskWriteFields, tempTaskId, withTicks, type PendingTick, type TaskForm } from "./tasks";
+import { isOverdue, isTempTask, taskOfWrite, taskWriteFields, tempTaskId, withTicks, type PendingTick, type TaskForm } from "./tasks";
 import { seal, userKeys } from "./vault";
-import { encryptBytes } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, ruleTargetIndex } from "@messages/crypto/addresses";
 import { sealAddress } from "./address-refs";
 import { track } from "./analytics";
-import { minutesBucket, wordOf, type Events } from "@messages/analytics";
+import { wordOf } from "@messages/analytics";
 import { draftEdit } from "@messages/analytics/draft";
+import { ComposeDraft, ComposeDraftRequest, ComposeStatus, NewEmail, PendingSend, attachToOutbox, composeStatusOf } from "./app-store/compose";
+import { AppContext, Ctx, DraftPhase } from "./app-store/context";
+import { DRAFT_TIMEOUT_MS, PRE_DRAFT_QUIET_MS, VOICE_DRAFT_TIMEOUT_MS, mayPreDraft, uploadRecording } from "./app-store/draft-helpers";
+import { Action, initial, reducer } from "./app-store/reducer";
+import { useRealtimeSync } from "./app-store/use-realtime";
+import { followTaskUpdate } from "./app-store/task-follow";
+import { recordAction, recordCorrection } from "./app-store/telemetry";
+import { MailAction, NO_MESSAGES, emailIds, inFilter, inView, isPriority, listState, rank, threadsIn } from "./app-store/thread-filters";
 
-export type DraftPhase = "thinking" | "streaming";
-
-/**
- * What the AI said about a conversation's latest message (its prompt code and the traits stored with it: sender kind,
- * channel, length and so on, never any text), for usage analytics. Empty when unknown or the lookup fails.
- */
-async function aiRecord(threadId: string): Promise<Record<string, unknown>> {
-  try {
-    const { data } = await supabase.from("message_ai").select("prompt_version, traits, messages!inner(thread_id)")
-      .eq("messages.thread_id", threadId).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    const traits = data?.traits && typeof data.traits === "object" && !Array.isArray(data.traits) ? data.traits : {};
-    return { ...(data?.prompt_version ? { prompt: data.prompt_version } : {}), ...traits };
-  } catch {
-    return {};
-  }
-}
-
-/** A label you changed, against what you were shown, for the correction rates. Nothing is recorded when it did not change. */
-function recordCorrection(threadId: string, field: "priority" | "junk", from: string, to: string) {
-  if (from === to) return;
-  void aiRecord(threadId).then((ai) => track("label_corrected", { field, from, to, ...ai } as Events["label_corrected"]));
-}
-
-/** Something done to conversations: which action, whether it had been read first, and how long after the last message. */
-function recordAction(threads: Thread[], action: string) {
-  for (const t of threads.slice(0, 3)) {
-    const base = { action, opened_first: !t.unread, mins_since: minutesBucket(Math.max(0, (Date.now() - Date.parse(t.lastMessageAt)) / 60_000)) };
-    void aiRecord(t.id).then((ai) => track("thread_action", { ...ai, ...base } as Events["thread_action"]));
-  }
-  if (threads.length > 3) track("thread_action", { action: `${action}_many`, opened_first: false, mins_since: 0 } as Events["thread_action"]);
-}
-
-/** How long the composer waits for an AI draft before giving up. */
-const DRAFT_TIMEOUT_MS = 30_000;
-/** A spoken request also goes up and is listened to first. */
-const VOICE_DRAFT_TIMEOUT_MS = 45_000;
-
-/** A recording of what a draft should say, sealed with your key and uploaded where only you and the AI
- *  worker can read it. Its path, or undefined when it could not be uploaded. */
-async function uploadRecording(userId: string, audio: Blob): Promise<string | undefined> {
-  const ext = audio.type.startsWith("audio/ogg") ? "ogg" : audio.type.startsWith("audio/mp4") ? "m4a" : "webm";
-  const path = `${userId}/drafts/${crypto.randomUUID()}.${ext}`;
-  try {
-    const sealed = await encryptBytes(await userKeys(), FIELD.voiceInstruction, new Uint8Array(await audio.arrayBuffer()));
-    const { error } = await supabase.storage.from("attachments").upload(path, new Blob([sealed], { type: "application/octet-stream" }), { contentType: "application/octet-stream" });
-    return error ? undefined : path;
-  } catch {
-    return undefined;
-  }
-}
-/** How long a conversation stays quiet before it gets a pre-draft, so a burst of messages gets one. */
-const PRE_DRAFT_QUIET_MS = 30_000;
-const PRE_DRAFT_DAYS = 7;
-
-/** Whether a conversation might get a pre-draft (docs/PLAN.md, Pre-Drafting). The database decides, in
- *  request_auto_draft; this only saves asking about conversations that plainly do not qualify. */
-function mayPreDraft(t: Thread, profile: Profile): boolean {
-  const person = t.needsReply || t.category === "personal" || t.category === "work" || t.category === "needs_reply";
-  const draftSince = !!t.draft && Date.parse(t.draft.generatedAt) > Date.parse(t.lastMessageAt);
-  return profile.autoDraftTop && person && !t.isGroup && !t.junk && !t.lastFromMe && !draftSince && t.status !== "trash"
-    && Date.now() - Date.parse(t.lastMessageAt) < PRE_DRAFT_DAYS * 86_400_000;
-}
-
-interface State {
-  loading: boolean;
-  threads: Thread[];
-  /** Loaded messages by conversation, oldest first. */
-  byThread: Record<string, Message[]>;
-  contacts: Contact[];
-  accounts: Account[];
-  rules: Rule[];
-  writingExamples: WritingExample[];
-  profile: Profile;
-  unsubscribes: Unsubscribe[];
-  /** Tasks with a due date, for Calendar and the Summary. */
-  tasks: Task[];
-}
-
-type Action =
-  | { type: "loaded"; data: Loaded }
-  | { type: "clear" }
-  | { type: "upsertThread"; thread: Thread }
-  | { type: "removeThread"; id: string }
-  | { type: "patchThread"; id: string; patch: Partial<Thread> }
-  | { type: "patchThreads"; ids: string[]; patch: Partial<Thread> }
-  | { type: "setThreadMessages"; threadId: string; messages: Message[] }
-  | { type: "mergeMessages"; threadId: string; messages: Message[] }
-  | { type: "addMessage"; message: Message }
-  | { type: "replaceMessage"; message: Message }
-  | { type: "patchMessage"; threadId: string; id: string; row: { provider_meta?: unknown; body_text?: string | null; transcript?: string | null } }
-  | { type: "upsertAttachment"; row: Tables<"attachments"> }
-  | { type: "removeAttachment"; id: string }
-  | { type: "upsertContacts"; contacts: Contact[] }
-  | { type: "setDraft"; id: string; draft?: Draft }
-  | { type: "feedback"; id: string; value: "important" | "not_important" }
-  | { type: "upsertUnsubscribe"; unsubscribe: Unsubscribe }
-  | { type: "removeUnsubscribe"; id: string }
-  | { type: "upsertAccount"; account: Account }
-  | { type: "patchAccount"; id: string; patch: Partial<Account> }
-  | { type: "addRule"; rule: Rule }
-  | { type: "removeRule"; id: string }
-  | { type: "addExample"; example: WritingExample }
-  | { type: "removeExample"; id: string }
-  | { type: "patchProfile"; patch: Partial<Profile> }
-  | { type: "setContactGraph"; contacts: Contact[]; participants: Map<string, string[]> }
-  | { type: "upsertTask"; task: Task }
-  | { type: "removeTask"; id: string }
-  | { type: "patchTask"; id: string; patch: Partial<Task> }
-  | { type: "reset" };
-
-const initial: State = {
-  loading: true,
-  threads: [],
-  byThread: {},
-  contacts: [],
-  accounts: [],
-  rules: [],
-  writingExamples: [],
-  profile: EMPTY_PROFILE,
-  unsubscribes: [],
-  tasks: [],
-};
-
-const byTime = (a: Message, b: Message) => (a.sentAt < b.sentAt ? -1 : a.sentAt > b.sentAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-
-/** Messages added to a conversation's list, or replacing the ones with the same id, kept in order. */
-function withMessages(list: Message[] = [], incoming: Message[]): Message[] {
-  const byId = new Map(list.map((m) => [m.id, m]));
-  for (const m of incoming) byId.set(m.id, m);
-  return [...byId.values()].sort(byTime);
-}
-
-const sameContact = (a: Contact, b: Contact) =>
-  a.name === b.name && a.company === b.company && a.role === b.role && a.avatarPath === b.avatarPath && a.isCompany === b.isCompany &&
-  a.organization?.id === b.organization?.id && a.organization?.name === b.organization?.name &&
-  a.organization?.logoPath === b.organization?.logoPath &&
-  a.emails.join() === b.emails.join() && a.phones.join() === b.phones.join();
-
-/** The list with these contacts added or updated. The same array when nothing changed, so lookups built on it stay stable. */
-function withContacts(list: Contact[], incoming: Contact[]): Contact[] {
-  if (list.length === 0) return incoming;
-  const byId = new Map(list.map((c) => [c.id, c]));
-  let changed = false;
-  for (const c of incoming) {
-    const old = byId.get(c.id);
-    if (old && sameContact(old, c)) continue;
-    byId.set(c.id, c);
-    changed = true;
-  }
-  return changed ? [...byId.values()] : list;
-}
-
-/** Changes one message's files wherever that message is loaded. */
-function editFiles(s: State, messageId: string | null, edit: (files: Attachment[]) => Attachment[]): State {
-  for (const [threadId, list] of Object.entries(s.byThread)) {
-    const i = messageId ? list.findIndex((m) => m.id === messageId) : list.findIndex((m) => m.attachments?.length && edit(m.attachments) !== m.attachments);
-    if (i < 0) continue;
-    const before = list[i].attachments ?? [];
-    const after = edit(before);
-    if (after === before) return s;
-    const next = [...list];
-    next[i] = { ...list[i], attachments: after.length ? after : undefined };
-    return { ...s, byThread: { ...s.byThread, [threadId]: next } };
-  }
-  return s;
-}
-
-function reducer(s: State, a: Action): State {
-  switch (a.type) {
-    case "loaded":
-      // Contacts are merged, as a resync after a reconnect brings only the people in the listed threads.
-      return { ...s, ...a.data, contacts: withContacts(s.contacts, a.data.contacts), loading: false };
-    case "clear":
-      return { ...initial, loading: false };
-    case "upsertThread": {
-      const exists = s.threads.some((t) => t.id === a.thread.id);
-      return {
-        ...s,
-        threads: exists
-          ? s.threads.map((t) => (t.id === a.thread.id ? { ...t, ...a.thread, draft: t.draft, feedback: t.feedback } : t))
-          : [a.thread, ...s.threads],
-      };
-    }
-    case "removeThread":
-      return { ...s, threads: s.threads.filter((t) => t.id !== a.id) };
-    case "patchThread":
-      return { ...s, threads: s.threads.map((t) => (t.id === a.id ? { ...t, ...a.patch } : t)) };
-    case "patchThreads": {
-      const ids = new Set(a.ids);
-      return { ...s, threads: s.threads.map((t) => (ids.has(t.id) ? { ...t, ...a.patch } : t)) };
-    }
-    case "setThreadMessages":
-      return { ...s, byThread: { ...s.byThread, [a.threadId]: [...a.messages].sort(byTime) } };
-    case "mergeMessages":
-      return { ...s, byThread: { ...s.byThread, [a.threadId]: withMessages(s.byThread[a.threadId], a.messages) } };
-    case "addMessage":
-      if (s.byThread[a.message.threadId]?.some((m) => m.id === a.message.id)) return s;
-      return { ...s, byThread: { ...s.byThread, [a.message.threadId]: withMessages(s.byThread[a.message.threadId], [a.message]) } };
-    case "replaceMessage":
-      return { ...s, byThread: { ...s.byThread, [a.message.threadId]: withMessages(s.byThread[a.message.threadId], [a.message]) } };
-    case "patchMessage": {
-      const list = s.byThread[a.threadId];
-      const i = list?.findIndex((m) => m.id === a.id) ?? -1;
-      if (i < 0) return s;
-      const patched = patchMessage(list[i], a.row);
-      if (patched === list[i]) return s;
-      const next = [...list];
-      next[i] = patched;
-      return { ...s, byThread: { ...s.byThread, [a.threadId]: next } };
-    }
-    case "upsertAttachment": {
-      const file = mapAttachment(a.row);
-      const hidden = a.row.hidden;
-      return editFiles(s, a.row.message_id, (files) => {
-        const at = files.findIndex((f) => f.id === file.id);
-        if (hidden) return at < 0 ? files : files.filter((f) => f.id !== file.id);
-        return at < 0 ? [...files, file] : files.map((f) => (f.id === file.id ? { ...f, ...file } : f));
-      });
-    }
-    case "removeAttachment":
-      return editFiles(s, null, (files) => (files.some((f) => f.id === a.id) ? files.filter((f) => f.id !== a.id) : files));
-    case "upsertContacts": {
-      const contacts = withContacts(s.contacts, a.contacts);
-      return contacts === s.contacts ? s : { ...s, contacts };
-    }
-    case "setDraft":
-      return { ...s, threads: s.threads.map((t) => (t.id === a.id ? { ...t, draft: a.draft } : t)) };
-    case "feedback": {
-      const priority: Priority = a.value === "important" ? "important" : "low";
-      return { ...s, threads: s.threads.map((t) => (t.id === a.id ? { ...t, feedback: a.value, priority } : t)) };
-    }
-    case "upsertUnsubscribe":
-      return {
-        ...s,
-        unsubscribes: [...s.unsubscribes.filter((u) => u.id !== a.unsubscribe.id && u.sender !== a.unsubscribe.sender), a.unsubscribe],
-      };
-    case "removeUnsubscribe":
-      return { ...s, unsubscribes: s.unsubscribes.filter((u) => u.id !== a.id) };
-    case "upsertAccount":
-      return s.accounts.some((x) => x.id === a.account.id)
-        ? { ...s, accounts: s.accounts.map((x) => (x.id === a.account.id ? a.account : x)) }
-        : { ...s, accounts: [...s.accounts, a.account] };
-    case "patchAccount":
-      return { ...s, accounts: s.accounts.map((x) => (x.id === a.id ? { ...x, ...a.patch } : x)) };
-    case "addRule":
-      return { ...s, rules: [a.rule, ...s.rules] };
-    case "removeRule":
-      return { ...s, rules: s.rules.filter((r) => r.id !== a.id) };
-    case "addExample":
-      return { ...s, writingExamples: [a.example, ...s.writingExamples] };
-    case "removeExample":
-      return { ...s, writingExamples: s.writingExamples.filter((w) => w.id !== a.id) };
-    case "patchProfile":
-      return { ...s, profile: { ...s.profile, ...a.patch } };
-    case "setContactGraph":
-      return { ...s, contacts: a.contacts, threads: s.threads.map((t) => ({ ...t, participantIds: a.participants.get(t.id) ?? [] })) };
-    case "upsertTask": {
-      // A task that lost its date has no day to show on.
-      const others = s.tasks.filter((t) => t.id !== a.task.id);
-      return { ...s, tasks: a.task.dueAt ? [...others, a.task] : others };
-    }
-    case "removeTask":
-      return s.tasks.some((t) => t.id === a.id) ? { ...s, tasks: s.tasks.filter((t) => t.id !== a.id) } : s;
-    case "patchTask":
-      return { ...s, tasks: s.tasks.map((t) => (t.id === a.id ? { ...t, ...a.patch } : t)) };
-    case "reset":
-      return s; // not available on real data yet
-  }
-}
-
-interface Ctx extends Omit<State, "byThread"> {
-  dispatch: (action: Action) => void;
-  contactById: (id: string) => Contact | undefined;
-  threadById: (id: string) => Thread | undefined;
-  /** Every loaded message, for search. */
-  messages: Message[];
-  /** Loaded messages and queued replies by conversation, oldest first. A list only changes when its conversation does. */
-  messagesByThread: Map<string, Message[]>;
-  messagesFor: (threadId: string) => Message[];
-  messagesLoaded: (threadId: string) => boolean;
-  /** Loads a conversation's newest messages, or with aroundMessageId every message from that one on. */
-  loadMessages: (threadId: string, aroundMessageId?: string) => Promise<void>;
-  /** Loads the page before the oldest loaded message. Resolves true when it added any. */
-  loadOlderMessages: (threadId: string) => Promise<boolean>;
-  /** Starts loading a conversation about to be opened. Does nothing once it is loaded or loading. */
-  prefetchMessages: (threadId: string) => void;
-  listThreads: (view: View, filter: ListFilter) => Thread[];
-  notify: (text: string, undo?: () => void) => void;
-  markRead: (id: string, read: boolean, opened?: boolean) => void;
-  /** Archives one conversation or several, with one Undo toast. */
-  archive: (ids: string | string[]) => void;
-  /** Moves conversations to the mail provider's Bin (never deletes for good), with an Undo toast. */
-  trash: (ids: string | string[]) => void;
-  pin: (id: string, pinned: boolean) => void;
-  /** Queues a reply. Resolves false when it could not be queued, so the composer keeps the text. */
-  /** standalone leaves out the conversation's AI draft and Reply-to, for a message started elsewhere. */
-  /** copies is Reply All (or an edited To and Cc): the reply goes to exactly those. Left out, the worker picks. */
-  send: (threadId: string, body: string, fromAddress?: string, files?: OutboxUpload[], standalone?: boolean, copies?: { to: string[]; cc: string[] }) => Promise<boolean>;
-  /** The message the next reply in each conversation answers, chosen with Reply on a message. */
-  replyTo: Record<string, Message | undefined>;
-  setReplyTo: (threadId: string, message: Message | null) => void;
-  /** Reacts to a WhatsApp message, or removes your reaction with an empty emoji. Sent by the worker. */
-  react: (message: Message, emoji: string) => void;
-  /** Queues a new email. Resolves to the outbox row id, or null when it could not be queued. */
-  composeEmail: (email: NewEmail) => Promise<string | null>;
-  /** Queues a first WhatsApp message to one E.164 number. Resolves to the outbox row id, or null. */
-  composeWhatsApp: (accountId: string, to: string, body: string, draftId?: string) => Promise<string | null>;
-  /** Asks the AI to write (or with tone "edit", correct) a new message. Resolves to the draft's id; it arrives in composeDrafts. */
-  generateComposeDraft: (request: ComposeDraftRequest) => Promise<string | null>;
-  composeDrafts: Record<string, ComposeDraft | undefined>;
-  /** Throws a new message's draft away (the dialog closed, or Undo), or with "revised", sets it aside for an edit of it. */
-  discardComposeDraft: (id: string, status?: "discarded" | "revised") => void;
-  /** New emails and WhatsApp chats queued this session, by outbox id. threadId arrives once it is stored. */
-  composed: Record<string, ComposeStatus | undefined>;
-  /** Re-reads a queued new email, for when a Realtime update is missed. */
-  refreshCompose: (outboxId: string) => Promise<void>;
-  /** Makes sure a conversation is in the list, loading it if it has only just been created. */
-  ensureThread: (threadId: string) => Promise<boolean>;
-  /** Saves the addresses an iCloud account sends from. Resolves false when it could not be saved. */
-  saveSendAddresses: (accountId: string, addresses: string[]) => Promise<boolean>;
-  /** Asks for a draft. decision is a guided drafting choice the draft must say. source is the text in the
-   *  reply box: with tone "edit" it comes back lightly corrected, and with Shorter, More Formal or More
-   *  Casual it is adjusted, instead of a new draft being written. audio is a recording of what the reply
-   *  should say, in place of a typed instruction. */
-  generateDraft: (threadId: string, tone?: Draft["tone"], instruction?: string, decision?: Decision, source?: string, audio?: Blob) => Promise<void>;
-  discardDraft: (threadId: string) => void;
-  /** Asks for a pre-draft when the conversation qualifies: on opening it, and while the app is open. */
-  requestAutoDraft: (threadId: string) => Promise<void>;
-  /** Moves conversations to or out of Junk, and email to or out of the provider's spam, with an Undo toast. */
-  setJunk: (threadIds: string | string[], junk: boolean) => void;
-  /** Queues unsubscribes for these senders. Resolves to how many were queued. */
-  unsubscribe: (senders: { accountId: string; sender: string }[]) => Promise<number>;
-  /** Records that the person unsubscribed on the sender's own page, for a request left at manual. */
-  confirmUnsubscribe: (id: string) => void;
-  drafting: Record<string, DraftPhase | undefined>;
-  hydrated: boolean;
-  giveFeedback: (id: string, value: "important" | "not_important") => void;
-  /** Merges mergeId into keepId, with an Undo toast. Resolves to the merge id, or null when it failed. */
-  mergeContacts: (keepId: string, mergeId: string, reason: "suggestion" | "manual", name?: string) => Promise<string | null>;
-  /** Moves some of a contact's addresses and numbers to a new person. Resolves to their id, or null. */
-  splitContact: (contactId: string, identityIds: string[], name: string) => Promise<string | null>;
-  undoMerge: (mergeId: string) => Promise<boolean>;
-  /** Reloads every contact after one is added or deleted, and the open conversations that involve these ids. */
-  refreshContacts: (affected: string[]) => Promise<Contact[]>;
-  /** Goes up after every merge, split or undo, so pages that load contacts themselves reload. */
-  contactsVersion: number;
-  /** Ticks a task off (done) or back on. Shown at once; the worker makes it at the provider, and a failure puts it back with a toast. */
-  tickTask: (task: Task, done: boolean, via: "calendar" | "details" | "summary") => void;
-  /** Makes a task at its provider. It shows at once; a failure takes it away again with a message. */
-  createTask: (form: TaskForm) => void;
-  /** Changes a task's title, notes, date or priority at its provider, shown at once and put back on failure. */
-  editTask: (task: Task, form: TaskForm) => void;
-  /** Deletes a task at its provider. It goes at once and comes back on failure. */
-  deleteTask: (task: Task) => void;
-}
-
-const AppContext = createContext<Ctx | null>(null);
-const rank: Record<Priority, number> = { urgent: 0, important: 1, normal: 2, low: 3 };
-const NO_MESSAGES: Message[] = [];
-
-// Junk splits in two: Subscriptions (it offers a way to unsubscribe) and Junk (spam, cold outreach).
-const inView = (t: Thread, view: View) =>
-  view === "junk" ? t.junk && !t.subscription : view === "subscriptions" ? t.junk && t.subscription : !t.junk;
-// Once you have answered, a conversation does not need you until they write again.
-const isPriority = (t: Thread) => (t.priority === "urgent" || t.priority === "important") && !t.lastFromMe && t.category !== "newsletter" && t.category !== "notification";
-
-function inFilter(t: Thread, filter: ListFilter) {
-  switch (filter) {
-    case "unread": return t.unread;
-    case "email": return t.channel === "email";
-    case "whatsapp": return t.channel === "whatsapp";
-    case "waiting": return isWaiting(t);
-    default: return true;
-  }
-}
-
-/** Waiting: you wrote last, your message expects an answer, and none has come for WAITING_DAYS. */
-const WAITING_DAYS = 2;
-const isWaiting = (t: Thread) => t.lastFromMe && !!t.waiting && Date.now() - Date.parse(t.lastMessageAt) >= WAITING_DAYS * 86_400_000;
-
-type MailAction = "read" | "unread" | "archive" | "unarchive" | "trash" | "untrash" | "spam" | "unspam";
-
-function threadsIn(threads: Thread[], ids: string | string[]): Thread[] {
-  const wanted = new Set(Array.isArray(ids) ? ids : [ids]);
-  return threads.filter((t) => wanted.has(t.id));
-}
-
-/** The state as the screens read it: messages are offered per conversation instead. */
-function listState({ byThread, ...rest }: State): Omit<State, "byThread"> {
-  void byThread;
-  return rest;
-}
-
-/** Only email conversations have a mail server to tell. */
-function emailIds(threads: Thread[]): string[] {
-  return threads.filter((t) => t.channel === "email").map((t) => t.id);
-}
-
-export interface NewEmail {
-  accountId: string;
-  fromAddress: string;
-  to: string[];
-  /** Copied in the open and in secret. Stored sealed like To. */
-  cc?: string[];
-  bcc?: string[];
-  subject: string;
-  body: string;
-  /** Files already uploaded to the outbox folder, in the order they were added. */
-  files?: OutboxUpload[];
-  /** The AI draft it started from, so learning can read what was changed. */
-  draftId?: string;
-}
-
-/** A draft for New Email or New WhatsApp, which has no conversation yet: kept by the dialog that asked. */
-export interface ComposeDraft {
-  status: "pending" | "active" | "failed";
-  body?: string;
-  /** An email's subject line. */
-  subject?: string;
-  /** What you asked for, or said in a recording. */
-  instruction?: string;
-  error?: string;
-}
-
-export interface ComposeDraftRequest {
-  accountId: string;
-  channel: "email" | "whatsapp";
-  /** Who it is to, when they are a contact, so the draft knows them and how you write to them. */
-  contactId?: string;
-  instruction?: string;
-  audio?: Blob;
-  /** "edit" with source: your own text, lightly corrected. */
-  tone?: Draft["tone"];
-  source?: string;
-}
-
-export interface ComposeStatus {
-  status: "queued" | "sending" | "sent" | "failed";
-  threadId?: string;
-  error?: string;
-}
-
-function composeStatusOf(row: Pick<Tables<"outbox">, "status" | "thread_id" | "error">): ComposeStatus {
-  return { status: row.status as ComposeStatus["status"], threadId: row.thread_id ?? undefined, error: row.error ?? undefined };
-}
-
-interface PendingSend {
-  id: string;
-  threadId: string;
-  body: string;
-  createdAt: string;
-  status: "queued" | "sending" | "sent" | "failed";
-  error?: string;
-  attachments?: Attachment[];
-}
-
-/**
- * Lists uploaded files on a queued outbox row, straight after it is inserted with attachment_count.
- * Tried twice; the worker fails the row if they never arrive. Each file has its own position, so a
- * retry after a lost answer is refused as a duplicate (23505), which means the first try worked. If
- * the worker has already taken the row, the files were all there, so that counts as attached too.
- */
-async function attachToOutbox(outboxId: string, files: OutboxUpload[]): Promise<boolean> {
-  if (files.length === 0) return true;
-  const rows = attachmentRows(outboxId, files);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const { error } = await supabase.from("outbox_attachments").insert(rows);
-    if (!error) return true;
-    if (attempt > 0 && error.code === "23505") return true;
-  }
-  const { data } = await supabase.from("outbox").select("status").eq("id", outboxId).maybeSingle();
-  return data?.status === "sending" || data?.status === "sent";
-}
-
-/**
- * Waits for the worker to settle a queued tick, by the row's Realtime updates with a poll as a safety net, like
- * Calendar's followUpdate. Resolves with the row then (done, or failed with the reason), or as failed after giveUpMs.
- */
-function followTaskUpdate(id: string, giveUpMs = 60_000, pollMs = 2000, giveUpText = "Ticking the task is taking too long. Check that the worker is running."): Promise<{ status: string; error: string | null }> {
-  return new Promise((resolve) => {
-    let finished = false;
-    const finish = (row: { status: string; error: string | null }) => {
-      if (finished) return;
-      finished = true;
-      clearInterval(poll);
-      clearTimeout(giveUp);
-      void supabase.removeChannel(channel);
-      resolve(row);
-    };
-    const apply = (row: { status: string; error: string | null } | null) => {
-      if (row && (row.status === "done" || row.status === "failed")) finish(row);
-    };
-    const channel = supabase
-      .channel(`task_updates-${id}`)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "task_updates", filter: `id=eq.${id}` }, (payload) => apply(payload.new as { status: string; error: string | null }))
-      .subscribe();
-    const poll = setInterval(() => void supabase.from("task_updates").select("status, error").eq("id", id).maybeSingle().then(({ data }) => apply(data)), pollMs);
-    const giveUp = setTimeout(() => finish({ status: "failed", error: giveUpText }), giveUpMs);
-  });
-}
+export type { DraftPhase } from "./app-store/context";
+export type { ComposeDraft, ComposeDraftRequest, ComposeStatus, NewEmail } from "./app-store/compose";
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const { session } = useAuth();
@@ -578,7 +87,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const key = `${t.id}:${t.lastMessageAt}:${t.category}:${t.needsReply}`;
     if (preDraftAskedRef.current.has(key)) return;
     preDraftAskedRef.current.add(key);
-    const { data } = await supabase.rpc("request_auto_draft", { p_thread: threadId });
+    const { data, error } = await supabase.rpc("request_auto_draft", { p_thread: threadId });
+    if (error) preDraftAskedRef.current.delete(key); // a failed ask can be made again
     if (data) track("draft_requested", { tone: "default", source: "auto", channel: t.channel });
   }, [userId]);
   // While the app is open and in view, a conversation that changed is asked about once it has been
@@ -650,237 +160,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [state.loading, userId, contactsTries]);
 
-  // Live updates: the sync worker writes to Supabase and changes arrive here within a second or so.
-  // Rows are built from the payload, so a change costs no extra request unless the payload is cut short.
-  useEffect(() => {
-    if (!userId) return;
-
-    /** A new message from its Realtime row. Large rows arrive without their big columns, so those are fetched. */
-    async function arrived(row: Tables<"messages">, cut: boolean): Promise<Message | null> {
-      try {
-        if (cut || row.body_text === undefined || row.body_html === undefined) return await loadMessage(row.id);
-        const attachments = await loadMessageAttachments(row.id);
-        const [opened] = await openMessages([{ ...row }]);
-        return mapMessage({ ...(opened as Omit<MessageRow, "attachments">), attachments });
-      } catch {
-        return null;
-      }
-    }
-
-    // After a dropped connection, catch up once on what changed while it was down.
-    async function resync() {
-      try {
-        rawDispatch({ type: "loaded", data: await loadEverything() });
-      } catch {
-        return;
-      }
-      const before = new Set(Object.values(stateRef.current.byThread).flatMap((list) => list.map((m) => m.id)));
-      const sentIn = new Set<string>();
-      await Promise.all([...loadedRef.current].map(async (threadId) => {
-        const page = await loadThreadMessages(threadId).catch(() => null);
-        if (!page) return;
-        rawDispatch({ type: "mergeMessages", threadId, messages: page.messages });
-        if (page.messages.some((m) => m.from === "me" && !before.has(m.id))) sentIn.add(threadId);
-      }));
-      const outboxIds = [...pendingRef.current.map((p) => p.id), ...Object.keys(composedRef.current)];
-      const { data } = outboxIds.length ? await supabase.from("outbox").select("id, status, thread_id, error").in("id", outboxIds) : { data: [] };
-      const rows = new Map((data ?? []).map((r) => [r.id, r]));
-      setComposed((c) => Object.fromEntries(Object.entries(c).map(([id, v]) => [id, rows.has(id) ? composeStatusOf(rows.get(id)!) : v])));
-      setPending((p) => p
-        .map((x) => { const r = rows.get(x.id); return r ? { ...x, status: r.status as PendingSend["status"], error: r.error ?? undefined } : x; })
-        .filter((x) => !(x.status === "sent" && sentIn.has(x.threadId))));
-    }
-
-    // Changes arrive in bursts (a sync writes many rows at once). They are collected for a moment and applied
-    // together, a row changed twice in that moment once, so a burst costs one pass instead of one per change.
-    // Within a pass, conversations are applied before their messages, and those before everything else.
-    const BATCH_MS = 250;
-    const queue = new Map<string, { rank: number; run: () => Promise<void> | void }>();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let flushing: Promise<void> = Promise.resolve();
-    let stopped = false;
-    async function flush() {
-      timer = undefined;
-      const batch = [...queue.values()];
-      queue.clear();
-      for (let rank = 0; rank <= 3 && !stopped; rank++) {
-        await Promise.all(batch.filter((c) => c.rank === rank).map((c) => Promise.resolve().then(c.run).catch(() => undefined)));
-      }
-    }
-    function queued(key: string, rank: number, run: () => Promise<void> | void) {
-      queue.set(key, { rank, run }); // a repeat of the same key keeps its place and carries the newest row
-      timer ??= setTimeout(() => { flushing = flushing.then(flush); }, BATCH_MS);
-    }
-    // Realtime applies a row filter to inserts and updates only; a deletion carries just the id.
-    const mine = `user_id=eq.${userId}`;
-
-    let dropped = false;
-    const channel = supabase
-      .channel(`inbox-${userId}`)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "threads" }, (payload) => {
-        rawDispatch({ type: "removeThread", id: (payload.old as { id: string }).id });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "threads", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const changed = payload.new as Tables<"threads">;
-        queued(`thread:${changed.id}`, 0, async () => {
-          const row = (await openThreads([changed]))[0];
-          const existing = threadMapRef.current.get(row.id);
-          if (existing) {
-            rawDispatch({ type: "upsertThread", thread: mapThread(row, existing.participantIds, existing.provider) });
-            schedulePreDraft(row.id);
-            return;
-          }
-          if (row.status === "trash") return; // deleted conversations are not shown
-          const loaded = await loadThread(row.id).catch(() => null);
-          if (!loaded) return;
-          rawDispatch({ type: "upsertContacts", contacts: loaded.contacts });
-          rawDispatch({ type: "upsertThread", thread: loaded.thread });
-          schedulePreDraft(row.id);
-        });
-      })
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: mine }, (payload) => {
-        const row = payload.new as Tables<"messages">;
-        queued(`message:${row.id}`, 1, async () => {
-          // Your sent reply has been imported, so its placeholder can go, in the same render as the message.
-          const dropSent = () => {
-            if (row.direction === "outbound") setPending((p) => p.filter((x) => !(x.threadId === row.thread_id && x.status === "sent")));
-          };
-          if (!loadedRef.current.has(row.thread_id)) { dropSent(); return; } // loaded fresh when the conversation is opened
-          const message = await arrived(row, !!payload.errors?.length);
-          if (message) rawDispatch({ type: "addMessage", message });
-          dropSent();
-        });
-      })
-      // Edits, deletions and reactions change a stored message. Read state changes arrive here too and change nothing shown.
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: mine }, (payload) => {
-        const changed = payload.new as Partial<Tables<"messages">> & { id: string; thread_id: string };
-        queued(`message-edit:${changed.id}`, 2, async () => {
-          const [row] = await openMessages([changed]);
-          if (loadedRef.current.has(row.thread_id)) rawDispatch({ type: "patchMessage", threadId: row.thread_id, id: row.id, row });
-        });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "drafts", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const changed = payload.new as Tables<"drafts">;
-        if (!changed.thread_id) {
-          // A new message's draft goes to the dialog that asked for it, straight away.
-          if (!composeWaitRef.current.has(changed.id) || changed.status === "pending") return;
-          void openDrafts([changed]).then(([row]) => {
-            if (!composeWaitRef.current.delete(row.id)) return;
-            if (row.status === "active") {
-              track("draft_shown", { tone: row.tone, channel: row.subject ? "email" : "whatsapp", ms: Math.max(0, Date.parse(row.updated_at) - Date.parse(row.created_at)), auto: false });
-              setComposeDrafts((c) => ({ ...c, [row.id]: { status: "active", body: row.body, subject: row.subject ?? undefined, instruction: row.instruction ?? undefined } }));
-            } else if (row.status === "failed") {
-              setComposeDrafts((c) => ({ ...c, [row.id]: { status: "failed", error: row.error ?? "The draft could not be written." } }));
-            }
-          });
-          return;
-        }
-        const threadId = changed.thread_id;
-        // A draft someone is waiting for is shown the moment it arrives, not with the next batch.
-        const waited = draftWaitRef.current[threadId] === changed.id;
-        (waited ? (key: string, rank: number, run: () => Promise<void>) => void run() : queued)(`draft:${changed.id}`, 3, async () => {
-          const [row] = await openDrafts([changed]);
-          if (row.status === "active") {
-            const t = threadMapRef.current.get(threadId);
-            if (t && t.draft?.id !== row.id) {
-              track("draft_shown", { tone: row.tone, channel: t.channel, ms: Math.max(0, Date.parse(row.updated_at) - Date.parse(row.created_at)), auto: row.auto });
-            }
-            rawDispatch({ type: "setDraft", id: threadId, draft: mapDraft(row) });
-            setDrafting((d) => ({ ...d, [threadId]: undefined }));
-            if (draftWaitRef.current[threadId] === row.id) delete draftWaitRef.current[threadId];
-          } else if (row.status === "failed") {
-            // A draft already given up on here has had its own message.
-            if (draftWaitRef.current[threadId] !== row.id) return;
-            delete draftWaitRef.current[threadId];
-            track("draft_failed", { code: "failed", channel: threadMapRef.current.get(threadId)?.channel ?? "email" });
-            toast(row.error ?? "The draft could not be written.");
-            setDrafting((d) => ({ ...d, [threadId]: undefined }));
-          } else if (row.status === "discarded" || row.status === "sent" || row.status === "expired" || row.status === "revised") {
-            const current = threadMapRef.current.get(threadId)?.draft;
-            if (current?.id === row.id) rawDispatch({ type: "setDraft", id: threadId });
-          }
-        });
-      })
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "unsubscribes" }, (payload) => {
-        rawDispatch({ type: "removeUnsubscribe", id: (payload.old as { id: string }).id });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "unsubscribes", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const changed = payload.new as Tables<"unsubscribes">;
-        queued(`unsubscribe:${changed.id}`, 3, async () => {
-          const u = mapUnsubscribe(await openAddresses(changed));
-          rawDispatch({ type: "upsertUnsubscribe", unsubscribe: u });
-          if (u.status === "manual") toast(`${u.sender} needs you to confirm on their page.`);
-          if (u.status === "failed") toast(u.error ?? `Could not unsubscribe from ${u.sender}.`);
-        });
-      })
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "outbox", filter: mine }, (payload) => {
-        const row = payload.new as Tables<"outbox">;
-        queued(`outbox:${row.id}`, 3, () => {
-          if (row.status === "failed") toast(row.error ?? (row.account_id && !row.thread_id ? "The email could not be sent." : "The reply could not be sent."));
-          setComposed((c) => (c[row.id] ? { ...c, [row.id]: composeStatusOf(row) } : c));
-          setPending((p) => p.map((x) => (x.id === row.id ? { ...x, status: row.status as PendingSend["status"], error: row.error ?? undefined } : x)));
-        });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "accounts", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const changed = payload.new as Tables<"accounts">;
-        queued(`account:${changed.id}`, 3, async () => {
-            rawDispatch({ type: "upsertAccount", account: mapAccount(await openAddresses(changed)) });
-        });
-      })
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          if (dropped) void resync();
-          dropped = false;
-        } else {
-          dropped = true; // CHANNEL_ERROR, TIMED_OUT or CLOSED; the client rejoins by itself
-        }
-      });
-
-    // Files saved after their message arrived, such as WhatsApp photos, appear without a reload. On its
-    // own channel, so the inbox keeps working if this table is not published for Realtime.
-    const files = supabase
-      .channel(`files-${userId}`)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "attachments" }, (payload) => {
-        rawDispatch({ type: "removeAttachment", id: (payload.old as { id: string }).id });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "attachments", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const row = payload.new as Tables<"attachments">;
-        // The file's name arrives encrypted.
-        queued(`file:${row.id}`, 1, async () => rawDispatch({ type: "upsertAttachment", row: (await openAddresses([{ ...row }]))[0] }));
-      })
-      // Refused while the table is not published, so it stops instead of rejoining forever. A resync
-      // after a dropped connection reloads files with their messages anyway.
-      .subscribe((status) => { if (status === "CHANNEL_ERROR") void supabase.removeChannel(files); });
-
-    // Tasks the worker stores or changes, on their own channel for the same reason. A resync reloads them too.
-    const taskChannel = supabase
-      .channel(`tasks-${userId}`)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "tasks" }, (payload) => {
-        rawDispatch({ type: "removeTask", id: (payload.old as { id: string }).id });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "tasks", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const changed = payload.new as Tables<"tasks">;
-        queued(`task:${changed.id}`, 3, async () => {
-          const [row] = await openTasks([{ ...changed }]);
-          rawDispatch({ type: "upsertTask", task: mapTask(row) });
-        });
-      })
-      .subscribe((status) => { if (status === "CHANNEL_ERROR") void supabase.removeChannel(taskChannel); });
-
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      supabase.removeChannel(channel);
-      supabase.removeChannel(files);
-      supabase.removeChannel(taskChannel);
-    };
-  }, [userId, schedulePreDraft]);
+  // Live updates: see app-store/use-realtime.ts.
+  useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending });
 
   /**
    * Applies a change on screen straight away, then saves it. Components call dispatch as before;
@@ -1020,6 +301,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Whether earlier messages are left to load, so a scroll near the top asks only when there is something to get.
+  const hasOlder = useCallback((threadId: string) => !!moreRef.current.get(threadId), []);
+
+  // A failed send you have deleted, or retried as a new send: it leaves the conversation for good.
+  const removePending = useCallback((outboxId: string) => setPending((p) => p.filter((x) => x.id !== outboxId)), []);
+
   const prefetchMessages = useCallback((threadId: string) => {
     if (!loadedRef.current.has(threadId)) void loadMessages(threadId);
   }, [loadMessages]);
@@ -1128,16 +415,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const draftId = standalone ? null : threadMapRef.current.get(threadId)?.draft?.id ?? null;
     const replyToId = standalone ? null : replyToRef.current[threadId]?.id ?? null;
     const sealed = await seal(FIELD.body, body).catch(() => null);
-    const { data, error } = sealed === null ? { data: null, error: true } : await supabase.from("outbox")
-      .insert({ thread_id: threadId, body: sealed, draft_id: draftId, from_address: fromAddress ? await sealAddress(fromAddress) : null, reply_to_message_id: replyToId, attachment_count: files.length,
+    // Addresses are sealed like the body: a failed key request is a failed send, not an unhandled rejection.
+    const addresses = sealed === null ? null : await Promise.all([
+      fromAddress ? sealAddress(fromAddress) : Promise.resolve(null),
+      copies ? Promise.all(copies.to.map((a) => sealAddress(a))) : Promise.resolve(null),
+      copies ? Promise.all(copies.cc.map((a) => sealAddress(a))) : Promise.resolve(null),
+    ]).catch(() => null);
+    const { data, error } = sealed === null || addresses === null ? { data: null, error: true } : await supabase.from("outbox")
+      .insert({ thread_id: threadId, body: sealed, draft_id: draftId, from_address: addresses[0], reply_to_message_id: replyToId, attachment_count: files.length,
         // Reply All: the worker sends to exactly these. Sealed like any address.
-        ...(copies ? { to_addresses: await Promise.all(copies.to.map((a) => sealAddress(a))), cc_addresses: await Promise.all(copies.cc.map((a) => sealAddress(a))) } : {}) })
+        ...(copies ? { to_addresses: addresses[1] ?? [], cc_addresses: addresses[2] ?? [] } : {}) })
       .select("id, created_at").single();
     if (error || !data) {
       toast("Could not send. Your reply is still in the box.");
       return false;
     }
-    if (!(await attachToOutbox(data.id, files))) {
+    if (!(await attachToOutbox(data.id, files).catch(() => false))) {
       toast("Could not attach the files. Your reply is still in the box.");
       return false;
     }
@@ -1176,7 +469,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     rawDispatch({ type: "replaceMessage", message: { ...message, reactions: Object.keys(reactions).length ? reactions : undefined } });
     supabase.from("mail_actions").insert({ thread_id: message.threadId, action: "react", message_id: message.id, emoji }).then(({ error }) => {
       if (!error) return;
-      rawDispatch({ type: "replaceMessage", message });
+      // Only your own reaction goes back: other people's may have changed since.
+      const now = stateRef.current.byThread[message.threadId]?.find((m) => m.id === message.id) ?? message;
+      const back = { ...(now.reactions ?? {}) };
+      if (message.reactions?.me) back.me = message.reactions.me;
+      else delete back.me;
+      rawDispatch({ type: "replaceMessage", message: { ...now, reactions: Object.keys(back).length ? back : undefined } });
       saveFailed();
     });
   }, [saveFailed]);
@@ -1184,14 +482,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // A new email has no conversation yet. The worker sets thread_id once the sent copy is stored.
   const composeEmail = useCallback(async (email: NewEmail) => {
     const files = email.files ?? [];
+    // Sealing and address sealing can fail on a transient key error: that is a failed send, not a crash.
     const sealed = await Promise.all([seal(FIELD.subject, email.subject.trim() || null), seal(FIELD.body, email.body)]).catch(() => null);
-    const { data, error } = sealed === null ? { data: null, error: true } : await supabase.from("outbox")
+    const addresses = sealed === null ? null : await Promise.all([
+      email.fromAddress ? sealAddress(email.fromAddress) : Promise.resolve(email.fromAddress),
+      Promise.all(email.to.map((a) => sealAddress(a))),
+      Promise.all((email.cc ?? []).map((a) => sealAddress(a))),
+      Promise.all((email.bcc ?? []).map((a) => sealAddress(a))),
+    ]).catch(() => null);
+    const { data, error } = sealed === null || addresses === null ? { data: null, error: true } : await supabase.from("outbox")
       .insert({
         account_id: email.accountId,
-        from_address: email.fromAddress ? await sealAddress(email.fromAddress) : email.fromAddress,
-        to_addresses: await Promise.all(email.to.map((a) => sealAddress(a))),
-        cc_addresses: await Promise.all((email.cc ?? []).map((a) => sealAddress(a))),
-        bcc_addresses: await Promise.all((email.bcc ?? []).map((a) => sealAddress(a))),
+        from_address: addresses[0],
+        to_addresses: addresses[1],
+        cc_addresses: addresses[2],
+        bcc_addresses: addresses[3],
         subject: sealed[0],
         body: sealed[1],
         attachment_count: files.length,
@@ -1202,7 +507,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       toast("Could not send. Your email is still in the box.");
       return null;
     }
-    if (!(await attachToOutbox(data.id, files))) {
+    if (!(await attachToOutbox(data.id, files).catch(() => false))) {
       toast("Could not attach the files. Your email is still in the box.");
       return null;
     }
@@ -1213,8 +518,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // A new WhatsApp chat: one number, no subject or From address. The worker sets thread_id once it is sent.
   const composeWhatsApp = useCallback(async (accountId: string, to: string, body: string, draftId?: string) => {
     const sealed = await seal(FIELD.body, body).catch(() => null);
-    const { data, error } = sealed === null ? { data: null, error: true } : await supabase.from("outbox")
-      .insert({ account_id: accountId, to_addresses: [await sealAddress(to)], body: sealed, attachment_count: 0, draft_id: draftId ?? null })
+    const sealedTo = await sealAddress(to).catch(() => null);
+    const { data, error } = sealed === null || sealedTo === null ? { data: null, error: true } : await supabase.from("outbox")
+      .insert({ account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0, draft_id: draftId ?? null })
       .select("id").single();
     if (error || !data) {
       toast("Could not send. Your message is still in the box.");
@@ -1610,12 +916,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // One value per change, so components that read the store redraw only when something changed.
   const value = useMemo<Ctx>(() => ({
-    ...listState(state), dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, prefetchMessages,
+    ...listState(state), dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
     listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
     contactsVersion, tasks, tickTask, createTask, editTask, deleteTask,
   }), [
-    state, dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, prefetchMessages,
+    state, dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
     listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
     contactsVersion, tasks, tickTask, createTask, editTask, deleteTask,
@@ -1623,6 +929,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
+/** The app store. Throws when used outside AppProvider. */
 export function useApp() {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error("useApp outside provider");

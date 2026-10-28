@@ -1,3 +1,6 @@
+// Tests for connectors/mail-service.ts: iCloud's server settings stay exactly as the old connector had them,
+// connection options never fall back to plain text, and a typed-in server is reached by its public address.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ICLOUD_IMAP, ICLOUD_SERVICE, ICLOUD_SMTP, IMAP_SERVICE, imapOptions, pinned, smtpOptions, type ImapCredentials } from "./mail-service";

@@ -9,7 +9,7 @@ import type { UserKeys } from "@messages/crypto";
 import type { Json } from "@messages/db";
 import { db, must } from "./db";
 import { log, errorCode } from "./log";
-import { keysFor, open } from "./vault";
+import { keysFor, openStrict as open } from "./vault";
 
 const INDEX_MS = 30_000;
 const PAGE = 200;
@@ -137,7 +137,25 @@ export async function indexAddresses(): Promise<number> {
       const rows = must(await query, `load ${table} to index`) as unknown as Record<string, unknown>[];
       if (!rows.length) break;
       after = rows[rows.length - 1].id as string;
-      const pending = await Promise.all(rows.map(async (r) => index(await keysFor(r.user_id as string), r, r.user_id as string)));
+      // A row with a value that cannot be opened is skipped, never indexed as if it were empty: it stays
+      // unindexed and is tried again next pass.
+      let failed = 0;
+      const results = await Promise.all(
+        rows.map(async (r) => {
+          try {
+            return await index(await keysFor(r.user_id as string), r, r.user_id as string);
+          } catch {
+            failed++;
+            return null;
+          }
+        }),
+      );
+      if (failed) log.warn("rows skipped, a value could not be opened", { table, rows: failed });
+      const pending = results.filter((p): p is Pending => p !== null);
+      if (!pending.length) {
+        if (rows.length < PAGE) break;
+        continue;
+      }
       const { data, error } = await write(table, pending);
       if (error) throw new Error(`${table}: ${error.message}`);
       total += data ?? 0;

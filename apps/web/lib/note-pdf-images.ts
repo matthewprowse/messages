@@ -1,7 +1,7 @@
-import type { Picture } from "./pdf-writer";
-
 // A picture in a note as the JPEG a PDF can hold, shrunk to what a page can show so a big photo does not make a big,
 // slow file. Needs a browser: it draws the picture on a canvas.
+
+import type { Picture } from "./pdf-writer";
 
 const MAX_SIDE = 1400;
 

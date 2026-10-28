@@ -1,3 +1,6 @@
+// Tests for teams/vtt.ts: parsing Teams' WebVTT transcripts (timestamps, speakers) and joining several
+// transcripts of one meeting.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { joinTranscripts, parseVtt, vttTime } from "./vtt";

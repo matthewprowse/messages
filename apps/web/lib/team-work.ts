@@ -1,14 +1,14 @@
 "use client";
 
+// The owner's side of Teams, from the app's side (supabase/migrations/20261103100000_team_owner_features.sql): the work
+// chats list and assigning, shared inboxes and who uses them, and response tracking. Everything here is a database
+// function that checks who is asking; the lists carry labels sealed with the team's key, which are opened here.
+
 import { useCallback, useEffect, useState } from "react";
 import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
 import { useAuth } from "./auth";
 import { open } from "./vault";
-
-// The owner's side of Teams, from the app's side (supabase/migrations/20261103100000_team_owner_features.sql): the work
-// chats list and assigning, shared inboxes and who uses them, and response tracking. Everything here is a database
-// function that checks who is asking; the lists carry labels sealed with the team's key, which are opened here.
 
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";
 

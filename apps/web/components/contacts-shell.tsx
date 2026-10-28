@@ -1,5 +1,7 @@
 "use client";
 
+// The two-column frame of the Contacts section: the list on the left, the open contact or company beside it. Also the context for company renames.
+
 import { createContext, Suspense } from "react";
 import { usePathname } from "next/navigation";
 import type { ContactSummary } from "@/lib/contacts";

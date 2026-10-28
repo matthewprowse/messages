@@ -23,10 +23,9 @@ export function isPlaceholderName(name: string | null | undefined): boolean {
 export function nameWords(name: string): string[] {
   return name
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/\p{M}+/gu, "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(" ")
+    .split(/[^\p{L}\p{N}]+/u)
     .filter(Boolean)
     .sort();
 }
@@ -44,6 +43,8 @@ export function preferredName(a: string, b: string): string | null | "ask" {
   if (pb) return a.trim();
   const wa = nameWords(a);
   const wb = nameWords(b);
+  // Nothing to compare (only symbols), so only an identical name is the same.
+  if (!wa.length || !wb.length) return a.trim() === b.trim() ? null : "ask";
   if (wa.join(" ") === wb.join(" ")) return null;
   const setA = new Set(wa);
   const setB = new Set(wb);

@@ -1,3 +1,6 @@
+// A shared chat's files over fake storage and real keys: the name and the bytes move to the team's key, the agent's own
+// object stays, moving back deletes the copy, and a key rotation seals the copies again.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { decryptBytes, decryptTeamBytes, decryptTeamField, deriveTeamKeys, deriveUserKeys, encryptBytes, encryptField, encryptTeamBytes, newDataKey, type TeamKeys } from "@messages/crypto";
@@ -8,9 +11,6 @@ process.env.SUPABASE_URL ??= "http://localhost";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test";
 const { resealFiles, resealWorkspace } = await import("./rotate");
 import type { Ring, RotateStore, TeamFileRow, TeamFileStore } from "./rotate";
-
-// A shared chat's files over fake storage and real keys: the name and the bytes move to the team's key, the agent's own
-// object stays, moving back deletes the copy, and a key rotation seals the copies again.
 
 const WS = "ws-1";
 const AGENT = "agent-1";

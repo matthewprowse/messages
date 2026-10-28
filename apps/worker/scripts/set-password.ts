@@ -1,8 +1,8 @@
-import { db } from "../src/db";
-import { ask, findUserId } from "./owner";
-
 // Sets the password you sign in to the Messages app with. Typed only into your terminal, never printed.
 // Run with: pnpm set-password
+
+import { db } from "../src/db";
+import { ask, findUserId } from "./owner";
 
 async function main() {
   const email = (await ask("Your Messages sign-in email: ")).trim().toLowerCase();

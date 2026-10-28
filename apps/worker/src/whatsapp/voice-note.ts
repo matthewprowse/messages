@@ -1,12 +1,12 @@
-import { spawn } from "node:child_process";
-import type { OutgoingAttachment } from "../send/compose";
-import { log } from "../log";
-import type { WhatsAppFile } from "./outgoing";
-
 // A voice note recorded in the app arrives as whatever the browser records (WebM or Ogg Opus in Chrome
 // and Firefox, MP4 AAC in older Safari). WhatsApp only shows a voice note for mono Opus in an Ogg file,
 // with its length and the 64-bar waveform drawn under it, so ffmpeg converts each one before it goes.
 // ffmpeg reads and writes through pipes, so the audio never touches the disk.
+
+import { spawn } from "node:child_process";
+import type { OutgoingAttachment } from "../send/compose";
+import { log } from "../log";
+import type { WhatsAppFile } from "./outgoing";
 
 /** Samples a second in the copy the length and waveform are read from. */
 const PCM_RATE = 8000;

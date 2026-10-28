@@ -1,3 +1,5 @@
+// Tests for summary.ts: which conversations land in each Summary section, the quiet-time cutoffs, and the digest line.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { digest, summarise } from "./summary";

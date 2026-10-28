@@ -1,3 +1,7 @@
+// The sync worker's part of the shared company logo queue (supabase/migrations/20261031100000_company_logos.sql):
+// gathering and framing candidates, and saving the judge's pick. The AI worker (apps/ai/ai/logos.py) only
+// asks Gemini: it judges the numbered sheet saved here, and searches when nothing passed.
+
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import type { Tables } from "@messages/db";
@@ -7,10 +11,6 @@ import { storageError, uploadObject } from "../storage";
 import { frameLogo, type Logo, type Rgb } from "../photos/logo-image";
 import { judgeSheet } from "./sheet";
 import { gather, searchResults, SOURCE_ORDER, type Found, type LogoSource } from "./sources";
-
-// The sync worker's part of the shared company logo queue (supabase/migrations/20261031100000_company_logos.sql):
-// gathering and framing candidates, and saving the judge's pick. The AI worker (apps/ai/ai/logos.py) only
-// asks Gemini: it judges the numbered sheet saved here, and searches when nothing passed.
 
 export const LOGOS_BUCKET = "logos";
 /** A framed logo less sharp than this (see Logo.quality) is never offered: a 48px favicon's mark is about 28. */

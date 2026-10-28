@@ -1,3 +1,9 @@
+// Connects any IMAP and SMTP mailbox from the terminal: mail on your own domain at Afrihost, xneelo,
+// Domains.co.za or any cPanel host, or Yahoo, Fastmail, Zoho and GMX. The servers are worked out from the
+// address (or typed in), the sign-in is checked with both, and everything is stored encrypted. The password
+// is never printed or logged, and nothing is sent.
+// Run with: pnpm connect:imap
+
 import { discover, domainOf, fromSettings, isEmail, readSettings, type Candidates } from "@messages/mail-servers";
 import { nodeLookups } from "@messages/mail-servers/net";
 import { failureText, findWorking } from "@messages/mail-servers/probe";
@@ -5,12 +11,6 @@ import { db, must } from "../src/db";
 import { credentialSealer } from "../src/vault";
 import type { ImapCredentials } from "../src/connectors/mail-service";
 import { ask, ownerUserId, saveAccountRow } from "./owner";
-
-// Connects any IMAP and SMTP mailbox from the terminal: mail on your own domain at Afrihost, xneelo,
-// Domains.co.za or any cPanel host, or Yahoo, Fastmail, Zoho and GMX. The servers are worked out from the
-// address (or typed in), the sign-in is checked with both, and everything is stored encrypted. The password
-// is never printed or logged, and nothing is sent.
-// Run with: pnpm connect:imap
 
 const ELSEWHERE = { google: "pnpm connect:google", microsoft: "pnpm connect:microsoft", icloud: "pnpm connect:icloud" } as const;
 

@@ -1,5 +1,7 @@
 "use client";
 
+// Product analytics, for the owner only: the database refuses the summary to anyone else.
+
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -9,8 +11,7 @@ import { AnalyticsError, loadSummary, type Summary } from "@/lib/analytics-data"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PaneControls, PaneHeader, PaneSelect, ViewButtons } from "@/components/pane";
 import { AiTab } from "@/components/analytics/ai-tab";
 import { UsageTab } from "@/components/analytics/usage-tab";
 import { StorageFlags } from "@/components/analytics/storage-flags";
@@ -32,7 +33,6 @@ interface Loaded {
 
 const clock = (t: number) => new Date(t).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
-// Product analytics, for the owner only: the database refuses the summary to anyone else.
 function Analytics() {
   const router = useRouter();
   const pathname = usePathname();
@@ -87,7 +87,7 @@ function Analytics() {
 
   if (!isOwner || denied) {
     return session ? (
-      <div className="w-full max-w-4xl p-3">
+      <div className="mx-auto w-full max-w-4xl p-3">
         <EmptyState title="Owner Only">Analytics is only for the owner of this app.</EmptyState>
       </div>
     ) : null;
@@ -97,47 +97,50 @@ function Analytics() {
       <AlertTitle>Could Not Load The Analytics</AlertTitle>
       <AlertDescription>{data ? "Showing the numbers from the last successful load. Check your connection and try again." : "Check your connection and try again."}</AlertDescription>
       <AlertAction>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void refresh(days)}>Retry</Button>
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void refresh(days)}>Retry</Button>
       </AlertAction>
     </Alert>
   );
 
+  const views: { key: TabName; label: string }[] = [{ key: "usage", label: "Usage" }, { key: "ai", label: "AI" }];
+  const periods = RANGES.map((d) => ({ value: String(d), label: `Last ${d} Days` }));
   return (
-    <ScrollArea className="h-full">
-      <div className="w-full max-w-4xl p-3">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="flex h-10 items-center text-lg font-medium">Analytics</h1>
-            <p className="mt-1 text-sm text-muted-foreground">How the product is used and how well the AI works. Only counts, labels and times: no message text, names or addresses are ever recorded.</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Select value={String(days)} onValueChange={(v) => setParam("days", v)}>
-              <SelectTrigger className="w-36" aria-label="Period"><SelectValue /></SelectTrigger>
-              <SelectContent>{RANGES.map((d) => <SelectItem key={d} value={String(d)}>Last {d} Days</SelectItem>)}</SelectContent>
-            </Select>
-            <Button variant="outline" asChild><Link href="/analytics/logos">Company Logos</Link></Button>
-            {data && <span className="text-xs whitespace-nowrap text-muted-foreground">Updated {clock(data.at)}</span>}
-            <Button variant="outline" size="icon" aria-label="Refresh" disabled={busy} onClick={() => void refresh(days)}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>
-          </div>
-        </div>
-        {!reports || !data ? (
-          failed ? problem : <Loading />
-        ) : (
-          <Tabs value={tab} onValueChange={(v) => setParam("tab", v)} className={busy ? "gap-6 opacity-60 transition-opacity" : "gap-6 transition-opacity"} aria-busy={busy}>
-            <TabsList>
-              <TabsTrigger value="usage">Usage</TabsTrigger>
-              <TabsTrigger value="ai">AI</TabsTrigger>
-            </TabsList>
-            {problem}
-            <TabsContent value="usage">
-              <UsageTab report={reports.usage} empty={reports.empty} />
-              <div className="mt-8"><StorageFlags /></div>
-            </TabsContent>
-            <TabsContent value="ai"><AiTab report={reports.ai} empty={reports.empty} /></TabsContent>
-          </Tabs>
-        )}
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0">
+        <PaneHeader
+          title="Analytics"
+          action={<Button variant="ghost" size="icon" aria-label="Refresh" disabled={busy} onClick={() => void refresh(days)}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>}
+        >
+          <PaneControls>
+            <ViewButtons label="Show" value={tab} onSelect={(v) => setParam("tab", v)} items={views} />
+            <PaneSelect label="Period" value={String(days)} onChange={(v) => setParam("days", v)} options={periods} />
+          </PaneControls>
+        </PaneHeader>
       </div>
-    </ScrollArea>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 p-3 md:px-4">
+          <div className="flex h-8 items-center justify-between gap-3">
+            <p className="min-w-0 truncate text-xs text-muted-foreground">{data ? `Updated ${clock(data.at)}` : "Counts, labels and times only. Never message text."}</p>
+            <Button variant="ghost" asChild><Link href="/analytics/logos">Company Logos</Link></Button>
+          </div>
+          {!reports || !data ? (
+            failed ? problem : <Loading />
+          ) : (
+            <div className={busy ? "flex flex-col gap-3 opacity-60 transition-opacity" : "flex flex-col gap-3 transition-opacity"} aria-busy={busy}>
+              {problem}
+              {tab === "usage" ? (
+                <>
+                  <UsageTab report={reports.usage} empty={reports.empty} />
+                  <div className="border-t pt-3"><StorageFlags /></div>
+                </>
+              ) : (
+                <AiTab report={reports.ai} empty={reports.empty} />
+              )}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+    </div>
   );
 }
 

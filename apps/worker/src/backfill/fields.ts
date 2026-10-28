@@ -1,9 +1,9 @@
+// The columns scripts/encrypt-fields.ts moves between plain text and ciphertext, and how one row is worked out.
+// Pure, so it is tested without a database.
+
 import { decryptField, encryptField, isCiphertext, type UserKeys } from "@messages/crypto";
 import { FIELD, type Field } from "@messages/crypto/fields";
 import { fileHints } from "../ingest/file-hints";
-
-// The columns scripts/encrypt-fields.ts moves between plain text and ciphertext, and how one row is worked out.
-// Pure, so it is tested without a database.
 
 export interface Column {
   column: string;

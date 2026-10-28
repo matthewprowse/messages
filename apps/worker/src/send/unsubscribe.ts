@@ -1,9 +1,9 @@
+// Unsubscribing acts only on the sender's List-Unsubscribe header. A link in the email body is only
+// shown to you, never followed: body links can confirm your address to spammers or lead to phishing pages.
+
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { isPublicAddress, publicAddress } from "@messages/mail-servers/net";
-
-// Unsubscribing acts only on the sender's List-Unsubscribe header. A link in the email body is only
-// shown to you, never followed: body links can confirm your address to spammers or lead to phishing pages.
 
 export interface UnsubscribeOptions {
   https: string | null;

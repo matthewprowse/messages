@@ -1,3 +1,7 @@
+// Zoom: meetings with their transcripts from your cloud recordings (zoom/recordings.ts), and Team Chat as
+// conversations (zoom/chat.ts), both polled since there is no public endpoint for Zoom's webhooks. Replies
+// queued in the outbox go out with the chat messages API. Each part runs when its scopes were granted.
+
 import type { Json, Tables, TablesInsert, TablesUpdate } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, chatIndex } from "@messages/crypto/addresses";
@@ -15,10 +19,6 @@ import { ChatSync, chatPayload, sendBody, type ChatRef, type ChatSealer, type Zo
 import { CHAT_NEEDS, CHAT_SEND_SCOPE, MEETING_SCOPE, MEETINGS_NEEDS, PARTICIPANTS_SCOPE, USER_SCOPE } from "../zoom/oauth";
 import { RecordingSync, type MeetingStore, type StoredMeeting } from "../zoom/recordings";
 import { openZoomClient, zoomFatalDetail } from "../zoom/session";
-
-// Zoom: meetings with their transcripts from your cloud recordings (zoom/recordings.ts), and Team Chat as
-// conversations (zoom/chat.ts), both polled since there is no public endpoint for Zoom's webhooks. Replies
-// queued in the outbox go out with the chat messages API. Each part runs when its scopes were granted.
 
 const CHAT_POLL_MS = 60_000;
 const RECORDINGS_POLL_MS = 10 * 60_000;
@@ -67,7 +67,7 @@ export class ZoomConnector {
         const fatal = zoomFatalDetail(err);
         if (fatal) {
           if (signInRevoked(err)) log.error("zoom sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         if (rateLimited(err)) {

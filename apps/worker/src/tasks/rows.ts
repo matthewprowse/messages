@@ -1,9 +1,9 @@
-import type { Tables, TablesInsert, TablesUpdate } from "@messages/db";
-import { FIELD, type Field } from "@messages/crypto/fields";
-
 // The parts of the tasks layer that need no database or network, so they can be unit tested: building the
 // sealed rows a connector stores, what a settled tick writes to its task, which queued ticks to make, and
 // the reasons shown in the app. See index.ts for the contract they serve.
+
+import type { Tables, TablesInsert, TablesUpdate } from "@messages/db";
+import { FIELD, type Field } from "@messages/crypto/fields";
 
 export type TaskRow = Tables<"tasks">;
 export type TaskUpdateRow = Tables<"task_updates">;

@@ -1,5 +1,7 @@
 "use client";
 
+// The line under a conversation header, for the agent only, about sharing: why the team's rule shared it, or an offer to share a likely work chat.
+
 import { useState } from "react";
 import { toast } from "sonner";
 import { dismissSuggestion, useMyTeam } from "@/lib/share";
@@ -35,10 +37,10 @@ export function ShareNotice({ thread }: { thread: Pick<Thread, "id" | "workspace
       </p>
       <div className="flex shrink-0 items-center gap-2">
         {ruleShared ? (
-          <Button variant="outline" size="sm" disabled={!canMove} onClick={() => setMoving(true)}>Move to Personal</Button>
+          <Button variant="secondary" disabled={!canMove} onClick={() => setMoving(true)}>Move to Personal</Button>
         ) : (
           <>
-            <Button variant="outline" size="sm" disabled={busy} onClick={async () => {
+            <Button variant="secondary" disabled={busy} onClick={async () => {
               setBusy(true);
               const problem = await dismissSuggestion(thread.id);
               setBusy(false);

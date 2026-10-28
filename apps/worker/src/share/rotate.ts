@@ -1,3 +1,6 @@
+// Team key rotation for a workspace: seals every team value again with the current key before old key versions are
+// retired. The long comment further down explains the threat and what rotation does and does not protect.
+
 import { decryptTeamField, encryptTeamBytes, encryptTeamField, isTeamCiphertext, type TeamKeys } from "@messages/crypto";
 import { FIELD, type Field } from "@messages/crypto/fields";
 import type { Json } from "@messages/db";

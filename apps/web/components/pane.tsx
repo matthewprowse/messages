@@ -1,15 +1,16 @@
 "use client";
 
-import type { KeyboardEventHandler, ReactNode, Ref } from "react";
+// The pieces every list page is built from, copied from the Inbox so the pages stay the same: a header block
+// (a title row with at most one action, then one row of controls), then the search in a band of its own.
+
+import { useCallback, useEffect, useRef, useState, type KeyboardEventHandler, type ReactNode, type Ref } from "react";
+import Link from "next/link";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-// The pieces every list page is built from, copied from the Inbox so the pages stay the same: a header block
-// (a title row with at most one action, then one row of controls), then the search in a band of its own.
 
 /** The title row, with the page's one action on the right, and the controls row under it. */
 export function PaneHeader({ title, action, children, className }: { title: ReactNode; action?: ReactNode; children?: ReactNode; className?: string }) {
@@ -29,23 +30,50 @@ export function PaneControls({ children }: { children: ReactNode }) {
   return <div className="flex items-center justify-between gap-3">{children}</div>;
 }
 
-/** The views of a page as text buttons: the open one filled, the rest quiet. They scroll sideways when the column is narrow. */
-export function ViewButtons<T extends string>({ items, value, onSelect, label }: { items: { key: T; label: string }[]; value: T; onSelect: (key: T) => void; label: string }) {
+/** True while a sideways scroller has more content past its right edge. */
+export function useMoreToRight<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [more, setMore] = useState(false);
+  const update = useCallback(() => {
+    const el = ref.current;
+    if (el) setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [update]);
+  return { ref, more, onScroll: update };
+}
+
+/**
+ * The views of a page as text buttons: the open one filled, the rest quiet. They scroll sideways when the column is narrow,
+ * fading out beside the filter until the end. With `hrefFor` each is a link (the Inbox's views live in the address).
+ */
+export function ViewButtons<T extends string>({ items, value, onSelect, hrefFor, label }: { items: { key: T; label: string }[]; value: T; onSelect?: (key: T) => void; hrefFor?: (key: T) => string; label: string }) {
+  const scroller = useMoreToRight<HTMLElement>();
   return (
-    <nav aria-label={label} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {items.map((v) => (
-        <Button
-          key={v.key}
-          type="button"
-          variant={value === v.key ? "secondary" : "ghost"}
-          aria-current={value === v.key ? "page" : undefined}
-          className={cn("shrink-0 px-2", value !== v.key && "text-muted-foreground")}
-          onClick={() => onSelect(v.key)}
-        >
-          {v.label}
-        </Button>
-      ))}
-    </nav>
+    <div className="relative min-w-0 flex-1">
+      <nav ref={scroller.ref} onScroll={scroller.onScroll} aria-label={label} className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {items.map((v) => {
+          const active = value === v.key;
+          const className = cn("shrink-0 px-2", !active && "text-muted-foreground");
+          return hrefFor ? (
+            <Button key={v.key} asChild variant={active ? "secondary" : "ghost"} className={className}>
+              <Link href={hrefFor(v.key)} replace aria-current={active ? "page" : undefined}>{v.label}</Link>
+            </Button>
+          ) : (
+            <Button key={v.key} type="button" variant={active ? "secondary" : "ghost"} aria-current={active ? "page" : undefined} className={className} onClick={() => onSelect?.(v.key)}>
+              {v.label}
+            </Button>
+          );
+        })}
+      </nav>
+      {scroller.more && <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-linear-to-r from-transparent to-background" />}
+    </div>
   );
 }
 

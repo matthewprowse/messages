@@ -1,3 +1,6 @@
+// Tests for tasks/rows.ts: sealed task rows, due-date handling, status patches, planning which queued ticks to
+// make, and failure reasons.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FIELD } from "@messages/crypto/fields";

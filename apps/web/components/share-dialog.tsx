@@ -1,5 +1,7 @@
 "use client";
 
+// Choosing how much of a chat to share with the team (whole history, from today, or from a date): the field, and the dialog used by Mark as Work.
+
 import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
@@ -127,7 +129,7 @@ export function MarkWorkDialog({ threadId, open, strict, suggested = false, onOp
             </p>
           )}
           <div className={DIALOG_BUTTONS}>
-            <Button type="button" variant="outline" disabled={busy} onClick={() => close(false)}>Cancel</Button>
+            <Button type="button" variant="ghost" disabled={busy} onClick={() => close(false)}>Cancel</Button>
             <Button type="submit" disabled={busy || !ready}>{busy ? "Sharing" : "Mark as Work"}</Button>
           </div>
         </form>

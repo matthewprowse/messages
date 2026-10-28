@@ -1,15 +1,16 @@
+// Saving a connected account from the app: the account row and its sign-in, stored exactly as the terminal
+// connect commands store them (apps/worker/scripts/owner.ts), so the sync worker cannot tell them apart.
+
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { encryptField } from "@messages/crypto";
 import { flagOn } from "@messages/crypto/flags";
+import type { UserKeys } from "@messages/crypto";
 import { addressIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
 import { openCredential, sealCredential } from "@messages/crypto/wrap";
 import type { TablesInsert } from "@messages/db";
 import { credentialKey, keysReady, userKeys } from "./keys";
 import { admin } from "./request";
-
-// Saving a connected account from the app: the account row and its sign-in, stored exactly as the terminal
-// connect commands store them (apps/worker/scripts/owner.ts), so the sync worker cannot tell them apart.
 
 /**
  * The old static key. It now seals only short-lived handoffs that no account owns yet (the 10 minute OAuth cookies,
@@ -55,8 +56,8 @@ async function ownerOf(accountId: string): Promise<string> {
  * Seals an account's sign-in or session as "v2:": under a key derived from its owner's data key, the account's ID as
  * additional data (packages/crypto/src/wrap.ts, sealCredential). apps/worker/src/crypto.ts and the AI worker read it.
  */
-export async function sealAccountJson(accountId: string, value: unknown): Promise<string> {
-  const key = await credentialKey(await ownerOf(accountId));
+export async function sealAccountJson(accountId: string, value: unknown, ownerId?: string): Promise<string> {
+  const key = await credentialKey(ownerId ?? (await ownerOf(accountId)));
   try {
     return await sealCredential(key, accountId, JSON.stringify(value));
   } finally {
@@ -65,9 +66,9 @@ export async function sealAccountJson(accountId: string, value: unknown): Promis
 }
 
 /** Opens an account's sign-in or session: "v2:" with its owner's key, or an older "v1:" with the static key. */
-export async function openAccountJson<T>(accountId: string, payload: string): Promise<T> {
+export async function openAccountJson<T>(accountId: string, payload: string, ownerId?: string): Promise<T> {
   if (!payload.startsWith("v2:")) return openJson<T>(payload);
-  const key = await credentialKey(await ownerOf(accountId));
+  const key = await credentialKey(ownerId ?? (await ownerOf(accountId)));
   try {
     return JSON.parse(await openCredential(key, accountId, payload)) as T;
   } finally {
@@ -86,11 +87,11 @@ export async function saveAccountRow(
   provider: TablesInsert<"accounts">["provider"],
   label: string,
   address: string,
-  opts: { onePerUser?: boolean } = {},
+  opts: { onePerUser?: boolean; /** The user's keys, when the caller already has them. */ keys?: UserKeys } = {},
 ): Promise<string> {
   const db = admin;
   if (!db) throw new Error("Supabase is not set up.");
-  const keys = await userKeys(userId);
+  const keys = opts.keys ?? (await userKeys(userId));
   const index = await addressIndex(keys, address);
   const find = async (column: "address_index" | "address", value: string) => {
     const { data, error } = await db.from("accounts").select("id").eq("user_id", userId).eq("provider", provider).eq(column, value).limit(1);
@@ -115,7 +116,15 @@ export async function saveAccountRow(
     }
   }
   const { data, error } = await db.from("accounts").insert({ user_id: userId, provider, address: sealed, address_index: index, ...fields }).select("id").single();
-  if (error) throw error;
+  if (error) {
+    // A double click or two callbacks at once: the other insert won (a unique index on the address), so take its row.
+    if (error.code !== "23505") throw error;
+    const raced = (await find("address_index", index)) ?? (await find("address", address));
+    if (!raced) throw error;
+    const { error: updateError } = await db.from("accounts").update(fields).eq("id", raced.id);
+    if (updateError) throw updateError;
+    return raced.id;
+  }
   return data.id;
 }
 
@@ -124,16 +133,40 @@ export async function saveAccountRow(
  * worker kept from the last sign-in (refreshed, for Microsoft and Zoom, which replace it on every refresh) is
  * cleared, as pnpm connect:microsoft does, so the new sign-in is the one used.
  */
-export async function saveCredentials(accountId: string, credentials: unknown) {
+export async function saveCredentials(accountId: string, credentials: unknown, ownerId?: string) {
   if (!admin) throw new Error("Supabase is not set up.");
   const { error } = await admin
     .from("account_credentials")
-    .upsert({ account_id: accountId, ciphertext: await sealAccountJson(accountId, credentials), refreshed: null, updated_at: new Date().toISOString() }, { onConflict: "account_id" });
+    .upsert({ account_id: accountId, ciphertext: await sealAccountJson(accountId, credentials, ownerId), refreshed: null, updated_at: new Date().toISOString() }, { onConflict: "account_id" });
   if (error) throw error;
+}
+
+/**
+ * Saves several accounts that share one sign-in (Gmail and Calendar, the Microsoft set) at once, deriving the user's
+ * keys a single time. Each is saved on its own, so one failing does not stop the others: the result names the
+ * labels saved and those that were not.
+ */
+export async function saveAccounts(
+  userId: string,
+  rows: { provider: TablesInsert<"accounts">["provider"]; label: string; address: string }[],
+  credentials: unknown,
+): Promise<{ saved: string[]; failed: string[] }> {
+  const keys = await userKeys(userId);
+  const results = await Promise.allSettled(
+    rows.map(async (row) => {
+      const accountId = await saveAccountRow(userId, row.provider, row.label, row.address, { keys });
+      await saveCredentials(accountId, credentials, userId);
+    }),
+  );
+  const saved: string[] = [];
+  const failed: string[] = [];
+  results.forEach((result, i) => (result.status === "fulfilled" ? saved : failed).push(rows[i].label));
+  return { saved, failed };
 }
 
 /** Makes sure the user has a profile row, as the connect commands do. */
 export async function ensureProfile(userId: string) {
   if (!admin) return;
-  await admin.from("profiles").upsert({ user_id: userId }, { onConflict: "user_id", ignoreDuplicates: true });
+  const { error } = await admin.from("profiles").upsert({ user_id: userId }, { onConflict: "user_id", ignoreDuplicates: true });
+  if (error) throw error;
 }

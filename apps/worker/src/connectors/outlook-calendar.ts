@@ -1,3 +1,9 @@
+// Outlook Calendar through Microsoft Graph: the events in a window around today, for the briefing and for
+// triage to know who you are meeting. Every few minutes the window is fetched again from every calendar and
+// replaces what is stored, the same way as Google Calendar. Changing an event and answering an invitation from
+// the app work when the sign-in has Calendars.ReadWrite; creating and deleting events is Google and iCloud only
+// for now.
+
 import type { TablesInsert } from "@messages/db";
 import { Backoff, Sleeper } from "../backoff";
 import { setAccountStatus, type AccountRow } from "../db";
@@ -11,12 +17,6 @@ import { GONE, GRAPH_RESPONSE, graphBody, graphUpdateFailure, readChange, type C
 import { CALENDAR_SCOPE } from "../microsoft/oauth";
 import { microsoftFatalDetail, openGraphClient } from "../microsoft/session";
 import { storedOutlookEvent, type GraphEvent } from "../microsoft/calendar-event";
-
-// Outlook Calendar through Microsoft Graph: the events in a window around today, for the briefing and for
-// triage to know who you are meeting. Every few minutes the window is fetched again from every calendar and
-// replaces what is stored, the same way as Google Calendar. Changing an event and answering an invitation from
-// the app work when the sign-in has Calendars.ReadWrite; creating and deleting events is Google and iCloud only
-// for now.
 
 const POLL_MS = 5 * 60_000;
 const PAST_DAYS = 7;
@@ -69,7 +69,7 @@ export class OutlookCalendarConnector {
         const fatal = microsoftFatalDetail(err, "Calendar");
         if (fatal) {
           if (signInRevoked(err)) log.error("outlook calendar sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         log.warn("outlook calendar sync failed", { account: this.id, code: errorCode(err) });

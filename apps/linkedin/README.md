@@ -100,6 +100,7 @@ commands, so they go to the same process, and none of them logs the password or 
 {"event": "reconnecting"}
 {"event": "message", "message": Message}
 {"event": "conversation", "conversation": Conversation}
+{"event": "seen", "conversationUrn": "urn:li:msg_conversation:...", "by": "<Person id>", "at": 1700000000000}
 {"event": "bad_credentials", "error": {"kind": "bad_credentials"}}
 {"event": "failed", "error": {"kind": "failed"}}
 ```

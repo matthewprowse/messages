@@ -1,7 +1,7 @@
-import type { ListFilter, Priority, Thread } from "./types";
-
 // What the Summary page gathers from your conversations. It is worked out in the browser from the labels
 // the AI already puts on each conversation: whether it needs a reply, its priority, category and summary.
+
+import type { ListFilter, Priority, Thread } from "./types";
 
 /** Conversations waiting on a reply for longer than this are left to Conversations. */
 export const REPLY_DAYS = 14;

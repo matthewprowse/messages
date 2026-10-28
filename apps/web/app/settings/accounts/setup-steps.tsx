@@ -1,5 +1,8 @@
 "use client";
 
+// Shared pieces of the connect pages under settings/accounts: SetupSteps (header, in-app connect slot, numbered terminal steps),
+// a copyable Command, and the status line that waits for the worker to pick the account up.
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Check, Copy, RefreshCw } from "lucide-react";
@@ -29,7 +32,7 @@ export function Command({ children }: { children: string }) {
   return (
     <div className="relative mt-2">
       <pre className="overflow-x-auto rounded-lg bg-muted py-2 pr-12 pl-3 font-mono text-xs text-foreground">{children}</pre>
-      <Button variant="ghost" size="icon-sm" className="absolute top-1 right-1" aria-label={copied ? "Copied" : "Copy Command"} onClick={copy}>
+      <Button variant="ghost" size="icon" className="absolute top-1 right-1" aria-label={copied ? "Copied" : "Copy Command"} onClick={copy}>
         {copied ? <Check /> : <Copy />}
       </Button>
     </div>
@@ -43,14 +46,14 @@ function ConnectionStatus({ label, providers }: { label: string; providers: Prov
   const live = found.some((a: Account) => a.status === "connected" || a.status === "syncing");
   const connecting = !live && found.some((a) => a.status === "connecting");
   return (
-    <section className="mt-8 space-y-3" aria-live="polite">
+    <section className="mt-3 space-y-3" aria-live="polite">
       <SettingsHeading title="Status" />
       <SettingsRows>
         <SettingsRow
           title={<>{label} {live ? <Badge variant="secondary">Connected</Badge> : <Badge variant="outline" className="gap-1"><RefreshCw className="size-3 animate-spin" /> {connecting ? "Connecting" : "Waiting"}</Badge>}</>}
           description={live ? "New messages appear in the Inbox within seconds." : "This updates by itself once the worker has connected the account."}
         >
-          {live && <Button size="sm" asChild><Link href="/inbox">Go to Inbox</Link></Button>}
+          {live && <Button variant="secondary" asChild><Link href="/inbox">Go to Inbox</Link></Button>}
         </SettingsRow>
       </SettingsRows>
     </section>
@@ -66,9 +69,9 @@ export function SetupSteps({ provider, title, description, steps, label, watch, 
   return (
     <>
       <SettingsHeader title={title} description={description} back="/settings/accounts" />
-      {connect && <div className="mb-8">{connect}</div>}
+      {connect && <div className="mb-3">{connect}</div>}
       <Badge variant="outline" className="mb-4">{connect ? "Developer Setup From the Terminal" : "Developer Setup"}</Badge>
-      <ol className="space-y-6">
+      <ol className="space-y-3">
         {steps.map((step, i) => (
           <li key={step.title}>
             <SettingsHeading title={`${i + 1}. ${step.title}`} description={step.body} />

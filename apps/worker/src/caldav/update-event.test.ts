@@ -1,3 +1,6 @@
+// Tests for caldav/update-event.ts. Pin down how an iCloud event file is rewritten for a change or an RSVP: UID and
+// SEQUENCE, guests and invites, single occurrence versus whole series, and what is refused.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readChange, type CalendarUpdateRow, type Change } from "../calendar/update-event";

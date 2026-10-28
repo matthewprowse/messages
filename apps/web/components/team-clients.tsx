@@ -1,5 +1,10 @@
 "use client";
 
+// Team Clients on the Contacts page: the clients everyone on the team looks after, with their company and the agent
+// or agents who look after them. A row above People opens this page, so the person's own contacts are untouched. It
+// holds names only: a chat is read by its agent and whoever it is assigned to, and an assigned chat is in the
+// assignee's Conversations (step 5), never here.
+
 import { Suspense, useDeferredValue, useState } from "react";
 import { Briefcase } from "lucide-react";
 import { useAuth } from "@/lib/auth";
@@ -12,11 +17,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ContactAvatar, EmptyState } from "@/components/primitives";
 import { DetailPage, Divided, LoadFailed, plural, ListRow } from "@/components/contact-list";
 import { ClientMenu, TeamCompanies } from "@/components/team-client-manage";
-
-// Team Clients on the Contacts page: the clients everyone on the team looks after, with their company and the agent
-// or agents who look after them. A row above People opens this page, so the person's own contacts are untouched. It
-// holds names only: a chat is read by its agent and whoever it is assigned to, and an assigned chat is in the
-// assignee's Conversations (step 5), never here.
 
 const HREF = "/contacts/team";
 

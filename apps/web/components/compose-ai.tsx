@@ -1,15 +1,15 @@
 "use client";
 
+// AI drafting in New Email and New WhatsApp: type or say what the message should say, and the AI writes
+// it in your voice (an email with its subject). Edit Text corrects what you wrote yourself. Undo puts back
+// what the fields held. The draft has no conversation yet; its id goes out with the message, so learning
+// can read what you changed once the conversation is filed.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RecordingActions, RecordingStatus, SpeakButton, useVoiceRecorder } from "@/components/voice-recorder";
-
-// AI drafting in New Email and New WhatsApp: type or say what the message should say, and the AI writes
-// it in your voice (an email with its subject). Edit Text corrects what you wrote yourself. Undo puts back
-// what the fields held. The draft has no conversation yet; its id goes out with the message, so learning
-// can read what you changed once the conversation is filed.
 
 export interface Composed {
   body: string;
@@ -106,8 +106,8 @@ export function ComposeAi({ open, sent, disabled, accountId, channel, contactId,
             />
             <SpeakButton voice={speech} disabled={off || busy} />
             <Button type="button" variant="secondary" disabled={off || busy || !said} onClick={draft}>{busy ? "Drafting" : "Draft"}</Button>
-            {editable && <Button type="button" variant="outline" disabled={off} onClick={() => void ask({ tone: "edit", source: body })}>Edit Text</Button>}
-            {undoable && <Button type="button" variant="outline" onClick={undo}>Undo</Button>}
+            {editable && <Button type="button" variant="secondary" disabled={off} onClick={() => void ask({ tone: "edit", source: body })}>Edit Text</Button>}
+            {undoable && <Button type="button" variant="ghost" onClick={undo}>Undo</Button>}
           </>
         )}
       </div>

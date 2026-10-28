@@ -1,10 +1,10 @@
-import type { FolderRole } from "../ingest/store-email";
-import { imapMove, imapThreadPlace, type ImapPlace, type ImapMove } from "../ingest/imap-place";
-
 // Pure helpers for where mail lives in Outlook. No I/O, so they can be unit tested.
 // Outlook works like IMAP: each message is in exactly one folder. Folders are named by Graph's
 // well-known names, which Graph also takes as a destination, so no folder IDs are stored. The IMAP
 // rules in imap-place.ts are reused by translating the Inbox's name.
+
+import type { FolderRole } from "../ingest/store-email";
+import { imapMove, imapThreadPlace, type ImapPlace, type ImapMove } from "../ingest/imap-place";
 
 export type OutlookFolder = "inbox" | "sentitems" | "archive" | "junkemail" | "deleteditems";
 

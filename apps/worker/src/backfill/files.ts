@@ -1,7 +1,7 @@
+// How scripts/encrypt-attachments.ts works out one stored object. Pure, so it is tested without a bucket.
+
 import { contentHash, decryptBytes, encryptBytes, isSealedBytes, type UserKeys } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
-
-// How scripts/encrypt-attachments.ts works out one stored object. Pure, so it is tested without a bucket.
 
 export interface Planned {
   /** What to upload in place of the object, or null to leave the bytes alone. */

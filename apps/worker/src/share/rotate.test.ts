@@ -1,3 +1,6 @@
+// Tests for share/rotate.ts over a fake store and real keys. Pin down sealing values again with the current team key,
+// leaving unreadable values alone, retiring old versions only after a clean pass, and picking up rows changed mid-job.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";

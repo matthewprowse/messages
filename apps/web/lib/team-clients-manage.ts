@@ -1,15 +1,15 @@
 "use client";
 
+// What an owner or admin can do to the team's client list (supabase/migrations/20261104100000_team_after_launch.sql): rename a
+// client, set or clear their company, change who looks after them, merge two clients, and remove a client or a company from
+// the list. Names are sealed with the team's key here. Every function checks who is asking; removing never unshares a chat.
+
 import { useCallback, useEffect, useState } from "react";
 import { encryptTeamField } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
 import { useAuth } from "./auth";
 import { open, teamKeys } from "./vault";
-
-// What an owner or admin can do to the team's client list (supabase/migrations/20261104100000_team_after_launch.sql): rename a
-// client, set or clear their company, change who looks after them, merge two clients, and remove a client or a company from
-// the list. Names are sealed with the team's key here. Every function checks who is asking; removing never unshares a chat.
 
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";
 const NO_KEY = "Your team's key is not available. Reload the page and try again.";

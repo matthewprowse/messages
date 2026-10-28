@@ -1,7 +1,7 @@
-import { getContentType, jidDecode, normalizeMessageContent, type proto } from "baileys";
-
 // Turns a WhatsApp message into what the app stores: a text body, a one-line preview, at most one media
 // file, and the message it quotes. Pure functions, so they can be unit tested without a connection.
+
+import { getContentType, jidDecode, normalizeMessageContent, type proto } from "baileys";
 
 export type MediaType = "imageMessage" | "videoMessage" | "ptvMessage" | "audioMessage" | "documentMessage" | "stickerMessage";
 

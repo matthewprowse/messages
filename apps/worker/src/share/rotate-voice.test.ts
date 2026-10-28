@@ -1,3 +1,5 @@
+// The company voice, the export log and the team's notes under a rotated team key (rotate-voice.ts).
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -9,8 +11,6 @@ const { resealWorkspace } = await import("./rotate");
 const { resealVoice } = await import("./rotate-voice");
 import type { Ring, RotateStore } from "./rotate";
 import type { VoiceStore } from "./rotate-voice";
-
-// The company voice, the export log and the team's notes under a rotated team key (rotate-voice.ts).
 
 const k1 = await deriveTeamKeys(Uint8Array.from(randomBytes(32)));
 const k2 = await deriveTeamKeys(Uint8Array.from(randomBytes(32)));

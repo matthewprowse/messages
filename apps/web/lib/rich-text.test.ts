@@ -1,3 +1,6 @@
+// Tests for rich-text.ts: WhatsApp markup parsing (bold, italics, code, nesting, what stays as typed) and emphasis
+// matching on email text.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findEmphasis, richParts, sliceRanges, whatsappMarkup } from "./rich-text";

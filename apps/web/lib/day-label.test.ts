@@ -1,3 +1,5 @@
+// Tests for dayLabel in format.ts: Today, Yesterday, weekday names for the past week, then full dates.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dayLabel } from "./format";

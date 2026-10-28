@@ -1,3 +1,5 @@
+// Database calls that store WhatsApp messages: one at a time for live messages, in batches for history.
+
 import type { Json } from "@messages/db";
 import { db, must } from "../db";
 import { BatchRpc, type RpcResponse } from "../ingest/batch-rpc";

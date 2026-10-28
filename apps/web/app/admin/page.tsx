@@ -1,24 +1,27 @@
 "use client";
 
+// The waitlist, for the owner only: the database refuses the rows to anyone else.
+// Approving or rejecting changes the status; nobody is emailed yet. Approving a team request also makes its team
+// and shows an invite link for its owner, to send by hand.
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, ShieldCheck, User, Users } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useAuth, useIsOwner } from "@/lib/auth";
 import { inviteLink } from "@/lib/team";
 import { teamSeats, teamSizeLabel, type WaitlistKind, type WaitlistStatus } from "@/lib/waitlist";
-import { EmptyState, Loading } from "@/components/analytics/parts";
+import { PaneControls, PaneHeader, PaneSelect, ViewButtons } from "@/components/pane";
+import { EmptyState } from "@/components/primitives";
 import { AiBudget } from "@/components/admin/ai-budget";
 import { AiUsage } from "@/components/admin/ai-usage";
+import { AdminColumn, AdminRow } from "@/components/admin/parts";
 import { OwnerInviteDialog, Workspaces, type OwnerInvite } from "@/components/admin/workspaces";
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Entry {
   id: string;
@@ -30,22 +33,34 @@ interface Entry {
   created_at: string;
 }
 
-const STATUSES: { value: WaitlistStatus; label: string }[] = [
-  { value: "pending", label: "Pending" },
-  { value: "approved", label: "Approved" },
-  { value: "rejected", label: "Rejected" },
+type View = "waitlist" | "teams" | "usage" | "budget";
+const VIEWS: { key: View; label: string }[] = [
+  { key: "waitlist", label: "Waitlist" },
+  { key: "teams", label: "Teams" },
+  { key: "usage", label: "AI Usage" },
+  { key: "budget", label: "AI Budget" },
+];
+const STATUSES: { key: WaitlistStatus; label: string }[] = [
+  { key: "pending", label: "Pending" },
+  { key: "approved", label: "Approved" },
+  { key: "rejected", label: "Rejected" },
+];
+const KINDS = [
+  { value: "all", label: "All Requests" },
+  { value: "team", label: "Teams" },
+  { value: "individual", label: "Individuals" },
 ];
 type KindFilter = "all" | WaitlistKind;
 
 const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
-// The waitlist from the marketing page, for the owner only: the database refuses the rows to anyone else.
-// Approving or rejecting changes the status; nobody is emailed yet. Approving a team request also makes its team
-// and shows an invite link for its owner, to send by hand.
 export default function AdminPage() {
   const router = useRouter();
   const { session } = useAuth();
   const isOwner = useIsOwner();
+  const [view, setView] = useState<View>("waitlist");
+  const [tick, setTick] = useState(0);
+  const [childBusy, setChildBusy] = useState(false);
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -108,82 +123,65 @@ export default function AdminPage() {
   }, [entries, kind]);
   const shown = useMemo(() => (entries ?? []).filter((e) => e.status === status && (kind === "all" || e.kind === kind)), [entries, status, kind]);
 
+  const busyNow = view === "waitlist" ? busy : childBusy;
+  const refresh = () => (view === "waitlist" ? void load() : setTick((t) => t + 1));
+
   if (!isOwner) {
     return session ? (
-      <div className="w-full max-w-4xl p-3">
-        <EmptyState title="Owner Only">Admin is only for the owner of this app.</EmptyState>
+      <div className="flex h-full min-h-0 flex-col">
+        <EmptyState icon={ShieldCheck} title="Owner Only" description="Admin is only for the owner of this app." />
       </div>
     ) : null;
   }
 
   return (
-    <ScrollArea className="h-full">
-      <div className="w-full max-w-4xl p-3">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="flex h-10 items-center text-lg font-medium">Admin</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Requests for access from the marketing page, the teams they become, and the AI budget for each seat.</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Select value={kind} onValueChange={(v) => setKind(v as KindFilter)}>
-              <SelectTrigger className="w-36" aria-label="Account Type"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Requests</SelectItem>
-                <SelectItem value="team">Teams</SelectItem>
-                <SelectItem value="individual">Individuals</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="icon" aria-label="Refresh" disabled={busy} onClick={() => void load()}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>
-          </div>
-        </div>
-        {failed && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertTitle>Could Not Load the Waitlist</AlertTitle>
-            <AlertDescription>Check your connection and try again.</AlertDescription>
-            <AlertAction>
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => void load()}>Retry</Button>
-            </AlertAction>
-          </Alert>
-        )}
-        {!entries ? (
-          !failed && <Loading />
-        ) : (
-          <div className="flex flex-col gap-6">
-            <Tabs value={status} onValueChange={(v) => setStatus(v as WaitlistStatus)}>
-              <TabsList>
-                {STATUSES.map((s) => <TabsTrigger key={s.value} value={s.value}>{s.label} ({counts[s.value]})</TabsTrigger>)}
-              </TabsList>
-            </Tabs>
-            {shown.length === 0 ? (
-              <EmptyState title={`No ${STATUSES.find((s) => s.value === status)?.label} Requests`}>
-                {status === "pending" ? "New requests from the marketing page show up here." : "Requests you decide on show up here."}
-              </EmptyState>
-            ) : (
-              <ItemGroup className="gap-2">
-                {shown.map((e) => (
-                  <Item key={e.id} variant="outline">
-                    <ItemContent>
-                      <ItemTitle>
-                        {e.kind === "team" ? e.company : e.email}
-                        <Badge variant="secondary">{e.kind === "team" ? teamSizeLabel(e.team_size) : "Individual"}</Badge>
-                      </ItemTitle>
-                      <ItemDescription>{e.kind === "team" ? `${e.email}, requested ${day(e.created_at)}` : `Requested ${day(e.created_at)}`}</ItemDescription>
-                    </ItemContent>
-                    <ItemActions>
-                      {e.status !== "rejected" && <Button size="sm" variant="outline" onClick={() => void decide(e, "rejected")}>Reject</Button>}
-                      {e.status !== "approved" && <Button size="sm" onClick={() => void decide(e, "approved")}>Approve</Button>}
-                    </ItemActions>
-                  </Item>
-                ))}
-              </ItemGroup>
-            )}
-          </div>
-        )}
-        <div className="mt-10"><Workspaces version={teamsVersion} onInvite={setOwnerInvite} /></div>
-        <div className="mt-10"><AiUsage /></div>
-        <div className="mt-10"><AiBudget /></div>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0">
+        <PaneHeader title="Admin" action={<Button variant="ghost" size="icon" aria-label="Refresh" disabled={busyNow} onClick={refresh}><RefreshCw className={busyNow ? "animate-spin" : undefined} /></Button>}>
+          <PaneControls>
+            <ViewButtons label="Admin Sections" value={view} onSelect={setView} items={VIEWS} />
+          </PaneControls>
+          {view === "waitlist" && (
+            <PaneControls>
+              <ViewButtons label="Request Status" value={status} onSelect={setStatus} items={STATUSES.map((x) => ({ key: x.key, label: `${x.label} (${counts[x.key]})` }))} />
+              <PaneSelect label="Account Type" value={kind} onChange={(v) => setKind(v as KindFilter)} options={KINDS} className="w-32 shrink-0" />
+            </PaneControls>
+          )}
+        </PaneHeader>
       </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <AdminColumn>
+          {view === "waitlist" && (
+            failed ? (
+              <EmptyState icon={Users} title="Could Not Load the Waitlist" description="Check your connection and try again." action={<Button variant="secondary" disabled={busy} onClick={() => void load()}>Retry</Button>} />
+            ) : !entries ? (
+              <div className="flex flex-col gap-3"><Skeleton className="h-14 w-full rounded-lg" /><Skeleton className="h-14 w-full rounded-lg" /></div>
+            ) : shown.length === 0 ? (
+              <div className="py-24">
+                <EmptyState icon={Users} title={`No ${STATUSES.find((x) => x.key === status)?.label} Requests`} description={status === "pending" ? "New requests show up here." : "Requests you decide on show up here."} />
+              </div>
+            ) : (
+              shown.map((e, i) => (
+                <div key={e.id}>
+                  {i > 0 && <Separator className="ml-14" />}
+                  <AdminRow
+                    icon={e.kind === "team" ? <Users /> : <User />}
+                    title={e.email}
+                    description={`${e.kind === "team" ? `${e.company ?? "Team"}, ${teamSizeLabel(e.team_size)}` : "Individual"}, requested ${day(e.created_at)}`}
+                  >
+                    {e.status !== "rejected" && <Button variant="ghost" onClick={() => void decide(e, "rejected")}>Reject</Button>}
+                    {e.status !== "approved" && <Button variant="secondary" onClick={() => void decide(e, "approved")}>Approve</Button>}
+                  </AdminRow>
+                </div>
+              ))
+            )
+          )}
+          {view === "teams" && <Workspaces version={teamsVersion + tick} onInvite={setOwnerInvite} onBusy={setChildBusy} />}
+          {view === "usage" && <AiUsage version={tick} onBusy={setChildBusy} />}
+          {view === "budget" && <AiBudget />}
+        </AdminColumn>
+      </ScrollArea>
       <OwnerInviteDialog invite={ownerInvite} onClose={() => setOwnerInvite(null)} />
-    </ScrollArea>
+    </div>
   );
 }

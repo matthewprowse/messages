@@ -1,5 +1,7 @@
 "use client";
 
+// The form that connects any IMAP and SMTP mailbox in Settings and onboarding, with server settings guessed from the address.
+
 import { useRef, useState } from "react";
 import { ELSEWHERE_TEXT, type Elsewhere, type ImapTls, type ServerSettings, type SmtpSecurity } from "@messages/mail-servers";
 import { track } from "@/lib/analytics";

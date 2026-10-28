@@ -1,3 +1,8 @@
+// Files sent with an outbox row. The app uploads them to the private "attachments" bucket at
+// "<user id>/outbox/<uuid>/<filename>", inserts the outbox row with attachment_count, then adds one
+// outbox_attachments row per file. The worker waits for those rows before it claims the outbox row:
+// the app can add them only while the row is still queued.
+
 import { db, must } from "../db";
 import { log, errorCode } from "../log";
 import { sleep, startEvery } from "../backoff";
@@ -16,11 +21,6 @@ import {
   storageUrlPath,
   type AttachmentProvider,
 } from "./attachment-rules";
-
-// Files sent with an outbox row. The app uploads them to the private "attachments" bucket at
-// "<user id>/outbox/<uuid>/<filename>", inserts the outbox row with attachment_count, then adds one
-// outbox_attachments row per file. The worker waits for those rows before it claims the outbox row:
-// the app can add them only while the row is still queued.
 
 const POLL_MS = 1_000;
 

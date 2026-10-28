@@ -53,6 +53,7 @@ interface El {
   attrs: string;
   children: (El | string)[];
   parent?: El;
+  depth: number;
 }
 
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "meta", "param", "source", "track", "wbr"]);
@@ -61,7 +62,83 @@ const RAW = new Set(["style", "script", "title", "textarea", "xmp"]);
 const SKIP = new Set(["head", "style", "script", "title", "noscript", "template", "svg", "math", "object", "iframe", "select", "textarea", "map", "xmp"]);
 const PARAGRAPH = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "dl", "pre", "figure"]);
 const LINE = new Set(["div", "table", "section", "article", "header", "footer", "nav", "aside", "main", "center", "address", "dd", "dt", "caption", "form", "fieldset", "details", "summary", "figcaption", "legend", "option"]);
-const TOKEN = /<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?\]\]>|<[!?][^>]*>|<\/?([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+|</g;
+/** Nesting deeper than this is flattened: real emails are a few dozen levels deep, and every walk below recurses. */
+const MAX_DEPTH = 100;
+/** Emphasis is not worked out for HTML longer than this: a hostile email must not hold up the worker. */
+const MAX_EMPHASIS_HTML = 500_000;
+
+interface Token {
+  /** The tag's name (lower case not applied), or undefined for text, comments, doctype and CDATA. */
+  name?: string;
+  attrs: string;
+  end: number;
+  /** A closing tag. */
+  closing: boolean;
+  /** Text and "<" only. */
+  text: boolean;
+}
+
+/**
+ * Splits HTML into tokens in one pass, never looking back, so a tag that never closes costs nothing extra
+ * (a lone "<" is then text). Quoted attribute values may hold ">". Same tokens as the pattern it replaced:
+ * comments (an unterminated one runs to the end), "<!...>" and "<?...>" declarations, CDATA, tags, text.
+ */
+function makeTokenizer(html: string) {
+  // Once a search finds nothing from some position it finds nothing from any later one.
+  const none = { gt: false, dq: false, sq: false, comment: false, cdata: false, decl: false };
+  const find = (what: string, from: number, key: keyof typeof none): number => {
+    if (none[key]) return -1;
+    const at = html.indexOf(what, from);
+    if (at < 0) none[key] = true;
+    return at;
+  };
+  let wasted = 0;
+  const lt = (pos: number): Token => ({ attrs: "", end: pos + 1, closing: false, text: true });
+  return (pos: number): Token => {
+    if (html[pos] !== "<") {
+      const next = html.indexOf("<", pos);
+      return { attrs: "", end: next < 0 ? html.length : next, closing: false, text: true };
+    }
+    const c1 = html[pos + 1];
+    if (c1 === "!" && html.startsWith("<!--", pos)) {
+      const at = find("-->", pos + 4, "comment");
+      return { attrs: "", end: at < 0 ? html.length : at + 3, closing: false, text: false };
+    }
+    if (c1 === "!" && html.startsWith("<![CDATA[", pos)) {
+      const at = find("]]>", pos + 9, "cdata");
+      if (at >= 0) return { attrs: "", end: at + 3, closing: false, text: false };
+    }
+    if (c1 === "!" || c1 === "?") {
+      const at = find(">", pos + 2, "decl");
+      return at < 0 ? lt(pos) : { attrs: "", end: at + 1, closing: false, text: false };
+    }
+    const closing = c1 === "/";
+    let i = pos + (closing ? 2 : 1);
+    const nameStart = i;
+    if (!/[a-zA-Z]/.test(html[i] ?? "")) return lt(pos);
+    while (i < html.length && /[\w:-]/.test(html[i])) i++;
+    const name = html.slice(nameStart, i);
+    const attrsStart = i;
+    // Scans that end in nothing are paid for from a budget, so odd quoting cannot make many of them add up.
+    if (wasted > 4 * html.length + 1000 || find(">", attrsStart, "gt") < 0) return lt(pos);
+    const fail = () => { wasted += i - pos; return lt(pos); };
+    for (;;) {
+      if (i >= html.length) return fail();
+      const ch = html[i];
+      if (ch === ">") return { name, attrs: html.slice(attrsStart, i), end: i + 1, closing, text: false };
+      if (ch === '"' || ch === "'") {
+        const at = find(ch, i + 1, ch === '"' ? "dq" : "sq");
+        if (at < 0) return fail();
+        i = at + 1;
+        continue;
+      }
+      // Plain characters up to the next quote or ">".
+      let j = i + 1;
+      while (j < html.length && html[j] !== ">" && html[j] !== '"' && html[j] !== "'") j++;
+      i = j;
+    }
+  };
+}
 
 function attr(attrs: string, name: string): string | undefined {
   const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "i").exec(attrs);
@@ -69,7 +146,7 @@ function attr(attrs: string, name: string): string | undefined {
 }
 
 function parseHtml(html: string): { root: El; styles: string[]; text: string } {
-  const root: El = { tag: "#root", attrs: "", children: [] };
+  const root: El = { tag: "#root", attrs: "", children: [], depth: 0 };
   const styles: string[] = [];
   const texts: string[] = [];
   const lower = html.toLowerCase();
@@ -81,16 +158,18 @@ function parseHtml(html: string): { root: El; styles: string[]; text: string } {
       if (boundaries.includes(e.tag)) return;
     }
   };
-  const re = new RegExp(TOKEN.source, "g");
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
-    const tok = m[0];
-    if (!m[1]) {
-      if (tok[0] !== "<" || tok === "<") { cur.children.push(tok); texts.push(tok); }
+  const next = makeTokenizer(html);
+  let pos = 0;
+  while (pos < html.length) {
+    const start = pos;
+    const t = next(pos);
+    pos = t.end;
+    if (!t.name) {
+      if (t.text) { const text = html.slice(start, pos); cur.children.push(text); texts.push(text); }
       continue; // comments (Outlook's conditional ones included), doctype and CDATA
     }
-    const tag = m[1].toLowerCase();
-    if (tok[1] === "/") { closeOpen([tag], []); continue; }
+    const tag = t.name.toLowerCase();
+    if (t.closing) { closeOpen([tag], []); continue; }
     // Tags HTML closes for you when the next one starts.
     if (tag === "body") closeOpen(["head"], []);
     else if (tag === "p") closeOpen(["p"], ["td", "th", "li", "div", "table", "blockquote", "body"]);
@@ -100,18 +179,18 @@ function parseHtml(html: string): { root: El; styles: string[]; text: string } {
     else if (tag === "tr") closeOpen(["tr"], ["table"]);
     else if (tag === "tbody" || tag === "thead" || tag === "tfoot") closeOpen(["tbody", "thead", "tfoot"], ["table"]);
     else if (tag === "option") closeOpen(["option"], ["select"]);
-    const el: El = { tag, attrs: m[2], children: [], parent: cur };
+    const el: El = { tag, attrs: t.attrs, children: [], parent: cur, depth: cur.depth + 1 };
     cur.children.push(el);
     if (RAW.has(tag)) {
-      const end = lower.indexOf(`</${tag}`, re.lastIndex);
-      const content = html.slice(re.lastIndex, end < 0 ? html.length : end);
+      const end = lower.indexOf(`</${tag}`, pos);
+      const content = html.slice(pos, end < 0 ? html.length : end);
       if (tag === "style") styles.push(content);
       const close = end < 0 ? -1 : html.indexOf(">", end);
-      re.lastIndex = close < 0 ? html.length : close + 1;
+      pos = close < 0 ? html.length : close + 1; // an unclosed one runs to the end, so this search is made once
       continue;
     }
-    if (VOID.has(tag) || /\/\s*$/.test(m[2])) continue;
-    cur = el;
+    if (VOID.has(tag) || /\/\s*$/.test(t.attrs)) continue;
+    if (el.depth < MAX_DEPTH) cur = el; // deeper than this, an element holds nothing and stays flat
   }
   return { root, styles, text: decodeEntities(texts.join(" ")).replace(/\s+/g, " ").toLowerCase() };
 }
@@ -307,6 +386,15 @@ function plainOf(node: El | string, classes: Set<string>): string {
  * styled run counts as its label. At most max runs, in document order.
  */
 export function emphasisRuns(html: string, max = 300): Emphasis[] {
+  if (html.length > MAX_EMPHASIS_HTML) return [];
+  try {
+    return emphasisRunsOf(html, max);
+  } catch {
+    return []; // emphasis is decoration: an email it cannot read is stored without it
+  }
+}
+
+function emphasisRunsOf(html: string, max: number): Emphasis[] {
   const { root, styles } = parseHtml(html);
   const classes = hiddenClasses(styles);
   const out: Emphasis[] = [];
@@ -894,11 +982,45 @@ export interface OriginalDoc {
  * A standalone document for an <iframe sandbox srcdoc>. The sandbox and CSP do the real work; stripping
  * active tags and remote image sources here is a second layer and stops trackers firing on open.
  */
+/** The viewer shows at most this much of one email's HTML: the stripping below must stay quick on hostile input. */
+const MAX_ORIGINAL_HTML = 2_000_000;
+const BLOCK_TAGS = new Set(["script", "iframe", "object", "embed", "noscript", "title"]);
+const BARE_TAGS = new Set(["meta", "base", "link"]);
+
+/**
+ * Removes <script>, <iframe>, <object>, <embed>, <noscript> and <title> elements with their content, and
+ * <meta>, <base> and <link> tags, in one pass. An element that never closes loses only its opening tag, and
+ * a tag that never ends takes the rest of the document with it (a pattern that backtracks over each of many
+ * such tags is quadratic).
+ */
+function stripBlocks(html: string): string {
+  const lower = html.toLowerCase();
+  const out: string[] = [];
+  const noClose = new Set<string>();
+  let copied = 0;
+  let at = 0;
+  for (let lt = html.indexOf("<", at); lt >= 0; lt = html.indexOf("<", at)) {
+    at = lt + 1;
+    const m = /^<([a-z]+)\b/.exec(lower.slice(lt, lt + 12));
+    if (!m || !(BLOCK_TAGS.has(m[1]) || BARE_TAGS.has(m[1]))) continue;
+    out.push(html.slice(copied, lt));
+    const name = m[1];
+    let close = -1;
+    if (BLOCK_TAGS.has(name) && !noClose.has(name)) {
+      close = lower.indexOf(`</${name}`, lt + 1);
+      if (close < 0) noClose.add(name);
+    }
+    const gt = html.indexOf(">", close < 0 ? lt : close);
+    if (gt < 0) return out.join("");
+    copied = at = gt + 1;
+  }
+  out.push(html.slice(copied));
+  return out.join("");
+}
+
 export function originalDoc(html: string, allowImages: boolean): OriginalDoc {
   let blocked = 0;
-  let body = html
-    .replace(/<(script|iframe|object|embed|noscript|title)\b[\s\S]*?<\/\1\s*>/gi, "")
-    .replace(/<(script|iframe|object|embed|meta|base|link)\b[^>]*>/gi, "")
+  let body = stripBlocks(html.length > MAX_ORIGINAL_HTML ? html.slice(0, MAX_ORIGINAL_HTML) : html)
     .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     .replace(/(href|src)\s*=\s*(["']?)\s*javascript:[^"'\s>]*\2/gi, '$1=""');
   if (!allowImages) {

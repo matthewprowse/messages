@@ -1,3 +1,6 @@
+// Plain display formatting shared across screens: phone numbers, names, relative times and dates, file sizes. Pure apart
+// from reading the clock.
+
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 
 /**

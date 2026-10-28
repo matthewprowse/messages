@@ -1,5 +1,7 @@
 "use client";
 
+// Settings page for connecting LinkedIn: the sign-in form (LinkedInConnect) plus notes on the codes and approvals LinkedIn may ask for.
+
 import { useEffect } from "react";
 import { track } from "@/lib/analytics";
 import { SettingsHeader } from "@/components/settings-header";
@@ -18,7 +20,7 @@ export default function LinkedInSetup() {
 
       <LinkedInConnect />
 
-      <div className="mt-8">
+      <div className="mt-3">
         <SettingsSection id="before-you-connect" title="Before You Connect">
           <SettingsHeading level={3} title="Codes and Approvals" description={<p>
             LinkedIn may ask for a 6-digit code, sent to your email or phone or shown by your authenticator app, or ask you to approve the

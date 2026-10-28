@@ -1,5 +1,9 @@
 "use client";
 
+// Setup, as a dialog over the app: connect accounts, then say who you are while the first import runs,
+// then check what Konva learned, tidy contacts it is unsure of, and try a reply. It opens for someone new
+// (no accounts and no setup flag) and for anyone part-way through, and resumes where they left off.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -31,12 +35,8 @@ import { LearnedStep } from "./learned-step";
 import { ContactsStep } from "./contacts-step";
 import { DraftStep } from "./draft-step";
 
-// Setup, as a dialog over the app: connect accounts, then say who you are while the first import runs,
-// then check what Konva learned, tidy contacts it is unsure of, and try a reply. It opens for someone new
-// (no accounts and no setup flag) and for anyone part-way through, and resumes where they left off.
-
-/** Pages it stays out of the way on: signing in, the marketing page, and setting up an account in Settings. */
-const AWAY = (path: string) => path === "/" || path === "/login" || path.startsWith("/settings/accounts");
+/** Pages it stays out of the way on: signing in and setting up an account in Settings. */
+const AWAY = (path: string) => path === "/login" || path.startsWith("/settings/accounts");
 
 export function SetupDialog() {
   const { session } = useAuth();
@@ -279,7 +279,7 @@ function AccountsStep() {
                   {live && status !== "error" ? null : service === "google" ? (
                     <Button size="sm" disabled={leaving} onClick={startGoogle}>{status === "error" ? "Reconnect" : "Connect"}</Button>
                   ) : service === "microsoft" ? (
-                    <Button size="sm" variant="outline" asChild><Link href="/settings/accounts/microsoft">Set Up</Link></Button>
+                    <Button variant="secondary" asChild><Link href="/settings/accounts/microsoft">Set Up</Link></Button>
                   ) : (
                     <Button size="sm" variant={open === service ? "secondary" : "default"} onClick={() => setOpen(open === service ? null : service)}>
                       {open === service ? "Close" : status === "error" ? "Reconnect" : "Connect"}
@@ -356,7 +356,7 @@ function AboutStep({ onLeave }: { onLeave: () => void }) {
           </Avatar>
           <div className="space-y-1">
             <input ref={file} type="file" accept="image/*" className="hidden" onChange={pick} />
-            <Button type="button" variant="outline" size="sm" onClick={() => file.current?.click()}><ImagePlus /> {photo ? "Change Photo" : "Add a Photo"}</Button>
+            <Button type="button" variant="secondary" onClick={() => file.current?.click()}><ImagePlus /> {photo ? "Change Photo" : "Add a Photo"}</Button>
             <p className="text-xs text-muted-foreground">Optional.</p>
           </div>
         </div>
@@ -400,7 +400,7 @@ function ReadyStep({ finish }: { finish: (tour: "pending" | "done") => void }) {
       footer={
         <>
           {back && <Button variant="ghost" disabled={busy} onClick={back}>Back</Button>}
-          <Button variant="outline" disabled={busy} onClick={() => finish("done")}>Start Using Konva</Button>
+          <Button variant="secondary" disabled={busy} onClick={() => finish("done")}>Start Using Konva</Button>
           <Button disabled={busy} onClick={() => finish("pending")}>Show Me Around</Button>
         </>
       }

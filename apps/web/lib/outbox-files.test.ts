@@ -1,3 +1,5 @@
+// Tests for outbox-files.ts: per-provider attachment limits, the file count cap, and cleaning of file names.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

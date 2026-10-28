@@ -1,5 +1,7 @@
 "use client";
 
+// The Work or Personal badge on the conversation list and in the conversation header, and the menu that moves a chat between them.
+
 import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { refreshMyTeam, useMyTeam, useSharing } from "@/lib/share";

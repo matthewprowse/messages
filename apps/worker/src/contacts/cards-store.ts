@@ -1,3 +1,6 @@
+// Saves the address book cards the photo job reads, so the contact linker can tell which addresses and
+// numbers belong to one person. Cards that disappear from the address book are deleted.
+
 import { createHash } from "node:crypto";
 import { addressIndex } from "@messages/crypto/addresses";
 import { allRows, db, must } from "../db";
@@ -7,9 +10,6 @@ import { errorCode, log } from "../log";
 import type { Card } from "../photos/cards";
 import { chunks } from "../util";
 import { countryCodeOf, DEFAULT_COUNTRY_CODE, toE164 } from "./signature-phones";
-
-// Saves the address book cards the photo job reads, so the contact linker can tell which addresses and
-// numbers belong to one person. Cards that disappear from the address book are deleted.
 
 /** The country for local numbers: from your own WhatsApp number, else a number you linked with, else +27. */
 export async function userCountryCode(userId: string): Promise<string> {

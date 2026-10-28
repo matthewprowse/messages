@@ -1,3 +1,6 @@
+// Tests for account-groups.ts: parts of one Google, Microsoft or iCloud sign-in group into one row, other services stay apart,
+// and a group's status and problem text come from its parts.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { groupAccounts, groupProblem, groupStatus, partsOf } from "./account-groups";

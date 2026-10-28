@@ -1,5 +1,7 @@
 "use client";
 
+// Settings page for connecting Zoom: in-app sign-in via ConnectZoom, with terminal steps below as the developer route.
+
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Video } from "lucide-react";
@@ -129,7 +131,7 @@ function ConnectZoom() {
 
   return (
     <div className="space-y-2">
-      <Button disabled={busy} onClick={start}><Video /> Connect Zoom</Button>
+      <Button variant="secondary" disabled={busy} onClick={start}><Video /> Connect Zoom</Button>
       {error && <FieldError>{error}</FieldError>}
     </div>
   );

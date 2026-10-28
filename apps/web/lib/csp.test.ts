@@ -1,3 +1,6 @@
+// Tests for csp.ts: the Content-Security-Policy needs a nonce for scripts and never allows unsafe-inline, with dev-only
+// relaxations kept out of production.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildCsp, makeNonce } from "./csp";

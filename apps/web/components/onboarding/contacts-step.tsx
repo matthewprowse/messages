@@ -1,5 +1,8 @@
 "use client";
 
+// 4. Contacts Konva is unsure of: people it would join together, and one it thinks is two people. Each
+// is decided here in a tap. MOCK: the suggestions come from the contact linker once it reports them.
+
 import { useState } from "react";
 import { Mail } from "lucide-react";
 import { MOCK_SUGGESTIONS, type ContactSuggestion } from "@/lib/onboarding-demo";
@@ -7,9 +10,6 @@ import { BrandLogo } from "@/components/provider-logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StepFrame, useSetup } from "./setup-context";
-
-// 4. Contacts Konva is unsure of: people it would join together, and one it thinks is two people. Each
-// is decided here in a tap. MOCK: the suggestions come from the contact linker once it reports them.
 
 type Decision = "accepted" | "declined";
 
@@ -26,7 +26,7 @@ export function ContactsStep() {
       footer={
         <>
           {back && <Button variant="ghost" disabled={busy} onClick={back}>Back</Button>}
-          {open.length > 0 && <Button variant="outline" disabled={busy} onClick={acceptAll}>Accept All</Button>}
+          {open.length > 0 && <Button variant="secondary" disabled={busy} onClick={acceptAll}>Accept All</Button>}
           <Button disabled={busy} onClick={next}>{open.length > 0 ? "Decide Later" : "Continue"}</Button>
         </>
       }
@@ -71,7 +71,7 @@ function Suggestion({ s, decision, onDecide, onUndo }: { s: ContactSuggestion; d
           </>
         ) : (
           <>
-            <Button variant="outline" size="sm" onClick={() => onDecide("declined")}>{merge ? "Keep Separate" : "Keep Together"}</Button>
+            <Button variant="secondary" onClick={() => onDecide("declined")}>{merge ? "Keep Separate" : "Keep Together"}</Button>
             <Button size="sm" onClick={() => onDecide("accepted")}>{merge ? "Merge" : "Split"}</Button>
           </>
         )}

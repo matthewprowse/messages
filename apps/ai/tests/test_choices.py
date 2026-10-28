@@ -1,3 +1,6 @@
+"""Tests for reply choices in ai.triage (read_choices, results and the prompt) and the decision text that ai.drafts adds
+after the tone: bad options are dropped, two are needed, and choices appear only while a reply is needed."""
+
 import json
 import unittest
 
@@ -43,6 +46,8 @@ class Choices(unittest.TestCase):
     def test_prompt_says_when_it_was_sent(self):
         self.assertEqual(sent_label("2026-10-27T13:05:00+00:00"), "Tuesday 27 October 2026, 13:05 UTC")
         self.assertEqual(sent_label(None), "unknown")
+        self.assertEqual(sent_label("2026-10-27T13:05:00+00:00", "Africa/Johannesburg"), "Tuesday 27 October 2026, 15:05 SAST")
+        self.assertEqual(sent_label("2026-10-27T13:05:00+00:00", "Not/AZone"), "Tuesday 27 October 2026, 13:05 UTC")
         email = {"name": "Sam", "sender": "sam@x.com", "relationship": "", "known": False, "bulk": False, "subject": "Viewing",
                  "sent": "2026-10-27T13:05:00Z", "body": "Are you free Thursday at 3?"}
         self.assertIn("Sent: Tuesday 27 October 2026, 13:05 UTC", triage_prompt(UserContext(), [email]))

@@ -1,3 +1,5 @@
+// Tests for recurrence.ts: describing a repeat rule in words, comparing rules, and the repeat choices offered for a date.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { describeRule, ordinal, repeatChoices, sameRepeat, sameRule } from "./recurrence";

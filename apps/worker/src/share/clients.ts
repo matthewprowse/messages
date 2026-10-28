@@ -1,3 +1,9 @@
+// Filling the team's shared client list (public.workspace_contacts) when a chat is shared: every person in the chat
+// joins it, with their addresses and numbers by team blind index, their company and who looks after them. The
+// worker does it because it holds the agent's key (to read their contacts) and the team's (to seal and index).
+// It runs when a to_work share job finishes, so the same chat can come round again (a follow-up job) and must change
+// nothing the second time: the database matches a client by any of its indexes and only adds what is missing.
+
 import { encryptTeamField } from "@messages/crypto";
 import { teamAddressIndex, teamDomainIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
@@ -5,12 +11,6 @@ import { isPlaceholderName as isPlaceholderSender } from "@messages/email-text/c
 import { isPlaceholderName } from "../contacts/match";
 import { ownKeys, readPerson, type OwnAddresses, type Participant } from "./people";
 import type { Keys, ThreadRow } from "./reseal";
-
-// Filling the team's shared client list (public.workspace_contacts) when a chat is shared: every person in the chat
-// joins it, with their addresses and numbers by team blind index, their company and who looks after them. The
-// worker does it because it holds the agent's key (to read their contacts) and the team's (to seal and index).
-// It runs when a to_work share job finishes, so the same chat can come round again (a follow-up job) and must change
-// nothing the second time: the database matches a client by any of its indexes and only adds what is missing.
 
 /** A group with more people than this is a community, not a client: its members are not all added to the list. */
 export const MAX_GROUP_CLIENTS = 10;

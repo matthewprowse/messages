@@ -1,3 +1,6 @@
+// Tests for zoom/vtt.ts: parsing Zoom's WebVTT transcripts (speakers, cue joining, notes) and the Teams quirks it
+// also accepts.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseVtt, timestampMs } from "./vtt";

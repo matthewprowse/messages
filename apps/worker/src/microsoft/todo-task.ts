@@ -1,10 +1,3 @@
-import type { TablesInsert } from "@messages/db";
-import { htmlToText } from "@messages/email-text";
-import { localDate } from "../calendar/create-event";
-import { zonedToUtc } from "../caldav/ical";
-import type { TaskWrite } from "../tasks/rows";
-import { ianaZone } from "./windows-zones";
-
 // Turns a Microsoft To Do task from Graph into a tasks row. Pure, so it can be unit tested; the connector
 // seals the title, notes and list name before storing the row.
 //
@@ -13,6 +6,13 @@ import { ianaZone } from "./windows-zones";
 // written in UTC ("2026-11-02T22:00:00" in "UTC" is 3 November in South Africa). A time at midnight in its own
 // zone is that day; any other time is the day whose midnight it is nearest to in your time zone. A reminder
 // set for the due day is when the task is due, so it shows at that time rather than all day.
+
+import type { TablesInsert } from "@messages/db";
+import { htmlToText } from "@messages/email-text";
+import { localDate } from "../calendar/create-event";
+import { zonedToUtc } from "../caldav/ical";
+import type { TaskWrite } from "../tasks/rows";
+import { ianaZone } from "./windows-zones";
 
 /** Graph's dateTimeTimeZone: a wall-clock time and the zone it is in, Windows ("South Africa Standard Time") or IANA. */
 export interface GraphDateTimeZone {

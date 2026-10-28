@@ -1,3 +1,6 @@
+// Tests for packages/email-text/src/index.ts. Pin down text cleaning, HTML to text, quote and forward splitting,
+// signature trimming, link shortening, the sandboxed original document and newsletter detection and footers.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bodySource, bulkPreview, cleanText, decodeEntities, emailParts, htmlToText, isBulkMail, linkParts, originalDoc, shortenUrl, siteOf, splitFooter, splitForward, splitQuoted, trimSignature, weakText } from "./index";

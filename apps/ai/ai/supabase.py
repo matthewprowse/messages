@@ -82,6 +82,8 @@ class Supabase:
 
     def download(self, bucket: str, path: str, *, timeout: float = 60) -> bytes:
         """A stored file's bytes, such as a WhatsApp voice note from the private attachments bucket."""
+        if ".." in path.split("/"):
+            raise SupabaseError(400, None)
         url = f"{self.storage}/object/{bucket}/{urllib.parse.quote(path)}"
         headers = {k: v for k, v in self.headers.items() if k != "Content-Type"}
         res = POOL.request("GET", url, None, headers, timeout=timeout)

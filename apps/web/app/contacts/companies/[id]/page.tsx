@@ -1,5 +1,7 @@
 "use client";
 
+// One company (/contacts/companies/[id]) in the right-hand pane. Reloads when one of its people is merged, split or deleted, and offers Retry when the read fails.
+
 import { Suspense, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { Building2 } from "lucide-react";

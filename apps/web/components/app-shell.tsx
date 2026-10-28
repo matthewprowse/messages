@@ -1,19 +1,21 @@
 "use client";
 
+// The frame around every signed-in page: navigation rail and bottom bar, the New menu, search palette, sync bar,
+// and the dialogs that open over the app (setup, tour, team review).
+
 import Link from "next/link";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useIsOwner } from "@/lib/auth";
 import { SearchCommand, ShortcutsDialog } from "@/components/search-command";
-import { NEW_ITEM_EVENT, NewMenu } from "@/components/new-menu";
-import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Ellipsis, Mail, MessageCircle, CalendarPlus, type LucideIcon } from "lucide-react";
+import { NewMenu } from "@/components/new-menu";
+import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Megaphone, Ellipsis, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { AppTour } from "@/components/tour";
 import { SyncBar } from "@/components/sync-bar";
 import { SetupDialog } from "@/components/onboarding/setup-dialog";
 import { TeamReview } from "@/components/team-review";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -107,6 +109,7 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
       </div>
       <div className="mt-auto flex flex-col gap-1">
         {isOwner && <RailButton href="/analytics" label="Analytics" icon={ChartColumn} active={pathname.startsWith("/analytics")} />}
+        {isOwner && <RailButton href="/updates" label="Updates" icon={Megaphone} active={pathname.startsWith("/updates")} />}
         {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin")} />}
         <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings")} />
       </div>
@@ -118,7 +121,7 @@ function BottomBar({ hidden }: { hidden: boolean }) {
   const pathname = usePathname();
   const hasUnread = useHasUnread();
   // More is its own screen (app/more), so it is lit there and on the places it leads to that the bar does not have.
-  const moreActive = ["/more", ...SECONDARY.map((m) => m.href), "/analytics", "/admin", "/settings"].some((href) => pathname.startsWith(href));
+  const moreActive = ["/more", ...SECONDARY.map((m) => m.href), "/analytics", "/updates", "/admin", "/settings"].some((href) => pathname.startsWith(href));
   if (hidden) return null;
   return (
     <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
@@ -166,18 +169,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const onLogin = pathname === "/login";
-  const onMarketing = pathname === "/";
   const onInvite = pathname.startsWith("/invite/");
+  const onOnboarding = pathname === "/onboarding";
   const isDetail = useIsDetailRoute();
 
-  // Everything except the sign-in page, the marketing page and an invite link needs a signed-in user: row-level security returns nothing otherwise.
+  // Everything except the sign-in page and an invite link needs a signed-in user: row-level security returns nothing otherwise.
   // An invite page asks someone to sign in itself, so the link they were sent is not lost.
   useEffect(() => {
-    if (session === null && !onLogin && !onMarketing && !onInvite) router.replace("/login");
-  }, [session, onLogin, onMarketing, onInvite, router]);
+    if (session === null && !onLogin && !onInvite && !onOnboarding) router.replace("/login");
+  }, [session, onLogin, onInvite, onOnboarding, router]);
 
-  if (onMarketing) return children;
-  if (onLogin || onInvite) return <main className="h-dvh w-full">{children}</main>;
+  if (onLogin || onInvite || onOnboarding) return <main className="h-dvh w-full">{children}</main>;
   if (!session) return <div className="h-dvh w-full" />; // checking the stored session, or redirecting
 
   return (

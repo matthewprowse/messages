@@ -1,12 +1,18 @@
 "use client";
 
+// The Settings page sections (About, Writing, Priorities, Appearance, Language, Data, Tour, Sign In) and the heading and row components every Settings page uses.
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { useApp } from "@/lib/store";
 import { signOut, useAuth } from "@/lib/auth";
+import { supabase } from "@/lib/supabase";
+import { PHOTO_BUCKET, photoPathFor, squareJpeg } from "@/lib/profile-photo";
+import { MyAvatar } from "@/components/my-avatar";
 import { saveOnboarding } from "@/lib/onboarding";
 import { resetMockImport } from "@/lib/onboarding-demo";
 import type { Rule } from "@/lib/types";
@@ -23,31 +29,31 @@ export function SettingsHeading({ title, description, level = 2 }: { title: Reac
   const Tag = `h${level}` as const;
   return (
     <div>
-      <Tag className="text-sm font-medium">{title}</Tag>
-      {description && <div className="mt-1 text-sm text-muted-foreground">{description}</div>}
+      <Tag className="flex min-h-8 items-center text-sm font-medium">{title}</Tag>
+      {description && <div className="text-sm text-muted-foreground">{description}</div>}
     </div>
   );
 }
 
 export function SettingsSection({ id, title, description, level, children }: { id?: string; title: React.ReactNode; description?: React.ReactNode; level?: 2 | 3 | 4; children: React.ReactNode }) {
   return (
-    <section id={id} className="scroll-mt-6 space-y-3">
+    <section id={id} className={cn("scroll-mt-16 space-y-3", (level ?? 2) === 2 && "[&:not(:first-child)]:border-t [&:not(:first-child)]:pt-3")}>
       <SettingsHeading title={title} description={description} level={level} />
       {children}
     </section>
   );
 }
 
-// The one row style in Settings: a bordered list, each row a title and description with any controls on the right.
+// The one row style in Settings: Inbox-style rows, each a title and description with any controls on the right.
 export function SettingsRows({ children }: { children: React.ReactNode }) {
-  return <div className="divide-y overflow-hidden rounded-lg border">{children}</div>;
+  return <div className="flex flex-col gap-1">{children}</div>;
 }
 
 export function SettingsRow({ title, description, leading, href, children }: { title: React.ReactNode; description?: React.ReactNode; leading?: React.ReactNode; href?: string; children?: React.ReactNode }) {
   // The controls wrap under the text when the row is narrow, so a long title is never squashed beside them.
   const body = (
     <>
-      <div className="flex min-w-[12rem] flex-1 items-center gap-4">
+      <div className="flex min-w-[12rem] flex-1 items-center gap-3">
         {leading}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 text-sm font-medium">{title}</div>
@@ -57,12 +63,12 @@ export function SettingsRow({ title, description, leading, href, children }: { t
       {children && <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div>}
     </>
   );
-  const className = "flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3";
+  const className = "flex flex-wrap items-center gap-x-3 gap-y-3 rounded-lg p-3";
   return href ? <Link href={href} className={cn(className, "hover:bg-muted/50")}>{body}</Link> : <div className={className}>{body}</div>;
 }
 
 export function SettingsEmpty({ children }: { children: React.ReactNode }) {
-  return <p className="rounded-lg border px-4 py-3 text-sm text-muted-foreground">{children}</p>;
+  return <p className="rounded-lg p-3 text-sm text-muted-foreground">{children}</p>;
 }
 
 export function AboutSection() {
@@ -72,7 +78,7 @@ export function AboutSection() {
   const changed = form.name.trim() !== profile.name || form.about.trim() !== profile.about || form.people.trim() !== profile.people;
   return (
     <SettingsSection id="about" title="About" description="The AI reads this before it ranks anything or writes a word.">
-      <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); if (!changed) return; dispatch({ type: "patchProfile", patch: { name: form.name.trim(), about: form.about.trim(), people: form.people.trim() } }); notify("Saved"); }}>
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!changed) return; dispatch({ type: "patchProfile", patch: { name: form.name.trim(), about: form.about.trim(), people: form.people.trim() } }); notify("Saved"); }}>
         <div className="grid gap-2"><Label htmlFor="name">Name</Label><Input id="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
         <div className="grid gap-2">
           <Label htmlFor="about">Role and Goals</Label>
@@ -83,7 +89,7 @@ export function AboutSection() {
           <Textarea id="people" rows={4} value={form.people} onChange={(e) => setForm({ ...form, people: e.target.value })} />
           <p className="text-xs text-muted-foreground">Who they are to you, so the AI knows a one-line message from your co-founder outranks a long newsletter.</p>
         </div>
-        <Button type="submit" disabled={!changed}>Save</Button>
+        <Button variant="secondary" type="submit" disabled={!changed}>Save</Button>
       </form>
     </SettingsSection>
   );
@@ -108,7 +114,7 @@ export function WritingSection() {
         <SettingsRows>
           {writingExamples.map((w) => (
             <SettingsRow key={w.id} title={w.context} description={w.text}>
-              <Button variant="ghost" size="icon-sm" aria-label={`Remove Example: ${w.context}`} onClick={() => { dispatch({ type: "removeExample", id: w.id }); notify("Example removed", () => dispatch({ type: "addExample", example: w })); }}><Trash2 /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Remove Example: ${w.context}`} onClick={() => { dispatch({ type: "removeExample", id: w.id }); notify("Example removed", () => dispatch({ type: "addExample", example: w })); }}><Trash2 /></Button>
             </SettingsRow>
           ))}
         </SettingsRows>
@@ -116,7 +122,7 @@ export function WritingSection() {
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); addExample(); }}>
         <div className="grid gap-2"><Label htmlFor="ctx">Situation</Label><Input id="ctx" value={context} onChange={(e) => setContext(e.target.value)} placeholder="Replying to a client" required /></div>
         <div className="grid gap-2"><Label htmlFor="txt">Example</Label><Textarea id="txt" rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste a message you actually sent" required /></div>
-        <Button type="submit">Add Example</Button>
+        <Button variant="secondary" type="submit">Add Example</Button>
       </form>
     </SettingsSection>
   );
@@ -148,7 +154,7 @@ export function PrioritiesSection() {
           <SelectTrigger className="sm:w-44" aria-label="Rule Type"><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value="always_important">Always Important</SelectItem><SelectItem value="never_important">Never Important</SelectItem></SelectContent>
         </Select>
-        <Button type="submit">Add</Button>
+        <Button variant="secondary" type="submit">Add</Button>
       </form>
       {groups.map((g) => {
         const list = rules.filter((r) => r.kind === g.kind);
@@ -158,7 +164,7 @@ export function PrioritiesSection() {
               <SettingsRows>
                 {list.map((r) => (
                   <SettingsRow key={r.id} title={r.target}>
-                    <Button variant="ghost" size="icon-sm" aria-label={`Remove Rule: ${r.target}`} onClick={() => { dispatch({ type: "removeRule", id: r.id }); notify("Rule removed", () => dispatch({ type: "addRule", rule: r })); }}><Trash2 /></Button>
+                    <Button variant="ghost" size="icon" aria-label={`Remove Rule: ${r.target}`} onClick={() => { dispatch({ type: "removeRule", id: r.id }); notify("Rule removed", () => dispatch({ type: "addRule", rule: r })); }}><Trash2 /></Button>
                   </SettingsRow>
                 ))}
               </SettingsRows>
@@ -222,7 +228,7 @@ export function DataSection() {
           <Switch checked={profile.shareUsage} onCheckedChange={(v) => dispatch({ type: "patchProfile", patch: { shareUsage: v } })} aria-label="Share Usage Data" />
         </SettingsRow>
         <SettingsRow title="Delete All Data" description="Deleting everything is not available yet. To stop an account syncing now, use Pause Sync in Connected Accounts.">
-          <Button variant="destructive" disabled>Delete Everything</Button>
+          <Button variant="ghost" className="text-destructive hover:text-destructive" disabled>Delete Everything</Button>
         </SettingsRow>
       </SettingsRows>
     </SettingsSection>
@@ -238,10 +244,10 @@ export function TourSection() {
     <SettingsSection id="tour" title="Getting Started">
       <SettingsRows>
         <SettingsRow title="Take the Tour" description="A page by page look at Summary, Conversations, Contacts and the rest.">
-          <Button variant="outline" onClick={tour}>Start Tour</Button>
+          <Button variant="secondary" onClick={tour}>Start Tour</Button>
         </SettingsRow>
         <SettingsRow title="Run Setup Again" description="Accounts, what Konva knows about you, contacts and a practice reply.">
-          <Button variant="outline" onClick={setup}>Run Setup</Button>
+          <Button variant="secondary" onClick={setup}>Run Setup</Button>
         </SettingsRow>
       </SettingsRows>
     </SettingsSection>
@@ -254,7 +260,62 @@ export function SignInSection() {
     <SettingsSection id="account" title="Account">
       <SettingsRows>
         <SettingsRow title="Signed In" description={session?.user.email}>
-          <Button variant="outline" onClick={() => signOut()}>Sign Out</Button>
+          <Button variant="secondary" onClick={() => signOut()}>Sign Out</Button>
+        </SettingsRow>
+      </SettingsRows>
+    </SettingsSection>
+  );
+}
+
+/** Your own photo, shown wherever "You" appears. It is cut to a square and shrunk in the browser before it is saved. */
+export function ProfilePhotoSection() {
+  const { profile, dispatch } = useApp();
+  const { session } = useAuth();
+  const userId = session?.user.id;
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<string>();
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  async function upload(file: File | undefined) {
+    if (!file || !userId) return;
+    setBusy(true);
+    try {
+      const blob = await squareJpeg(file);
+      const path = photoPathFor(userId);
+      const { error } = await supabase.storage.from(PHOTO_BUCKET).upload(path, blob, { upsert: true, contentType: "image/jpeg" });
+      if (error) throw new Error("Your photo could not be uploaded. Try again.");
+      dispatch({ type: "patchProfile", patch: { avatarPath: path } });
+      setPreview(URL.createObjectURL(blob));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Your photo could not be uploaded. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!userId) return;
+    setBusy(true);
+    const { error } = await supabase.storage.from(PHOTO_BUCKET).remove([photoPathFor(userId)]);
+    setBusy(false);
+    if (error) { toast.error("Your photo could not be removed. Try again."); return; }
+    dispatch({ type: "patchProfile", patch: { avatarPath: null } });
+    setPreview(undefined);
+  }
+
+  return (
+    <SettingsSection id="profile-photo" title="Profile Photo">
+      <SettingsRows>
+        <SettingsRow title="Your Photo" description="Shown beside the files and messages you send." leading={<MyAvatar className="size-12" previewUrl={preview} />}>
+          <Button variant="secondary" disabled={busy} onClick={() => document.getElementById("profile-photo-input")?.click()}>Upload Photo</Button>
+          {profile.avatarPath && <Button variant="ghost" disabled={busy} onClick={remove}>Remove</Button>}
+          <input
+            id="profile-photo-input"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; void upload(f); }}
+          />
         </SettingsRow>
       </SettingsRows>
     </SettingsSection>

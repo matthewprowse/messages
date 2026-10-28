@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Accounts: connected accounts grouped by provider family, with rename and pause for each group.
+
 import Link from "next/link";
 import { useState } from "react";
 import { Mail, Calendar, ListChecks, MessageCircle, RefreshCw, Video } from "lucide-react";
@@ -82,7 +84,7 @@ export default function AccountsPage() {
           <p className="mt-1 text-xs">Read over IMAP, CalDAV, the Gmail API, Microsoft Graph and a linked WhatsApp device.</p>
         </>}
       />
-      <div className="space-y-8">
+      <div className="space-y-3">
         {groups.length === 0 ? (loading ? <Skeleton className="h-40 w-full rounded-lg" /> : <SettingsEmpty>No accounts connected yet.</SettingsEmpty>) : (
           <SettingsRows>
             {groups.map((g) => {
@@ -101,11 +103,11 @@ export default function AccountsPage() {
                     </>
                   }
                 >
-                  <Button variant="ghost" size="sm" onClick={() => { setName(g.accounts.find((a) => a.nickname)?.nickname ?? ""); setRenaming(g); }}>Rename</Button>
+                  <Button variant="ghost" onClick={() => { setName(g.accounts.find((a) => a.nickname)?.nickname ?? ""); setRenaming(g); }}>Rename</Button>
                   {status === "disconnected" || status === "error" ? (
-                    <Button size="sm" asChild><Link href={setupOf(g)}>Reconnect</Link></Button>
+                    <Button variant="secondary" asChild><Link href={setupOf(g)}>Reconnect</Link></Button>
                   ) : (
-                    <Button variant="outline" size="sm" onClick={() => setPausing(g)}>Pause Sync</Button>
+                    <Button variant="secondary" onClick={() => setPausing(g)}>Pause Sync</Button>
                   )}
                 </SettingsRow>
               );

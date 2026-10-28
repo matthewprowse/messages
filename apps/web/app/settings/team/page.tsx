@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Team: the workspace and its people, loaded with useTeam, with Retry when the load fails.
+
 import { useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
@@ -51,19 +53,18 @@ export default function TeamPage() {
   };
 
   const workspace = state?.workspace ?? null;
-  const manages = state?.role === "owner" || state?.role === "admin";
   const hasCompliance = !!state?.people.some((p) => p.role === "compliance" && p.status !== "removed");
 
   return (
     <>
       <SettingsHeader title="Team" description={workspace ? workspace.name : "People you work with, and what the team can see."} />
-      <div className="space-y-8">
+      <div className="space-y-3">
         {failed && (
           <Alert variant="destructive">
             <AlertTitle>Could Not Load Your Team</AlertTitle>
             <AlertDescription>
               <p>Check your connection and try again.</p>
-              <Button variant="outline" size="sm" className="mt-2" onClick={() => void load()}>Retry</Button>
+              <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
             </AlertDescription>
           </Alert>
         )}
@@ -96,7 +97,7 @@ export default function TeamPage() {
 
             {state.role !== "owner" && (
               <SettingsSection id="membership" title="Your Membership" description={`You are ${state.role ? ROLE_LABEL[state.role] : "a member"} of ${workspace.name}. Leaving ends your access to what the team shares. Your own mail and chats stay with you.`}>
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => setLeaving(true)}>Leave Team</Button>
+                <Button variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={() => setLeaving(true)}>Leave Team</Button>
               </SettingsSection>
             )}
           </>
@@ -113,7 +114,7 @@ export default function TeamPage() {
           </AlertDialogHeader>
           <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" disabled={busy} onClick={(e) => { e.preventDefault(); void setStrict(false); }}>{busy ? "Turning Off" : "Turn Off"}</AlertDialogAction>
+            <AlertDialogAction variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={(e) => { e.preventDefault(); void setStrict(false); }}>{busy ? "Turning Off" : "Turn Off"}</AlertDialogAction>
           </div>
         </AlertDialogContent>
       </AlertDialog>
@@ -128,7 +129,7 @@ export default function TeamPage() {
           </AlertDialogHeader>
           <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" disabled={busy} onClick={(e) => { e.preventDefault(); void leave(); }}>{busy ? "Leaving" : "Leave Team"}</AlertDialogAction>
+            <AlertDialogAction variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={(e) => { e.preventDefault(); void leave(); }}>{busy ? "Leaving" : "Leave Team"}</AlertDialogAction>
           </div>
         </AlertDialogContent>
       </AlertDialog>

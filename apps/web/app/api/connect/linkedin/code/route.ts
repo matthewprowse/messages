@@ -1,26 +1,21 @@
-import { accountsReady, openAccountJson, sealAccountJson } from "@/lib/server/accounts";
-import { admin, fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
-import { parseRelay, type SignInStep } from "../shared";
-
 // What a LinkedIn sign-in is waiting for, and the answer. The worker's LinkedIn connector writes the step it is
 // at (a six-digit code from email, SMS or an authenticator app, or an approval in the LinkedIn app) to
 // account_credentials.refreshed, sealed. With no code in the body this only tells the page the step, which it
 // asks for every few seconds while it waits. With a code, or tryAnotherWay, the answer is written beside the step,
 // for the connector to take within seconds. Writing it changes only that column, so the connector is not
 // restarted, and only if the step has not moved on since it was read.
+
+import { accountsReady, openAccountJson, sealAccountJson } from "@/lib/server/accounts";
+import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
+import { parseRelay, type SignInStep } from "../shared";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const CODE = /^[0-9]{6}$/;
 
 // Only answers count against the limit; the page asks for the step every few seconds while it waits.
-const overLimit = limiter(10, 10 * 60_000);
-
-interface Body {
-  accountId?: string;
-  code?: string;
-  tryAnotherWay?: boolean;
-}
+const overLimit = limiter(10, 10 * 60_000, { name: "connect-linkedin-code" });
 
 export async function POST(request: Request) {
   if (!accountsReady() || !admin) return fail(503, "Connecting LinkedIn is not set up on this server yet.");
@@ -28,9 +23,13 @@ export async function POST(request: Request) {
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
 
-  const body = (await request.json().catch(() => ({}))) as Body;
-  if (!body.accountId) return fail(400, "Choose the LinkedIn account.");
-  const { data: account, error } = await admin.from("accounts").select("id").eq("id", body.accountId).eq("user_id", user.id).eq("provider", "linkedin").maybeSingle();
+  const body = await readJson(request);
+  const accountId = body && textField(body, "accountId");
+  if (!body || accountId === null || (body.code !== undefined && typeof body.code !== "string")) return fail(400, "That request could not be read.");
+  const code0 = body.code as string | undefined;
+  const tryAnotherWay = body.tryAnotherWay === true;
+  if (!accountId) return fail(400, "Choose the LinkedIn account.");
+  const { data: account, error } = await admin.from("accounts").select("id").eq("id", accountId).eq("user_id", user.id).eq("provider", "linkedin").maybeSingle();
   if (error) return fail(500, "Could not check the sign-in. Try again.");
   const none = () => Response.json({ step: null }, { headers: noStore });
   if (!account) return none();
@@ -44,18 +43,18 @@ export async function POST(request: Request) {
     return none();
   }
   if (!step) return none();
-  if (body.code === undefined && !body.tryAnotherWay) return Response.json({ step }, { headers: noStore });
+  if (code0 === undefined && !tryAnotherWay) return Response.json({ step }, { headers: noStore });
 
   const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many tries. Wait a few minutes and try again.", { "Retry-After": String(wait) });
 
   let reply: { step: SignInStep; code?: string; tryAnotherWay?: true };
-  if (body.tryAnotherWay) {
+  if (tryAnotherWay) {
     if (step.kind !== "app" || !step.canTryAnotherWay) return fail(409, "LinkedIn has no other way to offer right now.");
     reply = { step, tryAnotherWay: true };
   } else {
     if (step.kind !== "code") return fail(409, "LinkedIn is not asking for a code right now.");
-    const code = (body.code ?? "").replace(/[\s-]/g, "");
+    const code = (code0 ?? "").replace(/[\s-]/g, "");
     if (!CODE.test(code)) return fail(400, "Enter the 6-digit code from LinkedIn.");
     reply = { step, code };
   }

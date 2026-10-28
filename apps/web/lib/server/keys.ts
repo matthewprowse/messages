@@ -1,12 +1,12 @@
-import { deriveUserKeys, type UserKeys } from "@messages/crypto";
-import { dataKeyFor, deriveCredentialKey, teamKeyring, wrappersFromEnv, type KeyStore, type KeyWrapper, type TeamKeyring, type TeamKeyStore } from "@messages/crypto/wrap";
-import { admin } from "./request";
-
 // Users' data keys on the server: read from user_keys and unwrapped by the wrapper named in wrapped_by, the same way
 // the sync worker does. kms:v1 (Google Cloud KMS, when KMS_KEY_NAME is set) wraps new keys and local:v1
 // (KEY_WRAPPING_KEY) still opens older ones until pnpm rewrap-keys has moved them. A user's key is made on first use.
 // Never stored or logged here. A workspace's key (team_keys, one row per version) is handled the same way, and only for
 // a user whose workspace_members row is active.
+
+import { deriveUserKeys, type UserKeys } from "@messages/crypto";
+import { dataKeyFor, deriveCredentialKey, teamKeyring, wrappersFromEnv, type KeyStore, type KeyWrapper, type TeamKeyring, type TeamKeyStore } from "@messages/crypto/wrap";
+import { admin } from "./request";
 
 const db = admin;
 const store: KeyStore | null = db && {
@@ -93,9 +93,4 @@ export async function activeWorkspaceId(userId: string): Promise<string | null> 
 export async function teamKeys(workspaceId: string): Promise<TeamKeyring> {
   if (!teamStore || !keysReady()) throw new Error("The key service is not set up.");
   return teamKeyring(teamStore, await keyWrappers(), workspaceId);
-}
-
-/** A workspace's current raw 32-byte data key. Only for a caller who is an active member. */
-export async function teamDataKey(workspaceId: string): Promise<Uint8Array<ArrayBuffer>> {
-  return (await teamKeys(workspaceId)).current.key;
 }

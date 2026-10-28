@@ -1,5 +1,7 @@
 "use client";
 
+// Settings page for connecting iCloud Calendar from the terminal, using the shared SetupSteps.
+
 import { Command, SetupSteps, type SetupStep } from "../setup-steps";
 
 const STEPS: SetupStep[] = [

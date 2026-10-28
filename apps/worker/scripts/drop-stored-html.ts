@@ -1,10 +1,3 @@
-import { decryptField, encryptField, isCiphertext } from "@messages/crypto";
-import { FIELD } from "@messages/crypto/fields";
-import { bodySource, isBulkMail } from "@messages/email-text";
-import { db, must } from "../src/db";
-import { keysFor } from "../src/vault";
-import { marksJson } from "../src/ingest/store-email";
-
 // One-off: drops the HTML stored with emails from before View Original fetched it on demand. What the app
 // needed the HTML for is kept first, as new emails get it on arrival: is_bulk (a newsletter), has_original
 // (offer View Original), and readable text from the HTML in body_text when the email's own text part is
@@ -15,6 +8,13 @@ import { marksJson } from "../src/ingest/store-email";
 //
 // Clearing the HTML cannot be undone except by fetching each email from the provider again, so anything
 // else that should be taken from the stored HTML has to be added here before running with --apply.
+
+import { decryptField, encryptField, isCiphertext } from "@messages/crypto";
+import { FIELD } from "@messages/crypto/fields";
+import { bodySource, isBulkMail } from "@messages/email-text";
+import { db, must } from "../src/db";
+import { keysFor } from "../src/vault";
+import { marksJson } from "../src/ingest/store-email";
 
 const PAGE = 50;
 

@@ -1,7 +1,3 @@
-import { accountsReady, ensureProfile, openAccountJson, saveCredentials } from "@/lib/server/accounts";
-import { admin, fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
-import { cleanProxy, fromPaste, fromValues } from "@/lib/linkedin-cookies";
-
 // Connects LinkedIn from the app with an email and password. They are stored encrypted, like any sign-in, with
 // when they were typed, and the sync worker's LinkedIn connector signs in with them within seconds from the
 // worker's own connection: the sign-in has to keep one helper open through any code or approval LinkedIn asks
@@ -10,23 +6,17 @@ import { cleanProxy, fromPaste, fromValues } from "@/lib/linkedin-cookies";
 // (li_at and JSESSIONID, or a whole "Copy as cURL") are still taken as a fallback, as a session already.
 // An optional proxy is kept with the credentials and used for both. Nothing here talks to LinkedIn, and
 // nothing typed is logged or sent back.
+
+import { accountsReady, ensureProfile, openAccountJson, saveCredentials } from "@/lib/server/accounts";
+import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
+import { cleanProxy, fromPaste, fromValues } from "@/lib/linkedin-cookies";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Each password try may become a sign-in to LinkedIn, which watches for many of them, so few: 5 an hour.
-const overSignInLimit = limiter(5, 60 * 60_000);
-const overCookiesLimit = limiter(10, 10 * 60_000);
-
-interface Body {
-  email?: string;
-  password?: string;
-  /** An http, https or socks5 proxy for this account's LinkedIn requests. Left out: the one it has is kept; "": none. */
-  proxy?: string;
-  liAt?: string;
-  jsessionid?: string;
-  /** A "Copy as cURL (bash)" of a request to linkedin.com, or a Cookie header. */
-  curl?: string;
-}
+const overSignInLimit = limiter(5, 60 * 60_000, { name: "connect-linkedin-signin", perAddress: 20 });
+const overCookiesLimit = limiter(10, 10 * 60_000, { name: "connect-linkedin-cookies" });
 
 export async function POST(request: Request) {
   if (!accountsReady() || !admin) return fail(503, "Connecting LinkedIn is not set up on this server yet.");
@@ -34,18 +24,30 @@ export async function POST(request: Request) {
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
 
-  const body = (await request.json().catch(() => ({}))) as Body;
-  const withPassword = body.password !== undefined || body.email !== undefined;
-  const email = (body.email ?? "").trim();
-  const password = body.password ?? "";
+  const raw = await readJson(request);
+  // email, password, liAt, jsessionid, curl and proxy are all strings when present. A proxy left out keeps the
+  // one the account has; "" clears it. curl is a "Copy as cURL (bash)" of a request to linkedin.com, or a Cookie header.
+  const fields = raw && {
+    email: textField(raw, "email"),
+    password: textField(raw, "password"),
+    liAt: textField(raw, "liAt"),
+    jsessionid: textField(raw, "jsessionid"),
+    curl: textField(raw, "curl"),
+    proxy: textField(raw, "proxy"),
+  };
+  if (!raw || !fields || Object.values(fields).some((v) => v === null)) return fail(400, "That request could not be read.");
+  const body = { ...fields, proxy: raw.proxy === undefined ? undefined : fields.proxy } as { email: string; password: string; liAt: string; jsessionid: string; curl: string; proxy: string | undefined };
+  const withPassword = raw.password !== undefined || raw.email !== undefined;
+  const email = body.email.trim();
+  const password = body.password;
   let session: ReturnType<typeof fromPaste> = null;
   if (withPassword) {
     if (email.length < 3 || email.length > 254 || /\s/.test(email)) return fail(400, "Enter the email you use for LinkedIn.");
     if (password.length < 6 || password.length > 400) return fail(400, "Enter your LinkedIn password.");
   } else {
-    session = body.curl?.trim() ? fromPaste(body.curl) : fromValues(body.liAt ?? "", body.jsessionid ?? "");
+    session = body.curl.trim() ? fromPaste(body.curl) : fromValues(body.liAt, body.jsessionid);
     if (!session) {
-      return fail(400, body.curl?.trim()
+      return fail(400, body.curl.trim()
         ? "That does not have LinkedIn's li_at and JSESSIONID cookies. Copy a request to www.linkedin.com while signed in."
         : "Sign in with your email and password, or paste the cookies from a browser where you are signed in.");
     }
@@ -55,7 +57,7 @@ export async function POST(request: Request) {
     proxy = cleanProxy(body.proxy) ?? undefined;
     if (!proxy) return fail(400, "That proxy address does not look right. It starts with http://, https:// or socks5://.");
   }
-  const wait = await (withPassword ? overSignInLimit : overCookiesLimit)(user.id);
+  const wait = await (withPassword ? overSignInLimit : overCookiesLimit)(user.id, request);
   if (wait > 0) return fail(429, "Too many tries. Wait a while before connecting again.", { "Retry-After": String(wait) });
 
   try {

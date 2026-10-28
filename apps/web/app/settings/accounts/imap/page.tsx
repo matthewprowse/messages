@@ -1,5 +1,7 @@
 "use client";
 
+// Settings page for connecting any IMAP and SMTP mailbox: terminal steps in SetupSteps, with the user's own address passed on.
+
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { ImapConnectForm } from "@/components/imap-connect";

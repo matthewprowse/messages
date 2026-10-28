@@ -1,8 +1,3 @@
-import { companyNameFor, companyNameForDomain, isPlaceholderName } from "@messages/email-text/company";
-import { allRows, db, must } from "../src/db";
-import { saveIcon } from "../src/photos/company-icons";
-import { openAddressRows } from "../src/vault";
-
 // One-off, after company logos started being framed (src/photos/logo-image.ts): for every company,
 //  1. a name still the default made from its domain ("Linkedin") takes the spelling its own senders use
 //     ("LinkedIn"); a name you changed is left alone;
@@ -13,6 +8,11 @@ import { openAddressRows } from "../src/vault";
 //   npx tsx --env-file=.env scripts/refresh-company-logos.ts [--names-only | --logos-only]
 //
 // Prints counts and company names only, never addresses or people's names.
+
+import { companyNameFor, companyNameForDomain, isPlaceholderName } from "@messages/email-text/company";
+import { allRows, db, must } from "../src/db";
+import { saveIcon } from "../src/photos/company-icons";
+import { openAddressRows } from "../src/vault";
 
 const dryRun = process.argv.includes("--dry-run");
 const doNames = !process.argv.includes("--logos-only");

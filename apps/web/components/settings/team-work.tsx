@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Team, Work Chats: every work chat for owners and admins to find a client and reassign it, without showing any chat text.
+
 import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -67,7 +69,7 @@ export function WorkChatsSection({ team, userId }: { team: TeamState; userId: st
           <AlertTitle>Could Not Load Work Chats</AlertTitle>
           <AlertDescription>
             <p>Check your connection and try again.</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load()}>Retry</Button>
+            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
           </AlertDescription>
         </Alert>
       ) : null}
@@ -79,7 +81,7 @@ export function WorkChatsSection({ team, userId }: { team: TeamState; userId: st
             <p>Their clients stay with the team. Give each person&apos;s chats to someone who can read them and reply.</p>
             <div className="mt-3 flex flex-wrap gap-2">
               {leftAgents.map((a) => (
-                <Button key={a.id} size="sm" variant="outline" disabled={busy} onClick={() => setReassigning(a)}>
+                <Button key={a.id} variant="secondary" disabled={busy} onClick={() => setReassigning(a)}>
                   Reassign {a.name}&apos;s {a.chats === 1 ? "Chat" : `${a.chats} Chats`}
                 </Button>
               ))}
@@ -131,7 +133,7 @@ export function WorkChatsSection({ team, userId }: { team: TeamState; userId: st
                   <>
                     {options.length > 0 && (
                       <Select value="" onValueChange={(id) => assign(c, id)} disabled={busy}>
-                        <SelectTrigger size="sm" className="w-36" aria-label={`Assign ${c.label || "Chat"}`}><SelectValue placeholder="Assign To" /></SelectTrigger>
+                        <SelectTrigger className="w-36" aria-label={`Assign ${c.label || "Chat"}`}><SelectValue placeholder="Assign To" /></SelectTrigger>
                         <SelectContent>
                           {options.map((m) => <SelectItem key={m.userId} value={m.userId}>{m.userId === userId ? "Me" : m.name || m.email}</SelectItem>)}
                         </SelectContent>
@@ -139,20 +141,20 @@ export function WorkChatsSection({ team, userId }: { team: TeamState; userId: st
                     )}
                     {c.assigneeIds.length > 0 && (
                       <Select value="" onValueChange={(id) => unassign(c, id)} disabled={busy}>
-                        <SelectTrigger size="sm" className="w-36" aria-label={`Take ${c.label || "Chat"} back`}><SelectValue placeholder="Take Back From" /></SelectTrigger>
+                        <SelectTrigger className="w-36" aria-label={`Take ${c.label || "Chat"} back`}><SelectValue placeholder="Take Back From" /></SelectTrigger>
                         <SelectContent>
                           {c.assigneeIds.map((id) => <SelectItem key={id} value={id}>{id === userId ? "Me" : nameOf(id)}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     )}
                     {mine ? (
-                      <Button size="sm" asChild><Link href={`/inbox/shared/${c.threadId}?from=work`}>Open</Link></Button>
+                      <Button variant="secondary" asChild><Link href={`/inbox/shared/${c.threadId}?from=work`}>Open</Link></Button>
                     ) : (
-                      <Button size="sm" variant="outline" disabled title="Assign this chat to yourself to open it">Open</Button>
+                      <Button variant="secondary" disabled title="Assign this chat to yourself to open it">Open</Button>
                     )}
                   </>
                 ) : (
-                  <Button size="sm" asChild><Link href={`/inbox/shared/${c.threadId}?from=work`}>Open</Link></Button>
+                  <Button variant="secondary" asChild><Link href={`/inbox/shared/${c.threadId}?from=work`}>Open</Link></Button>
                 )}
               </SettingsRow>
             );
@@ -162,7 +164,7 @@ export function WorkChatsSection({ team, userId }: { team: TeamState; userId: st
       {chats && chats.length > 0 && (
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">{chats.length < total ? `Showing ${chats.length} of ${total}.` : `${total} ${total === 1 ? "chat" : "chats"}.`}</p>
-          {more && <Button variant="outline" size="sm" onClick={() => void loadMore()}>Show More</Button>}
+          {more && <Button variant="secondary" onClick={() => void loadMore()}>Show More</Button>}
         </div>
       )}
 
@@ -208,7 +210,7 @@ function ReassignDialog({ agent, members, onClose, onDone }: { agent: { id: stri
         </div>
         <div className={DIALOG_BUTTONS}>
           <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button type="button" disabled={busy || !to} onClick={() => void submit()}>{busy ? "Assigning" : "Assign All"}</Button>
+          <Button variant="secondary" type="button" disabled={busy || !to} onClick={() => void submit()}>{busy ? "Assigning" : "Assign All"}</Button>
         </div>
       </DialogContent>
     </Dialog>

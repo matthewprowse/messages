@@ -1,5 +1,8 @@
 "use client";
 
+// The Storage Flags section of the Analytics page: accounts that look like file hosting, from the storage_flags database function.
+// Sizes only; it never blocks anyone.
+
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { bytesLabel } from "@/lib/storage";

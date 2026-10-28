@@ -1,3 +1,6 @@
+// Tests for ingest/normalize-email.ts over parsed raw messages. Pin down thread roots and References, inline images versus
+// files, fallback ids, previews, derived names and unsubscribe headers.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { simpleParser } from "mailparser";

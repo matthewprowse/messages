@@ -1,3 +1,6 @@
+// Tests for tasks/index.ts against a fake database client that records queries: settling ticks, claiming, restart
+// recovery, superseded ticks and batched upserts.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TaskUpdateRow } from "./rows";

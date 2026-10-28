@@ -1,3 +1,5 @@
+// Tests for whatsapp/outgoing.ts: one WhatsApp message per file, where the caption goes, and new chat numbers.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileMessage, newChatNumber, outgoingMessages } from "./outgoing";

@@ -1,5 +1,7 @@
 "use client";
 
+// The editor node for a file inside a note: an image or a file tile, with the context that tells it which files have uploaded.
+
 import { createContext, useContext, useState } from "react";
 import { NodeViewWrapper, ReactNodeViewRenderer, type ReactNodeViewProps } from "@tiptap/react";
 import { FileX } from "lucide-react";

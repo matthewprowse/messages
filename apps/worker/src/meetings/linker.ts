@@ -1,12 +1,3 @@
-import { addressIndex } from "@messages/crypto/addresses";
-import { FIELD } from "@messages/crypto/fields";
-import { startEvery } from "../backoff";
-import { allRows, db, must } from "../db";
-import { errorCode, log } from "../log";
-import { chunks, mapLimit, push } from "../util";
-import { keysFor, open } from "../vault";
-import { eventEmails, LINK_WINDOW_MS, matchEvent, participantEmail } from "./match";
-
 // Every two minutes, and once a minute after startup, ties the meetings the Teams, Zoom and Google Meet
 // connectors store to the rest of the app. Those connectors only write meetings and meeting_participants;
 // this finds, for meetings from the last LOOKBACK_DAYS:
@@ -15,6 +6,15 @@ import { eventEmails, LINK_WINDOW_MS, matchEvent, participantEmail } from "./mat
 // A meeting whose people were just matched is touched, so the app (subscribed to meetings over Realtime)
 // shows it in their conversations at once. Something not matched is tried again after RETRY_MS: the
 // person may become a contact, or the event may sync, later.
+
+import { addressIndex } from "@messages/crypto/addresses";
+import { FIELD } from "@messages/crypto/fields";
+import { startEvery } from "../backoff";
+import { allRows, db, must } from "../db";
+import { errorCode, log } from "../log";
+import { chunks, mapLimit, push } from "../util";
+import { keysFor, open } from "../vault";
+import { eventEmails, LINK_WINDOW_MS, matchEvent, participantEmail } from "./match";
 
 const FIRST_RUN_MS = 60_000;
 const EVERY_MS = 2 * 60_000;

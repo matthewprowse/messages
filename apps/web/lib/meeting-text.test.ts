@@ -1,3 +1,6 @@
+// Tests for meeting-text.ts: reading stored action items and transcripts, meeting length, and searching and
+// highlighting a transcript.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { hasTranscript, highlight, meetingLength, meetingsAmong, parseActions, parseTranscript, searchTranscript, segmentTime } from "./meeting-text";

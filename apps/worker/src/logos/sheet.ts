@@ -1,7 +1,7 @@
-import sharp, { type OverlayOptions } from "sharp";
-
 // The picture the judge looks at: every framed candidate cut to the circle it would be shown in, numbered
 // from 1, on a grey that white logos stand out from.
+
+import sharp, { type OverlayOptions } from "sharp";
 
 const CELL = 200;
 const AVATAR = 160;

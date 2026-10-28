@@ -1,3 +1,6 @@
+// Tests for new-linkedin.ts: accepting a profile link in any common form, URNs, contact search and the existing chat
+// lookup.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Contact, Thread } from "./types";

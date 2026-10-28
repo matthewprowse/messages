@@ -1,3 +1,7 @@
+"""Tests for ai.meetings: planning queries and windows, turning transcript turns into segments, transcribing short
+(inline) and long (uploaded, hour by hour) recordings, budget holds, the minutes cap, retries and giving up, and
+summary and action items sealing. Uses its own fakes for the vault, database and Gemini."""
+
 import json
 from contextlib import contextmanager
 import unittest

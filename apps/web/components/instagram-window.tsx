@@ -1,14 +1,14 @@
 "use client";
 
+// Instagram lets a Business or Creator account reply only within 24 hours of the other person's last message.
+// The Instagram connector enforces it (it refuses a later reply and the bubble says so, like any reply that could
+// not go); this tells you before you write one. A personal account is not held to it.
+
 import { useEffect, useState } from "react";
 import { useApp } from "@/lib/store";
 import type { Account, Message, Thread } from "@/lib/types";
 import { INSTAGRAM_OFFICIAL_LABEL } from "@/app/api/connect/instagram/official/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-
-// Instagram lets a Business or Creator account reply only within 24 hours of the other person's last message.
-// The Instagram connector enforces it (it refuses a later reply and the bubble says so, like any reply that could
-// not go); this tells you before you write one. A personal account is not held to it.
 
 const WINDOW_MS = 24 * 3600_000;
 

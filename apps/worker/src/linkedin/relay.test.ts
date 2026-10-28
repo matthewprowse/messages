@@ -1,3 +1,6 @@
+// Tests for linkedin/relay.ts: parseRelay keeps only well-formed fields, and waitForReply returns, gives up or
+// stops as the sign-in page and connector hand codes back and forth.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseRelay, waitForReply, type Relay } from "./relay";

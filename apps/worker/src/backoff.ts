@@ -83,3 +83,27 @@ export function startEvery(firstMs: number, everyMs: number, job: () => Promise<
     setInterval(run, everyMs).unref();
   }, firstMs).unref();
 }
+
+/**
+ * Keeps a connector's run loop alive. run() returns when the connector stops or hits a fatal error;
+ * if it rejects instead, the failure is reported and it is started again after a backoff, so the
+ * loop is never lost while the connector still counts as running.
+ */
+export async function supervise(
+  run: () => Promise<void>,
+  stopped: () => boolean,
+  onError: (err: unknown) => void,
+  wait: (ms: number) => Promise<void> = sleep,
+  backoff = new Backoff(),
+) {
+  while (!stopped()) {
+    try {
+      await run();
+      return;
+    } catch (err) {
+      onError(err);
+      if (stopped()) return;
+      await wait(backoff.next());
+    }
+  }
+}

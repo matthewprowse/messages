@@ -1,8 +1,8 @@
-import type { GoogleClient } from "../google/client";
-import type { Card } from "./cards";
-
 // Google Contacts through the People API, read only. Needs the contacts.readonly scope, which older
 // sign-ins do not have: without it this source is skipped until you run pnpm connect:google again.
+
+import type { GoogleClient } from "../google/client";
+import type { Card } from "./cards";
 
 interface Person {
   names?: { displayName?: string; metadata?: { primary?: boolean } }[];

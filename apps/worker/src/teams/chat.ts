@@ -1,10 +1,10 @@
-import { emphasisRuns, htmlToText, type Emphasis } from "@messages/email-text";
-import { GraphApiError, signInRevoked, type GraphClient } from "../microsoft/client";
-import { MicrosoftAuthError } from "../microsoft/oauth";
-
 // Teams chats and messages from Microsoft Graph, turned into what the app stores, and replies turned into
 // what Graph takes. Pure apart from postReply, which only calls the client it is given, so it can all be
 // unit tested.
+
+import { emphasisRuns, htmlToText, type Emphasis } from "@messages/email-text";
+import { GraphApiError, signInRevoked, type GraphClient } from "../microsoft/client";
+import { MicrosoftAuthError } from "../microsoft/oauth";
 
 export interface GraphIdentity {
   id?: string | null;

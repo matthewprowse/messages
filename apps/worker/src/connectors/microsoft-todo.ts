@@ -1,3 +1,9 @@
+// Microsoft To Do through Microsoft Graph: every list and its tasks, for Calendar and the daily brief. Each
+// list is read with a delta query, so after the first full read only what changed comes back; the delta link
+// is kept per list in sync_state (scope "todo:<list id>", the link in sync_token). Every few minutes the
+// lists are read again and each list's changes fetched. Tasks deleted in To Do, and lists that are gone, are
+// removed. Ticking a task off, or back on, in the app is applied through task_updates.
+
 import type { Tables, TablesInsert } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { Backoff, Sleeper } from "../backoff";
@@ -21,12 +27,6 @@ import {
   type GraphTodoList,
   type GraphTodoTask,
 } from "../microsoft/todo-task";
-
-// Microsoft To Do through Microsoft Graph: every list and its tasks, for Calendar and the daily brief. Each
-// list is read with a delta query, so after the first full read only what changed comes back; the delta link
-// is kept per list in sync_state (scope "todo:<list id>", the link in sync_token). Every few minutes the
-// lists are read again and each list's changes fetched. Tasks deleted in To Do, and lists that are gone, are
-// removed. Ticking a task off, or back on, in the app is applied through task_updates.
 
 const POLL_MS = 3 * 60_000;
 const PAGE_SIZE = 100;
@@ -80,7 +80,7 @@ export class MicrosoftTodoConnector {
         const fatal = microsoftFatalDetail(err, "To Do");
         if (fatal) {
           if (signInRevoked(err)) log.error("microsoft todo sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         if (err instanceof GraphApiError && err.status === 429) {

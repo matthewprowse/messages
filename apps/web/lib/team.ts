@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { supabase } from "./supabase";
-import { useAuth } from "./auth";
-
 // A team is a workspace in the database; "organization" there means a client company. Reading goes through row-level
 // security and the member list function, every change through the database functions, which check who is asking
 // (supabase/migrations/20261101100000_workspaces.sql).
+
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "./supabase";
+import { useAuth } from "./auth";
 
 export type TeamRole = "owner" | "admin" | "compliance" | "member";
 export type TeamStatus = "invited" | "active" | "removed";

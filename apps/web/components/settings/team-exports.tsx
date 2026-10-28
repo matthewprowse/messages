@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Team, Compliance Exports: the log of client work history exports, with counts and never message text.
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { relTime } from "@/lib/format";

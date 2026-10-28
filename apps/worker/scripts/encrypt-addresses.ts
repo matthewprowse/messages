@@ -1,9 +1,3 @@
-import { decryptField, encryptField, isCiphertext, type UserKeys } from "@messages/crypto";
-import { addressIndex } from "@messages/crypto/addresses";
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { db, must } from "../src/db";
-import { keysFor } from "../src/vault";
-
 // One-off: encrypts the addresses, numbers, chat IDs and company domains stored before
 // ENCRYPT_ADDRESSES was switched on (encryption stage 2), or, with --decrypt, turns them back into plain
 // text. The database matches on their blind indexes, which do not change, so the app keeps working
@@ -18,6 +12,12 @@ import { keysFor } from "../src/vault";
 // read, so a row changed mid-run is left for the next run. It was dropped once the backfill was done
 // (20261025001300): re-apply it from 20261025001200_outbox_addresses.sql before --apply or --decrypt.
 // Values already in the wanted form are skipped, so it is safe to run again.
+
+import { decryptField, encryptField, isCiphertext, type UserKeys } from "@messages/crypto";
+import { addressIndex } from "@messages/crypto/addresses";
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { db, must } from "../src/db";
+import { keysFor } from "../src/vault";
 
 type Mode = "dry-run" | "apply" | "decrypt";
 type Table = "contact_identities" | "messages" | "threads" | "unsubscribes" | "organizations" | "priority_rules" | "accounts" | "address_book_cards" | "outbox";

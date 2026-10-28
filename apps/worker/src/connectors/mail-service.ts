@@ -1,12 +1,12 @@
+// What the IMAP connector (./imap.ts) needs to know about a service: where its servers are, and how it is
+// named to you. iCloud's servers are the same for everyone; any other mailbox has its own, saved with its
+// password. No database here, so it can be unit tested.
+
 import type { ImapFlowOptions } from "imapflow";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import { ICLOUD, type ImapServer, type SmtpServer } from "@messages/mail-servers";
 import { publicAddress } from "@messages/mail-servers/net";
 import type { AttachmentProvider } from "../send/attachment-rules";
-
-// What the IMAP connector (./imap.ts) needs to know about a service: where its servers are, and how it is
-// named to you. iCloud's servers are the same for everyone; any other mailbox has its own, saved with its
-// password. No database here, so it can be unit tested.
 
 /** The sign-in every IMAP mailbox has. */
 export interface MailCredentials {

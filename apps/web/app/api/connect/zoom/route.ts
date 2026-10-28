@@ -1,3 +1,6 @@
+// Starts connecting Zoom from the app, like /api/connect/google. Who is asking and the PKCE verifier go in a
+// short-lived encrypted cookie, which the callback reads. The refresh token never reaches the browser.
+
 import { randomBytes } from "node:crypto";
 import { accountsReady, sealJson } from "@/lib/server/accounts";
 import { pkce } from "@/lib/server/google";
@@ -5,12 +8,10 @@ import { authUrl, zoomReady } from "@/lib/server/zoom";
 import { appOrigin, fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
 import { ZOOM_COOKIE, type ZoomSignIn } from "./shared";
 
-// Starts connecting Zoom from the app, like /api/connect/google. Who is asking and the PKCE verifier go in a
-// short-lived encrypted cookie, which the callback reads. The refresh token never reaches the browser.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const overLimit = limiter(10, 60_000);
+const overLimit = limiter(10, 60_000, { name: "connect-zoom" });
 
 export async function POST(request: Request) {
   if (!zoomReady() || !accountsReady()) return fail(503, "Connecting Zoom is not set up on this server yet.");

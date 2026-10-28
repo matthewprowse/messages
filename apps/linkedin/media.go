@@ -236,7 +236,7 @@ func fetchPicture(ctx context.Context, client *http.Client, u *url.URL) (data []
 // pictureClient goes through the proxy of the environment, like the rest of the helper, and follows no redirect.
 func pictureClient() *http.Client {
 	return &http.Client{
-		Transport:     &http.Transport{Proxy: http.ProxyFromEnvironment},
+		Transport:     sharedTransport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }

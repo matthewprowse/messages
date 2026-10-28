@@ -1,3 +1,6 @@
+// Tests for oauth.ts: granted-scope parsing, the scopes each connector asks for, and when a sign-in needs an
+// IT admin's approval.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { TASKS_SCOPE, TEAMS_SCOPES, adminConsentUrl, authUrl, grantedScopes, needsAdminApproval, optionalGranted } from "./oauth";

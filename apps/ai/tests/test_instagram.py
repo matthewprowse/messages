@@ -8,13 +8,15 @@ import os
 import stat
 import threading
 import unittest
+import unittest.mock
+from datetime import datetime, timedelta, timezone
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ai.connectors.instagram import backoff, mapping, outgoing, signin, sync as sync_module
 from ai.connectors.instagram.sealing import open_json, seal_json, wrap_local
 from ai.connectors.instagram.sync import (
-    BAD_USERNAME, LOOKUP_FAILED, MAY_HAVE_SENT, NO_SUCH_USER, OWN_USERNAME, PARTIAL, TEXT_ONLY, AccountSync, Settings, username_of,
+    BAD_USERNAME, DAILY_LIMIT, LOOKUP_FAILED, MAY_HAVE_SENT, NO_SUCH_USER, OWN_USERNAME, PARTIAL, TEXT_ONLY, AccountSync, Settings, first_message_cap, username_of,
 )
 from ai.fields import BODY, PREVIEW, QUOTE
 from ai.keys import unwrap_local
@@ -494,6 +496,7 @@ class FakeStore:
         self.statuses, self.marked, self.newest, self.scoped = [], [], None, {}
         self.files = {}  # outbox id -> file rows; their bytes by storage path in self.blobs
         self.blobs = {}
+        self.first_sent = []  # when each first message went out, as aware datetimes
         self.contacts, self.photos = {}, []  # pk -> contact row; (contact id, bytes) saved
 
     def queued_outbox(self, account_id):
@@ -503,6 +506,9 @@ class FakeStore:
     def queued_new_chats(self, account_id):
         rows, self.new_chats = self.new_chats, []
         return rows
+
+    def first_messages_since(self, account_id, since):
+        return len([t for t in self.first_sent if t >= since])
 
     def count_outbox_files(self, outbox_id):
         return len(self.files.get(outbox_id, []))
@@ -572,6 +578,11 @@ class FakeStore:
     def mark_read_on_phone(self, account_id, sealer, thread_ids):
         self.marked.append(list(thread_ids))
         return 0
+
+    def mark_seen(self, account_id, sealer, thread_id, seen_us):
+        self.seen_calls = getattr(self, "seen_calls", [])
+        self.seen_calls.append((thread_id, seen_us))
+        return 1
 
     def save_file(self, *args):
         raise AssertionError("no files in these tests")
@@ -1056,6 +1067,41 @@ class NewChats(unittest.TestCase):
             sync.send_outbox(client)
         self.assertEqual(store.failed, [("n1", LOOKUP_FAILED)])
 
+    def test_the_daily_cap_stops_a_sixth_first_message_but_not_the_fifth(self):
+        now = datetime.now(timezone.utc)
+        client = NewChatClient(user=User(200), result=Sent("item5", 3402))
+        store, sync = self.send(new_chat_row(), client)
+        store.first_sent = [now - timedelta(hours=h) for h in (1, 2, 3, 4)]
+        sync.send_outbox(client)
+        self.assertEqual(store.settled, [("n1", "item5")])
+        client = NewChatClient(user=User(200), result=Sent("item5", 3402))
+        store, sync = self.send(new_chat_row(), client)
+        store.first_sent = [now - timedelta(hours=h) for h in (1, 2, 3, 4, 5)]
+        sync.send_outbox(client)
+        self.assertEqual(store.failed, [("n1", DAILY_LIMIT.format(cap=5))])
+        self.assertIn("5 a day", store.failed[0][1])
+        self.assertEqual((client.looked_up, client.sent, store.settled), ([], [], []))
+
+    def test_first_messages_older_than_a_day_do_not_count(self):
+        now = datetime.now(timezone.utc)
+        client = NewChatClient(user=User(200), result=Sent("item5", 3402))
+        store, sync = self.send(new_chat_row(), client)
+        store.first_sent = [now - timedelta(hours=25)] * 9
+        sync.send_outbox(client)
+        self.assertEqual(store.settled, [("n1", "item5")])
+
+    def test_replies_are_not_limited_by_the_cap(self):
+        store, client = FakeStore([outbox_row()]), SendClient(result=Item_("item77"))
+        store.first_sent = [datetime.now(timezone.utc)] * 9
+        account_sync(store).send_outbox(client)
+        self.assertEqual(store.settled, [("o1", "item77")])
+
+    def test_the_cap_can_be_changed_by_an_environment_variable(self):
+        with unittest.mock.patch.dict("os.environ", {"INSTAGRAM_FIRST_MESSAGES_PER_DAY": "2"}):
+            self.assertEqual(first_message_cap(), 2)
+        with unittest.mock.patch.dict("os.environ", {"INSTAGRAM_FIRST_MESSAGES_PER_DAY": "x"}):
+            self.assertEqual(first_message_cap(), 5)
+
     def test_a_failed_first_message_is_never_retried(self):
         client = NewChatClient(user=User(200), error=FeedbackRequired())
         store, sync = self.send(new_chat_row(), client)
@@ -1150,6 +1196,27 @@ class Polling(unittest.TestCase):
         self.assertEqual([r[0] for r in client.requests], ["direct_v2/inbox/", "direct_v2/inbox/", "direct_v2/pending_inbox/"])
         self.assertEqual(client.requests[1][1]["folder"], "1")
         self.assertEqual(set(store.scoped), {"instagram_inbox_general", "instagram_inbox_requests"})
+
+    def test_the_others_seeing_a_thread_marks_your_messages_seen(self):
+        t = raw_thread([item("text", 0, user=ME, text="Hi")], last_seen_at={ME: {"timestamp": str(T0)}, "200": {"timestamp": str(T0 + 7_000_000)}})
+        store, sync = FakeStore(), None
+        sync = account_sync(store)
+        sync.poll(PollClient([self.inbox([t])]))
+        sync.poll(PollClient([self.inbox([t])]))  # the same time is not sent again
+        self.assertEqual(store.seen_calls, [("340282366841710300949128", T0 + 7_000_000)])
+        newer = raw_thread([item("text", 0, user=ME)], last_seen_at={"200": {"timestamp": str(T0 + 9_000_000)}})
+        sync.poll(PollClient([self.inbox([newer])]))
+        self.assertEqual(store.seen_calls[-1][1], T0 + 9_000_000)
+
+    def test_a_group_is_seen_only_when_everyone_has_seen_it(self):
+        bo = {"pk": 300, "username": "bo", "full_name": "Bo"}
+        some = raw_thread([item("text", 0, user=ME)], users=(ANA, bo), last_seen_at={"200": {"timestamp": str(T0 + 5_000_000)}})
+        store = FakeStore()
+        account_sync(store).poll(PollClient([self.inbox([some])]))
+        self.assertFalse(hasattr(store, "seen_calls"))
+        every = raw_thread([item("text", 0, user=ME)], users=(ANA, bo), last_seen_at={"200": {"timestamp": str(T0 + 5_000_000)}, "300": {"timestamp": str(T0 + 3_000_000)}})
+        account_sync(store).poll(PollClient([self.inbox([every])]))
+        self.assertEqual(store.seen_calls, [("340282366841710300949128", T0 + 3_000_000)])
 
     def test_quiet_threads_are_left_alone(self):
         store = FakeStore()

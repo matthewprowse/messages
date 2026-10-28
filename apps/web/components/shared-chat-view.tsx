@@ -1,5 +1,9 @@
 "use client";
 
+// One shared chat, open for reading by someone who is not its agent (step 5 of Teams): an assignee, a member of the shared
+// inbox it is in, an owner or admin it is assigned to, or Compliance. The messages are read-only. An assignee answers from
+// their own account, a member of the inbox from the inbox. Notes between colleagues sit in a panel and are never sent.
+
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -24,10 +28,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/primitives";
 import { MessageBody } from "@/components/message-body";
 import { TemplatePicker } from "@/components/template-picker";
-
-// One shared chat, open for reading by someone who is not its agent (step 5 of Teams): an assignee, a member of the shared
-// inbox it is in, an owner or admin it is assigned to, or Compliance. The messages are read-only. An assignee answers from
-// their own account, a member of the inbox from the inbox. Notes between colleagues sit in a panel and are never sent.
 
 const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram", teams: "Teams", zoom: "Zoom", google_chat: "Google Chat" };
 const EMAIL_PROVIDERS = ["icloud", "gmail", "outlook", "imap"];
@@ -333,7 +333,7 @@ export function SharedChatView({ threadId }: { threadId: string }) {
     return failed ? (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
         <p className="text-sm text-muted-foreground">This chat did not load.</p>
-        <Button variant="outline" onClick={() => void load()}>Retry</Button>
+        <Button variant="secondary" onClick={() => void load()}>Retry</Button>
       </div>
     ) : (
       <div className="space-y-4 p-4" aria-busy="true" aria-label="Loading chat"><Skeleton className="h-8 w-1/3" /><Skeleton className="h-16 w-2/3" /><Skeleton className="ml-auto h-16 w-1/2" /></div>
@@ -346,7 +346,7 @@ export function SharedChatView({ threadId }: { threadId: string }) {
           icon={NotebookPen}
           title="You Cannot Open This Chat"
           description="A work chat is read by its agent and whoever it is assigned to. An owner or admin opens one by assigning it to themselves first, in Settings, Team, Work Chats."
-          action={<Button variant="outline" onClick={() => router.push(backHref)}>Back</Button>}
+          action={<Button variant="secondary" onClick={() => router.push(backHref)}>Back</Button>}
         />
       </div>
     );
@@ -360,7 +360,7 @@ export function SharedChatView({ threadId }: { threadId: string }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
-        <Button variant="ghost" size="icon" className="size-6 md:hidden" asChild aria-label="Back"><Link href={backHref}><ArrowLeft /></Link></Button>
+        <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back"><Link href={backHref}><ArrowLeft /></Link></Button>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate text-sm font-medium">{title}</span>
@@ -374,8 +374,8 @@ export function SharedChatView({ threadId }: { threadId: string }) {
         </div>
         {inboxChat && info.access === "inbox" && (
           mine
-            ? <Button variant="outline" size="sm" disabled={busy} onClick={() => void assign(null)}>Unassign</Button>
-            : <Button variant="outline" size="sm" disabled={busy} onClick={() => me && void assign(me)}>Assign to Me</Button>
+            ? <Button variant="secondary" disabled={busy} onClick={() => void assign(null)}>Unassign</Button>
+            : <Button variant="secondary" disabled={busy} onClick={() => me && void assign(me)}>Assign to Me</Button>
         )}
         <Button variant="secondary" size="sm" onClick={() => setNotesOpen(true)}><NotebookPen /> Notes</Button>
       </header>
@@ -384,7 +384,7 @@ export function SharedChatView({ threadId }: { threadId: string }) {
       <ScrollArea ref={scrollRef} className="min-h-0 flex-1">
         <div className="p-3 md:px-4">
           <div className="mx-auto w-full max-w-2xl space-y-4">
-            {older && <div className="flex justify-center"><Button variant="outline" size="sm" onClick={() => void loadOlder()}>Load Earlier Messages</Button></div>}
+            {older && <div className="flex justify-center"><Button variant="secondary" onClick={() => void loadOlder()}>Load Earlier Messages</Button></div>}
             {messages.length === 0 ? (
               <p className="py-12 text-center text-sm text-muted-foreground">Nothing has been shared in this chat yet. New messages appear here as the team&apos;s copy is made.</p>
             ) : (

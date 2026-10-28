@@ -1,3 +1,6 @@
+// Tests for linkedin/policy.ts: back-off lengths, when an account stops, and the wording and "may have been
+// sent" judgement for failed sign-ins, new conversations and replies.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { HelperError } from "./helper";

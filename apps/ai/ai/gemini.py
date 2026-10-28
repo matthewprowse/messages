@@ -27,7 +27,7 @@ from typing import Any
 from . import log
 from .analytics import Analytics, event, prompt_id
 from .http import POOL
-from .pricing import AUDIO_TOKENS_PER_SECOND, SEARCH_QUERY_USD, cost_usd, price_for
+from .pricing import AUDIO_TOKENS_PER_SECOND, SEARCH_QUERY_USD, cost_usd, price_or_fallback
 from .supabase import Supabase
 
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -130,15 +130,12 @@ def estimate_input_tokens(body: dict[str, Any], audio_seconds: float | None = No
 
 
 def price_in(model: str) -> float:
-    price = price_for(model, datetime.now(timezone.utc).date())
-    return price.input if price else 0.0
+    return price_or_fallback(model, datetime.now(timezone.utc).date()).input
 
 
 def estimate_cost(model: str, body: dict[str, Any], max_output: int | None, audio_seconds: float | None = None) -> float:
     """The most a call is likely to cost, reserved before it is made: its input as estimated and the whole
-    output allowance written. Zero for a model with no price."""
-    if price_for(model, datetime.now(timezone.utc).date()) is None:
-        return 0.0
+    output allowance written. A model with no price is estimated at the dearest known price, never zero."""
     text, audio = estimate_input_tokens(body, audio_seconds)
     return cost_usd(model, datetime.now(timezone.utc).date(), text + audio, 0, max_output or DEFAULT_OUTPUT_ESTIMATE, audio)
 
@@ -241,8 +238,9 @@ class Gemini:
             state = self._db.rpc("ai_allowance_for", {"p_user": user_id})
             if not isinstance(state, dict):
                 raise ValueError("no allowance")
-            month = {k: float(v) for k, v in (state.get("features") or {}).items() if v is not None}
-            week = {k: float(v) for k, v in (state.get("week_features") or {}).items() if v is not None}
+            # A null percent is a feature whose share is zero (the SQL divides by nullif(share, 0)): used up, not unlimited.
+            month = {k: 100.0 if v is None else float(v) for k, v in (state.get("features") or {}).items()}
+            week = {k: 100.0 if v is None else float(v) for k, v in (state.get("week_features") or {}).items()}
         except Exception as err:
             log.warn("ai budget not read, call not made", code=log.code_of(err))
             raise GeminiError(None, "budget_unknown") from None
@@ -252,8 +250,8 @@ class Gemini:
             try:  # dollars per share; without them only the percentages are checked
                 shares = self._db.rpc("ai_allowance_shares_for", {"p_user": user_id})
                 if isinstance(shares, dict):
-                    usd = {k: float(v) for k, v in (shares.get("features") or {}).items() if v is not None}
-                    week_usd = {k: float(v) for k, v in (shares.get("week_features") or {}).items() if v is not None}
+                    usd = {k: 0.0 if v is None else float(v) for k, v in (shares.get("features") or {}).items()}
+                    week_usd = {k: 0.0 if v is None else float(v) for k, v in (shares.get("week_features") or {}).items()}
             except Exception as err:
                 log.warn("ai share dollars not read", code=log.code_of(err))
         read = (now, month, week, usd, week_usd)

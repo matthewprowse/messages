@@ -1,3 +1,6 @@
+// Tests for server/microsoft.ts and the Microsoft connect route helpers: sign-in URL scopes, PKCE, granted scopes mapped to
+// accounts, and spotting admin-approval cases.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BASE_SCOPES, TEAMS_SCOPES, accountsFor, adminConsentUrl, authUrl, grantedScopes, needsAdminApproval, pkce } from "./microsoft";

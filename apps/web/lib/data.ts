@@ -1,3 +1,8 @@
+// Turns database rows into the shapes the screens use, and loads them for the signed-in user.
+// Row-level security keeps these to the user's own rows, with one exception: a team's work chats can also be read by
+// whoever they are assigned to, and by Compliance under strict sharing (supabase/migrations/20261101120000). A list
+// of chats or files asks for the user's own with user_id, so a colleague's chat never lands in someone's inbox.
+
 import type { Tables } from "@messages/db";
 import { openAddresses, openDrafts, openExamples, openMessages, openTasks, openThreads } from "./open-rows";
 import { supabase } from "./supabase";
@@ -9,11 +14,6 @@ import { allRows } from "./contacts";
 import { mapTask, TASK_COLUMNS } from "./tasks";
 import { withSealedColumns } from "./sealed-columns";
 import { companyLogo, isCompanySender, logoAvatar } from "./people";
-
-// Turns database rows into the shapes the screens use, and loads them for the signed-in user.
-// Row-level security keeps these to the user's own rows, with one exception: a team's work chats can also be read by
-// whoever they are assigned to, and by Compliance under strict sharing (supabase/migrations/20261101120000). A list
-// of chats or files asks for the user's own with user_id, so a colleague's chat never lands in someone's inbox.
 
 type ContactRow = Pick<Tables<"contacts">, "id" | "display_name" | "company" | "role" | "avatar_path"> & {
   organizations?: Pick<Tables<"organizations">, "id" | "name" | "logo_path"> | null;
@@ -31,18 +31,18 @@ export type MessageRow = Pick<
 > & { attachments: AttachmentRow[] };
 
 // With the company, whose logo stands in for the photo of a sender that writes as the company.
-const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path, organizations(id, name, logo_path)";
+export const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path, organizations(id, name, logo_path)";
 const THREAD_COLUMNS =
   "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me";
 // Threads with their account's provider and their people, so the list can draw names in one request.
 const THREAD_WITH_PEOPLE = `${THREAD_COLUMNS}, accounts(provider), thread_participants(contact_id, contacts(${CONTACT_COLUMNS}, contact_identities(kind, value)))` as const;
 // Explicit lists, so a column the app never reads (a WhatsApp QR or pairing code) never reaches every page.
 const ACCOUNT_COLUMNS = "id, provider, label, nickname, address, status, status_detail, last_synced_at, send_addresses";
-const PROFILE_COLUMNS = "display_name, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage, language";
+const PROFILE_COLUMNS = "display_name, avatar_path, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage, language";
 const DRAFT_COLUMNS = "id, thread_id, body, tone, instruction, decision, decision_kind, source, auto, updated_at";
 export const UNSUBSCRIBE_COLUMNS = "id, account_id, sender_address, status, manual_url, error";
 type AccountRow = Pick<Tables<"accounts">, "id" | "provider" | "label" | "nickname" | "address" | "status" | "status_detail" | "last_synced_at" | "send_addresses">;
-type ProfileRow = Pick<Tables<"profiles">, "display_name" | "about" | "important_people" | "quiet_start" | "quiet_end" | "push_urgent" | "push_important" | "auto_draft_top" | "whatsapp_read_receipts" | "share_usage" | "language">;
+type ProfileRow = Pick<Tables<"profiles">, "display_name" | "avatar_path" | "about" | "important_people" | "quiet_start" | "quiet_end" | "push_urgent" | "push_important" | "auto_draft_top" | "whatsapp_read_receipts" | "share_usage" | "language">;
 type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruction" | "decision" | "decision_kind" | "source" | "auto" | "updated_at">;
 type UnsubscribeRow = Pick<Tables<"unsubscribes">, "id" | "account_id" | "sender_address" | "status" | "manual_url" | "error">;
 const ATTACHMENT_COLUMNS = "id, message_id, filename, kind, size_bytes, storage_path, team_path, hidden, sealed, not_kept";
@@ -55,6 +55,7 @@ export const MESSAGE_PAGE = 200;
 
 export const EMPTY_PROFILE: Profile = {
   name: "",
+  avatarPath: null,
   about: "",
   people: "",
   quietStart: "22:00",
@@ -105,11 +106,15 @@ function whatsappChatName(chatId: string): string | undefined {
   return user.length < 6 ? "WhatsApp" : formatPhone(`+${user}`);
 }
 
+/** The conversation is shown as its first participant, so whoever sent the latest message leads. An email
+ *  can have several people in it, such as a forward from one that copies in another. */
+export function leadParticipant(participantIds: string[], lead: string | null | undefined): string[] {
+  if (lead && participantIds[0] !== lead && participantIds.includes(lead)) return [lead, ...participantIds.filter((id) => id !== lead)];
+  return participantIds;
+}
+
 export function mapThread(row: ThreadRow, participantIds: string[], provider: Provider): Thread {
-  // The conversation is shown as its first participant, so whoever sent the latest message leads. An email
-  // can have several people in it, such as a forward from one that copies in another.
-  const lead = row.last_sender_contact_id;
-  if (lead && participantIds[0] !== lead && participantIds.includes(lead)) participantIds = [lead, ...participantIds.filter((id) => id !== lead)];
+  participantIds = leadParticipant(participantIds, row.last_sender_contact_id);
   return {
     id: row.id,
     accountId: row.account_id,
@@ -266,6 +271,7 @@ function mapProfile(row: ProfileRow | null): Profile {
   if (!row) return EMPTY_PROFILE;
   return {
     name: row.display_name ?? "",
+    avatarPath: row.avatar_path,
     about: row.about ?? "",
     people: row.important_people ?? "",
     quietStart: row.quiet_start.slice(0, 5),
@@ -283,6 +289,7 @@ function mapProfile(row: ProfileRow | null): Profile {
 export function profilePatch(patch: Partial<Profile>) {
   const out: Partial<Tables<"profiles">> = {};
   if (patch.name !== undefined) out.display_name = patch.name;
+  if (patch.avatarPath !== undefined) out.avatar_path = patch.avatarPath;
   if (patch.about !== undefined) out.about = patch.about;
   if (patch.people !== undefined) out.important_people = patch.people;
   if (patch.quietStart !== undefined) out.quiet_start = patch.quietStart;

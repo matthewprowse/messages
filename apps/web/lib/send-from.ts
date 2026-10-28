@@ -1,7 +1,7 @@
-import type { Account, Channel, Contact, Message } from "./types";
-
 // Who an email goes to and which address it goes out from, for the reply box and New Email.
 // The sync worker applies the same rules when it sends, so what the app shows is what gets sent.
+
+import type { Account, Channel, Contact, Message } from "./types";
 
 /** Every address this account can send from, its own address first. Lowercase, no repeats. */
 export function sendAddressesOf(account: Pick<Account, "detail" | "sendAddresses">): string[] {

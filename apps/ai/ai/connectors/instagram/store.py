@@ -234,6 +234,12 @@ class Store:
         indexes = [sealer.chat_index(t) for t in thread_ids]
         return int(self.db.rpc("whatsapp_mark_read", {"p_account_id": account_id, "p_chat_jids": jids, "p_chat_indexes": indexes}) or 0)
 
+    def mark_seen(self, account_id: str, sealer: UserSealer, thread_id: str, seen_us: int) -> int:
+        """Your messages in a thread that the others have seen, up to that time, are shown as seen. Nothing is sent to Instagram."""
+        seen_at = datetime.fromtimestamp(seen_us / 1_000_000, timezone.utc).isoformat()
+        args = {"p_account_id": account_id, "p_thread_provider_id": sealer.address(thread_id) or thread_id, "p_seen_at": seen_at, "p_thread_index": sealer.chat_index(thread_id)}
+        return int(self.db.rpc("mark_seen_up_to", args) or 0)
+
     def usage(self, user_id: str) -> tuple[int, int]:
         """(bytes used, cap) for this person: a team pools its seats' storage, as team_storage_for says."""
         team = self.db.rpc("team_storage_for", {"p_user": user_id})
@@ -353,6 +359,13 @@ class Store:
                 "limit": "10",
             },
         )
+
+    def first_messages_since(self, account_id: str, since: datetime) -> int:
+        """How many new conversations this account has actually sent since then. The app sets outbox.account_id
+        only on a first message (a reply names its thread instead and leaves account_id empty), and that stays
+        after link_thread, so sent rows with an account_id are exactly the first messages sent. Failed, queued
+        and sending rows never count."""
+        return self.db.count("outbox", {"account_id": f"eq.{account_id}", "status": "eq.sent", "sent_at": f"gte.{since.isoformat()}"})
 
     def count_outbox_files(self, outbox_id: str) -> int:
         """How many files the app has added to this outbox row so far."""

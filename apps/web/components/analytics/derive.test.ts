@@ -1,3 +1,6 @@
+// Tests for analytics/derive.ts. They pin down the empty summary, reach and daily series, grouping of dialog events, draft shares and medians,
+// label splits and corrections, cost and retries, and when a contact summary counts as enough.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseSummary, type Summary, type SummaryGroup } from "../../lib/analytics-data";

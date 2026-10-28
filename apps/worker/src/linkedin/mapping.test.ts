@@ -1,8 +1,11 @@
+// Tests for linkedin/mapping.ts: helper conversations become ingest_linkedin payloads (sealed and indexed),
+// with the rules for groups, skipped conversations, deleted messages, files and unread.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Field } from "@messages/crypto/fields";
 import type { LinkedInConversation, LinkedInMessage, LinkedInPerson } from "./helper";
-import { DELETED_TEXT, attachmentRows, ingestPayload, isGroup, messageText, personName, skipConversation, stubConversation, unreadUrns, type Sealer } from "./mapping";
+import { DELETED_TEXT, attachmentRows, ingestPayload, isGroup, messageText, personName, seenByOther, skipConversation, stubConversation, unreadUrns, type Sealer } from "./mapping";
 
 // Hand-written data in the shape the helper reports. Names are made up.
 
@@ -146,4 +149,14 @@ test("a message in a conversation not known yet is stored with just you and its 
   const payload = await ingestPayload(message(), stub, me.id, sealer, { live: true, unread: true });
   assert.ok(payload);
   assert.equal(payload.participants.length, 1);
+});
+
+test("seen: only the other person in a one-to-one conversation, never you or a group", () => {
+  const direct = conversation();
+  assert.equal(seenByOther(direct, sam.id, 5000, me.id), 5000);
+  assert.equal(seenByOther(direct, me.id, 5000, me.id), null); // you, on another device
+  assert.equal(seenByOther(direct, alex.id, 5000, me.id), null); // not in it
+  assert.equal(seenByOther(direct, sam.id, 0, me.id), null);
+  assert.equal(seenByOther(undefined, sam.id, 5000, me.id), null);
+  assert.equal(seenByOther(conversation({ group: true, participants: [me, sam, alex] }), sam.id, 5000, me.id), null);
 });

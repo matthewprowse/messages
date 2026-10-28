@@ -1,3 +1,6 @@
+// Tests for selection.ts: click and shift-click selection, keyboard shortcuts, filters offered per view, and the list row
+// limit.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { filtersForView, nextLimit, shortcutAction, toggleSelection } from "./selection";

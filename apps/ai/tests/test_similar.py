@@ -1,3 +1,6 @@
+"""Tests for ai.similar and the embedding pipeline: sealed vector round trips, nearest-neighbour search by cosine, the
+vector cache, queued messages being embedded and saved sealed, and the seal_embeddings backfill."""
+
 import base64
 import random
 import unittest

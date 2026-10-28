@@ -1,9 +1,9 @@
-import { FIELD } from "@messages/crypto/fields";
-import { open, seal } from "../vault";
-
 // A calendar event's title and location are encrypted (fields.ts eventTitle, eventLocation); the times, guests,
 // notes and meeting link stay readable for now. Every write seals them with sealEvent and every read that uses
 // them opens them with openEvent, so a row stored before encryption and one stored after read the same way.
+
+import { FIELD } from "@messages/crypto/fields";
+import { open, seal } from "../vault";
 
 type Texts = { title?: string | null; location?: string | null };
 

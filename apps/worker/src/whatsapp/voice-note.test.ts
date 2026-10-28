@@ -1,3 +1,6 @@
+// Tests for whatsapp/voice-note.ts: waveform and length maths, pass-through of non-voice files, and (when
+// ffmpeg is installed) conversion of browser recordings to mono Ogg Opus.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

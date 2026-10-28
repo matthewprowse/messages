@@ -1,3 +1,6 @@
+// Tests for packages/email-text/src/company.ts. Pin down registrable domain roots, personal mail providers, company
+// names from domains and senders, and how automated senders are named.
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import { companyDomain, companyNameFor, companyNameForDomain, isPersonalMailDomain, mailDomainRoot, senderName, viaCompany } from "./company";

@@ -1,5 +1,7 @@
 "use client";
 
+// Groups the company voice, cover and compliance export sections of Settings, Team into one block.
+
 import { ChevronRight } from "lucide-react";
 import type { TeamState } from "@/lib/team";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";

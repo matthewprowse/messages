@@ -1,15 +1,15 @@
+// The outbox table: the app adds queued replies, the worker claims, sends and settles them.
+
 import type { Tables } from "@messages/db";
 import { db, failureCode, must, recordEvent, retryWrite } from "../db";
 import { buildNewEmail, buildReply, newMessageId, type OutgoingAttachment, type ReplyInput } from "./compose";
 import type { AttachmentProvider } from "./attachment-rules";
 import { loadAttachmentFiles, waitForAttachments } from "./outbox-attachments";
-import { chooseFrom, fromCandidates, outgoingRecipients, type OutgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";
+import { chooseFrom, fromCandidates, outgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";
 import { identitiesMergedFromElsewhere } from "../contacts/merged-identities";
 import { FIELD } from "@messages/crypto/fields";
 import { open, openAddresses } from "../vault";
 import { mayUseAccount, replyFor, type ReplyFor } from "./inbox";
-
-// The outbox table: the app adds queued replies, the worker claims, sends and settles them.
 
 export type OutboxRow = Tables<"outbox">;
 
@@ -36,14 +36,33 @@ export async function claimReady(row: OutboxRow): Promise<OutboxRow | null> {
     await markFailed(current.id, problem);
     return null;
   }
-  // Who it is to and from, opened for sending: the browser stored them encrypted.
-  const opened = await openAddresses(current.user_id, { ...current, status: "sending" });
-  // Cc and Bcc are sealed like To. Opened one by one here, and an unreadable one stays empty so the
-  // send fails rather than going without that person.
-  for (const key of ["cc_addresses", "bcc_addresses"] as const) {
-    opened[key] = await Promise.all((opened[key] ?? []).map(async (a) => (await open(opened.user_id, FIELD.address, a)) ?? ""));
+  // The row is claimed now, and nothing has gone to a provider yet. A failure while opening it would leave
+  // the row in "sending" for good, so it is failed here instead.
+  try {
+    // Who it is to and from, opened for sending: the browser stored them encrypted.
+    const opened = await openAddresses(current.user_id, { ...current, status: "sending" });
+    // Cc and Bcc are sealed like To. Opened one by one here, and an unreadable one stays empty so the
+    // send fails rather than going without that person.
+    for (const key of ["cc_addresses", "bcc_addresses"] as const) {
+      opened[key] = await Promise.all((opened[key] ?? []).map(async (a) => (await open(opened.user_id, FIELD.address, a)) ?? ""));
+    }
+    return opened;
+  } catch {
+    await markFailed(current.id, NOTHING_SENT);
+    return null;
   }
-  return opened;
+}
+
+const NOTHING_SENT = "Nothing was sent. Try again.";
+
+/**
+ * Safety net for a send that rejected: a row still in "sending" is failed (only while it is, so a row
+ * the connector settled is left alone). The wording admits it may have gone out. Never throws.
+ */
+export async function failStuckSend(id: string) {
+  await retryWrite(() =>
+    db.from("outbox").update({ status: "failed", error: "Sending was interrupted. Check your Sent folder before trying again." }).eq("id", id).eq("status", "sending"),
+  ).catch(() => false);
 }
 
 /**
@@ -71,9 +90,10 @@ function reportSend(id: string, outcome: "sent" | "failed", reason?: string) {
   );
 }
 
+/** Marks a row failed. Retried on a database error and never throws, so a row is not left in "sending". */
 export async function markFailed(id: string, reason: string, report = true) {
   if (report) reportSend(id, "failed", reason);
-  must(await db.from("outbox").update({ status: "failed", error: reason }).eq("id", id), "mark outbox failed");
+  await retryWrite(() => db.from("outbox").update({ status: "failed", error: reason }).eq("id", id)).catch(() => false);
 }
 
 /**

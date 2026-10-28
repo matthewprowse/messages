@@ -1,3 +1,5 @@
+// Tests for import-plan.ts: which address book cards create, update or are skipped as ambiguous or your own.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { toE164 } from "../contacts/signature-phones";

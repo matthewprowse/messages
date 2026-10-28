@@ -1,5 +1,7 @@
 "use client";
 
+// The form that connects iCloud Mail and Calendar in Settings and onboarding. The password is checked with iCloud before it is saved.
+
 import { useState } from "react";
 import { track } from "@/lib/analytics";
 import { postAsUser } from "@/lib/onboarding";

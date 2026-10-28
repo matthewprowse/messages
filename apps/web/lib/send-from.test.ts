@@ -1,3 +1,6 @@
+// Tests for send-from.ts: default send-from address, parsing address lists, and reply and reply-all recipients without
+// including yourself.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Contact, Message } from "./types";

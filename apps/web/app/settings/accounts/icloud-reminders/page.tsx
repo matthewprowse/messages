@@ -1,5 +1,8 @@
 "use client";
 
+// Settings page for connecting iCloud Reminders: the sign-in form plus an explanation of how Konva signs in for you.
+// Records a setup start in analytics when it opens.
+
 import { useEffect } from "react";
 import { track } from "@/lib/analytics";
 import { SettingsHeader } from "@/components/settings-header";
@@ -18,7 +21,7 @@ export default function ICloudRemindersSetup() {
 
       <ICloudRemindersConnect />
 
-      <div className="mt-8">
+      <div className="mt-3">
         <SettingsSection id="before-you-connect" title="Before You Connect">
           <SettingsHeading level={3} title="Signing In to iCloud for You" description={<>
             <p>

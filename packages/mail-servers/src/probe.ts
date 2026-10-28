@@ -1,11 +1,11 @@
+// Checks a mailbox's sign-in before it is saved: an IMAP login, and SMTP authentication with nodemailer's
+// verify(), which never sends anything. Each server is connected to by the public address it resolved to,
+// with its name for TLS, so the certificate is still checked against the name. Nothing here logs.
+
 import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import type { Candidates, ImapServer, ServerSettings, SmtpServer } from "./index";
 import { publicAddress } from "./net";
-
-// Checks a mailbox's sign-in before it is saved: an IMAP login, and SMTP authentication with nodemailer's
-// verify(), which never sends anything. Each server is connected to by the public address it resolved to,
-// with its name for TLS, so the certificate is still checked against the name. Nothing here logs.
 
 /** How a check went. tls: the port speaks the other kind of encryption. certificate: TLS is right, the certificate is not. */
 export type CheckResult = "ok" | "rejected" | "unreachable" | "tls" | "certificate";

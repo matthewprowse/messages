@@ -1,5 +1,8 @@
 "use client";
 
+// Settings page for connecting Google (Gmail, Calendar, Tasks, and Meet and Chat when chosen): in-app sign-in via ConnectGoogle,
+// with terminal steps below as the developer route.
+
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { track } from "@/lib/analytics";
@@ -127,7 +130,7 @@ function ConnectGoogle() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <Field orientation="horizontal">
         <Checkbox id="google-meet" checked={meet} disabled={busy} onCheckedChange={(on) => setMeet(on === true)} />
         <FieldContent>
@@ -139,7 +142,7 @@ function ConnectGoogle() {
         </FieldContent>
       </Field>
       <div className="space-y-2">
-        <Button disabled={busy} onClick={start}><GoogleLogo /> Connect Google</Button>
+        <Button variant="secondary" disabled={busy} onClick={start}><GoogleLogo /> Connect Google</Button>
         {error && <FieldError>{error}</FieldError>}
         {done && <FieldDescription>Signed in with Google. What each part is doing is below.</FieldDescription>}
         {notice && <FieldDescription>{notice}</FieldDescription>}

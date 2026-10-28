@@ -1,10 +1,3 @@
-import { randomUUID } from "node:crypto";
-import type { Json, TablesInsert, TablesUpdate } from "@messages/db";
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { errorCode, log } from "../log";
-import { meetingUuidPath, rateLimited, ZoomApiError, type ZoomApi } from "./client";
-import { parseVtt } from "./vtt";
-
 // Zoom meetings with their transcripts, from your cloud recordings. Each poll lists the recordings in a window
 // of days and stores one meetings row per meeting: with Zoom's own transcript (a VTT file) when it has one,
 // else with the audio recording uploaded for the AI worker to transcribe, else marked as having none. Who
@@ -13,6 +6,13 @@ import { parseVtt } from "./vtt";
 //
 // The database and sealing come in through interfaces, so the whole sync can be unit tested on recorded
 // Zoom replies (recordings.test.ts).
+
+import { randomUUID } from "node:crypto";
+import type { Json, TablesInsert, TablesUpdate } from "@messages/db";
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { errorCode, log } from "../log";
+import { meetingUuidPath, rateLimited, ZoomApiError, type ZoomApi } from "./client";
+import { parseVtt } from "./vtt";
 
 /** Zoom allows at most a month between from and to. */
 const WINDOW_DAYS = 30;

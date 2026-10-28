@@ -1,7 +1,3 @@
-import { kmsWrapper, googleAccessToken, localWrapper } from "@messages/crypto/wrap";
-import { allRows, db, must } from "../src/db";
-import { env } from "../src/env";
-
 // One-off (docs/PLAN.md, Google Cloud KMS, Migration): moves every data key from the local wrapper (local:v1,
 // KEY_WRAPPING_KEY) to Google Cloud KMS (kms:v1). The data keys themselves do not change, so nothing that was
 // encrypted with them is touched or re-encrypted: only the small wrapped copy in user_keys and team_keys is replaced.
@@ -16,6 +12,10 @@ import { env } from "../src/env";
 // stopped and started again, and a key changed meanwhile is left for the next run. Keep KEY_WRAPPING_KEY until a
 // dry run reports 0 left to move AND the backups made before the move are no longer wanted, then remove it everywhere.
 // Team keys of every version are moved, retired ones included (they are only audit rows, but stay openable).
+
+import { kmsWrapper, googleAccessToken, localWrapper } from "@messages/crypto/wrap";
+import { allRows, db, must } from "../src/db";
+import { env } from "../src/env";
 
 const apply = process.argv.includes("--apply");
 if (process.argv.some((a) => a.startsWith("--") && a !== "--apply" && a !== "--dry-run")) {

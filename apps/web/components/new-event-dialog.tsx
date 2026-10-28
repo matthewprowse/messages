@@ -1,5 +1,7 @@
 "use client";
 
+// The New Event dialog, which also edits an existing event. Saving closes it at once and the worker creates or changes the event in the calendar.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { markSubmitted } from "@/lib/analytics";
@@ -10,7 +12,7 @@ import { useApp } from "@/lib/store";
 import { followRow } from "@/lib/follow-row";
 import { supabase } from "@/lib/supabase";
 import type { Account } from "@/lib/types";
-import { buildUpdate, followUpdate, formOf, type CalendarEvent, type EventPatch, type UpdateScope } from "@/lib/calendar";
+import { buildUpdate, followUpdate, formOf, GAVE_UP, type CalendarEvent, type EventPatch, type UpdateScope } from "@/lib/calendar";
 import { describeRule, repeatChoices, sameRepeat } from "@/lib/recurrence";
 import {
   buildEventRow,
@@ -76,7 +78,8 @@ function TimeSelect({ id, value, onChange, invalid, disabled }: { id: string; va
 type Row = Pick<Tables<"calendar_outbox">, "status" | "error" | "html_link">;
 
 const isFinal = (r: Row) => r.status === "created" || r.status === "failed";
-const GIVE_UP: Row = { status: "failed", error: "The event is taking too long to create. Check that the worker is running.", html_link: null };
+// Not a failure: the worker may still create it, so the dialog does not invite a second try.
+const GIVE_UP: Row = { status: GAVE_UP, error: null, html_link: null };
 
 /** Resolves when the worker has created the queued event or given up, or after GIVE_UP_MS. */
 const followEvent = (id: string) => followRow<Row>("calendar_outbox", id, "status, error, html_link", isFinal, GIVE_UP, { giveUpMs: GIVE_UP_MS, pollMs: POLL_MS });
@@ -126,10 +129,12 @@ export function NewEventDialog({
   onQueued,
   onCreated,
   onFailed,
+  onLate,
   editing,
   onEditQueued,
   onEditDone,
   onEditFailed,
+  onEditLate,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -142,12 +147,15 @@ export function NewEventDialog({
   onQueued?: (event: CalendarEvent) => void;
   onCreated?: (id: string) => void;
   onFailed?: (id: string) => void;
+  /** The worker had not answered after a minute. The event may still appear, so the page loads again later. */
+  onLate?: (id: string) => void;
   /** The event to change, with its guests, notes and link loaded. The dialog opens with its details. */
   editing?: CalendarEvent;
   onEditQueued?: (token: string, event: CalendarEvent, patch: EventPatch, scope: UpdateScope) => void;
   /** The calendar has made the change. `note` says what it did not do, when it did only part. */
   onEditDone?: (token: string, note: string | null) => void;
   onEditFailed?: (token: string, event: CalendarEvent, error: string) => void;
+  onEditLate?: (token: string) => void;
 }) {
   const { accounts, contacts } = useApp();
   const choices = accounts.filter((a) => (CALENDARS as readonly string[]).includes(a.provider) && a.status !== "disconnected");
@@ -256,6 +264,8 @@ export function NewEventDialog({
   const repeatValue = repeat ? (repeatOptions.find((o) => sameRepeat(o.value, repeat, fromDateKey(date)))?.value ?? repeat) : repeating ? UNKNOWN_REPEAT : NO_REPEAT;
   // A new rule is for the whole series.
   const repeatChanged = !!repeat && !sameRepeat(repeat, editing?.recurrence ?? "", editing ? new Date(editing.startsAt) : undefined);
+  // Anything else changed alongside the repeat still gets the choice of this event or every one.
+  const othersChanged = !!update?.ok && !!update.row && (update.row.title !== undefined || update.row.location !== undefined || update.row.description !== undefined || update.row.starts_at !== undefined || update.row.attendees !== undefined);
   const problem: { field: EventField; error: string } | null = update ? (update.ok ? null : update) : built.ok ? null : built;
   const errorFor = (field: EventField) => (checked && problem?.field === field ? problem.error : null);
 
@@ -313,6 +323,12 @@ export function NewEventDialog({
       toast("Event created.", result.html_link ? { action: { label: "Open", onClick: () => window.open(result.html_link!, "_blank", "noopener") } } : undefined);
       return;
     }
+    if (result.status === GAVE_UP) {
+      // Still with the worker: the event stays shown as saving, and the form does not open for a second try.
+      toast("The event is still being created and may appear shortly.");
+      onLate?.(id);
+      return;
+    }
     onFailed?.(id);
     if (openNow.current) {
       // Already making another event: its form is not touched, so the reason goes in a message.
@@ -361,6 +377,11 @@ export function NewEventDialog({
       onEditDone?.(id, result.error);
       return;
     }
+    if (result.status === GAVE_UP) {
+      toast("The change is still being made and may appear shortly.");
+      onEditLate?.(id);
+      return;
+    }
     const reason = result.error ?? "The event could not be changed.";
     onEditFailed?.(id, editing, reason);
     toast.error(reason);
@@ -381,7 +402,7 @@ export function NewEventDialog({
         {!account ? (
           <Reconnect change={edit} />
         ) : (
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? (repeating && !repeatChanged ? askScope() : submitEdit(repeating ? "series" : "occurrence")) : submit()); }}>
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? (repeating && (!repeatChanged || othersChanged) ? askScope() : submitEdit(repeating ? "series" : "occurrence")) : submit()); }}>
             {!edit && choices.length > 1 && (
               <div className="grid gap-2">
                 <Label htmlFor="event-calendar">Calendar</Label>
@@ -458,7 +479,7 @@ export function NewEventDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                {repeating && repeatChanged && <p className="text-xs text-muted-foreground">A new repeat is saved to every event in the series.</p>}
+                {repeating && repeatChanged && <p className="text-xs text-muted-foreground">A new repeat is saved to every event in the series{othersChanged ? ", whichever you save" : ""}.</p>}
               </div>
             )}
             <div className="grid gap-2">
@@ -554,7 +575,7 @@ export function NewEventDialog({
             </AlertDialogHeader>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant="outline" onClick={saveOn("occurrence")}>Save This Event</AlertDialogAction>
+              <AlertDialogAction variant="ghost" onClick={saveOn("occurrence")}>Save This Event</AlertDialogAction>
               <AlertDialogAction variant="secondary" onClick={saveOn("series")}>Save All Events</AlertDialogAction>
             </div>
           </AlertDialogContent>

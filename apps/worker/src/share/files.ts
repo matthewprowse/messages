@@ -1,12 +1,12 @@
-import { decryptBytes, decryptTeamBytes, encryptTeamBytes, isSealedBytes, type TeamKeys } from "@messages/crypto";
-import { FIELD } from "@messages/crypto/fields";
-import { Changes, moveValue, type Keys, type Move, type RowWrite } from "./reseal";
-
 // The files and file names of a shared chat. The name moves between the keys like any other text. The bytes of a sealed
 // file are copied: a second object sealed with the team's current key (team/<workspace>/<attachment id>), next to the
 // agent's own, which stays as it is. attachments.team_path says where the copy is and team_key_version which version of
 // the team's key sealed it, so rotate.ts can seal it again when a member leaves. Moving the chat back deletes the copy.
 // A file stored unsealed (encryption off) has no copy: the team reads it where it is.
+
+import { decryptBytes, decryptTeamBytes, encryptTeamBytes, isSealedBytes, type TeamKeys } from "@messages/crypto";
+import { FIELD } from "@messages/crypto/fields";
+import { Changes, moveValue, type Keys, type Move, type RowWrite } from "./reseal";
 
 /** What the share job reads of an attachment row. */
 export interface AttachmentRow {

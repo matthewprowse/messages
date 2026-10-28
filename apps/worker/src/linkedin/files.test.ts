@@ -1,3 +1,6 @@
+// Tests for linkedin/files.ts: how files map to the helper's kinds, that staging is private and cleaned up,
+// and that more files get a longer send timeout.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";

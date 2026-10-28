@@ -1,5 +1,8 @@
 "use client";
 
+// Owner-only team activity in Settings, Team: response times per person and how many chats were moved back to personal.
+// Counts only, never the chats themselves.
+
 import { useState } from "react";
 import { replyTime, type ResponseStat, type WeekCount } from "@/lib/team-work";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -78,7 +81,7 @@ export function ResponseSection({ stats, failed, load }: { stats: ResponseStat[]
           <AlertTitle>Could Not Load Response Times</AlertTitle>
           <AlertDescription>
             <p>Check your connection and try again.</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load()}>Retry</Button>
+            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
           </AlertDescription>
         </Alert>
       ) : !stats ? (

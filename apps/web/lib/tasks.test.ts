@@ -1,3 +1,6 @@
+// Tests for tasks.ts: mapping task rows, due days and overdue rules, grouping by day, optimistic temp tasks and form
+// validation.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

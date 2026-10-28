@@ -1,10 +1,3 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
-import { isPublicAddress } from "@messages/mail-servers/net";
-
-export { isPublicAddress };
-import { frameLogo, type Logo } from "./logo-image";
-
 // A company's logo, fetched from its own website: every icon its home page and web app manifest name
 // (the large "apple-touch-icon" phones use, manifest icons, SVG icons, ordinary favicons), plus the
 // conventional /apple-touch-icon.png and /favicon.ico. Each is framed by logo-image.ts and the sharpest
@@ -13,6 +6,11 @@ import { frameLogo, type Logo } from "./logo-image";
 // mail). The domains come from the senders of email, so anyone can choose them: only HTTPS, only public
 // addresses (never this Mac, the local network or cloud metadata), redirects checked one by one, small
 // sizes and short timeouts. Nothing is sent but a plain request.
+
+import { isPublicAddress, pinnedGet, type PinnedResponse, type Resolver } from "@messages/mail-servers/net";
+
+export { isPublicAddress };
+import { frameLogo, type Logo } from "./logo-image";
 
 const PAGE_BYTES = 1024 * 1024;
 const ICON_BYTES = 1024 * 1024;
@@ -26,19 +24,14 @@ const MIN_QUALITY = 28;
 /** At most this many icons are fetched from one site. */
 const MAX_TRIES = 8;
 
-async function publicHost(url: URL): Promise<boolean> {
-  if (url.protocol !== "https:" || (url.port && url.port !== "443")) return false;
-  if (isIP(url.hostname)) return isPublicAddress(url.hostname);
-  const addresses = await lookup(url.hostname, { all: true }).catch(() => []);
-  return addresses.length > 0 && addresses.every((a) => isPublicAddress(a.address));
-}
-
 /**
  * Fetches a public HTTPS address, following up to four redirects that are also public. Null on anything
  * else. A body over maxBytes is refused, or with `truncate` cut short (a home page's icons are in its head).
- * `headers` are added to the request (a User-Agent some services ask for).
+ * `headers` are added to the request (a User-Agent some services ask for). Every connection goes to an
+ * address that was checked as public at the moment of connecting (pinnedGet), so a second DNS answer cannot
+ * point a request at the local network. `resolve` is for tests.
  */
-export async function safeGet(start: string, maxBytes: number, truncate = false, headers: Record<string, string> = {}): Promise<{ bytes: Buffer; url: URL; type: string } | null> {
+export async function safeGet(start: string, maxBytes: number, truncate = false, headers: Record<string, string> = {}, resolve?: Resolver): Promise<{ bytes: Buffer; url: URL; type: string } | null> {
   let url: URL;
   try {
     url = new URL(start);
@@ -46,13 +39,16 @@ export async function safeGet(start: string, maxBytes: number, truncate = false,
     return null;
   }
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    if (!(await publicHost(url))) return null;
-    const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS), headers: { accept: "text/html,application/xhtml+xml,image/*;q=0.9,*/*;q=0.8", ...headers } }).catch(() => null);
-    if (!res) return null;
+    let res: PinnedResponse;
+    try {
+      res = await pinnedGet(url, TIMEOUT_MS, { accept: "text/html,application/xhtml+xml,image/*;q=0.9,*/*;q=0.8", ...headers }, resolve);
+    } catch {
+      return null;
+    }
     if (res.status >= 300 && res.status < 400) {
-      await res.body?.cancel().catch(() => undefined);
-      const next = res.headers.get("location");
-      if (!next) return null;
+      res.destroy();
+      const next = res.headers.location;
+      if (typeof next !== "string" || !next) return null;
       try {
         url = new URL(next, url);
       } catch {
@@ -60,13 +56,13 @@ export async function safeGet(start: string, maxBytes: number, truncate = false,
       }
       continue;
     }
-    if (!res.ok || !res.body) {
-      await res.body?.cancel().catch(() => undefined);
+    if (res.status < 200 || res.status >= 300) {
+      res.destroy();
       return null;
     }
-    const declared = Number(res.headers.get("content-length") ?? 0);
+    const declared = Number(res.headers["content-length"] ?? 0);
     if (declared > maxBytes && !truncate) {
-      await res.body.cancel().catch(() => undefined);
+      res.destroy();
       return null;
     }
     const chunks: Buffer[] = [];
@@ -76,14 +72,16 @@ export async function safeGet(start: string, maxBytes: number, truncate = false,
         chunks.push(Buffer.from(chunk));
         size += chunk.length;
         if (size > maxBytes) {
+          res.destroy();
           if (!truncate) return null;
-          break; // leaving the loop cancels the rest of the download
+          break; // the rest of the download is dropped
         }
       }
     } catch {
       if (!truncate || size === 0) return null;
     }
-    return { bytes: Buffer.concat(chunks).subarray(0, maxBytes), url, type: res.headers.get("content-type") ?? "" };
+    const type = res.headers["content-type"];
+    return { bytes: Buffer.concat(chunks).subarray(0, maxBytes), url, type: typeof type === "string" ? type : "" };
   }
   return null;
 }

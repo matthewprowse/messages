@@ -1,10 +1,10 @@
+// The Messages user an account belongs to, found by the email you sign in to the app with, the
+// account row the setup scripts save, and the terminal prompt they use, hidden for passwords.
+
 import { addressIndex } from "@messages/crypto/addresses";
 import type { TablesInsert } from "@messages/db";
 import { db, must } from "../src/db";
 import { keysFor, sealAddress } from "../src/vault";
-
-// The Messages user an account belongs to, found by the email you sign in to the app with, the
-// account row the setup scripts save, and the terminal prompt they use, hidden for passwords.
 
 /**
  * Saves the user's account for this provider and address, and returns its id. A stored address may be

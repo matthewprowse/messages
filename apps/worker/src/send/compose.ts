@@ -1,7 +1,7 @@
+// Pure construction of replies and new emails. No I/O, so it can be unit tested.
+
 import { randomUUID } from "node:crypto";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
-
-// Pure construction of replies and new emails. No I/O, so it can be unit tested.
 
 export interface ReplyInput {
   from: { name: string | null; address: string };
@@ -44,6 +44,7 @@ export function replySubject(subject: string | null): string {
   return /^re\s*:/i.test(base) ? base : `Re: ${base}`;
 }
 
+/** A new RFC 822 Message-ID on the sender's domain, so a reply can thread onto it. */
 export function newMessageId(fromAddress: string): string {
   const domain = fromAddress.split("@")[1] || "localhost";
   return `<${randomUUID()}@${domain}>`;

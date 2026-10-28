@@ -1,15 +1,15 @@
 "use client";
 
+// Voice notes recorded in the WhatsApp reply box. The browser records in whatever it supports (Ogg or
+// WebM Opus, or MP4 in older Safari); the worker converts it to the format WhatsApp plays as a voice note.
+// Stopping adds the recording to the reply's files, to listen to or remove before sending.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioLines, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { clock } from "@/components/media-player";
 import type { OutboxFiles } from "@/components/outbox-attachments";
-
-// Voice notes recorded in the WhatsApp reply box. The browser records in whatever it supports (Ogg or
-// WebM Opus, or MP4 in older Safari); the worker converts it to the format WhatsApp plays as a voice note.
-// Stopping adds the recording to the reply's files, to listen to or remove before sending.
 
 /** Formats to record in, best first. */
 const FORMATS = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
@@ -118,7 +118,7 @@ export function useVoiceRecorder(files: Pick<OutboxFiles, "addVoiceNote" | "noti
 /** Speak: say what the reply should say, and the AI drafts it. On every channel. */
 export function SpeakButton({ voice, disabled }: { voice: VoiceRecorder; disabled?: boolean }) {
   return (
-    <Button type="button" variant="outline" size="icon" aria-label="Say What To Say" title="Say What To Say" disabled={disabled || voice.recording} onClick={voice.start}>
+    <Button type="button" variant="secondary" size="icon" aria-label="Say What To Say" title="Say What To Say" disabled={disabled || voice.recording} onClick={voice.start}>
       <AudioLines />
     </Button>
   );

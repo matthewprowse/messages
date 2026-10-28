@@ -2,10 +2,12 @@ module konva-linkedin
 
 go 1.26.0
 
-require go.mau.fi/mautrix-linkedin v0.2609.1-0.20261026162046-48d3d8301148
+require (
+	github.com/google/uuid v1.6.0
+	go.mau.fi/mautrix-linkedin v0.2609.1-0.20261026162046-48d3d8301148
+)
 
 require (
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/rs/zerolog v1.35.1 // indirect

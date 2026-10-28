@@ -1,3 +1,7 @@
+// Contacts as the pages need them. The worker creates a contact for every new sender and stores each
+// email address or phone number as an identity, so one person can have several of each.
+// Reads go through the signed-in browser client, so row-level security limits them to the user's own rows.
+
 import type { PostgrestError } from "@supabase/supabase-js";
 import type { Json } from "@messages/db";
 import { FIELD, type Field } from "@messages/crypto/fields";
@@ -11,10 +15,6 @@ import { isEmail } from "./send-from";
 import type { Attachment, FiledAttachment, Provider } from "./types";
 import { companyLogo, isCompanySender, logoAvatar } from "./people";
 import { withSealedColumns } from "./sealed-columns";
-
-// Contacts as the pages need them. The worker creates a contact for every new sender and stores each
-// email address or phone number as an identity, so one person can have several of each.
-// Reads go through the signed-in browser client, so row-level security limits them to the user's own rows.
 
 export interface ContactSummary {
   id: string;
@@ -131,15 +131,23 @@ export function isUuid(id: string) {
 
 export async function getContact(id: string): Promise<ContactDetail | null> {
   if (!isUuid(id)) return null;
-  const { data: c, error } = await supabase
+  const { data: base, error } = await supabase
     .from("contacts")
-    .select(
-      "id, display_name, company, role, relationship, ai_summary, hidden, avatar_path, organizations(id, name, logo_path), contact_identities(id, kind, value), thread_participants(threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider)))",
-    )
+    .select("id, display_name, company, role, relationship, ai_summary, hidden, avatar_path, organizations(id, name, logo_path), contact_identities(id, kind, value)")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`Load contact failed (${error.code})`);
-  if (!c) return null;
+  if (!base) return null;
+  // Their conversations are paged, so a contact with thousands of them is not cut off or too big for one response.
+  const thread_participants = await allRows("Load contact conversations", (from, to) =>
+    supabase
+      .from("thread_participants")
+      .select("thread_id, threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider))")
+      .eq("contact_id", id)
+      .order("thread_id")
+      .range(from, to),
+  );
+  const c = { ...base, thread_participants };
   await openNestedThreads([c]);
   // Deleted conversations (in the provider's bin) are left out here, as in Conversations.
   const conversations = c.thread_participants
@@ -178,18 +186,29 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
   };
 }
 
+const ATTACHMENT_THREADS = 100;
+
 async function contactAttachments(contactId: string, threadIds: string[], groupIds: Set<string>): Promise<FiledAttachment[]> {
   if (threadIds.length === 0) return [];
   const columns = await withSealedColumns("id, filename, kind, size_bytes, storage_path, team_path, hidden_reason, sealed, not_kept, messages!inner(id, thread_id, sent_at, direction, sender_contact_id)");
-  const data = await allRows("Load contact attachments", (from, to) =>
-    supabase
-      .from("attachments")
-      .select(columns)
-      .eq("hidden", false)
-      .in("messages.thread_id", threadIds)
-      .order("id")
-      .range(from, to),
-  );
+  // The ids go in the address of each request, so they are asked in chunks to keep it short.
+  const chunks: string[][] = [];
+  for (let i = 0; i < threadIds.length; i += ATTACHMENT_THREADS) chunks.push(threadIds.slice(i, i + ATTACHMENT_THREADS));
+  const data = (
+    await Promise.all(
+      chunks.map((ids) =>
+        allRows("Load contact attachments", (from, to) =>
+          supabase
+            .from("attachments")
+            .select(columns)
+            .eq("hidden", false)
+            .in("messages.thread_id", ids)
+            .order("id")
+            .range(from, to),
+        ),
+      ),
+    )
+  ).flat();
   await openAddresses(data);
   return data
     .filter((a) => !groupIds.has(a.messages.thread_id) || a.messages.sender_contact_id === contactId)
@@ -231,7 +250,7 @@ export function checkContactFields(f: { name: string; emails: string[]; phones: 
   return { nameError, emailErrors, phoneValues, phoneErrors, valid };
 }
 
-export type CreateResult = { ok: true; id: string } | { ok: false; error: string; existingId?: string };
+export type CreateResult = { ok: true; id: string; /** Set when the contact was added but its company, role or relationship was not saved. */ warning?: string } | { ok: false; error: string; existingId?: string };
 
 /** Errors the contact functions raise on purpose carry a message meant for people; anything else does not. */
 export function contactErrorText(error: Pick<PostgrestError, "code" | "message"> | null, fallback: string): string {
@@ -263,7 +282,10 @@ export async function createContact(c: NewContact): Promise<CreateResult> {
         p_add: [] as unknown as Json,
         p_remove: [],
       });
-      if (saved.error) console.error(`Save role failed (${saved.error.code})`);
+      if (saved.error) {
+        console.error(`Save role failed (${saved.error.code})`);
+        return { ok: true, id: data, warning: "The contact was added, but the company, role and relationship were not saved. Edit the contact to add them." };
+      }
     }
     return { ok: true, id: data };
   }

@@ -1,3 +1,6 @@
+// Tests for storage-rules.ts: the video link rule, the open, grace and full states of a seat's cap, per-person and team usage reads,
+// the one-minute cache, and that an unreadable usage fails open.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 

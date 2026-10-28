@@ -1,6 +1,9 @@
+// Tests for merging.ts: which contact names count as placeholders, when a merge is automatic or needs asking, and which
+// contact survives.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { followMerges, identityGroups, isPlaceholderName, mergeReasonText, namesDiffer, planMerge, preferredName, suggestionReasonText } from "./merging";
+import { followMerges, identityGroups, isPlaceholderName, mergeReasonText, nameWords, namesDiffer, planMerge, preferredName, suggestionReasonText } from "./merging";
 
 const side = (id: string, name: string, emails: string[] = [], phones: string[] = [], conversations = 0, hasWhatsApp = false) => ({ id, name, emails, phones, conversations, hasWhatsApp });
 
@@ -82,4 +85,13 @@ test("merged ids follow the chain and stop on loops", () => {
   assert.equal(followMerges("a", { a: "b", b: "c" }), "c");
   assert.equal(followMerges("x", { a: "b" }), "x");
   assert.equal(followMerges("a", { a: "b", b: "a" }), "b");
+});
+
+test("preferredName compares non-Latin names and keeps the first letter of Łukasz", () => {
+  assert.equal(preferredName("Иван Петров", "Пётр Иванов"), "ask");
+  assert.equal(preferredName("Иван Петров", "иван петров"), null);
+  assert.equal(preferredName("山田太郎", "田中花子"), "ask");
+  assert.equal(preferredName("Łukasz Nowak", "Lukasz Nowak"), "ask");
+  assert.deepEqual(nameWords("Łukasz"), ["łukasz"]);
+  assert.equal(preferredName("!!!", "???"), "ask");
 });

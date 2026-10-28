@@ -1,5 +1,9 @@
 "use client";
 
+// What the contact functions take for an address since encryption stage 2: its blind index, which the
+// database matches on, and the value itself, encrypted once NEXT_PUBLIC_ENCRYPT_ADDRESSES is on. The browser
+// holds the same keys as the workers, so it works these out before calling.
+
 import { flagOn } from "@messages/crypto/flags";
 import { addressIndex, chatIndex, domainIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
@@ -7,10 +11,6 @@ import { encryptField } from "@messages/crypto";
 import { companyDomain, companyNameForDomain } from "@messages/email-text/company";
 import { supabase } from "./supabase";
 import { open, userKeys } from "./vault";
-
-// What the contact functions take for an address since encryption stage 2: its blind index, which the
-// database matches on, and the value itself, encrypted once NEXT_PUBLIC_ENCRYPT_ADDRESSES is on. The browser
-// holds the same keys as the workers, so it works these out before calling.
 
 const encryptAddresses = flagOn(process.env.NEXT_PUBLIC_ENCRYPT_ADDRESSES);
 

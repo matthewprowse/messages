@@ -1,11 +1,11 @@
+// Replaces the stored copy of one account's events in a window with what the calendar has now. Shared by
+// Google Calendar and Outlook Calendar, which both fetch the whole window each time.
+
 import type { TablesInsert } from "@messages/db";
 import { allRows, db, must } from "../db";
 import { chunks } from "../util";
 import { openEvent, sealEvent } from "./sealed";
 import { eventChanged, type StoredEvent } from "./sync-diff";
-
-// Replaces the stored copy of one account's events in a window with what the calendar has now. Shared by
-// Google Calendar and Outlook Calendar, which both fetch the whole window each time.
 
 /**
  * Writes new and changed events, and removes stored events in the window that the calendar no longer

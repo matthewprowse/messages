@@ -1,3 +1,8 @@
+// WhatsApp, as a linked device (the way WhatsApp Web works) through Baileys. Messages and the history the
+// phone sends when the device links are stored like email; replies queued in the outbox go out over the
+// link. Nothing is ever sent on its own: no presence, no "online", and read receipts only when you open a
+// chat in the app with read receipts turned on in Settings.
+
 import makeWASocket, {
   Browsers,
   DisconnectReason,
@@ -47,11 +52,6 @@ import type { UserKeys } from "@messages/crypto";
 import { keysFor, open, openAddresses, seal, sealAddress } from "../vault";
 
 quietSignalLogs();
-
-// WhatsApp, as a linked device (the way WhatsApp Web works) through Baileys. Messages and the history the
-// phone sends when the device links are stored like email; replies queued in the outbox go out over the
-// link. Nothing is ever sent on its own: no presence, no "online", and read receipts only when you open a
-// chat in the app with read receipts turned on in Settings.
 
 const MEDIA_CATCH_UP_MS = 10 * 60_000;
 const TOUCH_MS = 60_000;
@@ -312,12 +312,12 @@ export class WhatsAppConnector {
       return "stop";
     }
     if (status === DisconnectReason.connectionReplaced) {
-      await setAccountStatus(this.id, "error", "Another copy of the worker took over this WhatsApp link. Stop the other one, then reconnect.");
+      await setAccountStatus(this.id, "error", "Another copy of the worker took over this WhatsApp link. Stop the other one, then reconnect.").catch(() => undefined);
       return "stop";
     }
     if (status === DisconnectReason.forbidden || status === DisconnectReason.multideviceMismatch) {
       await this.auth?.wipe().catch(() => undefined);
-      await setAccountStatus(this.id, "error", "WhatsApp refused this device. Scan the QR code again.");
+      await setAccountStatus(this.id, "error", "WhatsApp refused this device. Scan the QR code again.").catch(() => undefined);
       return "stop";
     }
     await setAccountStatus(this.id, "connecting", "Connection lost. Reconnecting.").catch(() => undefined);
@@ -819,16 +819,19 @@ export class WhatsAppConnector {
   /** Files not saved yet (a failed download, or one the phone had to upload again), within the import window. */
   private async saveMissingMedia() {
     const since = new Date(Date.now() - env.initialSyncDays * 86_400_000).toISOString();
-    const missing = () =>
-      db
+    // Files already past their tries are left out of the query, or they would fill the limit and starve the rest.
+    const spent = [...this.fileTries].filter(([, tries]) => tries >= MAX_FILE_TRIES).map(([id]) => id);
+    const missing = () => {
+      const query = db
         .from("attachments")
         .select("id, mime_type, kind, filename, size_bytes, message_id, messages!inner(account_id, provider_message_id, provider_meta, sent_at)")
         .is("storage_path", null)
         // A video kept as a link is not fetched; a file refused for a full seat is tried again once there is room.
         .or("not_kept.is.null,not_kept.eq.over_cap")
         .eq("messages.account_id", this.id)
-        .lte("size_bytes", MAX_FILE_BYTES)
-        .limit(100);
+        .lte("size_bytes", MAX_FILE_BYTES);
+      return (spent.length > 0 ? query.not("id", "in", `(${spent.join(",")})`) : query).limit(100);
+    };
     const [recent, stickers] = await Promise.all([
       missing().gte("messages.sent_at", since).then((r) => must(r, "load missing whatsapp files")),
       missing().eq("is_sticker", true).then((r) => must(r, "load missing whatsapp stickers")),

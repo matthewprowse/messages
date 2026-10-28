@@ -54,6 +54,9 @@ type Helper struct {
 	live   bool
 	// What the login was given, for the requests the library does not offer (start).
 	session *session
+	// Seams for tests: how the probe asks who the cookies belong to, and where start sends. Nil is the real thing.
+	probeProfile  func(ctx context.Context, jar *linkedingo.StringCookieJar, args loginArgs) (*linkedingo.UserProfile, error)
+	startEndpoint string
 
 	// A password sign-in in progress: where it is waiting, and the wait for approval in the app that runs
 	// beside the command loop (it can take minutes, and another command may have to end it).
@@ -130,7 +133,7 @@ func (h *Helper) handlers() linkedingo.Handlers {
 }
 
 // EventFrom turns a real-time event into the Event the worker hears, or nil for one it does not need
-// (typing, seen receipts, reactions, deletions).
+// (typing, reactions, deletions). A seen receipt becomes a seen event.
 func EventFrom(e *linkedingo.DecoratedEvent) *Event {
 	data := e.Payload.Data
 	switch {
@@ -140,6 +143,14 @@ func EventFrom(e *linkedingo.DecoratedEvent) *Event {
 	case data.DecoratedConversation != nil:
 		c := ConversationFrom(data.DecoratedConversation.Result)
 		return &Event{Event: "conversation", Conversation: &c}
+	case data.DecoratedSeenReceipt != nil:
+		r := data.DecoratedSeenReceipt.Result
+		conversation := MessageFrom(r.Message).ConversationURN
+		by := r.SeenByParticipant.EntityURN.ID()
+		if conversation == "" || by == "" || r.SeenAt.IsZero() {
+			return nil
+		}
+		return &Event{Event: "seen", ConversationURN: conversation, By: by, At: r.SeenAt.UnixMilli()}
 	}
 	return nil
 }
@@ -191,14 +202,16 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 		if json.Unmarshal(req.Args, &args) != nil || strings.TrimSpace(args.Cookies) == "" {
 			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
 		}
+		h.dropClient() // a new login replaces the old one, and a failed one leaves none
 		jar, err := linkedingo.NewJarFromCookieHeader(gState.ReplaceAllString(args.Cookies, ""))
 		if err != nil || jar.GetCookie("li_at") == "" || jar.GetCookie(linkedingo.LinkedInCookieJSESSIONID) == "" {
 			return Fail(req.ID, &Error{Kind: KindBadCredentials}), false
 		}
-		probe := linkedingo.NewClient(ctx, linkedingo.NewURN(""), jar, args.PageInstance, args.XLiTrack, "", linkedingo.Handlers{})
-		// The session must look like the browser it was created in, so LinkedIn does not end it.
-		probe.SetBrowserHeaders(args.Headers)
-		profile, err := probe.GetCurrentUserProfile(ctx)
+		probe := h.probeProfile
+		if probe == nil {
+			probe = probeProfile
+		}
+		profile, err := probe(ctx, jar, args)
 		if err != nil {
 			return Fail(req.ID, Classify(err)), false
 		}
@@ -206,6 +219,7 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 		if me.ID == "" {
 			return Fail(req.ID, &Error{Kind: KindBadCredentials}), false
 		}
+		h.session = newSession(jar, args, me, h.startEndpoint)
 		h.client = linkedingo.NewClient(ctx, linkedingo.NewURN(me.ID), jar, args.PageInstance, args.XLiTrack, args.SyncToken, h.handlers())
 		h.client.SetBrowserHeaders(args.Headers)
 		return Done(req.ID, map[string]any{"me": me}), false
@@ -327,13 +341,27 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 
 	case "stop":
 		h.endWait()
-		if h.client != nil && h.live {
-			h.client.RealtimeDisconnect()
-			h.live = false
-		}
+		h.dropClient()
 		return Done(req.ID, map[string]any{}), true
 	}
 	return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+}
+
+// dropClient ends the realtime connection of the current login, if any, and forgets the login, so a new one
+// (or none) starts clean. A start made after it is refused until the next login.
+func (h *Helper) dropClient() {
+	if h.client != nil && h.live {
+		h.client.RealtimeDisconnect()
+	}
+	h.client, h.session, h.live = nil, nil, false
+}
+
+// probeProfile asks LinkedIn who the cookies belong to, with the headers they were created with.
+func probeProfile(ctx context.Context, jar *linkedingo.StringCookieJar, args loginArgs) (*linkedingo.UserProfile, error) {
+	probe := linkedingo.NewClient(ctx, linkedingo.NewURN(""), jar, args.PageInstance, args.XLiTrack, "", linkedingo.Handlers{})
+	// The session must look like the browser it was created in, so LinkedIn does not end it.
+	probe.SetBrowserHeaders(args.Headers)
+	return probe.GetCurrentUserProfile(ctx)
 }
 
 // Dispatch runs one command like Handle does, except that waiting for approval in the app answers later, from
@@ -443,7 +471,5 @@ func main() {
 	}
 	// stdin closed: the worker went away, so the session ends with it.
 	h.endWait()
-	if h.client != nil && h.live {
-		h.client.RealtimeDisconnect()
-	}
+	h.dropClient()
 }

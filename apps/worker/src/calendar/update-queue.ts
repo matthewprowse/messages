@@ -1,11 +1,11 @@
+// The calendar_updates table: the app adds queued changes, the worker claims, makes and settles them.
+
 import type { TablesUpdate } from "@messages/db";
 import { db, must, retryWrite } from "../db";
 import { errorCode, log } from "../log";
 import type { StoredCalendarEvent } from "./delete-event";
 import { openEvent, sealEvent } from "./sealed";
 import { exactTimes, shiftedTimes, storedPatch, type CalendarUpdateRow, type Change, type SeriesShift } from "./update-event";
-
-// The calendar_updates table: the app adds queued changes, the worker claims, makes and settles them.
 
 export const INTERRUPTED = "Changing this event was interrupted. Reload to check whether it changed.";
 export const NOT_RECORDED = "The event was changed, but that could not be recorded. Reload to check.";
@@ -17,6 +17,7 @@ export async function claimUpdate(id: string): Promise<boolean> {
   return rows.length === 1;
 }
 
+/** Marks an update as failed with a reason shown to the user. Does nothing if it already finished. */
 export async function failUpdate(id: string, reason: string) {
   must(
     await db.from("calendar_updates").update({ status: "failed", error: reason, done_at: new Date().toISOString() }).eq("id", id).in("status", ["queued", "updating"]),

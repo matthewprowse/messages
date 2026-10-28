@@ -1,3 +1,6 @@
+// Tests for people.ts: recognising role addresses and company senders, keeping real people as people, and when a company
+// logo stands in for a sender.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { companyLogo, isCompanySender, isRoleAddress } from "./people";

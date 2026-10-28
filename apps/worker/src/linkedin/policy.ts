@@ -1,10 +1,10 @@
-import { HelperError } from "./helper";
-
 // What the LinkedIn connector does when LinkedIn pushes back. A 429 (too many requests) or LinkedIn's own
 // 999 (request refused) stops every request for half an hour, doubling each time up to six hours; three
 // 999s in a row stop the account until you reconnect. A session LinkedIn no longer accepts, or a 403,
 // stops it at once with the reason. Anything else is a dropped connection, retried with the usual backoff.
 // Pure, so it can be unit tested.
+
+import { HelperError } from "./helper";
 
 export const LIMITED_FIRST_MS = 30 * 60_000;
 export const LIMITED_MAX_MS = 6 * 60 * 60_000;

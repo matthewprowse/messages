@@ -1,3 +1,8 @@
+// Every address book card becomes a contact in Messages, so the people you know are in Contacts with
+// their full saved names before they ever write. A card that matches one person updates them (the saved
+// name wins); a card that matches nobody makes a new contact; a card that matches several people is left
+// to the contact linker, which merges or suggests merging them. Cards that are you are never imported.
+
 import type { Json } from "@messages/db";
 import { db, must } from "../db";
 import { errorCode, log } from "../log";
@@ -8,11 +13,6 @@ import { companyDomain, companyNameForDomain } from "@messages/email-text/compan
 import { keysFor, sealAddress, sealDomain } from "../vault";
 import type { Card } from "./cards";
 import { importRows, type Identity } from "./import-plan";
-
-// Every address book card becomes a contact in Messages, so the people you know are in Contacts with
-// their full saved names before they ever write. A card that matches one person updates them (the saved
-// name wins); a card that matches nobody makes a new contact; a card that matches several people is left
-// to the contact linker, which merges or suggests merging them. Cards that are you are never imported.
 
 /** Imports the cards. Returns how many contacts were created, so the caller knows to reload identities. Never throws. */
 export async function importCards(account: { id: string; user_id: string }, cards: Card[], identities: Identity[]): Promise<number> {

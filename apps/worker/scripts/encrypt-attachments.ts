@@ -1,8 +1,3 @@
-import { allRows, db, must } from "../src/db";
-import { planOpen, planSeal } from "../src/backfill/files";
-import { ATTACHMENTS_BUCKET, storedType, uploadObject } from "../src/storage";
-import { keysFor } from "../src/vault";
-
 // One-off: seals the attachment files stored before the workers sealed them (email, WhatsApp, Instagram), and fills in
 // attachments.content_hash (an HMAC of the file under the user's index key) so the same file is stored once from now on.
 // Or, with --decrypt, puts the plain bytes back.
@@ -18,6 +13,11 @@ import { keysFor } from "../src/vault";
 // closed, or accept that a file may fail to preview for the moment between the upload and the flag. Files that several
 // rows share (the same path) are done once. It does not merge existing duplicates; it only sets their hashes. Prints
 // counts and byte totals only, never a name.
+
+import { allRows, db, must } from "../src/db";
+import { planOpen, planSeal } from "../src/backfill/files";
+import { ATTACHMENTS_BUCKET, storedType, uploadObject } from "../src/storage";
+import { keysFor } from "../src/vault";
 
 const args = process.argv.slice(2);
 const decrypt = args.includes("--decrypt");

@@ -1,5 +1,9 @@
 "use client";
 
+// 5. A practice reply, in a copy of the real reply box: tap a choice, say what to say, or write it yourself
+// and let Konva tidy it, then adjust the tone. MOCK: the drafts are canned or built from what you type;
+// the real ones come from the AI worker in your voice. Nothing here is ever sent.
+
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, CircleCheck, Circle } from "lucide-react";
@@ -14,10 +18,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { StepFrame, useSetup } from "./setup-context";
-
-// 5. A practice reply, in a copy of the real reply box: tap a choice, say what to say, or write it yourself
-// and let Konva tidy it, then adjust the tone. MOCK: the drafts are canned or built from what you type;
-// the real ones come from the AI worker in your voice. Nothing here is ever sent.
 
 type Way = "choice" | "said" | "own" | "adjust";
 
@@ -100,7 +100,7 @@ export function DraftStep() {
             {!drafted && !working && (
               <div className="flex flex-wrap gap-2" aria-label="Choices">
                 {msg.choices.map((c) => (
-                  <Button key={c.label} variant="outline" size="sm" onClick={() => write(c.draft, "choice")}>{c.label}</Button>
+                  <Button key={c.label} variant="secondary" onClick={() => write(c.draft, "choice")}>{c.label}</Button>
                 ))}
               </div>
             )}
@@ -109,7 +109,7 @@ export function DraftStep() {
               <Button type="submit" variant="secondary" size="sm" disabled={working || !said.trim()}>{drafted ? "Redraft" : "Draft"}</Button>
               {text.trim() && !working && (
                 <DropdownMenu>
-                  <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="sm">Adjust <ChevronDown /></Button></DropdownMenuTrigger>
+                  <DropdownMenuTrigger asChild><Button type="button" variant="secondary">Adjust <ChevronDown /></Button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {TONES.map((t) => <DropdownMenuItem key={t.key} onSelect={() => write(mockAdjust(text, t.key), "adjust")}>{t.label}</DropdownMenuItem>)}
                   </DropdownMenuContent>

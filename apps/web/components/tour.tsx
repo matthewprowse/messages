@@ -1,15 +1,15 @@
 "use client";
 
+// The tour after setup: a card over the app that takes you page by page, opening each one behind it and
+// marking where it lives in the navigation (the rail, or the bottom bar on phones). The page stays usable,
+// so you can try things as you go. Start Tour in Settings, General, runs it again.
+
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { track } from "@/lib/analytics";
 import { saveOnboarding, useOnboardingMeta } from "@/lib/onboarding";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-
-// The tour after setup: a card over the app that takes you page by page, opening each one behind it and
-// marking where it lives in the navigation (the rail, or the bottom bar on phones). The page stays usable,
-// so you can try things as you go. Start Tour in Settings, General, runs it again.
 
 interface Stop {
   id: string;
@@ -178,7 +178,7 @@ export function AppTour() {
       <div className="flex items-center justify-between gap-2 rounded-b-xl border-t bg-muted/50 px-5 py-3">
         <Button variant="ghost" size="sm" onClick={() => end("skipped")}>{last ? "Close" : "End Tour"}</Button>
         <div className="flex gap-2">
-          {index > 0 && <Button variant="outline" size="sm" onClick={() => setIndex(index - 1)}>Back</Button>}
+          {index > 0 && <Button variant="ghost" onClick={() => setIndex(index - 1)}>Back</Button>}
           <Button size="sm" autoFocus onClick={next}>{last ? "Done" : "Next"}</Button>
         </div>
       </div>

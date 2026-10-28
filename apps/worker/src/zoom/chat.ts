@@ -1,8 +1,3 @@
-import type { Json } from "@messages/db";
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { errorCode, log } from "../log";
-import { ZoomApiError, type ZoomApi } from "./client";
-
 // Zoom Team Chat, 1:1 and group chats, as conversations on channel 'zoom'. There is no public endpoint for
 // Zoom's webhooks, so this polls: the chat sessions with a message since the last poll, then the messages in
 // each. Each message is stored through public.ingest_zoom_chat, which files it like ingest_whatsapp does (one
@@ -11,6 +6,11 @@ import { ZoomApiError, type ZoomApi } from "./client";
 // A 1:1 chat is keyed by the other person's email (or Zoom ID when there is none), a group chat by its channel
 // ID; sending uses the same value as to_contact or to_channel. The database and sealing come in through
 // interfaces, so the mapping and the sync can be unit tested on recorded Zoom replies (chat.test.ts).
+
+import type { Json } from "@messages/db";
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { errorCode, log } from "../log";
+import { ZoomApiError, type ZoomApi } from "./client";
 
 const PAGE_SIZE = 50;
 /** Each poll reads a little further back than the last one, so a message stamped just before it is not missed. */

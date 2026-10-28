@@ -1,3 +1,6 @@
+// Carries out a queued unsubscribe for one sender, using the pure parsing in unsubscribe.ts and the account's own connector for the
+// mailto route. Updates the unsubscribes row and marks the sender's conversations as junk.
+
 import type { Tables } from "@messages/db";
 import { allRows, db, must } from "../db";
 import { errorCode, log } from "../log";

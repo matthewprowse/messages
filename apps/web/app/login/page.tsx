@@ -1,5 +1,8 @@
 "use client";
 
+// One page to sign in and to sign up. No password to make up: Google, or a code sent to your email (the
+// email's link works too). An account with a password set can still use it.
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -23,8 +26,6 @@ function pendingInvite(): string | null {
   }
 }
 
-// One page to sign in and to sign up. No password to make up: Google, or a code sent to your email (the
-// email's link works too). An account with a password set can still use it.
 export default function LoginPage() {
   const router = useRouter();
   const { session } = useAuth();
@@ -103,7 +104,7 @@ export default function LoginPage() {
 
         {mode !== "code" && (
           <>
-            <Button type="button" variant="outline" className="w-full" disabled={busy} onClick={google}>
+            <Button type="button" variant="secondary" className="w-full" disabled={busy} onClick={google}>
               <GoogleLogo /> Continue With Google
             </Button>
             <FieldSeparator>Or</FieldSeparator>

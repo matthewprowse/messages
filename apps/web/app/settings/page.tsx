@@ -1,12 +1,13 @@
 "use client";
 
+// On a phone this is the list of sections (drawn by the layout). From tablet width up the list is always beside a
+// section, so the first one opens straight away.
+
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Settings2 } from "lucide-react";
 import { EmptyState } from "@/components/primitives";
 
-// On a phone this is the list of sections (drawn by the layout). From tablet width up the list is always beside a
-// section, so the first one opens straight away.
 export default function SettingsIndex() {
   const router = useRouter();
   useEffect(() => {

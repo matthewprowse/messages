@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Daily Brief: when it is written, the voice and the speed, with a sample of each voice.
+
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { toast } from "sonner";
@@ -49,7 +51,7 @@ export function BriefSection() {
           <Input type="time" value={settings?.time ?? "07:00"} disabled={!settings} onChange={(e) => e.target.value && void save({ time: e.target.value })} className="w-28" aria-label="Brief Time" />
         </SettingsRow>
         <SettingsRow title="Voice" description="Used from the next brief. Play a sample to hear it.">
-          <Button variant="outline" size="icon" disabled={!settings} onClick={playSample} aria-label={sampling ? "Stop Sample" : "Play Sample"}>
+          <Button variant="secondary" size="icon" disabled={!settings} onClick={playSample} aria-label={sampling ? "Stop Sample" : "Play Sample"}>
             {sampling ? <Pause /> : <Play />}
           </Button>
           <Select value={settings?.voice} disabled={!settings} onValueChange={(voice) => { sample.current?.pause(); void save({ voice }); }}>

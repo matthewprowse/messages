@@ -1,10 +1,10 @@
-import { blindIndex, teamBlindIndex, type TeamKeys, type UserKeys } from "./index";
-
 // What a blind index is taken of, for addresses (encryption stage 2). The same address always gives the same
 // token, however it was written, so the database can still match a sender to a contact, a reply to its
 // conversation and a person to their company without holding any of them. Each kind is prefixed, so an
 // email, a number and a domain never share a token. apps/ai/ai/crypto.py has the same rules: the shared
 // vectors check both.
+
+import { blindIndex, teamBlindIndex, type TeamKeys, type UserKeys } from "./index";
 
 /** Who someone is: an email address, a phone number in E.164, or a WhatsApp lid ("<digits>@lid"). */
 export function addressKey(value: string): string {

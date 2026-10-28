@@ -1,3 +1,6 @@
+// Tests for caldav/ical.ts. Pin down time and duration parsing, how an iCloud event is stored like a Google one
+// (organizer, occurrence ids, all-day, cancelled), line unfolding and meeting link detection.
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { icsDuration, icsTimestamp, meetingLink, parseEvents, storedIcsEvent } from "./ical";

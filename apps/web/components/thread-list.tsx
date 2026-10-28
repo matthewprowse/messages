@@ -1,20 +1,21 @@
 "use client";
 
+// The Inbox conversation list: rows with hover and swipe actions, selection and its bar, and ThreadRow, which the Summary list reuses.
+
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { track } from "@/lib/analytics";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Archive, Check, ExternalLink, Inbox as InboxIcon, Mail, MailCheck, MailX, OctagonAlert, Pin, RefreshCw, Search, Trash2, X, type LucideIcon } from "lucide-react";
+import { Archive, Check, ExternalLink, Inbox as InboxIcon, Mail, MailCheck, MailX, OctagonAlert, Pin, RefreshCw, Trash2, X, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import type { Contact, ListFilter, Thread, Unsubscribe, View } from "@/lib/types";
 import { niceName, relTime } from "@/lib/format";
+import { PaneControls, PaneHeader, PaneSelect, SearchBand, ViewButtons } from "@/components/pane";
 import { filtersForView, nextLimit, PAGE_SIZE, toggleSelection, type ShortcutAction } from "@/lib/selection";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -82,52 +83,18 @@ function useListState() {
   return { view, filter, query: query.toString() };
 }
 
-/** True while a sideways scroller has more content past its right edge. */
-function useMoreToRight<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
-  const [more, setMore] = useState(false);
-  const update = useCallback(() => {
-    const el = ref.current;
-    if (el) setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
-  }, []);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [update]);
-  return { ref, more, onScroll: update };
-}
-
 function ListControls({ view, filter }: { view: View; filter: ListFilter }) {
   const router = useRouter();
-  const views = useMoreToRight<HTMLElement>();
   return (
-    <div className="flex items-center justify-between gap-3">
-      {/* The views scroll sideways when the column is too narrow, fading out beside the filter until the end. */}
-      <div className="relative min-w-0 flex-1">
-        <nav ref={views.ref} onScroll={views.onScroll} aria-label="View" className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {VIEWS.map((v) => (
-            <Button key={v.key} asChild variant={view === v.key ? "secondary" : "ghost"} className={cn("shrink-0 px-2", view !== v.key && "text-muted-foreground")}>
-              <Link href={listHref(v.key, filter)} replace aria-current={view === v.key ? "page" : undefined}>{v.label}</Link>
-            </Button>
-          ))}
-        </nav>
-        {views.more && <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-linear-to-r from-transparent to-background" />}
-      </div>
-      <Select value={filter === "none" ? "" : filter} onValueChange={(f) => router.replace(listHref(view, f as ListFilter))}>
-        <SelectTrigger aria-label="Filter" className="w-36 data-[size=default]:h-8">
-          <SelectValue placeholder="Filter" />
-        </SelectTrigger>
-        <SelectContent align="end">
-          {FILTER_OPTIONS.filter((o) => filtersForView(view).includes(o.key)).map((o) => (
-            <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+    <PaneControls>
+      <ViewButtons label="View" value={view} items={VIEWS} hrefFor={(v) => listHref(v, filter)} />
+      <PaneSelect
+        label="Filter"
+        value={filter === "none" ? "" : filter}
+        onChange={(f) => router.replace(listHref(view, f as ListFilter))}
+        options={FILTER_OPTIONS.filter((o) => filtersForView(view).includes(o.key)).map((o) => ({ value: o.key, label: o.label }))}
+      />
+    </PaneControls>
   );
 }
 
@@ -156,7 +123,7 @@ export function useRowActions() {
   }, [all, archive, trash, setJunk, markRead, pin]);
 }
 
-function RowButton({ label, icon: Icon, onClick, variant = "ghost", className }: { label: string; icon: LucideIcon; onClick: () => void; variant?: "ghost" | "outline"; className?: string }) {
+function RowButton({ label, icon: Icon, onClick, variant = "ghost", className }: { label: string; icon: LucideIcon; onClick: () => void; variant?: "ghost" | "secondary"; className?: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -368,7 +335,7 @@ export const ThreadRow = memo(function ThreadRow({
               {ROW_ACTIONS(thread).map((a) => (
                 <RowButton
                   key={a.action}
-                  variant="outline"
+                  variant="secondary"
                   label={a.label}
                   icon={a.icon}
                   onClick={() => act(a.action)}
@@ -615,7 +582,7 @@ function SubscriptionRow({ sender, statuses, query, open, checked, selecting, pi
       )}
       {actions.length > 0 && (
         <div className="absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex group-focus-within/row:flex pointer-coarse:flex">
-          {actions.map((a) => <RowButton key={a.label} variant="outline" label={a.label} icon={a.icon} onClick={a.onClick} />)}
+          {actions.map((a) => <RowButton key={a.label} variant="secondary" label={a.label} icon={a.icon} onClick={a.onClick} />)}
         </div>
       )}
     </div>
@@ -745,44 +712,32 @@ export function ThreadList() {
     // The header sits above the scroll area, so the rows and their scrollbar both start below it.
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0">
-        <div className="space-y-3 border-b p-3">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="flex h-8 items-center text-lg font-medium">Inbox</h1>
+        <PaneHeader
+          title="Inbox"
+          action={
             <Button variant={selectMode ? "secondary" : "ghost"} aria-pressed={selectMode} onClick={() => (selectMode ? endSelecting() : setSelectMode(true))}>
               {selectMode ? "Done" : "Select"}
             </Button>
-          </div>
+          }
+        >
           {view === "subscriptions" && selectingSubs ? (
-            <BulkBar allPicked={subs.pickable.length > 0 && subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])} onDone={endSelecting}>
-              <RowButton label="Unsubscribe" icon={MailX} onClick={() => subs.run(subs.picked)} />
-            </BulkBar>
-          ) : selectingRows && view !== "subscriptions" ? (
-            <SelectionBar
-              allPicked={order.length > 0 && picked.length === order.length}
-              anyUnread={threads.some((t) => t.unread && pickedSet.has(t.id))}
-              onAll={() => setChecked(order)}
-              onClear={() => setChecked([])}
-              onDone={endSelecting}
-              onAction={(action) => run(picked, action)}
-            />
-          ) : (
-            <ListControls view={view} filter={filter} />
-          )}
-        </div>
-        <div className="border-b p-3">
-          <div className="relative">
-            <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="search"
-              className="pl-8"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Escape" && search) { e.stopPropagation(); setSearch(""); } }}
-              placeholder="Search Conversations"
-              aria-label="Search Conversations"
-            />
-          </div>
-        </div>
+          <BulkBar allPicked={subs.pickable.length > 0 && subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])} onDone={endSelecting}>
+            <RowButton label="Unsubscribe" icon={MailX} onClick={() => subs.run(subs.picked)} />
+          </BulkBar>
+        ) : selectingRows && view !== "subscriptions" ? (
+          <SelectionBar
+            allPicked={order.length > 0 && picked.length === order.length}
+            anyUnread={threads.some((t) => t.unread && pickedSet.has(t.id))}
+            onAll={() => setChecked(order)}
+            onClear={() => setChecked([])}
+            onDone={endSelecting}
+            onAction={(action) => run(picked, action)}
+          />
+        ) : (
+          <ListControls view={view} filter={filter} />
+        )}
+        </PaneHeader>
+        <SearchBand value={search} onChange={setSearch} placeholder="Search Conversations" />
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3">

@@ -1,5 +1,7 @@
 "use client";
 
+// Connects iCloud Reminders in Settings. Apple's sign-in steps (code or go-ahead) are handled here as the connector asks for them.
+
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { track } from "@/lib/analytics";
@@ -116,7 +118,7 @@ export function ICloudRemindersConnect() {
           title={<>iCloud Reminders <Badge variant="secondary">{status === "syncing" ? "Importing" : "Connected"}</Badge></>}
           description={status === "syncing" ? "Your reminders are importing." : "Your reminders appear in Calendar on the day they are due. Changes reach Konva within a few minutes."}
         >
-          <Button variant="outline" size="sm" onClick={() => setAgain(true)}>Sign In Again</Button>
+          <Button variant="secondary" onClick={() => setAgain(true)}>Sign In Again</Button>
         </SettingsRow>
       </SettingsRows>
     );
@@ -156,7 +158,7 @@ export function ICloudRemindersConnect() {
           {error && <FieldError>{error}</FieldError>}
           <div className="flex flex-wrap gap-2">
             <Button type="submit" disabled={busy || sent || code.trim() === ""}>{sent ? "Checking…" : "Submit Code"}</Button>
-            {!text && <Button type="button" variant="outline" onClick={() => void answer({ action: "sms" })} disabled={busy || sent}>Send a Text Instead</Button>}
+            {!text && <Button type="button" variant="secondary" onClick={() => void answer({ action: "sms" })} disabled={busy || sent}>Send a Text Instead</Button>}
           </div>
         </FieldGroup>
       </form>
@@ -198,7 +200,7 @@ export function ICloudRemindersConnect() {
         {error && <FieldError>{error}</FieldError>}
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={busy}>{busy ? "Connecting…" : reconnecting ? "Reconnect iCloud Reminders" : "Connect iCloud Reminders"}</Button>
-          {again && <Button type="button" variant="outline" onClick={() => setAgain(false)}>Cancel</Button>}
+          {again && <Button type="button" variant="ghost" onClick={() => setAgain(false)}>Cancel</Button>}
         </div>
       </FieldGroup>
     </form>

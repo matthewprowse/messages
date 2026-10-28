@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 // MOCK DATA for onboarding, until the workers report real numbers and the AI worker writes the first
 // profile during setup. Everything the setup dialog shows about "what Konva found" comes from here, so
 // swapping in the real thing touches only this file. Nothing here is saved unless the user keeps it.
+
+import { useEffect, useState } from "react";
 
 // ---------------------------------------------------------------------------------------------------------
 // The first import

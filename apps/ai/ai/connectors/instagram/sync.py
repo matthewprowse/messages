@@ -9,6 +9,7 @@ Instagram call happens on this thread, one at a time, with instagrapi's pause be
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import tempfile
@@ -66,6 +67,15 @@ BAD_USERNAME = "Enter an Instagram username, like ana.m."
 NO_SUCH_USER = "No Instagram account has that username."
 LOOKUP_FAILED = "Could not look up that Instagram username. Nothing was sent. Try again in a little while."
 OWN_USERNAME = "That is your own Instagram account."
+FIRST_MESSAGES_PER_DAY = 5  # new conversations started per account per rolling 24 hours; INSTAGRAM_FIRST_MESSAGES_PER_DAY overrides
+DAILY_LIMIT = "Instagram limits first messages to {cap} a day to protect your account. Try again tomorrow."
+
+
+def first_message_cap() -> int:
+    try:
+        return max(0, int(os.environ.get("INSTAGRAM_FIRST_MESSAGES_PER_DAY") or FIRST_MESSAGES_PER_DAY))
+    except ValueError:
+        return FIRST_MESSAGES_PER_DAY
 
 
 def username_of(value: str) -> str:
@@ -112,6 +122,7 @@ class AccountSync:
         self.saved_at = 0.0
         self.paused_until = 0.0
         self.connected = False
+        self.seen_marked: dict[str, int] = {}  # thread id -> how far the others had seen it when last recorded, this run
         self.photo_checked: dict[str, float] = {}  # person pk -> when their photo was last looked at, this run
 
     # -- starting ---------------------------------------------------------------------------------------
@@ -260,6 +271,7 @@ class AccountSync:
         latest = newest or 0
         read_here: list[str] = []
         for t in threads:
+            self.record_seen(sealer, t)
             if not t.items:
                 continue
             latest = max(latest, t.items[0].timestamp_us)
@@ -279,6 +291,17 @@ class AccountSync:
         if stored:
             log.info("instagram messages stored", account=self.id, folder=scope or "primary", threads=len(threads), inserted=stored)
         return stored
+
+    def record_seen(self, sealer: Any, t: Thread) -> None:
+        """Shows your messages as seen once the others have seen the thread (in a group, all of them have).
+        Only a time newer than the last one recorded is sent, and a failure is logged and tried again next poll."""
+        if not t.others_seen_us or t.others_seen_us <= self.seen_marked.get(t.id, 0):
+            return
+        try:
+            self.store.mark_seen(self.id, sealer, t.id, t.others_seen_us)
+            self.seen_marked[t.id] = t.others_seen_us
+        except Exception as err:
+            log.warn("instagram seen failed", account=self.id, code=log.code_of(err))
 
     def older(self, client: Any, t: Thread, newest: int) -> None:
         """More of a thread than the inbox showed, back to the last poll, a page at a time."""
@@ -487,6 +510,10 @@ class AccountSync:
             return
         if username == self.username.lower():
             self.store.fail(row["id"], OWN_USERNAME)
+            return
+        cap = first_message_cap()
+        if self.store.first_messages_since(self.id, datetime.now(timezone.utc) - timedelta(hours=24)) >= cap:
+            self.store.fail(row["id"], DAILY_LIMIT.format(cap=cap))  # nothing is looked up or sent, and a failed row is not retried
             return
         try:
             # The private API's own lookup, not the public web one that blocks servers quickly.

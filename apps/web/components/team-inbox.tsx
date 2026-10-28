@@ -1,5 +1,9 @@
 "use client";
 
+// What the team puts in your Inbox (step 5 of Teams), above your own conversations: chats assigned to you, with the name of
+// the agent whose chat each is, and the shared inboxes you use. They open read-only in /inbox/shared. Your own
+// conversations are not here and nothing of theirs is mixed into your own list: these are a separate group.
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
@@ -12,10 +16,6 @@ import { cn, withQuery } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-// What the team puts in your Inbox (step 5 of Teams), above your own conversations: chats assigned to you, with the name of
-// the agent whose chat each is, and the shared inboxes you use. They open read-only in /inbox/shared. Your own
-// conversations are not here and nothing of theirs is mixed into your own list: these are a separate group.
 
 const SHOWN = 5;
 

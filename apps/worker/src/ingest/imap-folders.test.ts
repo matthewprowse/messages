@@ -1,3 +1,6 @@
+// Tests for ingest/imap-folders.ts. Pin down how sent, archive, trash and junk folders are picked from a server's listing:
+// special-use flags first, then names, never an unopenable parent, never one folder for two roles.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pickFolders, type ListedFolder } from "./imap-folders";

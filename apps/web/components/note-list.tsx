@@ -1,5 +1,7 @@
 "use client";
 
+// The Notes list: search, pinned notes first then newest edits, and the delete dialog.
+
 import { PaneHeader, SearchBand } from "@/components/pane";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -25,6 +27,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 // Laid out like the Conversations list: the title, then the search where the views are and New Note
 // where the filter is, then the notes, pinned first and then the most recently edited.
 
+/** A note's title, or New Note while it is blank. */
 export const noteTitle = (n: Pick<Note, "title">) => n.title.trim() || "New Note";
 
 // The row's text fades out under its two hover buttons, as on conversation rows.
@@ -34,7 +37,7 @@ function RowButton({ label, icon: Icon, onClick }: { label: string; icon: Lucide
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="outline" size="icon" aria-label={label} onClick={onClick}><Icon /></Button>
+        <Button variant="secondary" size="icon" aria-label={label} onClick={onClick}><Icon /></Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

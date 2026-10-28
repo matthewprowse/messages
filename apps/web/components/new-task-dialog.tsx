@@ -1,5 +1,7 @@
 "use client";
 
+// The New Task dialog, which also edits a task. The task shows at once and the worker saves it to the task provider.
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDownIcon } from "lucide-react";

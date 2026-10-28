@@ -1,9 +1,12 @@
 "use client";
 
+// The New Email dialog, and useComposeSend, the queue-and-follow-the-outbox hook that New WhatsApp also uses.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { useApp } from "@/lib/store";
 import { MAX_RECIPIENTS, parseAddresses, sendAddressesOf } from "@/lib/send-from";
 import { attachProvider } from "@/lib/outbox-files";
@@ -66,6 +69,9 @@ export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => v
         markSubmitted(dialog);
         setOutboxId(id);
       }
+    } catch {
+      // Whatever threw, the dialog is usable again and says so.
+      toast("Could not send. Your message is still in the box.");
     } finally {
       setQueueing(false);
     }

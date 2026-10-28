@@ -1,14 +1,14 @@
+// The LinkedIn helper (apps/linkedin): a separate Go program, under the AGPL, that speaks to LinkedIn for one
+// account through mautrix-linkedin's linkedingo. The worker runs one per account and talks to it with JSON
+// lines over stdin and stdout; apps/linkedin/README.md is the protocol. Nothing of Konva is linked into it,
+// and nothing it writes is logged here: its stderr is not even read.
+
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { isPublicAddress, publicAddress } from "@messages/mail-servers/net";
-
-// The LinkedIn helper (apps/linkedin): a separate Go program, under the AGPL, that speaks to LinkedIn for one
-// account through mautrix-linkedin's linkedingo. The worker runs one per account and talks to it with JSON
-// lines over stdin and stdout; apps/linkedin/README.md is the protocol. Nothing of Konva is linked into it,
-// and nothing it writes is logged here: its stderr is not even read.
 
 export interface LinkedInPerson {
   /** The last part of the URN: a member's profile ID, or a company's. */
@@ -81,6 +81,8 @@ export type HelperEvent =
   | { event: "reconnecting" }
   | { event: "message"; message: LinkedInMessage }
   | { event: "conversation"; conversation: LinkedInConversation }
+  /** Someone (by their profile ID) has seen a conversation up to a time, Unix milliseconds. It can be you, on another device. */
+  | { event: "seen"; conversationUrn: string; by: string; at: number }
   | { event: "bad_credentials"; error?: { kind: ErrorKind } }
   | { event: "failed"; error?: { kind: ErrorKind; status?: number } };
 

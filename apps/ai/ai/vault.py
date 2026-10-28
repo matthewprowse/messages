@@ -22,8 +22,13 @@ from .crypto import KeySet, TeamKeys, UserKeys, decrypt_any, decrypt_bytes, deri
 from .keys import KEY_CACHE_S, unwrap, unwrap_team_ring
 
 MISSING_RECHECK_S = 60
+UNWRAP_RETRY_S = 5  # a key that exists but could not be unwrapped (a KMS blip) is tried again this soon
 WORKSPACES_TTL_S = 60
 TEAM_RECHECK_S = 30  # a workspace's key versions are read again this often, so a rotation is picked up promptly
+
+
+class KeyUnavailable(Exception):
+    """The user has a key but it cannot be opened right now, so nothing can be sealed (and nothing may be stored plain)."""
 
 
 class Vault:
@@ -34,6 +39,7 @@ class Vault:
         self._lock = threading.Lock()
         self._keys: dict[str, tuple[float, UserKeys]] = {}  # user_id -> (valid until, keys)
         self._credential_keys: dict[str, tuple[float, bytes]] = {}
+        self._unwrap_failed: dict[str, float] = {}  # user_id -> until when a key that exists but would not unwrap is not retried
         self._missing: dict[str, float] = {}  # user_id -> monotonic time to look for their key again
         self._team_keys: dict[str, tuple[float, list[TeamKeys]]] = {}  # workspace_id -> (valid until, versions newest first)
         self._team_missing: dict[str, float] = {}  # workspace_id -> the same, for a workspace's key
@@ -46,11 +52,12 @@ class Vault:
             hit = self._keys.get(user_id)
             if hit and hit[0] > time.monotonic():
                 return hit[1]
-            if time.monotonic() < self._missing.get(user_id, 0.0):
+            if time.monotonic() < self._missing.get(user_id, 0.0) or time.monotonic() < self._unwrap_failed.get(user_id, 0.0):
                 return None
         row = self.db.first("user_keys", {"select": "wrapped_key,wrapped_by", "user_id": f"eq.{user_id}"})
         keys = None
         cred = None
+        failed = False
         if row:
             try:
                 raw = unwrap(row, self.master_key_b64, user_id)
@@ -59,14 +66,19 @@ class Vault:
             except Exception as err:
                 # A missing or wrong KEY_WRAPPING_KEY or KMS setup, or a wrapper this worker does not know.
                 log.warn("user key could not be unwrapped", user=user_id, code=type(err).__name__)
+                failed = True
         with self._lock:
-            if keys is None:
+            if failed:
+                # Not "no key": a key exists, so nothing may be written in plain text for them (seal). Looked at again soon.
+                self._unwrap_failed[user_id] = time.monotonic() + UNWRAP_RETRY_S
+            elif keys is None:
                 self._missing[user_id] = time.monotonic() + MISSING_RECHECK_S
             else:
                 until = time.monotonic() + KEY_CACHE_S
                 self._keys[user_id] = (until, keys)
                 self._credential_keys[user_id] = (until, cred)  # type: ignore[arg-type]
                 self._missing.pop(user_id, None)
+                self._unwrap_failed.pop(user_id, None)
         return keys
 
     def credential_key_for(self, user_id: str) -> bytes | None:
@@ -183,4 +195,8 @@ class Vault:
         if value is None or not self.encrypt:
             return value
         keys = self.keys_for(user_id)
-        return value if keys is None else encrypt_field(keys, field, value)
+        if keys is None:
+            if self._unwrap_failed.get(user_id, 0.0) > 0.0:
+                raise KeyUnavailable("user key exists but could not be unwrapped")  # never fall back to plain text for them
+            return value
+        return encrypt_field(keys, field, value)

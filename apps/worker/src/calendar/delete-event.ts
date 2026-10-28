@@ -1,8 +1,8 @@
-import type { Tables } from "@messages/db";
-import { db, must, retryWrite } from "../db";
-
 // Deleting an event from the app: calendar_deletes rows are queued by the app, claimed here, carried out by
 // the account's connector, and settled once the stored copy is gone too.
+
+import type { Tables } from "@messages/db";
+import { db, must, retryWrite } from "../db";
 
 export type CalendarDeleteRow = Tables<"calendar_deletes">;
 export type StoredCalendarEvent = Tables<"calendar_events">;
@@ -16,6 +16,7 @@ export async function claimDelete(id: string): Promise<boolean> {
   return rows.length === 1;
 }
 
+/** Marks a delete as failed with a reason shown to the user. Does nothing if it already finished. */
 export async function failDelete(id: string, reason: string) {
   must(
     await db.from("calendar_deletes").update({ status: "failed", error: reason, done_at: new Date().toISOString() }).eq("id", id).in("status", ["queued", "deleting"]),

@@ -1,3 +1,6 @@
+// Tests for the owner analytics maths in stats.ts: median and percentile, dialog abandonment, junk false positives, draft edits,
+// summary misses, cost and speed by feature, and what counts as an active person.
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ai, usage, median, percentile, type Row } from "./stats";

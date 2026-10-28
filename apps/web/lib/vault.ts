@@ -1,14 +1,14 @@
 "use client";
 
-import { flagOn } from "@messages/crypto/flags";
-import { decryptAny, deriveTeamKeys, deriveUserKeys, encryptField, isCiphertext, type TeamKeys, type UserKeys } from "@messages/crypto";
-import type { Field } from "@messages/crypto/fields";
-import { supabase } from "./supabase";
-
 // The signed-in user's keys, fetched once from /api/keys and held in memory as WebCrypto keys that cannot
 // be exported. Nothing is written to storage: signing out or closing the tab drops them. A user in a team
 // gets the team's keys in the same reply, only while they are an active member, so a removed member's next
 // load has none.
+
+import { flagOn } from "@messages/crypto/flags";
+import { decryptAny, deriveTeamKeys, deriveUserKeys, encryptField, isCiphertext, type TeamKeys, type UserKeys } from "@messages/crypto";
+import type { Field } from "@messages/crypto/fields";
+import { supabase } from "./supabase";
 
 // teamOlds: the team's earlier key versions, newest first. A value sealed before the team's last rotation (a member
 // was removed) opens with one of them until the worker has re-sealed it under the current key.

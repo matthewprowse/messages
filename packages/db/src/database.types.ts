@@ -2158,6 +2158,7 @@ export type Database = {
         Row: {
           about: string | null
           auto_draft_top: boolean
+          avatar_path: string | null
           brief_speed: number
           brief_voice: string
           briefing_time: string
@@ -2180,6 +2181,7 @@ export type Database = {
         Insert: {
           about?: string | null
           auto_draft_top?: boolean
+          avatar_path?: string | null
           brief_speed?: number
           brief_voice?: string
           briefing_time?: string
@@ -2202,6 +2204,7 @@ export type Database = {
         Update: {
           about?: string | null
           auto_draft_top?: boolean
+          avatar_path?: string | null
           brief_speed?: number
           brief_voice?: string
           briefing_time?: string
@@ -2879,6 +2882,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      updates: {
+        Row: {
+          changes: Json
+          created_at: string
+          id: string
+          published: boolean
+          released_on: string
+          summary: string | null
+          title: string
+          updated_at: string
+          version: string | null
+        }
+        Insert: {
+          changes?: Json
+          created_at?: string
+          id?: string
+          published?: boolean
+          released_on?: string
+          summary?: string | null
+          title: string
+          updated_at?: string
+          version?: string | null
+        }
+        Update: {
+          changes?: Json
+          created_at?: string
+          id?: string
+          published?: boolean
+          released_on?: string
+          summary?: string | null
+          title?: string
+          updated_at?: string
+          version?: string | null
+        }
+        Relationships: []
       }
       user_keys: {
         Row: {
@@ -4005,6 +4044,10 @@ export type Database = {
         Returns: string
       }
       mail_domain_root: { Args: { p_domain: string }; Returns: string }
+      mark_seen_up_to: {
+        Args: { p_account_id: string; p_seen_at: string; p_thread_index?: string; p_thread_provider_id: string }
+        Returns: number
+      }
       merge_contacts: {
         Args: {
           p_automatic?: boolean

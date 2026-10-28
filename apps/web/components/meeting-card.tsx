@@ -1,5 +1,9 @@
 "use client";
 
+// A meeting from Teams, Zoom or Google Meet as a card: where and when it was, the AI's summary and action
+// items, and its transcript in a dialog with search. Shown among a conversation's messages, on a contact's
+// page and on the calendar event it was.
+
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Video } from "lucide-react";
 import { track } from "@/lib/analytics";
@@ -14,10 +18,6 @@ import { providerLabel } from "@/components/primitives";
 import { ProviderLogo } from "@/components/provider-logo";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { useMeetings } from "@/components/meetings-data";
-
-// A meeting from Teams, Zoom or Google Meet as a card: where and when it was, the AI's summary and action
-// items, and its transcript in a dialog with search. Shown among a conversation's messages, on a contact's
-// page and on the calendar event it was.
 
 /** Where a card is shown, for the analytics. */
 export type MeetingPlace = "conversation" | "contact" | "calendar";
@@ -85,7 +85,7 @@ export const MeetingCard = memo(function MeetingCard({ meeting: m, place, classN
       )}
 
       {hasTranscript(m) && (
-        <Button variant="outline" size="sm" className="self-start" onClick={() => setReading(true)}>View Transcript</Button>
+        <Button variant="secondary" className="self-start" onClick={() => setReading(true)}>View Transcript</Button>
       )}
       <TranscriptDialog meeting={m} place={place} open={reading} onOpenChange={setReading} />
     </article>
@@ -186,7 +186,7 @@ function TranscriptDialog({ meeting: m, place, open, onOpenChange }: { meeting: 
           </p>
         )}
         <div className={DIALOG_BUTTONS}>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>Close</Button>
         </div>
       </DialogContent>
     </Dialog>

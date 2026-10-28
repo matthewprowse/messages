@@ -1,5 +1,7 @@
 "use client";
 
+// A company's page under Contacts: its summary, details, people and conversations. Renaming happens here and is reported to the list.
+
 import { useContext, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";
@@ -64,7 +66,7 @@ export function CompanyView({ company: loaded }: { company: CompanyDetail | null
   const [renaming, setRenaming] = useState(false);
 
   if (!company) {
-    return <EmptyState icon={Building2} title="Company Not Found" description="It may have been removed." action={<Button variant="outline" asChild><Link href="/contacts?view=companies">Back to Companies</Link></Button>} />;
+    return <EmptyState icon={Building2} title="Company Not Found" description="It may have been removed." action={<Button variant="secondary" asChild><Link href="/contacts?view=companies">Back to Companies</Link></Button>} />;
   }
 
   const addresses = company.people.reduce((n, p) => n + p.emails.length, 0);

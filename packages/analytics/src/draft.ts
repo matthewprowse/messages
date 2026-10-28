@@ -1,3 +1,6 @@
+// Measures what a person changed in a draft before sending it (draftEdit). Returns only counts, flags and buckets, never the words,
+// so the result can go into content-free analytics.
+
 import type { DraftEdit } from "./index";
 
 const GREETING = /^(hi|hello|hey|dear|good\s+(morning|afternoon|evening)|morning|afternoon|evening)\b/i;

@@ -1,3 +1,7 @@
+// The people in a chat, as step 4 of Teams reads them (20261101130000_team_contacts.sql): the shared client list is
+// filled from them, and the rule pass matches them against it. They are the agent's own contacts, so their names and
+// addresses are opened with the agent's key. Nothing here is ever logged.
+
 import { decryptField, isCiphertext, isTeamCiphertext } from "@messages/crypto";
 import { addressKey } from "@messages/crypto/addresses";
 import type { Field } from "@messages/crypto/fields";
@@ -5,10 +9,6 @@ import { FIELD } from "@messages/crypto/fields";
 import { companyDomain, companyNameForDomain } from "@messages/email-text/company";
 import { isRoleAddress } from "../contacts/match";
 import type { Keys } from "./reseal";
-
-// The people in a chat, as step 4 of Teams reads them (20261101130000_team_contacts.sql): the shared client list is
-// filled from them, and the rule pass matches them against it. They are the agent's own contacts, so their names and
-// addresses are opened with the agent's key. Nothing here is ever logged.
 
 /** A contact in a chat as stored: names and addresses may be sealed with the agent's key. */
 export interface Participant {

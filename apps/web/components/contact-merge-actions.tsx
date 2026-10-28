@@ -1,5 +1,8 @@
 "use client";
 
+// The ways to change who a contact is: merge with another person, split addresses off to a new one, delete, and undo an automatic merge.
+// Opened from the contact page's menu.
+
 import { useEffect, useMemo, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -14,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -60,6 +63,8 @@ function MergeWithDialog({ contact, open, onOpenChange }: { contact: ContactDeta
   return (
     <>
       <CommandDialog open={open} onOpenChange={onOpenChange} title="Merge With" description="Search for the person to merge with">
+        {/* The search box and list need a Command around them to talk to each other. */}
+        <Command>
         <CommandInput placeholder="Search People" />
         <CommandList>
           <CommandEmpty>{contacts === undefined ? "Loading people" : "No people found."}</CommandEmpty>
@@ -81,6 +86,7 @@ function MergeWithDialog({ contact, open, onOpenChange }: { contact: ContactDeta
             ))}
           </CommandGroup>
         </CommandList>
+        </Command>
       </CommandDialog>
       <MergeDialog a={contact} b={target} open={confirming} onOpenChange={setConfirming} onConfirm={(name) => merge(name)} />
     </>
@@ -275,8 +281,7 @@ export function MergedAutomatically({ contact }: { contact: ContactDetail }) {
                 <span className="truncate text-xs text-muted-foreground">{mergeReasonText(m.reason, m.providers)}, {relTime(m.createdAt)}</span>
               </div>
               <Button
-                variant="outline"
-                size="sm"
+                variant="secondary"
                 disabled={busy !== null}
                 onClick={async () => {
                   setBusy(m.id);

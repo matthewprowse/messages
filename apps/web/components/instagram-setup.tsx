@@ -1,5 +1,7 @@
 "use client";
 
+// The Instagram page under Settings, Accounts: asks which kind of account it is, then shows the matching connect flow.
+
 import { Suspense, useState } from "react";
 import { useApp } from "@/lib/store";
 import { InstagramConnect } from "@/components/instagram-connect";
@@ -18,11 +20,11 @@ function Choices({ unsure, onPick }: { unsure?: boolean; onPick: (choice: Choice
         <Button size="sm" onClick={() => onPick("professional")}>Choose</Button>
       </SettingsRow>
       <SettingsRow title="Personal" description="Sign in with your Instagram username and password.">
-        <Button size="sm" variant="outline" onClick={() => onPick("personal")}>Choose</Button>
+        <Button variant="secondary" onClick={() => onPick("personal")}>Choose</Button>
       </SettingsRow>
       {!unsure && (
         <SettingsRow title="Not Sure" description="Check in the Instagram app. It takes a minute.">
-          <Button size="sm" variant="outline" onClick={() => onPick("unsure")}>Show Me How</Button>
+          <Button variant="secondary" onClick={() => onPick("unsure")}>Show Me How</Button>
         </SettingsRow>
       )}
     </SettingsRows>

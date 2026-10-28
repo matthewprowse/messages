@@ -1,3 +1,6 @@
+// Tests for sources.ts: the pure checks and parsers behind company logo lookup (App Store publisher match, BIMI,
+// Wikidata files, Simple Icons, Wikipedia infobox). No network.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bimiLogoUrl, commonsFileUrl, currentFiles, infoboxLogo, publisherMatches, simpleIconFor } from "./sources";

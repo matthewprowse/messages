@@ -1,11 +1,12 @@
+// Instagram sends the browser back here with a code. The code is traded for a token that lasts 60 days, which is
+// stored encrypted with the account as credentials of kind "official" (the Instagram connector in apps/ai reads
+// them and renews the token before it ends). Then back to Settings, with ?connected=instagram or ?connect_error=<reason>.
+
 import { ensureProfile, openJson, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
 import { BASIC_SCOPE, InstagramError, MESSAGES_SCOPE, exchangeCode, instagramAccount, longLivedToken } from "@/lib/server/instagram";
 import { admin, appOrigin } from "@/lib/server/request";
 import { INSTAGRAM_COOKIE, INSTAGRAM_OFFICIAL_LABEL, INSTAGRAM_RETURN, type InstagramSignIn } from "../shared";
 
-// Instagram sends the browser back here with a code. The code is traded for a token that lasts 60 days, which is
-// stored encrypted with the account as credentials of kind "official" (the Instagram connector in apps/ai reads
-// them and renews the token before it ends). Then back to Settings, with ?connected=instagram or ?connect_error=<reason>.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 

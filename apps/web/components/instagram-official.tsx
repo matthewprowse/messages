@@ -1,5 +1,8 @@
 "use client";
 
+// Connects an Instagram Business or Creator account through Instagram's official sign-in, and explains a failed return in words.
+// Needs a Suspense boundary above it because it reads the address.
+
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { RefreshCw } from "lucide-react";

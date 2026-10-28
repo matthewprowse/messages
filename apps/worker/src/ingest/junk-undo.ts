@@ -1,8 +1,8 @@
-import type { db as Db } from "../db";
-
 // A conversation the AI sorted into Junk was never in the provider's spam. Taking it out of Junk only
 // moves mail that really was in spam, and undoing that (a spam action straight after) only puts that
 // mail back, so AI junk never moves mail in the provider.
+
+import type { db as Db } from "../db";
 
 /** How long after a Not Junk a spam action on the same conversation counts as its undo. */
 export const UNDO_WINDOW_MS = 2 * 60 * 1000;

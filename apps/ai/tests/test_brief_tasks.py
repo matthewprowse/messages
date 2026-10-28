@@ -1,3 +1,6 @@
+"""Tests for the task part of ai.brief: which tasks count as due today or overdue in the user's zone, how they appear in
+the prompt (cut and counted when long), and that sealed task titles are opened before use."""
+
 import unittest
 from datetime import date
 from zoneinfo import ZoneInfo

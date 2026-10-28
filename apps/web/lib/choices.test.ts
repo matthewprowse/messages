@@ -1,3 +1,6 @@
+// Tests for choices.ts: parsing the guided drafting options the AI offers, finding clashes with busy time, and picking
+// free slots to suggest.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clashes, freeSlots, otherTimeDecision, parseChoices, type Busy } from "./choices";

@@ -1,5 +1,7 @@
 "use client";
 
+// The New button in the rail and its menu of things to create. Each dialog loads on first use. Also the keyboard helpers other shortcuts use.
+
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { SquarePen } from "lucide-react";

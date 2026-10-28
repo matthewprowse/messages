@@ -1,11 +1,11 @@
-import { decryptField, decryptTeamField, encryptField, encryptTeamField, isCiphertext, isTeamCiphertext, type TeamKeys, type UserKeys } from "@messages/crypto";
-import { FIELD, type Field } from "@messages/crypto/fields";
-import type { Json } from "@messages/db";
-
 // Moving a chat's text between the agent's key (e1:) and the team's (t1:), which is all sharing a chat is. A value
 // that is already where it should be is left alone, so a job that is run again, or resumed after a crash, does only
 // the rest. The same list of columns is in public.message_needs_team_seal (20261101120000_shared_chats.sql), which
 // finds the rows that still need moving: keep the two together.
+
+import { decryptField, decryptTeamField, encryptField, encryptTeamField, isCiphertext, isTeamCiphertext, type TeamKeys, type UserKeys } from "@messages/crypto";
+import { FIELD, type Field } from "@messages/crypto/fields";
+import type { Json } from "@messages/db";
 
 export type Direction = "to_work" | "to_personal";
 

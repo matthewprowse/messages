@@ -1,3 +1,6 @@
+// Tests for packages/mail-servers/src/index.ts. Pin down provider presets and how they match a domain, autoconfig
+// parsing, the MX guess, discover() ordering with fake lookups, and which typed settings are accepted.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -287,4 +290,13 @@ test("typed settings are tidied, and only encrypted connections on the usual por
   assert.ok("error" in readSettings({ ...good, smtp: { ...good.smtp, security: "none" } }));
   assert.ok("error" in readSettings({ ...good, username: "" }));
   assert.ok("error" in readSettings(null));
+});
+
+test("discover: a domain that is not a plain host name builds no autoconfig addresses", async () => {
+  const { lookups, asked } = fakeLookups({});
+  for (const email of ["a@evil.com:8443", "a@evil.com/x", "a@evil.com?x.y", "a@evil.com#x.y"]) {
+    const found = await discover(email, lookups);
+    assert.ok("imap" in found);
+  }
+  assert.equal(asked.length, 0);
 });

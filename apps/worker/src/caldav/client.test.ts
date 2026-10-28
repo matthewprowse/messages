@@ -1,3 +1,6 @@
+// Tests for caldav/client.ts. Pin down which iCloud calendars are kept from a PROPFIND answer, that no request follows a
+// calendar to a host outside iCloud, and that a changed event file is never overwritten (If-Match).
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deleteEventFile, eventCalendars, eventsIn, getEvent, replaceEvent, type DavEvent } from "./client";

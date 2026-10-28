@@ -1,8 +1,8 @@
-import type { FolderRole } from "../ingest/store-email";
-
 // Pure helpers for Gmail's labels and change history. No I/O, so they can be unit tested.
 // Gmail has no folders: a message is "in the Inbox" while it has the INBOX label, and unread while it
 // has UNREAD. A conversation is in the Inbox while any of its messages is.
+
+import type { FolderRole } from "../ingest/store-email";
 
 /** Messages that never appear in the app: unsent drafts, spam, the bin and old Hangouts chats. */
 const HIDDEN = new Set(["DRAFT", "SPAM", "TRASH", "CHAT"]);

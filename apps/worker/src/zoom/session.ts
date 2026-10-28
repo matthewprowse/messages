@@ -1,10 +1,3 @@
-import { db, must } from "../db";
-import { env } from "../env";
-import { credentialSealer } from "../vault";
-import { errorCode, log } from "../log";
-import { ZoomClient, signInRevoked } from "./client";
-import type { ZoomCredentials } from "./oauth";
-
 // How the Zoom connector starts a session and which failures stop it for good.
 //
 // Zoom replaces the refresh token on every refresh, and each one expires 90 days after it was issued. As for
@@ -12,6 +5,13 @@ import type { ZoomCredentials } from "./oauth";
 // means "you signed in again" and restarts the connector, and a token refreshed every hour must not. Writes
 // are tied to the sign-in they came from (its updated_at), so a connector that is stopping cannot overwrite a
 // new sign-in with an older token.
+
+import { db, must } from "../db";
+import { env } from "../env";
+import { credentialSealer } from "../vault";
+import { errorCode, log } from "../log";
+import { ZoomClient, signInRevoked } from "./client";
+import type { ZoomCredentials } from "./oauth";
 
 /** A client for this account's Zoom sign-in. Throws NO_CLIENT when the worker has no Zoom app configured. */
 export async function openZoomClient(accountId: string): Promise<{ client: ZoomClient; creds: ZoomCredentials }> {

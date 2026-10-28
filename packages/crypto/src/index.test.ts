@@ -1,3 +1,6 @@
+// Tests for the crypto package (index.ts): encryption and blind indexes match the saved vectors.json byte for
+// byte, tampering or the wrong key fails, and nonces are fresh.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

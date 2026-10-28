@@ -1,3 +1,7 @@
+"""Tests for ai.brief: when a brief is due in the user's zone, which conversations make the sections, the prompt, writing
+and sealing the brief, lazy speech, audio file storage and cleanup, and splitting the script into spoken parts.
+Also defines FakeDb and FakeGemini, reused by test_brief_tasks."""
+
 import base64
 import io
 import unittest

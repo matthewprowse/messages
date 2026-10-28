@@ -1,3 +1,6 @@
+// Tests for wav.ts: joinParts joins WAV parts into one with every sample in order, and refuses parts that differ in
+// format or are not WAV.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { joinParts } from "./wav";

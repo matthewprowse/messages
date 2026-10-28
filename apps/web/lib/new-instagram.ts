@@ -1,8 +1,8 @@
-import type { Account } from "./types";
-import { INSTAGRAM_OFFICIAL_LABEL } from "../app/api/connect/instagram/official/shared";
-
 // Pure helpers for starting an Instagram conversation from the New menu. The database policy and the
 // Instagram connector check the same limits.
+
+import type { Account } from "./types";
+import { INSTAGRAM_OFFICIAL_LABEL } from "../app/api/connect/instagram/official/shared";
 
 export const INSTAGRAM_HINT = "Enter an Instagram username, like ana.m.";
 export const INSTAGRAM_OFFICIAL_NOTICE =

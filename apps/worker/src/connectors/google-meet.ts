@@ -1,3 +1,16 @@
+// Google Meet transcripts and Google Chat, from one google_meet account on the Google sign-in. Both need a
+// Google Workspace account; a personal one is told so on the account instead of syncing nothing.
+//
+// Meet: every few minutes, the meetings that ended since the last look (conferenceRecords filtered on
+// end_time), each with its participants and its transcript's entries, stored as a meetings row with the
+// transcript as JSON segments and its participants. A meeting whose transcript is still being made is stored
+// as waiting and looked at again. Linking meetings to contacts and calendar events, and summaries, happen
+// elsewhere.
+//
+// Chat: every 30 seconds, the spaces with new messages since the last look (each space says when it last
+// had one), and those messages (filtered on createTime), stored like WhatsApp chats. Google answering
+// "too many requests" slows the polling down. Replies queued in the outbox are posted as you.
+
 import type { Json, TablesInsert } from "@messages/db";
 import { addressIndex, chatIndex } from "@messages/crypto/addresses";
 import { isCiphertext } from "@messages/crypto";
@@ -51,19 +64,6 @@ import {
   type ChatSpace,
   type MappedChat,
 } from "../google/chat";
-
-// Google Meet transcripts and Google Chat, from one google_meet account on the Google sign-in. Both need a
-// Google Workspace account; a personal one is told so on the account instead of syncing nothing.
-//
-// Meet: every few minutes, the meetings that ended since the last look (conferenceRecords filtered on
-// end_time), each with its participants and its transcript's entries, stored as a meetings row with the
-// transcript as JSON segments and its participants. A meeting whose transcript is still being made is stored
-// as waiting and looked at again. Linking meetings to contacts and calendar events, and summaries, happen
-// elsewhere.
-//
-// Chat: every 30 seconds, the spaces with new messages since the last look (each space says when it last
-// had one), and those messages (filtered on createTime), stored like WhatsApp chats. Google answering
-// "too many requests" slows the polling down. Replies queued in the outbox are posted as you.
 
 const MEET_POLL_MS = 5 * 60_000;
 const CHAT_POLL_MS = 30_000;
@@ -129,7 +129,7 @@ export class GoogleMeetConnector {
         const fatal = (err as { code?: string }).code === "PERSONAL" ? PERSONAL_ACCOUNT : googleFatalDetail(err, "Meet and Chat");
         if (fatal) {
           if (signInRevoked(err)) log.error("meet sign-in revoked", { account: this.id, code: errorCode(err) });
-          await setAccountStatus(this.id, "error", fatal);
+          await setAccountStatus(this.id, "error", fatal).catch(() => undefined);
           return;
         }
         log.warn("meet sync failed", { account: this.id, code: errorCode(err) });

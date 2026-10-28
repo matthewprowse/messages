@@ -1,3 +1,6 @@
+// Tests for whatsapp/auth-codec.ts: session values survive sealing and opening with Buffers intact, another
+// user's key or account cannot open them, and rows sealed under the old static key still open.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";

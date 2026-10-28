@@ -1,3 +1,5 @@
+// Tests for peopleFromBatch in google/people.ts: People API batchGet answers become names and addresses keyed by Google ID.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { peopleFromBatch } from "./people";

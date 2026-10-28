@@ -1,5 +1,8 @@
 "use client";
 
+// Layout for /contacts: loads contacts, companies and merge suggestions for the signed-in user, and reloads them when
+// contactsVersion changes or Retry is pressed. A list that failed shows an error while the others stay on screen.
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";

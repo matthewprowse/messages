@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, Team, Shared Inboxes: make one from a connected account and choose who may use it.
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Inbox, Plus } from "lucide-react";
@@ -60,7 +62,7 @@ function AccessDialog({ inbox, team, onClose, onSaved }: { inbox: SharedInbox | 
         </div>
         <div className={DIALOG_BUTTONS}>
           <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button type="button" disabled={busy} onClick={() => void save()}>{busy ? "Saving" : "Save"}</Button>
+          <Button variant="secondary" type="button" disabled={busy} onClick={() => void save()}>{busy ? "Saving" : "Save"}</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -118,7 +120,7 @@ function ShareDialog({ open, onClose, onShared }: { open: boolean; onClose: () =
         )}
         <div className={DIALOG_BUTTONS}>
           <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button type="button" disabled={busy || !account || !name.trim()} onClick={() => void submit()}>{busy ? "Sharing" : "Make Shared Inbox"}</Button>
+          <Button variant="secondary" type="button" disabled={busy || !account || !name.trim()} onClick={() => void submit()}>{busy ? "Sharing" : "Make Shared Inbox"}</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -144,13 +146,13 @@ export function SharedInboxesSection({ team }: { team: TeamState }) {
       title="Shared Inboxes"
       description="An account the business owns, such as info@ or the business WhatsApp number. Every chat on it is shared with the people you choose, who can assign chats, add internal notes and reply from it."
     >
-      {manages && <div><Button size="sm" onClick={() => setSharing(true)}><Plus /> Make Shared Inbox</Button></div>}
+      {manages && <div><Button variant="secondary" onClick={() => setSharing(true)}><Plus /> Make Shared Inbox</Button></div>}
       {failed && !inboxes ? (
         <Alert variant="destructive">
           <AlertTitle>Could Not Load Shared Inboxes</AlertTitle>
           <AlertDescription>
             <p>Check your connection and try again.</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load()}>Retry</Button>
+            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
           </AlertDescription>
         </Alert>
       ) : !inboxes ? (
@@ -175,7 +177,7 @@ export function SharedInboxesSection({ team }: { team: TeamState }) {
                 ? `Connected by ${i.connectedBy}. ${i.access.length === 1 ? "1 person uses it" : `${i.access.length} people use it`}${i.access.length ? `: ${i.access.map((a) => a.name).join(", ")}` : ""}.`
                 : `Connected by ${i.connectedBy}. Open it from your Inbox.`}
             >
-              {manages && <Button size="sm" variant="outline" onClick={() => setManaging(i)}>Who Uses It</Button>}
+              {manages && <Button variant="secondary" onClick={() => setManaging(i)}>Who Uses It</Button>}
             </SettingsRow>
           ))}
         </SettingsRows>

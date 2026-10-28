@@ -1,5 +1,7 @@
 "use client";
 
+// Settings, What You Share: the chats shared with the team, who each is assigned to, and moving one back to personal.
+
 import { useState } from "react";
 import Link from "next/link";
 import { useSharedChats, type SharedChat } from "@/lib/share";
@@ -34,7 +36,7 @@ export function SharedChatsSection({ strict, role }: { strict: boolean; role: Te
           <AlertTitle>Could Not Load Your Shared Chats</AlertTitle>
           <AlertDescription>
             <p>Check your connection and try again.</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void load()}>Retry</Button>
+            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
           </AlertDescription>
         </Alert>
       ) : !chats ? (
@@ -62,7 +64,7 @@ export function SharedChatsSection({ strict, role }: { strict: boolean; role: Te
               ].join(", ")}
             >
               {c.sharedBy !== "account" && (
-                <Button size="sm" variant="outline" disabled={!canMove} title={canMove ? undefined : "Strict sharing keeps work chats shared. Only an owner or admin can release one."} onClick={() => setMoving(c)}>
+                <Button variant="secondary" disabled={!canMove} title={canMove ? undefined : "Strict sharing keeps work chats shared. Only an owner or admin can release one."} onClick={() => setMoving(c)}>
                   Move to Personal
                 </Button>
               )}

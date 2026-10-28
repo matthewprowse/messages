@@ -1,3 +1,6 @@
+// Tests for cards.ts: vCard 3.0 and 4.0 parsing (folded photos, escapes), CardDAV multistatus extraction, phone
+// keys, and matching cards to contacts by email then phone.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { matchCards, parseVCard, phoneKey, vcardsFromMultistatus } from "./cards";

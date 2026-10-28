@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -56,6 +57,29 @@ type session struct {
 	me           Person
 	// endpoint is where createMessage goes; empty is LinkedIn's. Tests point it elsewhere.
 	endpoint string
+}
+
+// sharedTransport is the one connection pool for the requests this file and media.go make themselves, so a
+// call reuses a connection instead of leaking one, and idle ones are closed.
+var sharedTransport = &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	MaxIdleConns:          4,
+	MaxIdleConnsPerHost:   2,
+	IdleConnTimeout:       30 * time.Second,
+	TLSHandshakeTimeout:   15 * time.Second,
+	ResponseHeaderTimeout: 45 * time.Second,
+}
+
+// newSession is what a login keeps for start: the jar and headers the client signs in with, the page headers
+// as the library will use them, and who the account is.
+func newSession(jar *linkedingo.StringCookieJar, args loginArgs, me Person, endpoint string) *session {
+	page, track := args.PageInstance, args.XLiTrack
+	// The library drops a track that is not voyager-web's, with its page instance; the same is done here.
+	var parsed map[string]any
+	if track != "" && (json.Unmarshal([]byte(track), &parsed) != nil || parsed["mpName"] != "voyager-web") {
+		page, track = "", ""
+	}
+	return &session{jar: jar, headers: args.Headers.Clone(), pageInstance: page, xLiTrack: track, me: me, endpoint: endpoint}
 }
 
 // ProfileRef is who a start is addressed to, as far as the input says.
@@ -195,6 +219,10 @@ const defaultTrack = `{"clientVersion":"` + linkedingo.ServiceVersion + `","mpVe
 // request is the createMessage call, made like linkedingo makes its own requests. A single attempt: if
 // the answer is lost the worker is told it may have gone out, and is never retried here.
 func (s *session) request(ctx context.Context, payload startPayload) (*linkedingo.MessageSentResponse, error) {
+	if s == nil || s.jar == nil {
+		// No login behind this session: nothing is sent, and the answer is the one for a missing sign-in.
+		return nil, &linkedingo.ResponseError{StatusCode: http.StatusUnauthorized}
+	}
 	endpoint := s.endpoint
 	if endpoint == "" {
 		endpoint = createMessageAt
@@ -207,7 +235,7 @@ func (s *session) request(ctx context.Context, payload startPayload) (*linkeding
 	if err != nil {
 		return nil, err
 	}
-	header := s.headers.Clone()
+	header := s.headers.Clone() // a nil Header clones to nil, which has no User-Agent and is replaced below
 	if header.Get("User-Agent") == "" {
 		header = http.Header{"User-Agent": {linkedingo.UserAgent}, "Sec-Ch-Ua": {linkedingo.SecCHUserAgent}, "Sec-Ch-Ua-Platform": {linkedingo.SecCHPlatform}, "Sec-Ch-Ua-Mobile": {linkedingo.SecCHMobile}}
 	}
@@ -229,8 +257,9 @@ func (s *session) request(ctx context.Context, payload startPayload) (*linkeding
 	req.Header = header
 
 	client := &http.Client{
-		Transport: &http.Transport{Proxy: http.ProxyFromEnvironment},
+		Transport: sharedTransport,
 		Jar:       s.jar,
+		Timeout:   60 * time.Second,
 		// A redirect is LinkedIn sending the session to its sign-in page; it is read as the status.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}

@@ -1,18 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { encryptTeamField } from "@messages/crypto";
-import { FIELD, type Field } from "@messages/crypto/fields";
-import { supabase } from "./supabase";
-import { useAuth } from "./auth";
-import { open, teamKeys } from "./vault";
-
 // The team's company voice (supabase/migrations/20261104100000_team_after_launch.sql), from the app's side: how the business
 // writes (tone, sign-off, things to always and never say), templates (a name and a body) and company facts (a title and a
 // body). Everything is sealed with the team's key here in the browser, so the server never holds a readable word of it.
 // Every active member reads it (templates go into the composer); only an owner or admin saves it, through the database
 // functions. The AI worker reads it for a draft in a work chat and never for a personal one (apps/ai/ai/company_voice.py);
 // the field names below are the ones it opens each part with.
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { encryptTeamField } from "@messages/crypto";
+import { FIELD, type Field } from "@messages/crypto/fields";
+import { supabase } from "./supabase";
+import { useAuth } from "./auth";
+import { open, teamKeys } from "./vault";
 
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";
 

@@ -1,5 +1,7 @@
 "use client";
 
+// Settings page for connecting Instagram. The form and sign-in steps are in InstagramSetup; this adds the header and records a setup start.
+
 import { useEffect } from "react";
 import { track } from "@/lib/analytics";
 import { SettingsHeader } from "@/components/settings-header";

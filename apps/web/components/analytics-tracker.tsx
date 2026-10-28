@@ -1,5 +1,8 @@
 "use client";
 
+// Mounted once in the app. Feeds lib/analytics with screen changes, screen time, errors and rage clicks.
+// Content-free by design: it records names the code gave things, never text the user typed or read.
+
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { wordOf } from "@messages/analytics";
