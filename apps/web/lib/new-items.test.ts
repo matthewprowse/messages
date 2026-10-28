@@ -74,7 +74,7 @@ test("existingChat finds the newest one-to-one chat with the number", () => {
   assert.equal(existingChat([lid], "+27821234567", undefined, (id) => (id === "p" ? ["+27821234567"] : undefined))?.id, "lid");
 });
 
-const contact = (p: Partial<Contact>): Contact => ({ id: "c", name: "Jane Doe", initials: "JD", hue: 0, emails: [], phones: [], ...p });
+const contact = (p: Partial<Contact>): Contact => ({ id: "c", name: "Jane Doe", initials: "JD", hue: 0, emails: [], phones: [], isCompany: false, ...p });
 
 test("searchPhoneContacts matches names and digits typed nationally", () => {
   const contacts = [
@@ -140,6 +140,7 @@ test("buildEventRow builds a timed event in local time", () => {
     attendees: ["jane@x.com"],
     send_invites: true,
     add_meet: true,
+    recurrence: null,
   });
 });
 

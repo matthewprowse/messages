@@ -1,7 +1,6 @@
 import { ImapFlow } from "imapflow";
 import { db, must } from "../src/db";
-import { encryptJson } from "../src/crypto";
-import { env } from "../src/env";
+import { credentialSealer } from "../src/vault";
 import { ICLOUD_IMAP, type ICloudCredentials } from "../src/connectors/icloud";
 import { ask, ownerUserId, saveAccountRow } from "./owner";
 
@@ -51,7 +50,7 @@ async function main() {
   must(
     await db
       .from("account_credentials")
-      .upsert({ account_id: account.id, ciphertext: encryptJson(credentials, env.encryptionKey), updated_at: new Date().toISOString() }, { onConflict: "account_id" }),
+      .upsert({ account_id: account.id, ciphertext: await (await credentialSealer(account.id, userId)).sealJson(credentials), updated_at: new Date().toISOString() }, { onConflict: "account_id" }),
     "save credentials",
   );
 

@@ -1,5 +1,6 @@
 import type { Json, Tables, TablesInsert } from "@messages/db";
 import { isEmailAddress } from "../send/from-address";
+import { BAD_RULE, ruleOf, validRule } from "./recurrence";
 
 // Turns a queued calendar_outbox row into the request that creates it in Google Calendar, and the
 // created event into a calendar_events row. Pure functions only, so all of it is unit tested.
@@ -33,6 +34,8 @@ export interface GoogleEvent {
   hangoutLink?: string;
   /** Set on each occurrence of a repeating event: the id of the series. */
   recurringEventId?: string;
+  /** A series' own event: how it repeats, as iCalendar lines (RRULE:, EXDATE:). */
+  recurrence?: string[];
   start?: EventTime;
   end?: EventTime;
   attendees?: { email?: string; displayName?: string; responseStatus?: string; self?: boolean; organizer?: boolean; resource?: boolean }[];
@@ -143,6 +146,10 @@ export function buildCreateEvent(row: CalendarOutboxRow): CreateEventRequest | {
     body.end = { dateTime: endsAt.toISOString(), timeZone: row.time_zone };
   }
   if (attendees.length > 0) body.attendees = attendees.map((email) => ({ email }));
+  if (row.recurrence) {
+    if (!validRule(row.recurrence)) return { error: BAD_RULE };
+    body.recurrence = [`RRULE:${row.recurrence}`];
+  }
 
   const query: Record<string, string | number> = { sendUpdates: row.send_invites ? "all" : "none" };
   if (row.add_meet) {
@@ -185,6 +192,8 @@ export function storedEvent(
     conference_url: meetingUrl(event),
     resource_url: null,
     series_id: event.recurringEventId ?? null,
+    // Only a series' own event says; the sync gives its occurrences the series' rule.
+    recurrence: ruleOf(event.recurrence),
   };
 }
 

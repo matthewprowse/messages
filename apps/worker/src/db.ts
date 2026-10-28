@@ -2,7 +2,7 @@ import { createClient, type PostgrestSingleResponse } from "@supabase/supabase-j
 import type { AccountStatus, Database, Tables } from "@messages/db";
 import { env } from "./env";
 import { cleanProps, type EventName, type Events } from "@messages/analytics";
-import { decryptJson } from "./crypto";
+import { HeartbeatGate } from "./polling";
 
 // The worker uses the service role: it bypasses row-level security, so every query here
 // must scope by account or user explicitly.
@@ -47,10 +47,13 @@ export function failureCode(reason: string): string {
 }
 
 export async function setAccountStatus(accountId: string, status: AccountStatus, detail: string | null = null) {
-  const before = await db.from("accounts").select("user_id, provider, status, created_at, last_synced_at").eq("id", accountId).maybeSingle();
+  const before = await db.from("accounts").select("user_id, provider, status, status_detail, created_at, last_synced_at").eq("id", accountId).maybeSingle();
+  // Nothing changed: the same status and detail is not written again (a write is a realtime event to every open browser).
+  if (before.data && before.data.status === status && (before.data.status_detail ?? null) === detail && !(status === "connected" && heartbeat.due(accountId))) return;
   const patch: Database["public"]["Tables"]["accounts"]["Update"] = { status, status_detail: detail };
   if (status === "connected") patch.last_synced_at = new Date().toISOString();
   must(await db.from("accounts").update(patch).eq("id", accountId), "update account status");
+  if (status === "connected") heartbeat.wrote(accountId);
   const prev = before.data;
   if (!prev || prev.status === status) return;
   const { user_id: user, provider } = prev;
@@ -71,7 +74,9 @@ export async function loadCredentials<T>(accountId: string): Promise<T> {
     "load credentials",
   );
   if (!row) throw Object.assign(new Error("No credentials stored"), { code: "NO_CREDENTIALS" });
-  return decryptJson<T>(row.ciphertext, env.encryptionKey);
+  // vault.ts imports this file, so it is loaded here when first needed rather than at the top.
+  const { credentialSealer } = await import("./vault");
+  return (await credentialSealer(accountId)).openJson<T>(row.ciphertext);
 }
 
 export async function getSyncState(accountId: string, scope: string) {
@@ -109,13 +114,20 @@ export async function allRows<T>(
   return rows.length > limit ? rows.slice(0, limit) : rows;
 }
 
-/** Records that an account is still syncing, for the "Last synced" line in the app. Never throws. */
+const heartbeat = new HeartbeatGate();
+
+/**
+ * Records that an account is still syncing, for the "Last synced" line in the app. accounts is published
+ * to Realtime, so every write reaches every open browser: it is made at most once per ACCOUNT_HEARTBEAT_MS
+ * (15 minutes) per account. A status change (setAccountStatus) writes the time itself. Never throws.
+ */
 export async function touchAccount(accountId: string) {
+  if (!heartbeat.due(accountId)) return;
   await db
     .from("accounts")
     .update({ last_synced_at: new Date().toISOString() })
     .eq("id", accountId)
-    .then(() => undefined, () => undefined);
+    .then((result) => { if (result.error) heartbeat.forget(accountId); }, () => heartbeat.forget(accountId));
 }
 
 /**

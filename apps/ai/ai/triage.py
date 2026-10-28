@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 from . import log
 from .analytics import Analytics, event, prompt_id, traits as message_traits
-from .fields import ADDRESS, BODY, CHOICES, HTML, SUBJECT, SUMMARY, TRANSCRIPT, UNSUBSCRIBE
+from .fields import ADDRESS, BODY, CHOICES, CONTACT_RELATIONSHIP, FILENAME, HTML, SUBJECT, SUMMARY, TRANSCRIPT, UNSUBSCRIBE
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, not_in
 from .supabase import Supabase, in_list
@@ -119,6 +119,10 @@ Use what you are told about them and their past corrections. Mail styled to look
 Judge each email on its own and return one result for every email, with its number.""" + UNTRUSTED
 
 
+# Spelling and language for what is written about their mail. Never American by default: they write British.
+LANGUAGE_NAMES = {"en-GB": "British English (colour, organise, cheque)", "en-US": "American English", "af": "Afrikaans"}
+
+
 @dataclass
 class UserContext:
     name: str = ""  # profiles.display_name, so summaries can say "you" instead of it
@@ -131,6 +135,7 @@ class UserContext:
     corrections: list[str] = field(default_factory=list)
     accounts: list[str] = field(default_factory=list)  # every connected account, for finding the same email twice
     timezone: str = ""  # profiles.timezone, for the time of day in a message's traits
+    language: str = ""  # profiles.language: en-GB, en-US or af; empty follows how they write
 
 
 def matches(address: str, targets: list[str]) -> bool:
@@ -243,6 +248,7 @@ def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]]) -> str:
         f"About them: {ctx.about or 'not given'}",
         f"People who matter to them: {ctx.important_people or 'not given'}",
         "Their recent corrections: " + ("; ".join(ctx.corrections[:12]) or "none"),
+        f"Write summaries in: {LANGUAGE_NAMES.get(ctx.language, 'the language and spelling they write in themselves (judge by their own sent emails and the email thread), British English when unclear')}",
     ]
     for i, e in enumerate(emails, 1):
         lines += [
@@ -366,7 +372,7 @@ class Triage:
         now = time.monotonic()
         keep = []
         for r in rows:
-            voice = any(str(a.get("filename") or "").startswith("Voice Note.") for a in r.get("attachments") or [])
+            voice = any((self.vault.open(r["user_id"], FILENAME, a.get("filename")) or "").startswith("Voice Note.") for a in r.get("attachments") or [])
             try:
                 sent = datetime.fromisoformat(str(r.get("sent_at")).replace("Z", "+00:00"))
             except ValueError:  # an unreadable date must not stall the whole batch: triage it now
@@ -555,7 +561,7 @@ class Triage:
         return out
 
     def _user_context(self, user_id: str) -> UserContext:
-        profile = self.db.first("profiles", {"select": "display_name,about,important_people,timezone", "user_id": f"eq.{user_id}"}) or {}
+        profile = self.db.first("profiles", {"select": "display_name,about,important_people,timezone,language", "user_id": f"eq.{user_id}"}) or {}
         rules = self.db.select("priority_rules", {"select": "kind,target", "user_id": f"eq.{user_id}"})
         unsubs = self.db.select("unsubscribes", {"select": "sender_address", "user_id": f"eq.{user_id}"})
         accounts = self.db.select("accounts", {"select": "id,address", "user_id": f"eq.{user_id}"})
@@ -578,6 +584,7 @@ class Triage:
             corrections=corrections,
             accounts=[a["id"] for a in accounts],
             timezone=profile.get("timezone") or "",
+            language=profile.get("language") or "",
         )
 
     def _latest(self, batch: list[dict[str, Any]]) -> dict[str, tuple[bool, bool]]:
@@ -684,7 +691,7 @@ class Triage:
             m["_email"] = {
                 "name": contact.get("display_name") or "",
                 "sender": (m.get("sender_address") or "").lower(),
-                "relationship": contact.get("relationship") or "",
+                "relationship": self.vault.open(m["user_id"], CONTACT_RELATIONSHIP, contact.get("relationship")) or "",
                 "known": m.get("sender_contact_id") in found["known"],
                 "bulk": bool(m.get("list_unsubscribe")),
                 "subject": (m.get("subject") or "")[:SUBJECT_CHARS],

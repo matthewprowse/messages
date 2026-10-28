@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { clock, useMedia } from "@/components/media-player";
 
 interface Item {
@@ -197,18 +198,22 @@ export function AttachButton({ files, className }: { files: OutboxFiles; classNa
   if (!files.provider) return null;
   return (
     <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className={className}
-        aria-label="Attach Files"
-        title="Attach Files"
-        disabled={files.disabled || files.uploading}
-        onClick={() => input.current?.click()}
-      >
-        <Paperclip />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={className}
+            aria-label="Attach Files"
+            disabled={files.disabled || files.uploading}
+            onClick={() => input.current?.click()}
+          >
+            <Paperclip />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-64 text-balance">Attach photos, documents or other files to send with this reply.</TooltipContent>
+      </Tooltip>
       <input
         ref={input}
         type="file"

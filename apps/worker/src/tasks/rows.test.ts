@@ -3,8 +3,11 @@ import { test } from "node:test";
 import { FIELD } from "@messages/crypto/fields";
 import {
   NOT_A_TASK_ACCOUNT,
+  NOT_SUPPORTED_WRITE,
   TaskUpdateError,
   planTaskUpdates,
+  taskKey,
+  taskWriteOf,
   taskAccountProblem,
   taskFailure,
   taskFailureCode,
@@ -22,8 +25,8 @@ function input(patch: Partial<TaskInput> = {}): TaskInput {
   return { provider_task_id: "p1", list_id: "l1", title: "Send the offer", ...patch };
 }
 
-function update(id: string, taskId: string, at: string, patch: Partial<TaskUpdateRow> = {}): TaskUpdateRow {
-  return { id, user_id: "u", task_id: taskId, action: "complete", status: "queued", error: null, created_at: at, ...patch };
+function update(id: string, taskId: string | null, at: string, patch: Partial<TaskUpdateRow> = {}): TaskUpdateRow {
+  return { id, user_id: "u", task_id: taskId, action: "complete", status: "queued", error: null, created_at: at, account_id: null, title: null, notes: null, due_at: null, due_all_day: false, priority: null, ...patch };
 }
 
 test("a task is stored with its text sealed under the task fields", async () => {
@@ -111,4 +114,38 @@ test("failure reasons become plain code words for the analytics", () => {
   assert.equal(taskFailureCode("Tasks in this account cannot be ticked from here yet."), "not_supported");
   assert.equal(taskFailureCode("Microsoft To Do could not be reached. Try again."), "unreachable");
   assert.equal(taskFailureCode("This task was deleted in Google Tasks."), "provider_refused");
+});
+
+test("creates, updates and deletes are never superseded, and ticks only by later ticks", () => {
+  const rows = [
+    update("1", "t1", "2026-10-26T08:00:01Z"),
+    update("2", "t1", "2026-10-26T08:00:02Z", { action: "update", title: "x" }),
+    update("3", "t1", "2026-10-26T08:00:03Z", { action: "reopen" }),
+    update("4", "t1", "2026-10-26T08:00:04Z", { action: "delete" }),
+    update("5", null, "2026-10-26T08:00:02Z", { action: "create", account_id: "a1" }),
+    update("6", null, "2026-10-26T08:00:03Z", { action: "create", account_id: "a1" }),
+  ];
+  const { apply, superseded } = planTaskUpdates(rows);
+  assert.deepEqual(superseded.map((r) => r.id), ["1"]);
+  assert.deepEqual(apply.map((r) => r.id), ["2", "5", "3", "6", "4"]);
+});
+
+test("a create is keyed by its own row, so two new tasks do not wait on each other", () => {
+  assert.equal(taskKey({ id: "r1", task_id: "t1" }), "t1");
+  assert.notEqual(taskKey({ id: "r1", task_id: null }), taskKey({ id: "r2", task_id: null }));
+});
+
+test("the state a row asks for is opened, trimmed and kept to a day when all-day", async () => {
+  const opener = async (_u: string, _f: unknown, v: string | null | undefined) => (v ? v.replace(/^sealed:/, "") : null);
+  const base = update("1", null, "2026-10-26T08:00:00Z", { action: "create", account_id: "a1" });
+  const timed = await taskWriteOf({ ...base, title: "sealed: Call Sam ", notes: "sealed:  ", due_at: "2026-11-03T07:30:00+00:00", due_all_day: false, priority: 2 }, opener);
+  assert.deepEqual(timed, { title: "Call Sam", notes: null, dueAt: "2026-11-03T07:30:00.000Z", dueAllDay: false, priority: 2 });
+  const day = await taskWriteOf({ ...base, title: "sealed:A", due_at: "2026-11-03T22:00:00Z", due_all_day: true, priority: 9 }, opener);
+  assert.deepEqual([day.dueAt, day.priority], ["2026-11-03T00:00:00.000Z", null]);
+  assert.equal((await taskWriteOf({ ...base, title: "sealed:A", due_at: "nonsense" }, opener)).dueAt, null);
+});
+
+test("an unsupported change is worded and coded as not supported", () => {
+  assert.equal(taskFailureCode(NOT_SUPPORTED_WRITE), "not_supported");
+  assert.equal(taskFailureCode("This task is no longer there, so it was not changed."), "task_gone");
 });

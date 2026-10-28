@@ -8,7 +8,7 @@ import { Command, SetupSteps, type SetupStep } from "../setup-steps";
 const STEPS: SetupStep[] = [
   { title: "Have Your Email Password Ready", body: "The one your email app uses. Yahoo, Fastmail and Zoho with two-factor sign-in need an app password instead." },
   { title: "Run the Connect Command", body: <><p>From the project folder. It finds the server settings, or lets you type them in:</p><Command>pnpm connect:imap</Command></> },
-  { title: "Keep the Worker Running", body: <><Command>pnpm worker</Command><p className="mt-2">New mail then appears in Conversations within seconds.</p></> },
+  { title: "Keep the Worker Running", body: <><Command>pnpm worker</Command><p className="mt-2">New mail then appears in the Inbox within seconds.</p></> },
 ];
 
 export default function ImapSetup() {

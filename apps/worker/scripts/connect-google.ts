@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { db, must } from "../src/db";
-import { encryptJson } from "../src/crypto";
+import { credentialSealer } from "../src/vault";
 import { env } from "../src/env";
 import { GoogleClient } from "../src/google/client";
 import {
@@ -80,7 +80,7 @@ async function saveAccount(userId: string, provider: "gmail" | "google_calendar"
     await db
       .from("account_credentials")
       .upsert(
-        { account_id: account.id, ciphertext: encryptJson(credentials, env.encryptionKey), updated_at: new Date().toISOString() },
+        { account_id: account.id, ciphertext: await (await credentialSealer(account.id, userId)).sealJson(credentials), updated_at: new Date().toISOString() },
         { onConflict: "account_id" },
       ),
     `save ${provider} credentials`,

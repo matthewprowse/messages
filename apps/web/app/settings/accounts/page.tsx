@@ -6,8 +6,12 @@ import { Mail, Calendar, ListChecks, MessageCircle, RefreshCw, Video } from "luc
 import { useApp } from "@/lib/store";
 import { relTime } from "@/lib/format";
 import type { Account } from "@/lib/types";
+import { FAMILY_NAME, groupAccounts, groupProblem, groupStatus, partsOf, type AccountGroup } from "@/lib/account-groups";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { SettingsHeader } from "@/components/settings-header";
 import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
@@ -36,6 +40,9 @@ const SETUP = {
   icloud_reminders: "/settings/accounts/icloud-reminders",
 } as const;
 
+const FAMILY_SETUP = { google: "/settings/accounts/google", microsoft: "/settings/accounts/microsoft", apple: "/settings/accounts/icloud" } as const;
+const setupOf = (g: AccountGroup) => (g.family in FAMILY_SETUP ? FAMILY_SETUP[g.family as keyof typeof FAMILY_SETUP] : SETUP[g.accounts[0].provider]);
+
 function StatusBadge({ status }: { status: Account["status"] }) {
   if (status === "connected") return <Badge variant="secondary">Connected</Badge>;
   if (status === "syncing") return <Badge variant="outline" className="gap-1"><RefreshCw className="size-3 animate-spin" /> Syncing</Badge>;
@@ -49,14 +56,23 @@ function RowIcon({ icon: Icon }: { icon: React.ComponentType<{ className?: strin
 }
 
 export default function AccountsPage() {
-  const { accounts, dispatch, notify } = useApp();
-  const [pausing, setPausing] = useState<Account | null>(null);
+  const { accounts, loading, dispatch, notify } = useApp();
+  const [pausing, setPausing] = useState<AccountGroup | null>(null);
+  const [renaming, setRenaming] = useState<AccountGroup | null>(null);
+  const [name, setName] = useState("");
+  const rename = () => {
+    if (!renaming) return;
+    for (const a of renaming.accounts) dispatch({ type: "patchAccount", id: a.id, patch: { nickname: name.trim() } });
+    setRenaming(null);
+  };
   const pause = () => {
     if (!pausing) return;
-    dispatch({ type: "patchAccount", id: pausing.id, patch: { status: "disconnected" } });
-    notify(`Sync paused for ${pausing.label}`);
+    for (const a of pausing.accounts) dispatch({ type: "patchAccount", id: a.id, patch: { status: "disconnected" } });
+    notify(`Sync paused for ${nameOf(pausing)}`);
     setPausing(null);
   };
+  const groups = groupAccounts(accounts);
+  const nameOf = (g: AccountGroup) => g.accounts.find((a) => a.nickname)?.nickname || FAMILY_NAME[g.family] || g.accounts[0].label;
   return (
     <>
       <SettingsHeader
@@ -67,42 +83,46 @@ export default function AccountsPage() {
         </>}
       />
       <div className="space-y-8">
-        {accounts.length === 0 ? <SettingsEmpty>No accounts connected yet.</SettingsEmpty> : (
+        {groups.length === 0 ? (loading ? <Skeleton className="h-40 w-full rounded-lg" /> : <SettingsEmpty>No accounts connected yet.</SettingsEmpty>) : (
           <SettingsRows>
-            {accounts.map((a) => (
-              <SettingsRow
-                key={a.id}
-                leading={<RowIcon icon={ICON[a.provider]} />}
-                title={<>{a.label} <StatusBadge status={a.status} /></>}
-                description={
-                  <>
-                    <span className="block truncate">{a.detail}{a.lastSync && a.status === "connected" ? ` · Last synced ${relTime(a.lastSync)}` : ""}</span>
-                    {a.statusDetail && a.status !== "connected" && <span className="block">{a.statusDetail}</span>}
-                  </>
-                }
-              >
-                {a.status === "disconnected" || a.status === "error" ? (
-                  <Button size="sm" asChild><Link href={SETUP[a.provider]}>Reconnect</Link></Button>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={() => setPausing(a)}>Pause Sync</Button>
-                )}
-              </SettingsRow>
-            ))}
+            {groups.map((g) => {
+              const status = groupStatus(g);
+              const problem = groupProblem(g);
+              const first = g.accounts[0];
+              return (
+                <SettingsRow
+                  key={g.key}
+                  leading={<RowIcon icon={ICON[first.provider]} />}
+                  title={<>{nameOf(g)} <StatusBadge status={status} /></>}
+                  description={
+                    <>
+                      <span className="block truncate">{[g.accounts.length > 1 ? partsOf(g) : "", g.accounts.map((a) => a.detail).find((d) => d && !d.startsWith("urn:"))].filter(Boolean).join(" · ")}{first.lastSync && status === "connected" ? ` · Last synced ${relTime(first.lastSync)}` : ""}</span>
+                      {problem && status !== "connected" && <span className="block">{problem}</span>}
+                    </>
+                  }
+                >
+                  <Button variant="ghost" size="sm" onClick={() => { setName(g.accounts.find((a) => a.nickname)?.nickname ?? ""); setRenaming(g); }}>Rename</Button>
+                  {status === "disconnected" || status === "error" ? (
+                    <Button size="sm" asChild><Link href={setupOf(g)}>Reconnect</Link></Button>
+                  ) : (
+                    <Button variant="outline" size="sm" onClick={() => setPausing(g)}>Pause Sync</Button>
+                  )}
+                </SettingsRow>
+              );
+            })}
           </SettingsRows>
         )}
 
         <SettingsSection id="add-account" title="Add an Account">
           <SettingsRows>
             {[
-              { href: "/settings/accounts/icloud", label: "iCloud+ Mail", sub: "Mail on your own domain", icon: ICON.icloud },
-              { href: "/settings/accounts/icloud-calendar", label: "iCloud Calendar", sub: "Your iCloud events", icon: ICON.icloud_calendar },
-              { href: "/settings/accounts/icloud-reminders", label: "iCloud Reminders", sub: "Through a small app on your Mac", icon: ICON.icloud_reminders },
-              { href: "/settings/accounts/google", label: "Google", sub: "Gmail and Calendar", icon: ICON.gmail },
-              { href: "/settings/accounts/microsoft", label: "Microsoft", sub: "Outlook and Calendar, work or personal", icon: ICON.outlook },
+              { href: "/settings/accounts/google", label: "Google", sub: "Gmail, Calendar and Tasks, with one sign-in", icon: ICON.gmail },
+              { href: "/settings/accounts/microsoft", label: "Microsoft", sub: "Outlook, Calendar and To Do, with one sign-in", icon: ICON.outlook },
+              { href: "/settings/accounts/icloud", label: "iCloud", sub: "Mail, Calendar and Reminders", icon: ICON.icloud },
               { href: "/settings/accounts/whatsapp", label: "WhatsApp", sub: "Scan a QR code", icon: ICON.whatsapp },
+              { href: "/settings/accounts/instagram", label: "Instagram", sub: "Direct messages, Business, Creator or Personal", icon: ICON.instagram },
+              { href: "/settings/accounts/linkedin", label: "LinkedIn", sub: "Messages, signed in with your LinkedIn account", icon: ICON.linkedin },
               { href: "/settings/accounts/imap", label: "Other Email", sub: "Any IMAP mailbox, like Afrihost, xneelo or cPanel", icon: ICON.imap },
-              { href: "/settings/accounts/zoom", label: "Zoom", sub: "Meeting transcripts and Team Chat", icon: ICON.zoom },
-              { href: "/settings/accounts/linkedin", label: "LinkedIn", sub: "Messages, with your browser's cookies", icon: ICON.linkedin },
             ].map((x) => (
               <SettingsRow key={x.href} href={x.href} leading={<RowIcon icon={x.icon} />} title={x.label} description={x.sub} />
             ))}
@@ -117,7 +137,7 @@ export default function AccountsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Pause Sync?</AlertDialogTitle>
             <AlertDialogDescription>
-              {pausing?.label} stops syncing and new messages stop arriving. Nothing is deleted, and you can reconnect it at any time.
+              {pausing && nameOf(pausing)} stops syncing and new messages stop arriving. Nothing is deleted, and you can reconnect it at any time.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -126,6 +146,24 @@ export default function AccountsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={renaming !== null} onOpenChange={(open) => { if (!open) setRenaming(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename Account</DialogTitle>
+            <DialogDescription>
+              Shown next to the logo in your inbox, and only once you have more than one {renaming ? FAMILY_NAME[renaming.family] ?? renaming.accounts[0].label : "account"} connected. Leave it empty to use the default name.
+            </DialogDescription>
+          </DialogHeader>
+          <form id="rename-account" onSubmit={(e) => { e.preventDefault(); rename(); }}>
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={renaming ? FAMILY_NAME[renaming.family] ?? renaming.accounts[0].label : undefined} aria-label="Account Name" autoFocus />
+          </form>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRenaming(null)}>Cancel</Button>
+            <Button variant="secondary" type="submit" form="rename-account">Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

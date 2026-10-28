@@ -1,6 +1,8 @@
-// LinkedIn signs in with your browser's session cookies: li_at and JSESSIONID copied on their own, or a whole
-// "Copy as cURL" from the browser's developer tools, the way the mautrix LinkedIn bridge accepts them. These
-// turn either into what the sync worker's LinkedIn helper takes. Pure, and never logs what it reads.
+// LinkedIn signs in with an email and password, typed in Konva (see the sign-in route). This file is what is
+// left of the older way and the one value a sign-in can carry beyond them, all pure and never logging what it
+// reads: the session cookies copied from a browser (li_at and JSESSIONID on their own, or a whole "Copy as
+// cURL" from the developer tools, the way the mautrix LinkedIn bridge accepts them), for the small
+// "Sign In With Cookies Instead" fallback, and the optional proxy an account's requests go through.
 
 export interface LinkedInSession {
   /** A Cookie header with at least li_at and JSESSIONID. */
@@ -95,4 +97,32 @@ export function fromCookieHeader(header: string, xLiTrack?: string, pageInstance
 export function fromPaste(text: string): LinkedInSession | null {
   const trimmed = text.trim();
   return /^curl\b/i.test(trimmed) ? fromCurl(trimmed) : fromCookieHeader(trimmed.replace(/^cookie:\s*/i, ""));
+}
+
+const PRIVATE_V4 = /^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
+
+/**
+ * A proxy for one account's LinkedIn requests, as a clean URL, or null when it is not one the worker may use:
+ * an http, https or socks5 address with a host, and not this machine or a private network, because the proxy is
+ * connected to from the worker's side and what someone types here must not reach inside it. (A name that
+ * resolves to a private address, such as 127.0.0.1.nip.io, is not caught here: the worker resolves the host and
+ * refuses non-public addresses each time it connects, see vettedProxy in the worker.) The literal checks below
+ * are only a first filter.
+ */
+export function cleanProxy(raw: string): string | null {
+  const text = raw.trim();
+  if (!text || text.length > 300) return null;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  if (!["http:", "https:", "socks5:", "socks5h:"].includes(url.protocol)) return null;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host || url.search || url.hash || (url.pathname !== "" && url.pathname !== "/")) return null;
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".") && !host.includes(":")) return null;
+  if (PRIVATE_V4.test(host)) return null;
+  if (host.includes(":") && (host === "::1" || host === "::" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host) || host.startsWith("::ffff:") || host.startsWith("64:ff9b:") || host.startsWith("2002:"))) return null;
+  return `${url.protocol}//${url.username ? `${url.username}${url.password ? `:${url.password}` : ""}@` : ""}${url.host}`;
 }

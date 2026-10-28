@@ -4,11 +4,11 @@ import { imageType } from "./site-icon";
 
 // Contact and group photos live in the private "avatars" bucket at <user id>/<contact id> (or
 // <user id>/thread-<thread id> for a WhatsApp group). Photos from your own address book (iCloud or Google
-// Contacts) win over WhatsApp profile pictures, which only fill in where there is none.
+// Contacts) win over WhatsApp profile pictures, which (and LinkedIn profile pictures) only fill in where there is none.
 
 const BUCKET = "avatars";
 const MAX_BYTES = 2 * 1024 * 1024;
-export type PhotoSource = "icloud" | "google" | "whatsapp";
+export type PhotoSource = "icloud" | "google" | "whatsapp" | "linkedin" | "instagram";
 
 async function upload(path: string, bytes: Buffer): Promise<boolean> {
   const type = imageType(bytes);
@@ -30,7 +30,7 @@ export async function saveContactPhoto(
   known?: { avatar_source: string | null },
 ): Promise<boolean> {
   const current = known ?? (await loadPhotoSource(contactId));
-  const rank = (s: string | null) => (s === "icloud" || s === "google" ? 2 : s === "whatsapp" ? 1 : 0);
+  const rank = (s: string | null) => (s === "icloud" || s === "google" ? 2 : s === "whatsapp" || s === "linkedin" || s === "instagram" ? 1 : 0);
   const now = new Date().toISOString();
   // A photo from another source of the same or higher standing stays: iCloud and Google Contacts never
   // take one from each other (that swapped them back and forth every day), and neither yields to WhatsApp.

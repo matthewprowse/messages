@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import log
-from .fields import BODY, HTML
+from .fields import BODY, HTML, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
 from .text import clean
@@ -30,6 +30,7 @@ EMAIL_CHARS = 800
 PROMPT_CHARS = 24000
 MAX_RULES = 8
 SAME_RULE = 0.88  # wording this close to an existing rule is that rule
+LEARN_MAX_OUTPUT = 2048  # tokens, thinking included: a few short rules
 RETRY_S = 3600  # after a failed or skipped attempt, try that user again an hour later
 
 SCHEMA = {
@@ -177,6 +178,8 @@ class Voice:
             "style_rules",
             {"select": "id,rule,scope,contact_id,source,support_count,enabled,disabled_reason", "user_id": f"eq.{user_id}", "limit": "200"},
         )
+        for r in existing:  # rules written sealed are opened here; plain ones pass through
+            r["rule"] = self.vault.open(user_id, STYLE_RULE, r.get("rule")) or ""
         global_rules = [r for r in existing if r["scope"] == "global"]
         prompt = build_prompt(
             emails,
@@ -184,7 +187,7 @@ class Voice:
             [r["rule"] for r in global_rules if not r["enabled"] and r.get("disabled_reason") == "user"],
         )
         try:
-            result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"))
+            result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"), max_output=LEARN_MAX_OUTPUT)
         except GeminiError as err:
             log.warn("voice learning failed", user=user_id, status=err.status)
             return False
@@ -197,7 +200,7 @@ class Voice:
         if inserts:
             self.db.insert(
                 "style_rules",
-                [{"user_id": user_id, "scope": "global", "contact_id": None, "rule": text, "source": "sent_mail"} for text in inserts],
+                [{"user_id": user_id, "scope": "global", "contact_id": None, "rule": self.vault.seal(user_id, STYLE_RULE, text), "source": "sent_mail"} for text in inserts],
             )
         self.db.update("profiles", {"user_id": f"eq.{user_id}"}, {"voice_learned_at": now, "voice_learned_outbound": outbound}, minimal=True)
         turned_off = sum(1 for _, p in updates if p.get("enabled") is False)

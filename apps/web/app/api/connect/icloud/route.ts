@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   const password = (body.password ?? "").replace(/\s+/g, "");
   if (!EMAIL.test(username) || !EMAIL.test(address)) return fail(400, "Enter your iCloud email address.");
   if (password.length < 16) return fail(400, "An app-specific password is 16 letters, in four groups of four.");
-  const wait = overLimit(user.id);
+  const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many tries. Wait a few minutes and try again.", { "Retry-After": String(wait) });
 
   const mail = await checkMail(username, password);

@@ -2,6 +2,7 @@ import type { TablesUpdate } from "@messages/db";
 import { db, must, retryWrite } from "../db";
 import { errorCode, log } from "../log";
 import type { StoredCalendarEvent } from "./delete-event";
+import { openEvent, sealEvent } from "./sealed";
 import { exactTimes, shiftedTimes, storedPatch, type CalendarUpdateRow, type Change, type SeriesShift } from "./update-event";
 
 // The calendar_updates table: the app adds queued changes, the worker claims, makes and settles them.
@@ -26,7 +27,8 @@ export async function failUpdate(id: string, reason: string) {
 /** The stored event an update is for, or null once it is gone. */
 export async function storedEventOfUpdate(row: CalendarUpdateRow): Promise<StoredCalendarEvent | null> {
   if (!row.event_id) return null;
-  return must(await db.from("calendar_events").select("*").eq("id", row.event_id).eq("account_id", row.account_id).maybeSingle(), "load event to change");
+  const stored = must(await db.from("calendar_events").select("*").eq("id", row.event_id).eq("account_id", row.account_id).maybeSingle(), "load event to change");
+  return stored ? await openEvent(stored.user_id, stored) : null;
 }
 
 /** Settles a change the calendar has taken. `note` says what was not done, for a change applied only in part. */
@@ -50,9 +52,9 @@ export async function failInterruptedUpdates() {
 }
 
 /** Writes the change to the stored copy, so the app shows it before the next sync. A failed write is left to the sync. */
-export async function saveStored(ids: { id: string; patch: TablesUpdate<"calendar_events"> }[]) {
+export async function saveStored(userId: string, ids: { id: string; patch: TablesUpdate<"calendar_events"> }[]) {
   for (const { id, patch } of ids) {
-    const saved = await db.from("calendar_events").update(patch).eq("id", id);
+    const saved = await db.from("calendar_events").update(await sealEvent(userId, patch)).eq("id", id);
     if (saved.error) log.warn("changed event not stored", { code: saved.error.code });
   }
 }
@@ -69,6 +71,7 @@ export async function storeChange(event: StoredCalendarEvent, change: Change, se
       ? must(await db.from("calendar_events").select("*").eq("account_id", event.account_id).eq("series_id", event.series_id), "load series to change")
       : [event];
     await saveStored(
+      event.user_id,
       rows.map((r) => ({
         id: r.id,
         patch: storedPatch(r, change, !change.time ? null : r.id === event.id ? exactTimes(change.time) : shift ? shiftedTimes(r, shift) : null),

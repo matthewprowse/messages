@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
+import { isPublicAddress, publicAddress } from "@messages/mail-servers/net";
 
 // The LinkedIn helper (apps/linkedin): a separate Go program, under the AGPL, that speaks to LinkedIn for one
 // account through mautrix-linkedin's linkedingo. The worker runs one per account and talks to it with JSON
@@ -18,6 +20,8 @@ export interface LinkedInPerson {
   lastName?: string;
   name?: string;
   headline?: string;
+  /** The address of the largest profile picture (or a page's logo): signed, expiring, fetched with the picture command and never logged. */
+  picture?: string;
 }
 
 export interface LinkedInFile {
@@ -51,12 +55,20 @@ export interface LinkedInConversation {
   messages?: LinkedInMessage[];
 }
 
-export type ErrorKind = "bad_credentials" | "rate_limited" | "refused" | "forbidden" | "bad_request" | "failed";
+export type ErrorKind =
+  | "bad_credentials" | "rate_limited" | "refused" | "forbidden" | "bad_request" | "failed"
+  // A new conversation adds these: nobody matched the profile, or several people did. Nothing was sent.
+  | "not_found" | "ambiguous"
+  // A sign-in adds these: not accepted, turned away, a check that cannot be completed, unreachable, a sign-in
+  // page the library no longer understands, and an approval wait that another command ended.
+  // A send of several files stopped after some went out (error.sent).
+  | "partial"
+  | "rejected" | "blocked" | "challenge" | "unavailable" | "unsupported" | "cancelled";
 
 /** What the helper reports, never what LinkedIn said. code is the kind, for errorCode() in logs. */
 export class HelperError extends Error {
   readonly code: string;
-  constructor(readonly kind: ErrorKind | "exited" | "timeout", readonly status?: number) {
+  constructor(readonly kind: ErrorKind | "exited" | "timeout", readonly status?: number, readonly stage?: string, readonly sent?: number) {
     super(`linkedin helper: ${kind}`);
     this.code = kind;
   }
@@ -74,18 +86,49 @@ export type HelperEvent =
 
 export interface LoginArgs {
   cookies: string;
+  /** The browser headers (User-Agent and its companions) the cookies were created with, from a password sign-in. */
+  headers?: BrowserHeaders;
   xLiTrack?: string;
   pageInstance?: string;
   syncToken?: string;
 }
 
+/** Header name to values, as Go's http.Header. */
+export type BrowserHeaders = Record<string, string[]>;
+
+/** Where a password sign-in stands: done with a session, or waiting for a code or an approval in the LinkedIn app. */
+export type SignInResult =
+  | { state: "done"; cookies: string; headers: BrowserHeaders }
+  | { state: "code"; method: "email" | "sms" | "totp"; /** The last code was wrong. */ rejected?: boolean }
+  | { state: "app"; canTryAnotherWay: boolean };
+
+/**
+ * A file for send and start: written by the worker under the temp folder (the helper runs on the same machine
+ * and refuses any path outside it). image and video choose LinkedIn's upload type; everything else is file.
+ */
+export interface HelperAttachment {
+  path: string;
+  name: string;
+  mime: string;
+  kind: "image" | "video" | "file";
+}
+
 /** Each command's arguments and result. */
 export interface Commands {
+  signin: { args: { email: string; password: string; proxy?: string }; result: SignInResult };
+  code: { args: { code: string }; result: SignInResult };
+  app: { args: Record<string, never>; result: SignInResult };
+  another_way: { args: Record<string, never>; result: SignInResult };
   login: { args: LoginArgs; result: { me: LinkedInPerson } };
   conversations: { args: { before?: number }; result: { conversations: LinkedInConversation[] } };
   changes: { args: Record<string, never>; result: { conversations: LinkedInConversation[]; deleted: string[]; syncToken: string } };
   messages: { args: { conversation: string; before?: number; count?: number }; result: { messages: LinkedInMessage[] } };
-  send: { args: { conversation: string; text: string; token: string }; result: { message: LinkedInMessage } };
+  /** With attachments the text may be empty. Each file is a message of its own (messages), the text with the first. */
+  send: { args: { conversation: string; text: string; token: string; attachments?: HelperAttachment[] }; result: { message: LinkedInMessage; messages?: LinkedInMessage[] } };
+  /** With attachments the text may be empty. The first file opens the conversation; the others are in conversation.messages. */
+  start: { args: { profile: string; text: string; token: string; attachments?: HelperAttachment[] }; result: { conversation: LinkedInConversation; message: LinkedInMessage } };
+  /** A person's picture, fetched by the helper (through the account's proxy, from LinkedIn's image servers only). */
+  picture: { args: { url: string }; result: { data: string; type: string } };
   read: { args: { conversation: string }; result: Record<string, never> };
   connect: { args: Record<string, never>; result: Record<string, never> };
   cookies: { args: Record<string, never>; result: { cookies: string } };
@@ -145,7 +188,7 @@ export class Helper {
   }
 
   private receive(line: string) {
-    let msg: { id?: number; ok?: boolean; result?: unknown; error?: { kind: ErrorKind; status?: number }; event?: string };
+    let msg: { id?: number; ok?: boolean; result?: unknown; error?: { kind: ErrorKind; status?: number; stage?: string; sent?: number }; event?: string };
     try {
       msg = JSON.parse(line);
     } catch {
@@ -160,7 +203,7 @@ export class Helper {
     this.pending.delete(msg.id!);
     clearTimeout(pending.timer);
     if (msg.ok) pending.resolve(msg.result ?? {});
-    else pending.reject(new HelperError(msg.error?.kind ?? "failed", msg.error?.status));
+    else pending.reject(new HelperError(msg.error?.kind ?? "failed", msg.error?.status, msg.error?.stage, msg.error?.sent));
   }
 }
 
@@ -173,30 +216,93 @@ export function helperBuilt(path = helperPath()): boolean {
   return existsSync(path);
 }
 
-/** Starts the helper as a child process. Its stderr is discarded, so nothing it might print is kept. */
-export function spawnTransport(path = helperPath()): Transport {
-  const child = spawn(path, [], { stdio: ["pipe", "pipe", "ignore"] });
-  const lines = createInterface({ input: child.stdout });
+/**
+ * The environment a helper runs in. With a proxy, every request the helper makes goes through it: linkedingo
+ * reads the standard proxy variables, once, when it starts, so this is per helper and so per account.
+ */
+export function helperEnv(proxy?: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"]) delete env[name];
+  if (proxy?.trim()) {
+    env.HTTPS_PROXY = proxy.trim();
+    env.HTTP_PROXY = proxy.trim();
+  }
+  return env;
+}
+
+/**
+ * The proxy to hand the helper, checked at connect time: its host must be a public address or a name that
+ * resolves only to public addresses (127.0.0.1.nip.io does not). For http and socks5 proxies the resolved
+ * address replaces the name, so a second lookup cannot swap it; an https proxy keeps its name for the
+ * certificate check. Null when the proxy may not be used.
+ */
+export async function vettedProxy(proxy: string, resolve: (host: string) => Promise<string | null> = publicAddress): Promise<string | null> {
+  let url: URL;
+  try {
+    url = new URL(proxy.trim());
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(host)) return isPublicAddress(host) ? url.toString().replace(/\/$/, "") : null;
+  const address = await resolve(host);
+  if (!address) return null;
+  if (url.protocol === "https:") return url.toString().replace(/\/$/, "");
+  url.hostname = isIP(address) === 6 ? `[${address}]` : address;
+  return url.toString().replace(/\/$/, "");
+}
+
+/**
+ * Starts the helper as a child process. Its stderr is discarded, so nothing it might print is kept. With a
+ * proxy, the proxy is vetted first (see vettedProxy); lines written meanwhile are held, and a proxy that fails
+ * the check ends the transport as if the helper had exited, so nothing connects through it.
+ */
+export function spawnTransport(path = helperPath(), proxy?: string, vet = vettedProxy): Transport {
+  let child: ReturnType<typeof spawn> | null = null;
+  let lines: ReturnType<typeof createInterface> | null = null;
   let exited = false;
+  let closed = false;
+  const queued: string[] = [];
+  const lineListeners: ((line: string) => void)[] = [];
   const exitListeners: (() => void)[] = [];
   const exit = () => {
     if (exited) return;
     exited = true;
     for (const l of exitListeners) l();
   };
-  child.on("exit", exit);
-  child.on("error", exit);
-  child.stdin.on("error", () => undefined); // a write after the process died
+  const start = (checked: string | undefined) => {
+    if (closed) return exit();
+    const c = spawn(path, [], { stdio: ["pipe", "pipe", "ignore"], env: helperEnv(checked) });
+    child = c;
+    lines = createInterface({ input: c.stdout });
+    for (const l of lineListeners) lines.on("line", l);
+    c.on("exit", exit);
+    c.on("error", exit);
+    c.stdin.on("error", () => undefined); // a write after the process died
+    for (const line of queued.splice(0)) c.stdin.write(line + "\n");
+  };
+  if (proxy?.trim()) {
+    void vet(proxy).then((checked) => (checked ? start(checked) : exit()), () => exit());
+  } else {
+    start(undefined);
+  }
   return {
     write: (line) => {
-      if (!exited) child.stdin.write(line + "\n");
+      if (exited) return;
+      if (child) child.stdin?.write(line + "\n");
+      else queued.push(line);
     },
-    onLine: (listener) => void lines.on("line", listener),
+    onLine: (listener) => {
+      lineListeners.push(listener);
+      lines?.on("line", listener);
+    },
     onExit: (listener) => void exitListeners.push(listener),
     close: () => {
-      child.stdin.end();
+      closed = true;
+      child?.stdin?.end();
+      const c = child;
       setTimeout(() => {
-        if (!exited) child.kill();
+        if (!exited) c?.kill();
       }, 3_000).unref();
     },
   };

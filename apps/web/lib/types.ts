@@ -22,10 +22,18 @@ export interface Contact {
   hue: number;
   emails: string[];
   phones: string[];
+  /** Instagram usernames, without the @. */
+  handles?: string[];
+  /** WhatsApp privacy IDs ("...@lid") that stand in for a hidden number, so a reaction by one can still be named. */
+  lids?: string[];
   company?: string;
   role?: string;
   /** Their photo in the private avatars bucket, from your address book or WhatsApp. */
   avatarPath?: string;
+  /** Writes as a company (a no-reply sender, a brand) rather than as themselves, which picks their avatar's icon. */
+  isCompany: boolean;
+  /** The company they write for, as grouped on the Companies tab, with its shared logo. */
+  organization?: { id: string; name: string; logoPath?: string };
 }
 
 export interface Attachment {
@@ -33,8 +41,12 @@ export interface Attachment {
   name: string;
   kind: "image" | "pdf" | "video" | "audio" | "file";
   size: string;
+  /** The file's size in bytes, for totals. */
+  bytes?: number;
   path?: string; // where the file is stored in the private attachments bucket, once it is
   hiddenReason?: "inline" | "tiny" | "junk" | "manual"; // set for files kept out of the attachment lists
+  sealed?: boolean; // the stored file is encrypted: it is opened in the browser, not shown from a signed link
+  notKept?: "video_link" | "over_cap"; // why no copy was made: a video left at the provider, or the storage is full
 }
 
 /** An attachment with the message it came with, for views that gather files from many messages. */
@@ -80,6 +92,8 @@ export interface Message {
   deleted?: boolean;
   /** A WhatsApp message changed by its sender after it was sent. */
   edited?: boolean;
+  /** How far a WhatsApp message you sent has got: WhatsApp's one tick, two ticks, two blue ticks. */
+  receipt?: "sent" | "delivered" | "read";
   /** Set on a reply you just sent until the real message arrives from the mail server. */
   sendState?: "sending" | "failed";
   sendError?: string;
@@ -126,12 +140,22 @@ export interface Thread {
   needsReply: boolean;
   /** The latest message is yours, so the conversation waits on them, not you. */
   lastFromMe: boolean;
+  /** Who sent the latest message, so a group's row can say who it was. */
+  lastSenderId?: string;
   /** That message of yours expects an answer (a question, a request, documents sent), as the AI read it. */
   waiting?: boolean;
   /** Spam, marketing or impersonal bulk mail, kept out of All and Priority. */
   junk: boolean;
   /** Offers a way to unsubscribe. Junk that does is shown under Subscriptions, the rest under Junk. */
   subscription: boolean;
+  /** The team this is a work chat of; none for a personal chat (see lib/share.ts). */
+  workspaceId?: string;
+  /** How a work chat became one: a rule, a suggestion the agent accepted, the agent, or a team account. */
+  sharedBy?: "rule" | "suggestion" | "agent" | "account";
+  /** The client or client company a rule matched (a shared chat) or a suggestion rests on, opened with the team's key. */
+  shareMatch?: string;
+  /** Konva thinks this personal chat is about work; only its agent sees it (see lib/share.ts). */
+  shareSuggestion?: "suggested";
   draft?: Draft;
   feedback?: "important" | "not_important";
 }
@@ -151,6 +175,8 @@ export interface Account {
   id: string;
   provider: Provider;
   label: string;
+  /** A name the person gave it. Shown beside the logo only when they have several accounts of one service. */
+  nickname?: string;
   detail: string;
   status: AccountStatus;
   statusDetail?: string;
@@ -183,6 +209,8 @@ export interface Profile {
   whatsappReadReceipts: boolean;
   /** Send content-free usage numbers (which screens and features are used, never any text) to improve the product. */
   shareUsage: boolean;
+  /** What the AI writes summaries in: a language code, or null to follow how you write. */
+  language: "en-GB" | "en-US" | "af" | null;
 }
 
 /** A task or reminder from Microsoft To Do, Google Tasks or iCloud Reminders, shown in Calendar on the day it is due. */

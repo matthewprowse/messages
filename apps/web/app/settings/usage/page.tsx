@@ -2,46 +2,25 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { Tables } from "@messages/db";
-import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
-import { providerLabel } from "@/components/primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsHeader } from "@/components/settings-header";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { StorageSection } from "@/components/settings/storage-section";
 
-type SummaryRow = Tables<"ai_usage_summary">;
+type Allowance = { used_pct: number; resets_at: string; features: Record<string, number>; week_pct: number | null; week_resets_at: string; week_features: Record<string, number> };
 
-// In the order shown under This Month by Feature.
-const FEATURE_LABEL: Record<string, string> = { triage: "Sorting and Junk", draft: "Drafts", learn: "Learning From Edits", brief: "Daily Brief", transcribe: "Voice Note Transcripts" };
-const FEATURES = Object.keys(FEATURE_LABEL);
-const COLUMNS = "account_id, month, feature, model, calls, input_tokens, output_tokens, cost_usd";
+// In the order shown. A feature that is not in the budget is not listed.
+const FEATURE_LABEL: Record<string, string> = { triage: "Sorting and Junk", draft: "Drafts", learn: "Learning From Edits", brief: "Daily Brief", transcribe: "Transcripts" };
 
-function money(usd: number) {
-  if (usd === 0) return "$0.00";
-  return usd < 1 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
-}
-
-const calls = (n: number) => (n === 1 ? "1 call" : `${n} calls`);
-
-function tokens(n: number) {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
-}
-
-function Amount({ value, label }: { value: string; label?: string }) {
-  return (
-    <div className="text-right text-sm tabular-nums">
-      {value}
-      {label && <div className="text-xs text-muted-foreground">{label}</div>}
-    </div>
-  );
-}
+const pct = (n: number) => `${Math.min(100, Math.round(n))}%`;
+const resets = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "long" });
 
 export default function UsagePage() {
-  const { accounts } = useApp();
-  const [rows, setRows] = useState<SummaryRow[] | null>(null);
+  const [allowance, setAllowance] = useState<Allowance | null>(null);
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -49,89 +28,78 @@ export default function UsagePage() {
   const load = useCallback(async () => {
     setRefreshing(true);
     setFailed(false);
-    const { data, error } = await supabase.from("ai_usage_summary").select(COLUMNS);
-    if (error) setFailed(true);
-    else setRows((data ?? []) as SummaryRow[]);
+    const { data, error } = await supabase.rpc("my_ai_allowance");
+    if (error || !data) setFailed(true);
+    else setAllowance(data as unknown as Allowance);
     setRefreshing(false);
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  // Months are grouped in UTC by the database.
-  const now = new Date();
-  const thisMonth = (r: SummaryRow) => {
-    if (!r.month) return false;
-    const m = new Date(r.month);
-    return m.getUTCFullYear() === now.getUTCFullYear() && m.getUTCMonth() === now.getUTCMonth();
-  };
-  const sum = (list: SummaryRow[], key: "cost_usd" | "calls" | "input_tokens" | "output_tokens") => list.reduce((n, r) => n + Number(r[key] ?? 0), 0);
-
-  const accountIds = [...new Set([...accounts.map((a) => a.id), ...(rows ?? []).map((r) => r.account_id ?? "none")])];
-  const month = (rows ?? []).filter(thisMonth);
+  const used = allowance ? Math.min(100, allowance.used_pct) : 0;
+  const features = allowance ? Object.keys(FEATURE_LABEL).filter((f) => f in allowance.features) : [];
+  const hasWeek = !!allowance && allowance.week_pct !== null && Object.keys(allowance.week_features).length > 0;
+  const week = allowance && hasWeek ? Math.min(100, allowance.week_pct ?? 0) : 0;
+  // A feature is paused by its week or its month, whichever is used up.
+  const paused = (f: string) => !!allowance && (allowance.features[f] >= 100 || (allowance.week_features[f] ?? 0) >= 100);
+  const weekPaused = (f: string) => !!allowance && (allowance.week_features[f] ?? 0) >= 100 && allowance.features[f] < 100;
 
   return (
     <>
       <SettingsHeader
         title="Usage"
-        description="What the AI has cost, per connected account, in US dollars at Google's published Gemini prices."
-        actions={rows && (
+        description="Your storage and your AI allowance for the month."
+        actions={allowance && (
           <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void load()}>
             <RefreshCw className={refreshing ? "animate-spin" : undefined} /> Refresh
           </Button>
         )}
       />
-      {failed && (
-        <Alert variant="destructive" className="mb-6">
-          <AlertTitle>Could Not Load Usage</AlertTitle>
-          <AlertDescription>
-            <p>Check your connection and try again.</p>
-            <Button variant="outline" size="sm" className="mt-2" disabled={refreshing} onClick={() => void load()}>Retry</Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {rows === null ? (
-        failed ? null : <Skeleton className="h-40 w-full rounded-lg" />
-      ) : (
-        <div className="space-y-8">
-          <SettingsSection id="accounts" title="Accounts">
+      <div className="space-y-8">
+        <StorageSection />
+        {failed && (
+          <Alert variant="destructive">
+            <AlertTitle>Could Not Load Your AI Allowance</AlertTitle>
+            <AlertDescription>
+              <p>Check your connection and try again.</p>
+              <Button variant="outline" size="sm" className="mt-2" disabled={refreshing} onClick={() => void load()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        )}
+        {!allowance ? (
+          failed ? null : <Skeleton className="h-40 w-full rounded-lg" />
+        ) : (
+          <SettingsSection id="ai" title="AI Allowance" description="What the AI uses for sorting, drafts and transcripts. Setting up a newly connected account is free and not counted. The week starts again on Monday and the month on the first.">
             <SettingsRows>
-              {accountIds.map((id) => {
-                const account = accounts.find((a) => a.id === id);
-                const all = rows.filter((r) => (r.account_id ?? "none") === id);
-                return (
-                  <SettingsRow
-                    key={id}
-                    title={account ? `${providerLabel[account.provider]}, ${account.detail}` : "Not Linked to an Account"}
-                    description={`${calls(sum(all, "calls"))} in total, ${money(sum(all, "cost_usd"))} all time`}
-                  >
-                    <Amount value={money(sum(all.filter(thisMonth), "cost_usd"))} label="This Month" />
-                  </SettingsRow>
-                );
-              })}
-              <SettingsRow title="Total" description={`${money(sum(rows, "cost_usd"))} all time`}>
-                <Amount value={money(sum(month, "cost_usd"))} label="This Month" />
-              </SettingsRow>
+              {hasWeek && (
+                <div className="space-y-2 px-4 py-3">
+                  <div className="flex items-baseline justify-between text-sm">
+                    <span className="font-medium">This Week: {pct(100 - week)} left</span>
+                    <span className="text-xs text-muted-foreground">Resets {resets(allowance.week_resets_at)}</span>
+                  </div>
+                  <Progress value={week} aria-label="AI allowance used this week" />
+                </div>
+              )}
+              <div className="space-y-2 px-4 py-3">
+                <div className="flex items-baseline justify-between text-sm">
+                  <span className="font-medium">This Month: {pct(100 - used)} left</span>
+                  <span className="text-xs text-muted-foreground">Resets {resets(allowance.resets_at)}</span>
+                </div>
+                <Progress value={used} aria-label="AI allowance used this month" />
+                {used >= 80 && (
+                  <p className="text-xs text-muted-foreground">
+                    {used >= 100 ? "You have used this month's allowance. Features that are used up pause until it resets." : "You are close to this month's allowance."}
+                  </p>
+                )}
+              </div>
+              {features.map((f) => (
+                <SettingsRow key={f} title={FEATURE_LABEL[f]} description={paused(f) ? `Paused until ${weekPaused(f) ? resets(allowance.week_resets_at) : resets(allowance.resets_at)}` : undefined}>
+                  <span className="text-sm tabular-nums">{pct(allowance.features[f])} used</span>
+                </SettingsRow>
+              ))}
             </SettingsRows>
           </SettingsSection>
-
-          <SettingsSection id="features" title="This Month by Feature">
-            <SettingsRows>
-              {FEATURES.map((f) => {
-                const list = month.filter((r) => r.feature === f);
-                const models = [...new Set(list.map((r) => r.model))].join(", ");
-                return (
-                  <SettingsRow
-                    key={f}
-                    title={FEATURE_LABEL[f]}
-                    description={`${calls(sum(list, "calls"))}, ${tokens(sum(list, "input_tokens"))} in, ${tokens(sum(list, "output_tokens"))} out${models ? `, ${models}` : ""}`}
-                  >
-                    <Amount value={money(sum(list, "cost_usd"))} />
-                  </SettingsRow>
-                );
-              })}
-            </SettingsRows>
-          </SettingsSection>
-        </div>
-      )}
+        )}
+      </div>
     </>
   );
 }

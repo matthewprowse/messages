@@ -11,6 +11,7 @@ const SECTIONS = [
   { href: "/settings/personalisation", label: "Personalisation" },
   { href: "/settings/notifications", label: "Notifications" },
   { href: "/settings/usage", label: "Usage" },
+  { href: "/settings/team", label: "Team" },
   { href: "/settings/general", label: "General" },
 ];
 

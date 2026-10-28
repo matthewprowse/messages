@@ -29,7 +29,7 @@ export const FIELD = {
   transcript: "transcript",
   /** Addresses (stage 2): contact_identities.value, messages.sender_address and to_addresses, chat IDs */
   address: "address",
-  /** contacts.display_name, organizations.name */
+  /** contacts.display_name, organizations.name, meeting_participants.name (meeting_participants.address uses address) */
   name: "name",
   /** organizations.domain */
   domain: "domain",
@@ -57,6 +57,38 @@ export const FIELD = {
   meetingTitle: "meeting_title",
   /** meetings.action_items: the AI's action items from a meeting, as JSON */
   meetingActions: "meeting_actions",
+  /** attachments.filename: the name of an email, WhatsApp, Instagram or LinkedIn file */
+  filename: "filename",
+  /** The bytes of a stored attachment (email, WhatsApp, Instagram), sealed with encryptBytes before upload */
+  attachmentData: "attachment_data",
+  /** The bytes of a meeting recording (Zoom), sealed with encryptBytes before upload */
+  recordingData: "recording_data",
+  /** calendar_events.title */
+  eventTitle: "event_title",
+  /** calendar_events.location */
+  eventLocation: "event_location",
+  /** address_book_cards.name */
+  cardName: "card_name",
+  /** writing_examples.situation */
+  writingSituation: "writing_situation",
+  /** writing_examples.body */
+  writingBody: "writing_body",
+  /** style_rules.rule */
+  styleRule: "style_rule",
+  /** style_rules.relationship */
+  styleRelationship: "style_relationship",
+  /** contacts.company */
+  contactCompany: "contact_company",
+  /** contacts.role */
+  contactRole: "contact_role",
+  /** contacts.relationship */
+  contactRelationship: "contact_relationship",
+  /** contacts.style_note */
+  contactStyleNote: "contact_style_note",
+  /** contacts.ai_summary: written by the AI worker */
+  contactSummary: "contact_summary",
+  /** message_embeddings.embedding_data: a vector sealed with encryptBytes, base64 */
+  embeddingData: "embedding_data",
 } as const;
 
 export type Field = (typeof FIELD)[keyof typeof FIELD];

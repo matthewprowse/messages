@@ -143,7 +143,7 @@ export async function keepName(contactId: string, name: string): Promise<void> {
 export async function loadContactGraph(): Promise<{ contacts: Contact[]; participants: Map<string, string[]> }> {
   const [parts, contacts, identities] = await Promise.all([
     allRows("Load contacts", (from, to) => supabase.from("thread_participants").select("thread_id, contact_id").order("thread_id").order("contact_id").range(from, to)),
-    allRows("Load contacts", (from, to) => supabase.from("contacts").select("*").order("id").range(from, to)),
+    allRows("Load contacts", (from, to) => supabase.from("contacts").select("*, organizations(id, name, logo_path)").order("id").range(from, to)),
     allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("*").order("id").range(from, to)).then(openAddresses),
   ]);
   const participants = new Map<string, string[]>();

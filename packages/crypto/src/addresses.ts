@@ -1,4 +1,4 @@
-import { blindIndex, type UserKeys } from "./index";
+import { blindIndex, teamBlindIndex, type TeamKeys, type UserKeys } from "./index";
 
 // What a blind index is taken of, for addresses (encryption stage 2). The same address always gives the same
 // token, however it was written, so the database can still match a sender to a contact, a reply to its
@@ -29,6 +29,12 @@ export function domainKey(value: string): string {
 export const addressIndex = (keys: UserKeys, value: string) => blindIndex(keys, addressKey(value));
 export const chatIndex = (keys: UserKeys, value: string) => blindIndex(keys, chatKey(value));
 export const domainIndex = (keys: UserKeys, value: string) => blindIndex(keys, domainKey(value));
+
+// The same keys under a team's index key, for the team's shared contacts and chats: the same normalisation, so a
+// value is written one way everywhere, and a different HMAC key, so a team's token never equals a user's.
+export const teamAddressIndex = (keys: TeamKeys, value: string) => teamBlindIndex(keys, addressKey(value));
+export const teamChatIndex = (keys: TeamKeys, value: string) => teamBlindIndex(keys, chatKey(value));
+export const teamDomainIndex = (keys: TeamKeys, value: string) => teamBlindIndex(keys, domainKey(value));
 
 /** A priority rule's target, a whole address or a domain (with or without its @). */
 export const ruleTargetIndex = (keys: UserKeys, target: string) =>

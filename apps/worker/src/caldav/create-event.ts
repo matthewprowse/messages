@@ -8,6 +8,7 @@ import {
   validTimeZone,
   type CalendarOutboxRow,
 } from "../calendar/create-event";
+import { BAD_RULE, validRule } from "../calendar/recurrence";
 import { wallMs, wallString } from "../calendar/update-event";
 
 // Turns a queued calendar_outbox row into the iCalendar file that creates it in iCloud Calendar, and says
@@ -77,6 +78,10 @@ export function buildIcs(row: CalendarOutboxRow, organizer: string | null, now =
   } else {
     // In the zone it was made in, as Calendar on your devices writes it: a UTC time shows in iCloud as GMT.
     lines.push(`DTSTART;TZID=${row.time_zone}:${wallIn(startsAt, row.time_zone)}`, `DTEND;TZID=${row.time_zone}:${wallIn(endsAt, row.time_zone)}`);
+  }
+  if (row.recurrence) {
+    if (!validRule(row.recurrence)) return { error: BAD_RULE };
+    lines.push(`RRULE:${row.recurrence}`);
   }
   lines.push(`SUMMARY:${escapeText(row.title.trim())}`);
   const location = row.location?.trim();

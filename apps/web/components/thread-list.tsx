@@ -4,11 +4,11 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import { track } from "@/lib/analytics";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Archive, Check, ExternalLink, Inbox as InboxIcon, Mail, MailCheck, MailX, OctagonAlert, Pin, RefreshCw, Trash2, X, type LucideIcon } from "lucide-react";
+import { Archive, Check, ExternalLink, Inbox as InboxIcon, Mail, MailCheck, MailX, OctagonAlert, Pin, RefreshCw, Search, Trash2, X, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import type { Contact, ListFilter, Thread, Unsubscribe, View } from "@/lib/types";
-import { relTime } from "@/lib/format";
-import { filtersForView, nextLimit, PAGE_SIZE, shortcutAction, toggleSelection, type ShortcutAction } from "@/lib/selection";
+import { niceName, relTime } from "@/lib/format";
+import { filtersForView, nextLimit, PAGE_SIZE, toggleSelection, type ShortcutAction } from "@/lib/selection";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,9 +19,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ContactAvatar, EmptyState } from "@/components/primitives";
+import { CompanyAvatar, ContactAvatar, EmptyState, GroupAvatar } from "@/components/primitives";
 import { useImporting } from "@/components/sync-bar";
 import { ProviderLogo } from "@/components/provider-logo";
+import { WorkTag } from "@/components/work-badge";
+import { TeamInbox } from "@/components/team-inbox";
 
 const VIEWS: { key: View; label: string }[] = [
   { key: "all", label: "All" },
@@ -44,10 +46,6 @@ const EMPTY: Record<View, { title: string; description: string }> = {
   junk: { title: "No Junk", description: "Spam and cold outreach the AI sorts out lands here." },
   subscriptions: { title: "No Subscriptions", description: "Newsletters, promotions and alerts you can unsubscribe from land here." },
 };
-
-// Key handlers leave these alone so typing, menus and dialogs keep their keys. A closed select (the
-// From picker) jumps by letter, so it is included too.
-const TYPING = "input, textarea, select, [contenteditable=true], [role=menu], [role=dialog], [role=listbox], [role=combobox]";
 
 function withQuery(path: string, query: string) {
   return query ? `${path}?${query}` : path;
@@ -214,7 +212,7 @@ export function useToday() {
 }
 
 // Memoised with id-based callbacks, so opening or checking one row re-renders only the rows that change.
-// Exported for the Summary page, which links rows to /briefing and shows each conversation's AI summary.
+// Exported for the Summary page, which links rows to /summary and shows each conversation's AI summary.
 export const ThreadRow = memo(function ThreadRow({
   thread,
   contact,
@@ -227,6 +225,8 @@ export const ThreadRow = memo(function ThreadRow({
   onPress,
   baseHref = "/inbox",
   summary,
+  accountName,
+  lastSender,
   swiped = false,
   onSwipe,
   onTouchRow,
@@ -245,10 +245,14 @@ export const ThreadRow = memo(function ThreadRow({
   onAction: (id: string, action: RowAction) => void;
   /** Called on pointer down, so the conversation's messages start loading before the click lands. */
   onPress: (id: string) => void;
-  /** Where the row links: /inbox by default, /briefing on the Summary page. */
+  /** Where the row links: /inbox by default, /summary on the Summary page. */
   baseHref?: string;
   /** An extra line under the preview, such as the AI summary. */
   summary?: string;
+  /** The account's name, given only when the person has several accounts of this service. */
+  accountName?: string;
+  /** Who sent the latest message of a group, named before its preview. */
+  lastSender?: Contact;
   /** Swiped open on a touch screen: the actions and the checkbox are out. */
   swiped?: boolean;
   /** A swipe to the left opens this row (id), to the right closes it (null). */
@@ -257,9 +261,13 @@ export const ThreadRow = memo(function ThreadRow({
   onTouchRow?: (id: string) => void;
 }) {
   const router = useRouter();
-  const title = thread.isGroup ? thread.groupName : contact?.name ?? thread.fallbackName ?? "Unknown";
+  const title = niceName((thread.isGroup ? thread.groupName : contact?.name ?? thread.fallbackName) ?? "Unknown");
   // Email rows show the subject, chats show the latest message.
-  const preview = (thread.channel === "email" ? thread.subject : undefined) ?? thread.preview ?? "";
+  const body = (thread.channel === "email" ? thread.subject : undefined) ?? thread.preview ?? "";
+  // A group says who spoke last, the way Messages does.
+  // WhatsApp groups already store the speaker in the preview ("Kelly Prowse: ..."), so it is only added where it is missing.
+  const speaker = thread.isGroup && !/^[^\n:]{1,50}: /.test(body) ? (thread.lastFromMe ? "You" : lastSender && niceName(lastSender.name).split(" ")[0]) : undefined;
+  const preview = speaker && body ? `${speaker}: ${body}` : body;
   const href = withQuery(`${baseHref}/${thread.id}`, query);
   const unreadCount = thread.unreadCount;
   const lit = selected || checked;
@@ -316,20 +324,22 @@ export const ThreadRow = memo(function ThreadRow({
           >
             <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", selecting || open ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible pointer-fine:group-focus-within/row:invisible")}>
               {/* A group's own picture, or the other person's photo. */}
-              <ContactAvatar contact={thread.isGroup ? thread : contact} className="size-8" />
+              {thread.isGroup ? <GroupAvatar path={thread.avatarPath} className="size-8" /> : <ContactAvatar contact={contact} className="size-8" />}
             </div>
             {/* 20px name line + 4px gap + 16px preview line. */}
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <div className="flex h-5 items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className={cn("min-w-0 truncate text-sm", thread.unread ? "font-semibold" : "font-medium")}>{title}</span>
+                  <span className="min-w-0 truncate text-sm font-medium">{title}</span>
                   <ProviderLogo provider={thread.provider} />
+                  {accountName && <span className="min-w-0 shrink-[2] truncate text-xs text-muted-foreground">{accountName}</span>}
+                  <WorkTag thread={thread} />
                   {thread.pinned && <Pin className="size-3 shrink-0 text-muted-foreground" aria-label="Pinned" />}
                 </span>
                 <span data-hover-hide className="shrink-0 text-xs tabular-nums text-muted-foreground">{relTime(thread.lastMessageAt)}</span>
               </div>
               <div className="flex h-4 items-center justify-between gap-3">
-                {/* Always full colour: unread shows in the bold name and the count. Only the AI summary below is muted. */}
+                {/* Always full colour: unread shows in the count. Only the AI summary below is muted. */}
                 <span className="min-w-0 truncate text-xs text-foreground">{preview}</span>
                 {unreadCount > 0 && (
                   <span data-unread className="-my-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium" data-hover-hide aria-label={`${unreadCount} unread`}>
@@ -383,23 +393,23 @@ export const ThreadRow = memo(function ThreadRow({
 });
 
 /** Takes the place of the view and filter controls while rows are checked: Select All, then the actions. */
-function BulkBar({ allPicked, onAll, onClear, children }: { allPicked: boolean; onAll: () => void; onClear: () => void; children: React.ReactNode }) {
+function BulkBar({ allPicked, onAll, onClear, onDone, children }: { allPicked: boolean; onAll: () => void; onClear: () => void; /** Leaves select mode; without it the X only unchecks. */ onDone?: () => void; children: React.ReactNode }) {
   return (
     <div className="flex h-8 items-center justify-between gap-3">
       {/* Once every row is checked, the same button clears them all. */}
       <Button variant="secondary" onClick={allPicked ? onClear : onAll}>{allPicked ? "Deselect All" : "Select All"}</Button>
       <div className="flex items-center gap-1">
         {children}
-        <RowButton label="Clear Selection" icon={X} onClick={onClear} />
+        <RowButton label={onDone ? "Done Selecting" : "Clear Selection"} icon={X} onClick={onDone ?? onClear} />
       </div>
     </div>
   );
 }
 
 /** The header's actions on checked conversations. */
-export function SelectionBar({ allPicked, anyUnread, onAll, onClear, onAction }: { allPicked: boolean; anyUnread: boolean; onAll: () => void; onClear: () => void; onAction: (action: RowAction) => void }) {
+export function SelectionBar({ allPicked, anyUnread, onAll, onClear, onDone, onAction }: { allPicked: boolean; anyUnread: boolean; onAll: () => void; onClear: () => void; onDone?: () => void; onAction: (action: RowAction) => void }) {
   return (
-    <BulkBar allPicked={allPicked} onAll={onAll} onClear={onClear}>
+    <BulkBar allPicked={allPicked} onAll={onAll} onClear={onClear} onDone={onDone}>
       <RowButton label="Archive" icon={Archive} onClick={() => onAction("archive")} />
       <RowButton label="Delete" icon={Trash2} onClick={() => onAction("trash")} />
       <RowButton label="Move to Junk" icon={OctagonAlert} onClick={() => onAction("junk")} />
@@ -422,19 +432,46 @@ const NO_THREADS: Thread[] = [];
 // Senders already unsubscribed, or on their way, cannot be picked again.
 const UNPICKABLE = new Set<Unsubscribe["status"]>(["queued", "working", "done"]);
 
-interface Sender {
+/** One address that sends subscriptions, on the account it sends to. Unsubscribing works one of these at a time. */
+interface Address {
   key: string;
   accountId: string;
   address: string;
+}
+
+/**
+ * One row in Subscriptions: a company, with every address it writes from, as on the Companies tab. A sender
+ * with no company (a personal address) is a row of its own.
+ */
+interface Sender {
+  key: string;
   name: string;
+  addresses: Address[];
+  /** The company, for its logo. */
+  company?: { name: string; logoPath?: string };
   contact?: Contact;
   latest: Thread;
   count: number;
 }
 
+const canPick = (status?: Unsubscribe) => !status || !UNPICKABLE.has(status.status);
+
 /**
- * Subscriptions grouped by sender, so whole senders can be picked and unsubscribed from in one go. The
- * list keeps the checked senders so its header can act on them. The selection clears when `reset` changes.
+ * A row's state across its addresses: on its way while any is, waiting on you while any is left to confirm,
+ * failed while any failed, and unsubscribed once all are. Nothing while some have never been asked.
+ */
+function rowStatus(statuses: (Unsubscribe | undefined)[]): Unsubscribe | undefined {
+  const known = statuses.filter((u): u is Unsubscribe => !!u);
+  return known.find((u) => u.status === "queued" || u.status === "working")
+    ?? known.find((u) => u.status === "manual")
+    ?? known.find((u) => u.status === "failed")
+    ?? (known.length === statuses.length ? known[0] : undefined);
+}
+
+/**
+ * Subscriptions grouped by company, so a whole company (every address it writes from) can be picked and
+ * unsubscribed from in one go. The list keeps the checked rows so its header can act on them. The selection
+ * clears when `reset` changes.
  */
 function useSubscriptions(items: Thread[], contactOf: (id: string) => Contact | undefined, reset: string) {
   const { unsubscribes, unsubscribe, confirmUnsubscribe } = useApp();
@@ -447,22 +484,37 @@ function useSubscriptions(items: Thread[], contactOf: (id: string) => Contact | 
       const contact = t.isGroup ? undefined : contactOf(t.participantIds[0]);
       const address = contact?.emails[0];
       if (!t.accountId || !address) continue;
-      const key = `${t.accountId}:${address}`;
+      const one = { key: `${t.accountId}:${address}`, accountId: t.accountId, address };
+      const org = contact?.organization;
+      const key = org ? `company:${org.id}` : one.key;
       const existing = byKey.get(key);
       if (existing) {
         existing.count++;
-        if (t.lastMessageAt > existing.latest.lastMessageAt) existing.latest = t;
+        if (!existing.addresses.some((a) => a.key === one.key)) existing.addresses.push(one);
+        if (t.lastMessageAt > existing.latest.lastMessageAt) {
+          existing.latest = t;
+          existing.contact = contact;
+        }
       } else {
-        byKey.set(key, { key, accountId: t.accountId, address, name: contact?.name ?? address, contact, latest: t, count: 1 });
+        byKey.set(key, {
+          key,
+          name: org?.name ?? contact?.name ?? address,
+          addresses: [one],
+          company: org ? { name: org.name, logoPath: org.logoPath } : undefined,
+          contact,
+          latest: t,
+          count: 1,
+        });
       }
     }
     return [...byKey.values()].sort((a, b) => b.latest.lastMessageAt.localeCompare(a.latest.lastMessageAt));
   }, [items, contactOf]);
 
-  // Keyed like a sender, so each row finds its status without scanning.
+  // Keyed like an address, so each row finds its addresses' states without scanning.
   const statusByKey = useMemo(() => new Map(unsubscribes.map((u) => [`${u.accountId}:${u.sender}`, u])), [unsubscribes]);
+  // A row can be picked while any of its addresses can still be unsubscribed from.
   const pickable = useMemo(
-    () => senders.filter((s) => { const status = statusByKey.get(s.key)?.status; return !status || !UNPICKABLE.has(status); }).map((s) => s.key),
+    () => senders.filter((s) => s.addresses.some((a) => canPick(statusByKey.get(a.key)))).map((s) => s.key),
     [senders, statusByKey],
   );
   // A sender that starts unsubscribing drops out of the selection.
@@ -476,33 +528,24 @@ function useSubscriptions(items: Thread[], contactOf: (id: string) => Contact | 
     anchor.current = key;
   }, [pickable]);
 
+  // Every address in the chosen rows that can still be unsubscribed from.
   const run = useCallback(async (keys: string[]) => {
     const chosen = senders.filter((s) => keys.includes(s.key));
-    if (chosen.length === 0) return;
+    const addresses = chosen.flatMap((s) => s.addresses.filter((a) => canPick(statusByKey.get(a.key))));
+    if (addresses.length === 0) return;
     track("feature_used", { feature: "unsubscribe", detail: chosen.length > 1 ? "many" : "one" });
-    await unsubscribe(chosen.map((s) => ({ accountId: s.accountId, sender: s.address })));
+    await unsubscribe(addresses.map((a) => ({ accountId: a.accountId, sender: a.address })));
     setChecked((c) => c.filter((k) => !keys.includes(k)));
-  }, [senders, unsubscribe]);
-
-  // Escape clears the selection, as it does for conversations.
-  const anyPicked = picked.length > 0;
-  useEffect(() => {
-    if (!anyPicked) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key !== "Escape" || (e.target as HTMLElement | null)?.closest(TYPING)) return;
-      setChecked([]);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [anyPicked]);
+  }, [senders, statusByKey, unsubscribe]);
 
   return { senders, statusByKey, pickable, picked, setChecked, check, run, confirm: confirmUnsubscribe };
 }
 
-/** One sender in Subscriptions: laid out like a conversation row, opening its latest email. */
-function SubscriptionRow({ sender, status, query, open, checked, selecting, pickable, onCheck, onUnsubscribe, onConfirm }: {
+/** One company or sender in Subscriptions: laid out like a conversation row, opening its latest email. */
+function SubscriptionRow({ sender, statuses, query, open, checked, selecting, pickable, onCheck, onUnsubscribe, onConfirm }: {
   sender: Sender;
-  status?: Unsubscribe;
+  /** Each address's unsubscribe, in the order of sender.addresses. */
+  statuses: (Unsubscribe | undefined)[];
   query: string;
   open: boolean;
   checked: boolean;
@@ -513,13 +556,17 @@ function SubscriptionRow({ sender, status, query, open, checked, selecting, pick
   onConfirm: (id: string) => void;
 }) {
   const lit = open || checked;
-  // A sender left to confirm on their own page offers that page and a way to say it is done; one that can
-  // still be unsubscribed from offers that. Others, already on their way or done, offer nothing.
-  const manual = status?.status === "manual" ? status : undefined;
-  const actions: { label: string; icon: LucideIcon; onClick: () => void }[] = selecting ? [] : manual ? [
-    ...(manual.manualUrl ? [{ label: "Open Their Page", icon: ExternalLink, onClick: () => window.open(manual.manualUrl, "_blank", "noopener,noreferrer") }] : []),
-    { label: "Mark as Unsubscribed", icon: Check, onClick: () => onConfirm(manual.id) },
+  const status = rowStatus(statuses);
+  // A sender left to confirm on their own page offers that page and a way to say it is done (for every
+  // address of the company waiting on it); one that can still be unsubscribed from offers that. Others,
+  // already on their way or done, offer nothing.
+  const manual = statuses.filter((u): u is Unsubscribe => u?.status === "manual");
+  const page = manual.find((u) => u.manualUrl)?.manualUrl;
+  const actions: { label: string; icon: LucideIcon; onClick: () => void }[] = selecting ? [] : manual.length > 0 ? [
+    ...(page ? [{ label: "Open Their Page", icon: ExternalLink, onClick: () => window.open(page, "_blank", "noopener,noreferrer") }] : []),
+    { label: "Mark as Unsubscribed", icon: Check, onClick: () => manual.forEach((u) => onConfirm(u.id)) },
   ] : pickable ? [{ label: "Unsubscribe", icon: MailX, onClick: () => onUnsubscribe(sender.key) }] : [];
+  const addresses = sender.addresses.length === 1 ? sender.addresses[0].address : `${sender.addresses.length} Addresses`;
 
   return (
     <div className={cn("group/row relative rounded-lg", lit ? "bg-muted" : "hover:bg-muted/50")}>
@@ -536,7 +583,11 @@ function SubscriptionRow({ sender, status, query, open, checked, selecting, pick
         className={cn("flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", actions.length > 0 && FADE[actions.length as 1 | 2])}
       >
         <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", pickable && (selecting ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible group-focus-within/row:invisible pointer-coarse:invisible"))}>
-          <ContactAvatar contact={sender.contact} className="size-8" />
+          {sender.company ? (
+            <CompanyAvatar logoPath={sender.company.logoPath} className="size-8" />
+          ) : (
+            <ContactAvatar contact={sender.contact} className="size-8" />
+          )}
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex h-5 items-center justify-between gap-3">
@@ -544,7 +595,7 @@ function SubscriptionRow({ sender, status, query, open, checked, selecting, pick
             <span data-hover-hide className="shrink-0 text-xs tabular-nums text-muted-foreground">{sender.count === 1 ? "1 Email" : `${sender.count} Emails`}</span>
           </div>
           <div className="flex h-4 items-center justify-between gap-3">
-            <span className="min-w-0 truncate text-xs">{sender.address}</span>
+            <span className="min-w-0 truncate text-xs">{addresses}</span>
             {status && <span data-hover-hide className="shrink-0 text-xs text-muted-foreground">{UNSUBSCRIBE_LABEL[status.status]}</span>}
           </div>
         </div>
@@ -631,59 +682,7 @@ export function useThreadSelection(order: string[], query: string, reset: string
     run(picked.includes(id) ? picked : [id], action);
   }, []);
 
-  // E, # or Delete, and ! act on the checked conversations, or the row with keyboard focus. Otherwise
-  // the open conversation handles them. Listening first, during capture, lets the list claim the key.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const target = e.target as HTMLElement | null;
-      if (target?.closest(TYPING)) return;
-      // Only a row focused from the keyboard counts. A clicked row, or one a closing dialog hands focus
-      // back to, is not necessarily the conversation on screen.
-      const focused = target?.matches(":focus-visible") ? target.closest<HTMLElement>("[data-thread-row]")?.dataset.threadRow : undefined;
-      const { picked, run } = latest.current;
-      const ids = picked.length > 0 ? picked : focused ? [focused] : [];
-      if (ids.length === 0) return;
-      if (e.key === "Escape" && picked.length > 0) {
-        e.stopPropagation();
-        setChecked([]);
-        return;
-      }
-      const action = shortcutAction(e);
-      if (!action) return;
-      e.preventDefault();
-      e.stopPropagation();
-      run(ids, action);
-    }
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
-
   return { picked, setChecked, check, run, onRowAction };
-}
-
-/**
- * J and K move keyboard focus down and up the rows inside the returned element, starting from the
- * focused or open row, and Enter then opens it. E and the other shortcuts act on the focused row.
- */
-function useRowNavigation<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== "j" && e.key !== "k")) return;
-      if ((e.target as HTMLElement | null)?.closest(TYPING)) return;
-      const rows = [...(ref.current?.querySelectorAll<HTMLElement>("[data-row-link]") ?? [])];
-      if (rows.length === 0) return;
-      const from = rows.findIndex((r) => r === document.activeElement);
-      const at = from !== -1 ? from : rows.findIndex((r) => r.getAttribute("aria-current") === "page");
-      const next = at === -1 ? 0 : Math.min(rows.length - 1, Math.max(0, at + (e.key === "j" ? 1 : -1)));
-      e.preventDefault();
-      rows[next].focus({ preventScroll: true });
-      rows[next].scrollIntoView({ block: "nearest" });
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-  return ref;
 }
 
 export function ThreadList() {
@@ -691,6 +690,12 @@ export function ThreadList() {
   const params = useParams<{ id?: string }>();
   const { listThreads, accounts, loading, contactById: contactOf, prefetchMessages } = useApp();
   const noAccounts = !accounts.some((a) => a.status !== "disconnected");
+  // A name beside the logo only tells accounts apart, so it shows once there are two of one service.
+  const accountNames = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const a of accounts) count.set(a.provider, (count.get(a.provider) ?? 0) + 1);
+    return new Map(accounts.filter((a) => (count.get(a.provider) ?? 0) > 1).map((a) => [a.id, a.nickname || a.label]));
+  }, [accounts]);
   const importing = useImporting().length > 0;
   const [search, setSearch] = useState("");
   const term = search.trim().toLowerCase();
@@ -709,7 +714,6 @@ export function ThreadList() {
   const subsPicked = useMemo(() => new Set(subs.picked), [subs.picked]);
   const subsPickable = useMemo(() => new Set(subs.pickable), [subs.pickable]);
   const pickedSet = useMemo(() => new Set(picked), [picked]);
-  const rowsRef = useRowNavigation<HTMLDivElement>();
   const today = useToday();
   const rowSwipe = useSwipedRow();
 
@@ -718,16 +722,6 @@ export function ThreadList() {
   const selectingRows = selectMode || picked.length > 0;
   const selectingSubs = selectMode || subs.picked.length > 0;
   const endSelecting = () => { setSelectMode(false); setChecked([]); subs.setChecked([]); };
-  // Escape leaves select mode once nothing is checked (with rows checked, it clears them first).
-  useEffect(() => {
-    if (!selectMode) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !(e.target as HTMLElement | null)?.closest(TYPING)) setSelectMode(false);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectMode]);
-
   // Long lists draw a hundred rows, then a hundred more whenever the end nears the viewport. The limit
   // starts over when the list changes. Keyboard navigation reads whatever rows are drawn.
   const listKey = `${view}:${filter}:${term}`;
@@ -753,13 +747,13 @@ export function ThreadList() {
       <div className="shrink-0">
         <div className="space-y-3 border-b p-3">
           <div className="flex items-center justify-between gap-3">
-            <h1 className="flex h-8 items-center text-lg font-medium">Conversations</h1>
+            <h1 className="flex h-8 items-center text-lg font-medium">Inbox</h1>
             <Button variant={selectMode ? "secondary" : "ghost"} aria-pressed={selectMode} onClick={() => (selectMode ? endSelecting() : setSelectMode(true))}>
               {selectMode ? "Done" : "Select"}
             </Button>
           </div>
           {view === "subscriptions" && selectingSubs ? (
-            <BulkBar allPicked={subs.pickable.length > 0 && subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])}>
+            <BulkBar allPicked={subs.pickable.length > 0 && subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])} onDone={endSelecting}>
               <RowButton label="Unsubscribe" icon={MailX} onClick={() => subs.run(subs.picked)} />
             </BulkBar>
           ) : selectingRows && view !== "subscriptions" ? (
@@ -768,6 +762,7 @@ export function ThreadList() {
               anyUnread={threads.some((t) => t.unread && pickedSet.has(t.id))}
               onAll={() => setChecked(order)}
               onClear={() => setChecked([])}
+              onDone={endSelecting}
               onAction={(action) => run(picked, action)}
             />
           ) : (
@@ -775,18 +770,23 @@ export function ThreadList() {
           )}
         </div>
         <div className="border-b p-3">
-          <Input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Escape" && search) { e.stopPropagation(); setSearch(""); } }}
-            placeholder="Filter Conversations"
-            aria-label="Filter Conversations"
-          />
+          <div className="relative">
+            <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="search"
+              className="pl-8"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape" && search) { e.stopPropagation(); setSearch(""); } }}
+              placeholder="Search Conversations"
+              aria-label="Search Conversations"
+            />
+          </div>
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div ref={rowsRef} className="p-3">
+        <div className="p-3">
+          <TeamInbox query={query} hidden={view !== "all" || !!term} />
           {loading && <LoadingRows />}
           {!loading && threads.length === 0 && (
             <div className="py-24">
@@ -813,7 +813,7 @@ export function ThreadList() {
                   {i > 0 && <div className="pl-14"><Separator /></div>}
                   <SubscriptionRow
                     sender={s}
-                    status={subs.statusByKey.get(s.key)}
+                    statuses={s.addresses.map((a) => subs.statusByKey.get(a.key))}
                     query={query}
                     open={params.id === s.latest.id}
                     checked={subsPicked.has(s.key)}
@@ -845,6 +845,8 @@ export function ThreadList() {
                     swiped={rowSwipe.swiped === t.id}
                     onSwipe={rowSwipe.onSwipe}
                     onTouchRow={rowSwipe.onTouchRow}
+                    lastSender={t.isGroup && t.lastSenderId ? contactOf(t.lastSenderId) : undefined}
+                    accountName={t.accountId ? accountNames.get(t.accountId) : undefined}
                   />
                 </Fragment>
               ))}

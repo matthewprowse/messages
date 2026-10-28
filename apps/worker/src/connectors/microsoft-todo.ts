@@ -5,17 +5,19 @@ import { allRows, db, must, saveSyncState, setAccountStatus, type AccountRow } f
 import { errorCode, log } from "../log";
 import { chunks, mapLimit } from "../util";
 import { seal } from "../vault";
-import { TaskUpdateError, taskOfUpdate } from "../tasks";
+import { NO_TITLE, TASK_GONE, TaskUpdateError, taskOfUpdate, taskWriteOfRow } from "../tasks";
 import { GraphApiError, signInRevoked, type GraphClient } from "../microsoft/client";
 import { TASKS_SCOPE } from "../microsoft/oauth";
 import { microsoftFatalDetail, openGraphClient } from "../microsoft/session";
 import { ianaZone } from "../microsoft/windows-zones";
 import {
+  defaultTodoList,
   graphInstant,
   statusPatch,
   storedTodoTask,
   throttleWait,
   todoUpdateFailure,
+  todoWriteBody,
   type GraphTodoList,
   type GraphTodoTask,
 } from "../microsoft/todo-task";
@@ -252,6 +254,113 @@ export class MicrosoftTodoConnector {
     const run = this.updates.then(() => this.applyUpdate(row));
     this.updates = run.catch(() => undefined);
     return run;
+  }
+
+  /** Adds a task made in the app to the default list, then stores it so the app shows it before the next sync. */
+  createTask(row: Tables<"task_updates">): Promise<void> {
+    return this.queue(() => this.applyCreate(row));
+  }
+
+  /** Changes a task's title, notes, date or importance, as made in the app. */
+  editTask(row: Tables<"task_updates">): Promise<void> {
+    return this.queue(() => this.applyEdit(row));
+  }
+
+  /** Deletes a task, as made in the app. */
+  deleteTask(row: Tables<"task_updates">): Promise<void> {
+    return this.queue(() => this.applyDelete(row));
+  }
+
+  private queue(work: () => Promise<void>): Promise<void> {
+    const run = this.updates.then(work);
+    this.updates = run.catch(() => undefined);
+    return run;
+  }
+
+  private signedIn(): GraphClient {
+    if (!this.client || this.stopped) throw new TaskUpdateError("Microsoft To Do is still connecting. Try again in a moment.");
+    return this.client;
+  }
+
+  private async ownTask(row: Tables<"task_updates">) {
+    const task = await taskOfUpdate(row);
+    if (!task) throw new TaskUpdateError(TASK_GONE);
+    if (task.account_id !== this.id || row.user_id !== this.account.user_id) throw new TaskUpdateError("This task belongs to another account.");
+    return task;
+  }
+
+  private async applyCreate(row: Tables<"task_updates">) {
+    const client = this.signedIn();
+    if (row.account_id !== this.id || row.user_id !== this.account.user_id) throw new TaskUpdateError("This task belongs to another account.");
+    const write = await taskWriteOfRow(row);
+    if (!write.title) throw new TaskUpdateError(NO_TITLE);
+    let list: GraphTodoList | null;
+    let created: GraphTodoTask;
+    try {
+      const lists = await client.request<{ value?: GraphTodoList[] }>("/me/todo/lists", { query: { $select: "id,displayName,wellknownListName" }, timeoutMs: 30_000 });
+      list = defaultTodoList(lists.value ?? []);
+      if (!list) throw new TaskUpdateError("Microsoft To Do has no list to add this task to.");
+      created = await client.request<GraphTodoTask>(`/me/todo/lists/${encodeURIComponent(list.id)}/tasks`, { method: "POST", body: todoWriteBody(write, this.userZone, true), timeoutMs: 30_000 });
+    } catch (err) {
+      if (err instanceof TaskUpdateError) throw err;
+      log.warn("microsoft todo task not created", { account: this.id, update: row.id, code: errorCode(err) });
+      throw new TaskUpdateError(todoUpdateFailure(err instanceof GraphApiError ? err.status : null));
+    }
+    const name = list.displayName?.trim() || UNNAMED_LIST;
+    await this.store([storedTodoTask(created, { userId: this.account.user_id, accountId: this.id, list: { id: list.id, name }, userZone: this.userZone })]);
+    log.info("microsoft todo task created", { account: this.id, update: row.id });
+  }
+
+  private async applyEdit(row: Tables<"task_updates">) {
+    const client = this.signedIn();
+    const task = await this.ownTask(row);
+    const write = await taskWriteOfRow(row);
+    if (!write.title) throw new TaskUpdateError(NO_TITLE);
+    let updated: GraphTodoTask;
+    try {
+      updated = await client.request<GraphTodoTask>(`/me/todo/lists/${encodeURIComponent(task.list_id)}/tasks/${encodeURIComponent(task.provider_task_id)}`, {
+        method: "PATCH",
+        body: todoWriteBody(write, this.userZone, false),
+        timeoutMs: 30_000,
+      });
+    } catch (err) {
+      log.warn("microsoft todo task not changed", { account: this.id, update: row.id, code: errorCode(err) });
+      throw new TaskUpdateError(todoUpdateFailure(err instanceof GraphApiError ? err.status : null));
+    }
+    // The date and importance as To Do kept them; the title and notes sealed as the app sent them.
+    const kept = storedTodoTask(updated, { userId: this.account.user_id, accountId: this.id, list: { id: task.list_id, name: "" }, userZone: this.userZone });
+    const meta = task.provider_meta && typeof task.provider_meta === "object" && !Array.isArray(task.provider_meta) ? task.provider_meta : {};
+    must(
+      await db
+        .from("tasks")
+        .update({
+          title: row.title ?? "",
+          notes: row.notes,
+          due_at: kept.due_at ?? null,
+          due_all_day: kept.due_all_day ?? true,
+          priority: kept.priority ?? null,
+          provider_meta: { ...meta, etag: updated["@odata.etag"] ?? meta.etag ?? null },
+        })
+        .eq("id", task.id),
+      "store task change",
+    );
+    log.info("microsoft todo task edited", { account: this.id, update: row.id });
+  }
+
+  private async applyDelete(row: Tables<"task_updates">) {
+    const client = this.signedIn();
+    const task = await this.ownTask(row);
+    try {
+      await client.request(`/me/todo/lists/${encodeURIComponent(task.list_id)}/tasks/${encodeURIComponent(task.provider_task_id)}`, { method: "DELETE", timeoutMs: 30_000 });
+    } catch (err) {
+      // Already gone in To Do is what was asked for.
+      if (!(err instanceof GraphApiError && err.status === 404)) {
+        log.warn("microsoft todo task not deleted", { account: this.id, update: row.id, code: errorCode(err) });
+        throw new TaskUpdateError(todoUpdateFailure(err instanceof GraphApiError ? err.status : null));
+      }
+    }
+    must(await db.from("tasks").delete().eq("id", task.id), "remove deleted task");
+    log.info("microsoft todo task deleted", { account: this.id, update: row.id });
   }
 
   /**

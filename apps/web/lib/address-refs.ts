@@ -1,5 +1,6 @@
 "use client";
 
+import { flagOn } from "@messages/crypto/flags";
 import { addressIndex, chatIndex, domainIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
 import { encryptField } from "@messages/crypto";
@@ -11,7 +12,7 @@ import { open, userKeys } from "./vault";
 // database matches on, and the value itself, encrypted once NEXT_PUBLIC_ENCRYPT_ADDRESSES is on. The browser
 // holds the same keys as the workers, so it works these out before calling.
 
-const encryptAddresses = process.env.NEXT_PUBLIC_ENCRYPT_ADDRESSES === "true";
+const encryptAddresses = flagOn(process.env.NEXT_PUBLIC_ENCRYPT_ADDRESSES);
 
 export interface IdentityRef {
   kind: string;

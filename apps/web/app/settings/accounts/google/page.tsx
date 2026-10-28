@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { MEET_PERSONAL, connectGoogle, googleErrorText } from "@/lib/onboarding";
 import { useApp } from "@/lib/store";
@@ -96,13 +95,14 @@ function ConnectGoogle() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [meet, setMeet] = useState(false);
 
   useEffect(() => {
     const failed = params.get("connect_error");
     if (params.get("connected") === "google") {
-      toast("Google is connected.");
+      setDone(true);
       if (params.get("meet") === "personal") setNotice(MEET_PERSONAL);
       track("account_connect", { provider: "google", step: "app", outcome: "done" });
     } else if (failed) {
@@ -116,6 +116,7 @@ function ConnectGoogle() {
     setBusy(true);
     setError(null);
     setNotice(null);
+    setDone(false);
     track("account_connect", { provider: "google", step: "app", outcome: "start" });
     try {
       await connectGoogle("/settings/accounts/google", { meet });
@@ -140,10 +141,36 @@ function ConnectGoogle() {
       <div className="space-y-2">
         <Button disabled={busy} onClick={start}><GoogleLogo /> Connect Google</Button>
         {error && <FieldError>{error}</FieldError>}
+        {done && <FieldDescription>Signed in with Google. What each part is doing is below.</FieldDescription>}
         {notice && <FieldDescription>{notice}</FieldDescription>}
       </div>
+      <GoogleParts />
       <MeetStatus />
     </div>
+  );
+}
+
+const PARTS = [
+  { provider: "gmail", name: "Gmail" },
+  { provider: "google_calendar", name: "Google Calendar" },
+  { provider: "google_tasks", name: "Google Tasks" },
+] as const;
+
+/** What each part of the sign-in is doing, with what Google said when one is not working. */
+function GoogleParts() {
+  const { accounts } = useApp();
+  const parts = PARTS.map((p) => ({ ...p, account: accounts.find((a) => a.provider === p.provider) })).filter((p) => p.account);
+  if (parts.length === 0) return null;
+  return (
+    <SettingsRows>
+      {parts.map(({ provider, name, account }) => (
+        <SettingsRow
+          key={provider}
+          title={<>{name} {account!.status === "error" ? <Badge variant="destructive">Needs Attention</Badge> : account!.status === "connected" || account!.status === "syncing" ? <Badge variant="secondary">Connected</Badge> : <Badge variant="outline">Connecting</Badge>}</>}
+          description={account!.status === "error" ? account!.statusDetail : undefined}
+        />
+      ))}
+    </SettingsRows>
   );
 }
 

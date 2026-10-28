@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
+import { INVITE_KEY } from "@/lib/team";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +12,16 @@ import { FieldSeparator } from "@/components/ui/field";
 import { GoogleLogo } from "@/components/provider-logo";
 
 type Mode = "email" | "code" | "password";
+
+/** The invite page waiting for this sign-in, left by that page in this browser. */
+function pendingInvite(): string | null {
+  try {
+    const token = localStorage.getItem(INVITE_KEY);
+    return token && /^[0-9a-f]{64}$/.test(token) ? `/invite/${token}` : null;
+  } catch {
+    return null;
+  }
+}
 
 // One page to sign in and to sign up. No password to make up: Google, or a code sent to your email (the
 // email's link works too). An account with a password set can still use it.
@@ -24,9 +35,10 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Into the app. Someone new finds the setup dialog open over it.
+  // Into the app, or back to the team invite they were sent to sign in for. Someone new finds the setup dialog open over it.
   useEffect(() => {
-    if (session) router.replace("/briefing");
+    if (!session) return;
+    router.replace(pendingInvite() ?? "/summary");
   }, [session, router]);
 
   const run = async (work: () => Promise<string | null>) => {

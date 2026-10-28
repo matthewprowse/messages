@@ -27,7 +27,7 @@ import { SelectionBar, ThreadRow, useSwipedRow, useThreadSelection } from "@/com
 import { BriefPlayer } from "@/components/brief-player";
 
 // The Summary list looks and behaves like the Conversations list: same header, rows (ThreadRow itself),
-// hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /briefing.
+// hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /summary.
 
 const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
   { key: "none", label: "All" },
@@ -36,7 +36,7 @@ const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
   { key: "whatsapp", label: "WhatsApp" },
 ];
 
-const BASE = "/briefing";
+const BASE = "/summary";
 
 function listHref(filter: ListFilter) {
   return filter === "none" ? BASE : `${BASE}?filter=${filter}`;
@@ -157,12 +157,15 @@ const NO_END_MINUTES = 60;
  * last events loaded stay up while a refetch or a new day's load runs, and when one fails. `failed` is
  * set while the latest load has failed with nothing loaded to show, and `retry` loads again.
  */
+// Today's events as last loaded, so the section is there at once when the page is opened again.
+let todaysCache: { day: string; events: CalendarEvent[] } | null = null;
+
 function useTodaysEvents(now: Date) {
   const { session } = useAuth();
   const userId = session?.user.id;
   const today = dayKey(now);
   const tick = Math.floor(now.getTime() / (EVENTS_REFRESH_MINUTES * 60_000));
-  const [loaded, setLoaded] = useState<CalendarEvent[]>();
+  const [loaded, setLoaded] = useState<CalendarEvent[] | undefined>(() => (todaysCache?.day === today ? todaysCache.events : undefined));
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -173,6 +176,7 @@ function useTodaysEvents(now: Date) {
     loadEvents(new Date(y, m - 1, d), new Date(y, m - 1, d + 1))
       .then((events) => {
         if (cancelled) return;
+        todaysCache = { day: today, events };
         setLoaded(events);
         setFailed(false);
       })
@@ -353,9 +357,9 @@ export function SummaryList() {
       scrollbarClassName="z-20 data-vertical:top-[calc(var(--summary-header)+var(--summary-band))]! data-vertical:h-auto!"
     >
       {/* Plain white like the Conversations header, so the rows scrolling under it do not show through. */}
-      <div ref={headerRef} className="sticky top-0 z-10 space-y-2 border-b bg-background p-3">
-        <div className="flex h-10 items-center justify-between gap-2">
-          <h1 className="text-lg font-medium">Summary</h1>
+      <div ref={headerRef} className="sticky top-0 z-10 space-y-3 border-b bg-background p-3">
+        <div className="flex h-8 items-center justify-between gap-3">
+          <h1 className="flex h-8 items-center text-lg font-medium">Summary</h1>
           <BriefPlayer />
         </div>
         {picked.length > 0 ? (

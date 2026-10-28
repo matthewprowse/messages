@@ -10,7 +10,7 @@ import { Forward, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/lib/supabase";
 import { open as openText } from "@/lib/vault";
@@ -20,17 +20,15 @@ import { FIELD } from "@messages/crypto/fields";
 // the like are drawn from ranges over the text (rich-text.ts), and the original is only ever shown inside
 // a sandboxed iframe by ViewOriginal below.
 // bulk comes from Message.bulk, set when the message is loaded, and is shared with ViewOriginal.
-export function MessageBody({ m, whatsapp, bulk }: { m: Message; whatsapp: boolean; bulk: boolean }) {
-  const [showQuoted, setShowQuoted] = useState(false);
+export function MessageBody({ m, whatsapp, bulk, showFull = false }: { m: Message; whatsapp: boolean; bulk: boolean; showFull?: boolean }) {
   // Newsletters and marketing mail lead with a short preview. View Original is the main way to read them.
   const preview = useMemo(() => (bulk && !whatsapp ? bulkPreview(m.body) : null), [bulk, whatsapp, m.body]);
   // WhatsApp text is shown as sent, with WhatsApp's own formatting and full links.
   if (whatsapp) return <WhatsAppText text={m.quoted ? `${m.body}\n${m.quoted}` : m.body} />;
   if (preview) {
-    const more = preview.more || !!m.quoted;
     return (
       <div className="flex flex-col items-start gap-1">
-        {showQuoted ? (
+        {showFull ? (
           <>
             <EmailText text={m.body} marks={m.marks} />
             {m.quoted && <div className="w-full whitespace-pre-wrap wrap-anywhere border-t border-current/20 pt-2 text-xs opacity-70"><Linked text={m.quoted} /></div>}
@@ -40,7 +38,6 @@ export function MessageBody({ m, whatsapp, bulk }: { m: Message; whatsapp: boole
         ) : (
           <div>This email is mostly images. Open the original to read it.</div>
         )}
-        {more && <ToggleButton onClick={() => setShowQuoted((v) => !v)}>{showQuoted ? "Show Less" : "Show Full Text"}</ToggleButton>}
       </div>
     );
   }
@@ -55,6 +52,13 @@ export function MessageBody({ m, whatsapp, bulk }: { m: Message; whatsapp: boole
     );
   }
   return <EmailText text={m.body} marks={m.marks} />;
+}
+
+/** Whether a message shows a short preview that Show Full Text opens up. The toggle sits beside the date, under the bubble. */
+export function hasFullText(m: Message, whatsapp: boolean, bulk: boolean): boolean {
+  if (whatsapp || !bulk) return false;
+  const preview = bulkPreview(m.body);
+  return !!preview && (preview.more || !!m.quoted);
 }
 
 /** "Jane Doe <jane@x.com>" as the name, then the address, or the address on its own. */
@@ -179,10 +183,6 @@ function WhatsAppText({ text }: { text: string }) {
   );
 }
 
-function ToggleButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return <Button variant="ghost" size="xs" className="-ml-2 text-current opacity-70 hover:opacity-100" onClick={onClick}>{children}</Button>;
-}
-
 const MARK_CLASS: Record<Mark, string> = {
   bold: "font-medium",
   italic: "italic",
@@ -210,6 +210,14 @@ const ORIGINAL_WAIT_MS = 30_000;
 const ORIGINAL_RECHECK_MS = 2_000;
 const ORIGINAL_RECHECK_MAX_MS = 10_000;
 
+// The worker stores a code, not text. A request stored before that holds the sentence itself, which is shown as it is.
+const ORIGINAL_ERRORS: Record<string, string> = {
+  not_found: "This email could not be found.",
+  gone: "This email is no longer in your mailbox.",
+  no_layout: "This email has no original layout to show.",
+  unreachable: "Your mailbox could not be reached. Try again.",
+};
+
 type Original = { status: "loading" } | { status: "ready"; html: string } | { status: "failed"; error: string };
 type Answer = { status: "done"; html: string } | { status: "failed"; error: string } | { status: "timeout" };
 
@@ -236,7 +244,7 @@ function awaitAnswer(id: string): Promise<Answer> {
       const { data: row } = await supabase.from("email_originals").select("status, html, error").eq("id", id).maybeSingle();
       if (settled || !row) return;
       if (row.status === "done" && row.html) finish({ status: "done", html: row.html });
-      else if (row.status === "failed") finish({ status: "failed", error: row.error ?? "The original could not be fetched." });
+      else if (row.status === "failed") finish({ status: "failed", error: (row.error && ORIGINAL_ERRORS[row.error]) || row.error || "The original could not be fetched." });
     }
     function recheck() {
       timer = setTimeout(async () => {
@@ -299,7 +307,7 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
         <TooltipContent>View Original</TooltipContent>
       </Tooltip>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent track="view_original" className="flex h-[85dvh] flex-col sm:max-w-3xl" showCloseButton={false}>
+        <DialogContent track="view_original" className="flex h-[85dvh] flex-col sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Original Email</DialogTitle>
             <DialogDescription>The email as it was sent, fetched from your mailbox.</DialogDescription>
@@ -312,6 +320,7 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
           )}
           {doc ? (
             // No allow-scripts and no allow-same-origin: the email cannot run code or reach the app. Popups let links open in a new tab.
+            // allow-popups-to-escape-sandbox stays on: without it the opened page inherits this sandbox (no scripts, no cookies), so most sites a link leads to would load broken. The frame cannot reach the app either way, and its only opener is this scriptless frame.
             <iframe title="Original Email" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" srcDoc={doc.srcdoc} className="min-h-0 w-full flex-1 rounded-md border" />
           ) : original?.status === "failed" ? (
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-md border text-sm text-muted-foreground">
@@ -321,9 +330,6 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
           ) : (
             <Skeleton className="min-h-0 w-full flex-1 rounded-md" />
           )}
-          <DialogFooter>
-            <DialogClose asChild><Button variant="outline">Close</Button></DialogClose>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

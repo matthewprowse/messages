@@ -286,7 +286,7 @@ export function BriefPlayer() {
   const refreshNote = none ? `No Refreshes Left Today${allowance?.nextAt ? `, Available ${whenAllowed(allowance.nextAt, now)}` : ""}` : cooling ? "Available Again in a Minute" : "Refresh Brief";
 
   return (
-    <div className="flex shrink-0 items-center gap-1">
+    <div className="flex shrink-0 items-center gap-3">
       {waiting && <span role="status" className="hidden pr-1 text-xs text-muted-foreground md:inline">Writing your brief, this takes up to a minute</span>}
       <Tooltip>
         <TooltipTrigger asChild>
@@ -299,7 +299,7 @@ export function BriefPlayer() {
       {brief && !waiting && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={none || cooling ? 0 : -1} className="flex items-center gap-1">
+            <span tabIndex={none || cooling ? 0 : -1} className="flex items-center gap-3">
               {left && <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">{left}</span>}
               <Button variant="ghost" size="icon" aria-label="Refresh Brief" disabled={none || cooling} onClick={() => setConfirming(true)}>
                 <RotateCcw />

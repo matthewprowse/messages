@@ -1,6 +1,6 @@
 import { db, must } from "../db";
-import { decryptJson, encryptJson } from "../crypto";
 import { env } from "../env";
+import { credentialSealer } from "../vault";
 import { errorCode, log } from "../log";
 import { ZoomClient, signInRevoked } from "./client";
 import type { ZoomCredentials } from "./oauth";
@@ -23,13 +23,14 @@ export async function openZoomClient(accountId: string): Promise<{ client: ZoomC
     "load credentials",
   );
   if (!row) throw Object.assign(new Error("No credentials stored"), { code: "NO_CREDENTIALS" });
-  const signedIn = decryptJson<ZoomCredentials>(row.ciphertext, env.encryptionKey);
-  const creds = row.refreshed ? decryptJson<ZoomCredentials>(row.refreshed, env.encryptionKey) : signedIn;
+  const sealer = await credentialSealer(accountId);
+  const signedIn = await sealer.openJson<ZoomCredentials>(row.ciphertext);
+  const creds = row.refreshed ? await sealer.openJson<ZoomCredentials>(row.refreshed) : signedIn;
 
   const keep = async (refreshToken: string) => {
     const { error } = await db
       .from("account_credentials")
-      .update({ refreshed: encryptJson({ ...creds, refreshToken }, env.encryptionKey) })
+      .update({ refreshed: await sealer.sealJson({ ...creds, refreshToken }) })
       .eq("account_id", accountId)
       .eq("updated_at", row.updated_at);
     if (error) log.warn("zoom token not kept", { account: accountId, code: errorCode(error) });

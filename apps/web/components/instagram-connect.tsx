@@ -104,7 +104,7 @@ export function InstagramConnect() {
       <SettingsRows>
         <SettingsRow
           title={<>Instagram <Badge variant="secondary">{status === "syncing" ? "Importing" : "Connected"}</Badge></>}
-          description={status === "syncing" ? "Your recent Instagram chats are importing." : "New messages appear in Conversations within a few minutes."}
+          description={status === "syncing" ? "Your recent Instagram chats are importing." : "New messages appear in the Inbox within a few minutes."}
         />
       </SettingsRows>
     );
@@ -134,7 +134,7 @@ export function InstagramConnect() {
       <div className="flex flex-col items-center gap-2 rounded-lg border p-6 text-sm text-muted-foreground" aria-live="polite">
         <RefreshCw className="size-4 animate-spin" />
         <span>{current?.statusDetail ?? "Signing in to Instagram."}</span>
-        <span className="text-xs">This updates by itself while the Instagram connector is running.</span>
+        <span className="text-xs">This updates by itself.</span>
       </div>
     );
   }

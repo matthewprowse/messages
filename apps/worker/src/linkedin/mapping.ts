@@ -134,7 +134,8 @@ export async function ingestPayload(
     preview: await seal.text(FIELD.preview, previewOf(said.text, m, conv, meId)),
     body_text: await seal.text(FIELD.body, said.text || null),
     provider_meta: meta,
-    attachments: said.deleted ? [] : attachmentRows(m.files),
+    // A file's name is sealed like the text; its hints (extension, receipt-like, sticker) are set when its file is saved.
+    attachments: said.deleted ? [] : await Promise.all(attachmentRows(m.files).map(async (a) => ({ ...a, filename: (await seal.text(FIELD.filename, a.filename))! }))),
   };
 }
 

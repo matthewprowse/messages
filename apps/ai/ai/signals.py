@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
-from .fields import BODY, DRAFT, INSTRUCTION
+from .fields import BODY, DRAFT, INSTRUCTION, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
 from .vault import Vault
@@ -28,6 +28,7 @@ MIN_SIGNALS = 3  # instructions or thrown away drafts needed before the model is
 MAX_RULES = 3
 SAMPLES = 20
 DRAFT_CHARS = 300
+LEARN_MAX_OUTPUT = 2048  # tokens, thinking included: a few short rules
 RECHECK_S = 3600
 
 TONE_RULES = {
@@ -153,29 +154,44 @@ class Signals:
         self.vault = vault or Vault(db)  # without one, plaintext passes through
         self._seen: dict[str, str] = {}  # user_id -> newest signal draft the model has read
         self._next: dict[str, float] = {}
+        self._probed: str | None = None  # when drafts were last checked for changes
+        self._dirty: set[str] = set()  # users whose drafts changed and who are waiting out RECHECK_S
 
     def run_once(self) -> int:
-        since = (datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)).isoformat()
-        drafts = self.db.select(
+        """Looks only at users whose drafts changed since the last run (a cheap read of user ids), then reads those
+        users' drafts with bodies. The first run looks at everyone with drafts in the window."""
+        started = datetime.now(timezone.utc)
+        since = (started - timedelta(days=WINDOW_DAYS)).isoformat()
+        filters = {"status": "in.(active,sent,discarded)", "tone": "neq.edit"}  # edits of your own text say nothing about how drafts are written
+        probe = self.db.select(
             "drafts",
             {
-                "select": "id,user_id,tone,instruction,decision,decision_kind,status,body,created_at",
-                "status": "in.(active,sent,discarded)",
-                "tone": "neq.edit",  # edits of your own text say nothing about how drafts are written
+                "select": "user_id",
+                **filters,
                 "created_at": f"gte.{since}",
-                "order": "created_at.desc",
+                **({"updated_at": f"gte.{self._probed}"} if self._probed else {}),
                 "limit": "1000",
             },
         )
-        by_user: dict[str, list[dict[str, Any]]] = {}
-        for d in drafts:
-            by_user.setdefault(d["user_id"], []).append(d)
+        self._probed = (started - timedelta(minutes=1)).isoformat()  # a little back, so a row written during the read is not missed
+        self._dirty |= {r["user_id"] for r in probe}
+        due = sorted(u for u in self._dirty if time.monotonic() >= self._next.get(u, 0.0))
         changed = 0
-        for user_id, mine in by_user.items():
-            if time.monotonic() < self._next.get(user_id, 0.0):
-                continue
+        for user_id in due:
             self._next[user_id] = time.monotonic() + RECHECK_S
-            for d in mine:  # only users due are opened: most of the rows read are skipped
+            self._dirty.discard(user_id)
+            mine = self.db.select(
+                "drafts",
+                {
+                    "select": "id,user_id,tone,instruction,decision,decision_kind,status,body,created_at",
+                    **filters,
+                    "user_id": f"eq.{user_id}",
+                    "created_at": f"gte.{since}",
+                    "order": "created_at.desc",
+                    "limit": "300",
+                },
+            )
+            for d in mine:
                 self.vault.open_row(user_id, d, [("instruction", INSTRUCTION), ("decision", INSTRUCTION), ("body", DRAFT)])
             try:  # one user's failure must not skip the others
                 changed += self._learn(user_id, mine)
@@ -188,6 +204,8 @@ class Signals:
             "style_rules",
             {"select": "id,rule,support_count,enabled,disabled_reason", "user_id": f"eq.{user_id}", "source": "eq.signals", "scope": "eq.global"},
         )
+        for r in existing:  # rules written sealed are opened here; plain ones pass through
+            r["rule"] = self.vault.open(user_id, STYLE_RULE, r.get("rule")) or ""
         signal_drafts = [d for d in drafts if (d.get("instruction") or "").strip() or d.get("decision_kind") or (d["status"] == "discarded" and d.get("body"))]
         instructions = [d["instruction"].strip()[:300] for d in drafts if (d.get("instruction") or "").strip()][:SAMPLES]
         thrown_away = [(d.get("tone") or "default", (d.get("body") or "")[:DRAFT_CHARS]) for d in drafts if d["status"] == "discarded" and d.get("body")][:SAMPLES]
@@ -200,7 +218,7 @@ class Signals:
             choices = [(d["decision_kind"], d["decision"].strip()[:300], sent) for d, sent in zip(picked, self._sent_bodies(user_id, picked))]
             prompt = build_prompt([r["rule"] for r in existing if r["enabled"] and not _is_tone_rule(r["rule"])], instructions, thrown_away, choices)
             try:
-                result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"))
+                result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"), max_output=LEARN_MAX_OUTPUT)
                 learned = [item.get("rule") or "" for item in (result.get("rules") or []) if isinstance(item, dict)]
                 self._seen[user_id] = newest
             except GeminiError as err:
@@ -214,7 +232,7 @@ class Signals:
             self.db.insert(
                 "style_rules",
                 [
-                    {"user_id": user_id, "scope": "global", "contact_id": None, "rule": text, "source": "signals", "support_count": n}
+                    {"user_id": user_id, "scope": "global", "contact_id": None, "rule": self.vault.seal(user_id, STYLE_RULE, text), "source": "signals", "support_count": n}
                     for text, n in inserts
                 ],
             )

@@ -4,7 +4,7 @@ import unittest
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from ai.crypto import derive_user_keys, encrypt_bytes, encrypt_field, is_ciphertext
+from ai.crypto import derive_team_keys, derive_user_keys, encrypt_bytes, encrypt_field, encrypt_team_field, is_ciphertext
 from ai.drafts import Drafts
 from ai.fields import BODY, CHOICES, DRAFT, HTML, INSTRUCTION, SUBJECT, SUMMARY, VOICE_INSTRUCTION
 from ai.learn import Learn
@@ -88,6 +88,132 @@ class VaultTests(unittest.TestCase):
         self.assertIsNone(vault.open_row("u1", None, [("subject", SUBJECT)]))
 
 
+TEAM_DATA_KEY = os.urandom(32)
+TEAM_KEYS = derive_team_keys(TEAM_DATA_KEY)
+
+
+def wrapped_team_row(workspace_id: str, master: bytes = MASTER) -> dict:
+    """A team_keys row: local:v1, the workspace id bound in as team_keys:<id>."""
+    iv = os.urandom(12)
+    sealed = AESGCM(master).encrypt(iv, TEAM_DATA_KEY, f"team_keys:{workspace_id}".encode())
+    return {"wrapped_key": base64.b64encode(iv + sealed).decode(), "wrapped_by": "local:v1"}
+
+
+class TeamKeysDb:
+    def __init__(self, users: dict, teams: dict, members: dict | None = None):
+        self.users, self.teams = users, teams
+        self.members = members or {}  # user_id -> workspace ids they are or were in, newest first
+        self.reads: list[tuple[str, str]] = []
+
+    def select(self, table, params):
+        if table == "team_keys":
+            owner = params["workspace_id"][3:]
+            self.reads.append(("team", owner))
+            rows = self.teams.get(owner)
+            return [] if rows is None else (rows if isinstance(rows, list) else [rows])
+        assert table == "workspace_members"
+        owner = params["user_id"][3:]
+        self.reads.append(("members", owner))
+        return [{"workspace_id": w} for w in self.members.get(owner, [])]
+
+    def first(self, table, params):
+        if table == "user_keys":
+            owner = params["user_id"][3:]
+            self.reads.append(("user", owner))
+            return self.users.get(owner)
+        raise AssertionError(table)
+
+
+class TeamVaultTests(unittest.TestCase):
+    def team_enc(self, field: str, text: str) -> str:
+        return encrypt_team_field(TEAM_KEYS, field, text)
+
+    def test_opens_either_prefix_and_reads_each_key_once(self):
+        db = TeamKeysDb({"u1": wrapped_row("u1")}, {"w1": wrapped_team_row("w1")})
+        vault = Vault(db, MASTER_B64)
+        self.assertEqual(vault.open("u1", SUBJECT, enc(SUBJECT, "Mine"), "w1"), "Mine")
+        self.assertEqual(vault.open("u1", SUBJECT, self.team_enc(SUBJECT, "Shared"), "w1"), "Shared")
+        self.assertEqual(vault.open("u1", SUBJECT, self.team_enc(SUBJECT, "Shared"), "w1"), "Shared")
+        self.assertEqual(vault.open("u1", SUBJECT, "plain", "w1"), "plain")
+        self.assertEqual(sorted(db.reads), [("team", "w1"), ("user", "u1")])
+
+    def test_a_team_value_needs_the_rows_workspace(self):
+        db = TeamKeysDb({"u1": wrapped_row("u1")}, {"w1": wrapped_team_row("w1")})
+        vault = Vault(db, MASTER_B64)
+        shared = self.team_enc(SUBJECT, "Shared")
+        self.assertEqual(vault.open("u1", SUBJECT, shared), "")  # no workspace on the row, and the user is in none
+        self.assertEqual(vault.open("u1", SUBJECT, shared, "w2"), "")  # a workspace with no key
+        self.assertEqual(vault.open("u1", SUBJECT, self.team_enc(BODY, "A body"), "w1"), "")  # another field
+        self.assertEqual(Vault(TeamKeysDb({}, {"w1": wrapped_team_row("w1", os.urandom(32))}), MASTER_B64).open("u1", SUBJECT, shared, "w1"), "")
+        # A key wrapped for another workspace does not open under this one.
+        self.assertEqual(Vault(TeamKeysDb({}, {"w3": wrapped_team_row("w1")}), MASTER_B64).open("u1", SUBJECT, shared, "w3"), "")
+
+    def test_without_a_workspace_on_the_row_the_users_own_are_tried(self):
+        # Most reads do not select workspace_id. A team value in a user's row is from a workspace they are or were in.
+        db = TeamKeysDb({"u1": wrapped_row("u1")}, {"w1": wrapped_team_row("w1"), "w2": wrapped_team_row("w2", os.urandom(32))}, {"u1": ["w2", "w1"], "u2": ["w3"]})
+        vault = Vault(db, MASTER_B64)
+        shared = self.team_enc(SUBJECT, "Shared")
+        self.assertEqual(vault.open("u1", SUBJECT, shared), "Shared")  # w2's key cannot be opened here, w1's does
+        self.assertEqual(vault.open("u1", SUBJECT, shared), "Shared")
+        self.assertEqual(db.reads.count(("members", "u1")), 1)  # cached
+        self.assertEqual(vault.open("u2", SUBJECT, shared), "")  # a workspace with no key
+        self.assertEqual(vault.open("u1", SUBJECT, self.team_enc(BODY, "A body")), "")  # another field of a team value
+
+    def test_open_row_uses_the_rows_workspace_id(self):
+        db = TeamKeysDb({"u1": wrapped_row("u1")}, {"w1": wrapped_team_row("w1")})
+        vault = Vault(db, MASTER_B64)
+        row = {"id": "m1", "workspace_id": "w1", "subject": self.team_enc(SUBJECT, "Shared"), "body_text": enc(BODY, "Mine")}
+        vault.open_row("u1", row, [("subject", SUBJECT), ("body_text", BODY)])
+        self.assertEqual((row["subject"], row["body_text"]), ("Shared", "Mine"))
+        own = {"id": "m2", "subject": enc(SUBJECT, "Personal")}
+        vault.open_row("u1", own, [("subject", SUBJECT)])
+        self.assertEqual(own["subject"], "Personal")
+
+
+def team_row(workspace_id: str, data_key: bytes, version: int, retired: bool = False, master: bytes = MASTER) -> dict:
+    iv = os.urandom(12)
+    sealed = AESGCM(master).encrypt(iv, data_key, f"team_keys:{workspace_id}".encode())
+    return {"key_version": version, "wrapped_key": base64.b64encode(iv + sealed).decode(), "wrapped_by": "local:v1", "retired_at": "2026-11-02T00:00:00Z" if retired else None}
+
+
+class TeamRotationTests(unittest.TestCase):
+    """A rotation makes version 2; the AI worker opens values sealed under either until the sync worker has re-sealed."""
+
+    K1, K2 = bytes(range(32, 64)), bytes(range(64, 96))
+
+    def sealed_under(self, data_key: bytes, field: str, text: str, index_root: bytes) -> str:
+        keys = derive_team_keys(data_key)
+        return encrypt_team_field(type(keys)(enc=keys.enc, index=derive_team_keys(index_root).index), field, text)
+
+    def test_opens_both_versions_and_keeps_the_index_from_the_first(self):
+        rows = [team_row("w1", self.K1, 1), team_row("w1", self.K2, 2)]
+        vault = Vault(TeamKeysDb({}, {"w1": rows}), MASTER_B64)
+        old = self.sealed_under(self.K1, SUBJECT, "Sealed before", self.K1)
+        new = self.sealed_under(self.K2, SUBJECT, "Sealed after", self.K1)
+        self.assertEqual(vault.open("u", SUBJECT, old, "w1"), "Sealed before")
+        self.assertEqual(vault.open("u", SUBJECT, new, "w1"), "Sealed after")
+        ring = vault.team_keyring_for("w1")
+        self.assertEqual(len(ring), 2)
+        self.assertEqual(ring[0].enc, derive_team_keys(self.K2).enc)  # the current version first
+        self.assertEqual(ring[0].index, derive_team_keys(self.K1).index)  # the index never moves
+
+    def test_a_retired_version_no_longer_opens_anything(self):
+        rows = [team_row("w1", self.K1, 1, retired=True), team_row("w1", self.K2, 2)]
+        vault = Vault(TeamKeysDb({}, {"w1": rows}), MASTER_B64)
+        self.assertEqual(vault.open("u", SUBJECT, self.sealed_under(self.K1, SUBJECT, "Old", self.K1), "w1"), "")
+        self.assertEqual(vault.open("u", SUBJECT, self.sealed_under(self.K2, SUBJECT, "New", self.K1), "w1"), "New")
+        self.assertEqual(len(vault.team_keyring_for("w1")), 1)
+
+    def test_keys_are_read_again_after_their_cache_time(self):
+        db = TeamKeysDb({"u1": wrapped_row("u1")}, {})
+        vault = Vault(db, MASTER_B64)
+        vault.open("u1", SUBJECT, enc(SUBJECT, "x"))
+        self.assertEqual(db.reads.count(("user", "u1")), 1)
+        vault._keys["u1"] = (0.0, vault._keys["u1"][1])  # aged out
+        vault.open("u1", SUBJECT, enc(SUBJECT, "x"))
+        self.assertEqual(db.reads.count(("user", "u1")), 2)
+
+
 class EncryptedTriageDb(FakeTriageDb):
     """FakeTriageDb with encrypted subjects and bodies, and a user_keys row for user u."""
 
@@ -154,7 +280,6 @@ class DraftsDb:
             "contact": None,
             "to_them": [],
             "choices": enc(CHOICES, self.choices) if self.choices else None,
-            "similar": [{"thread_id": "t9", "similarity": 0.9, "inbound_text": enc(BODY, "Lunch on Tuesday?"), "reply_text": enc(BODY, "Tuesday is good, Matt")}],
         }
 
     def update(self, table, filters, patch, minimal=False):
@@ -171,16 +296,30 @@ class DraftsGemini:
         return {"body": "Friday works, see you then."}
 
 
+class FakeIndex:
+    def replies(self, user_id, query, exclude_thread, limit):
+        return [{"thread_id": "t9", "similarity": 0.9, "inbound_text": enc(BODY, "Lunch on Tuesday?"), "reply_text": enc(BODY, "Tuesday is good, Matt")}]
+
+
+class FakeEmbeddings:
+    """What Drafts needs of Embeddings: the stored vector of the newest incoming mail and the search."""
+    index = FakeIndex()
+
+    def stored(self, user_id, message_id):
+        return [1.0, 0.0]
+
+
 class EncryptedDrafts(unittest.TestCase):
     def test_opens_the_conversation_and_instruction_and_seals_the_draft(self):
         db, gemini = DraftsDb(), DraftsGemini()
-        drafts = Drafts(db, gemini, "m", None, Vault(db, MASTER_B64, True))
+        vault = Vault(db, MASTER_B64, True)
+        drafts = Drafts(db, gemini, "m", FakeEmbeddings(), vault)
         self.assertEqual(drafts.run_once(), 1)
         drafts._runner.shutdown(wait=True)
         [prompt] = gemini.prompts
         self.assertIn("Free on Friday?", prompt)
         self.assertIn("Cheers, Matt", prompt)
-        self.assertIn("Tuesday is good, Matt", prompt)  # a similar reply found by draft_context, opened
+        self.assertIn("Tuesday is good, Matt", prompt)  # a similar reply found by the worker's own search, opened
         self.assertIn("Their instruction for this reply: Say Friday works", prompt)
         self.assertNotIn("e1:", prompt)
         [written] = [p for t, f, p in db.updates if t == "drafts" and p.get("status") == "active"]

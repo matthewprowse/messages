@@ -14,7 +14,7 @@ import {
   mapMessage, mapThread, mapUnsubscribe, messageSentAt, patchMessage, profilePatch, type Loaded, type MessageRow, UNSUBSCRIBE_COLUMNS,
 } from "./data";
 import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "./open-rows";
-import { isOverdue, mapTask, withTicks, type PendingTick } from "./tasks";
+import { isOverdue, isTempTask, mapTask, taskOfWrite, taskWriteFields, tempTaskId, withTicks, type PendingTick, type TaskForm } from "./tasks";
 import { seal, userKeys } from "./vault";
 import { encryptBytes } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
@@ -157,7 +157,9 @@ function withMessages(list: Message[] = [], incoming: Message[]): Message[] {
 }
 
 const sameContact = (a: Contact, b: Contact) =>
-  a.name === b.name && a.company === b.company && a.role === b.role && a.avatarPath === b.avatarPath &&
+  a.name === b.name && a.company === b.company && a.role === b.role && a.avatarPath === b.avatarPath && a.isCompany === b.isCompany &&
+  a.organization?.id === b.organization?.id && a.organization?.name === b.organization?.name &&
+  a.organization?.logoPath === b.organization?.logoPath &&
   a.emails.join() === b.emails.join() && a.phones.join() === b.phones.join();
 
 /** The list with these contacts added or updated. The same array when nothing changed, so lookups built on it stay stable. */
@@ -370,6 +372,12 @@ interface Ctx extends Omit<State, "byThread"> {
   contactsVersion: number;
   /** Ticks a task off (done) or back on. Shown at once; the worker makes it at the provider, and a failure puts it back with a toast. */
   tickTask: (task: Task, done: boolean, via: "calendar" | "details" | "summary") => void;
+  /** Makes a task at its provider. It shows at once; a failure takes it away again with a message. */
+  createTask: (form: TaskForm) => void;
+  /** Changes a task's title, notes, date or priority at its provider, shown at once and put back on failure. */
+  editTask: (task: Task, form: TaskForm) => void;
+  /** Deletes a task at its provider. It goes at once and comes back on failure. */
+  deleteTask: (task: Task) => void;
 }
 
 const AppContext = createContext<Ctx | null>(null);
@@ -494,7 +502,7 @@ async function attachToOutbox(outboxId: string, files: OutboxUpload[]): Promise<
  * Waits for the worker to settle a queued tick, by the row's Realtime updates with a poll as a safety net, like
  * Calendar's followUpdate. Resolves with the row then (done, or failed with the reason), or as failed after giveUpMs.
  */
-function followTaskUpdate(id: string, giveUpMs = 60_000, pollMs = 2000): Promise<{ status: string; error: string | null }> {
+function followTaskUpdate(id: string, giveUpMs = 60_000, pollMs = 2000, giveUpText = "Ticking the task is taking too long. Check that the worker is running."): Promise<{ status: string; error: string | null }> {
   return new Promise((resolve) => {
     let finished = false;
     const finish = (row: { status: string; error: string | null }) => {
@@ -513,7 +521,7 @@ function followTaskUpdate(id: string, giveUpMs = 60_000, pollMs = 2000): Promise
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "task_updates", filter: `id=eq.${id}` }, (payload) => apply(payload.new as { status: string; error: string | null }))
       .subscribe();
     const poll = setInterval(() => void supabase.from("task_updates").select("status, error").eq("id", id).maybeSingle().then(({ data }) => apply(data)), pollMs);
-    const giveUp = setTimeout(() => finish({ status: "failed", error: "Ticking the task is taking too long. Check that the worker is running." }), giveUpMs);
+    const giveUp = setTimeout(() => finish({ status: "failed", error: giveUpText }), giveUpMs);
   });
 }
 
@@ -842,7 +850,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .on("postgres_changes", { event: "*", schema: "public", table: "attachments", filter: mine }, (payload) => {
         if (payload.eventType === "DELETE") return;
         const row = payload.new as Tables<"attachments">;
-        queued(`file:${row.id}`, 1, () => rawDispatch({ type: "upsertAttachment", row }));
+        // The file's name arrives encrypted.
+        queued(`file:${row.id}`, 1, async () => rawDispatch({ type: "upsertAttachment", row: (await openAddresses([{ ...row }]))[0] }));
       })
       // Refused while the table is not published, so it stops instead of rejoining forever. A resync
       // after a dropped connection reloads files with their messages anyway.
@@ -898,8 +907,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       case "addExample": {
         const example = { ...action.example, id: crypto.randomUUID() };
         rawDispatch({ type: "addExample", example });
-        supabase.from("writing_examples").insert({ id: example.id, user_id: userId, situation: example.context, body: example.text })
-          .then(({ error }) => { if (error) { rawDispatch({ type: "removeExample", id: example.id }); saveFailed(); } });
+        // The situation and the text are sealed in the browser (fields writingSituation and writingBody).
+        void Promise.all([seal(FIELD.writingSituation, example.context), seal(FIELD.writingBody, example.text)])
+          .then(([situation, body]) => supabase.from("writing_examples").insert({ id: example.id, user_id: userId, situation, body }))
+          .then(({ error }) => { if (error) { rawDispatch({ type: "removeExample", id: example.id }); saveFailed(); } }, () => { rawDispatch({ type: "removeExample", id: example.id }); saveFailed(); });
         return;
       }
       case "removeExample":
@@ -918,6 +929,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return;
       case "patchAccount":
         rawDispatch(action);
+        if (action.patch.nickname !== undefined) {
+          supabase.from("accounts").update({ nickname: action.patch.nickname || null }).eq("id", action.id).then(({ error }) => { if (error) saveFailed(); });
+        }
         if (action.patch.status === "disconnected") {
           // The sync worker notices within 30 seconds and stops that account.
           supabase.from("accounts").update({ status: "disconnected" }).eq("id", action.id).then(({ error }) => { if (error) saveFailed(); });
@@ -1386,14 +1400,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return queued;
   }, []);
 
+  // "I've Unsubscribed" is easy to press by mistake, so it shows at once but is only saved once this long has
+  // passed without Undo. Closing the page in that time saves nothing, and the sender stays to do.
+  const CONFIRM_UNSUBSCRIBE_MS = 6000;
   const confirmUnsubscribe = useCallback((id: string) => {
     const before = stateRef.current.unsubscribes.find((u) => u.id === id);
     if (!before || before.status !== "manual") return;
     rawDispatch({ type: "upsertUnsubscribe", unsubscribe: { ...before, status: "done" } });
-    void supabase.rpc("confirm_unsubscribe", { p_id: id }).then(({ error }) => {
-      if (!error) return;
-      rawDispatch({ type: "upsertUnsubscribe", unsubscribe: before });
-      toast("Could not mark it as unsubscribed. Try again.");
+    const timer = setTimeout(() => {
+      void supabase.rpc("confirm_unsubscribe", { p_id: id }).then(({ error }) => {
+        if (!error) return;
+        rawDispatch({ type: "upsertUnsubscribe", unsubscribe: before });
+        toast("Could not mark it as unsubscribed. Try again.");
+      });
+    }, CONFIRM_UNSUBSCRIBE_MS);
+    toast("Marked as unsubscribed", {
+      duration: CONFIRM_UNSUBSCRIBE_MS,
+      action: { label: "Undo", onClick: () => { clearTimeout(timer); rawDispatch({ type: "upsertUnsubscribe", unsubscribe: before }); } },
     });
   }, []);
 
@@ -1509,17 +1532,93 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [userId, saveFailed]);
 
+  // Tasks made, changed and deleted here go through the same queue as a tick. Title and notes are sealed before the row is stored.
+  const queueTaskWrite = useCallback(async (row: { action: "create" | "update" | "delete"; task_id?: string; account_id?: string }, write?: ReturnType<typeof taskWriteFields>) => {
+    const sealed = write ? await Promise.all([seal(FIELD.taskTitle, write.title), seal(FIELD.taskNotes, write.notes)]).catch(() => null) : undefined;
+    if (write && !sealed) return null;
+    const { data, error } = await supabase
+      .from("task_updates")
+      .insert({ ...row, ...(write && sealed ? { title: sealed[0], notes: sealed[1], due_at: write.due_at, due_all_day: write.due_all_day, priority: write.priority } : {}) })
+      .select("id")
+      .single();
+    return error || !data ? null : data.id;
+  }, []);
+
+  const createTask = useCallback((form: TaskForm) => {
+    if (!userId) return;
+    const provider = stateRef.current.accounts.find((a) => a.id === form.accountId)?.provider;
+    const write = taskWriteFields(form, provider);
+    const temp = tempTaskId();
+    rawDispatch({ type: "upsertTask", task: taskOfWrite(temp, form.accountId, write) });
+    void (async () => {
+      const id = await queueTaskWrite({ action: "create", account_id: form.accountId }, write);
+      if (!id) {
+        rawDispatch({ type: "removeTask", id: temp });
+        saveFailed();
+        return;
+      }
+      const result = await followTaskUpdate(id, 60_000, 2000, "Creating the task is taking too long. Check that the worker is running.");
+      // The worker has stored the real task by now (its Realtime insert replaces this one); on failure it never will.
+      rawDispatch({ type: "removeTask", id: temp });
+      toast(result.status === "failed" ? (result.error ?? "The task could not be created.") : "Task created.");
+    })();
+  }, [userId, saveFailed, queueTaskWrite]);
+
+  const editTask = useCallback((task: Task, form: TaskForm) => {
+    if (!userId || isTempTask(task)) return;
+    const provider = stateRef.current.accounts.find((a) => a.id === task.accountId)?.provider;
+    const write = taskWriteFields({ ...form, accountId: task.accountId }, provider);
+    rawDispatch({ type: "upsertTask", task: taskOfWrite(task.id, task.accountId, write, task) });
+    // Put back as it was, unless something newer has been shown for the task since.
+    const restore = () => rawDispatch({ type: "upsertTask", task });
+    void (async () => {
+      const id = await queueTaskWrite({ action: "update", task_id: task.id }, write);
+      if (!id) {
+        restore();
+        saveFailed();
+        return;
+      }
+      const result = await followTaskUpdate(id, 60_000, 2000, "Saving the task is taking too long. Check that the worker is running.");
+      if (result.status === "failed") {
+        restore();
+        toast(result.error ?? "The task could not be changed.");
+        return;
+      }
+      rawDispatch({ type: "patchTask", id: task.id, patch: { pending: false } });
+    })();
+  }, [userId, saveFailed, queueTaskWrite]);
+
+  const deleteTask = useCallback((task: Task) => {
+    if (!userId || isTempTask(task)) return;
+    rawDispatch({ type: "removeTask", id: task.id });
+    void (async () => {
+      const id = await queueTaskWrite({ action: "delete", task_id: task.id });
+      if (!id) {
+        rawDispatch({ type: "upsertTask", task });
+        saveFailed();
+        return;
+      }
+      const result = await followTaskUpdate(id, 60_000, 2000, "Deleting the task is taking too long. Check that the worker is running.");
+      if (result.status === "failed") {
+        rawDispatch({ type: "upsertTask", task });
+        toast(result.error ?? "The task could not be deleted.");
+        return;
+      }
+      toast("Task deleted.");
+    })();
+  }, [userId, saveFailed, queueTaskWrite]);
+
   // One value per change, so components that read the store redraw only when something changed.
   const value = useMemo<Ctx>(() => ({
     ...listState(state), dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, prefetchMessages,
     listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
-    contactsVersion, tasks, tickTask,
+    contactsVersion, tasks, tickTask, createTask, editTask, deleteTask,
   }), [
     state, dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, prefetchMessages,
     listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
-    contactsVersion, tasks, tickTask,
+    contactsVersion, tasks, tickTask, createTask, editTask, deleteTask,
   ]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

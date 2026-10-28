@@ -98,7 +98,7 @@ export function WhatsAppLinkPanel({ link }: { link: WhatsAppLink }) {
         <SettingsRows>
           <SettingsRow
             title={<>WhatsApp <Badge variant="secondary">{status === "syncing" ? "Importing" : "Linked"}</Badge></>}
-            description={`${account?.address ? `Linked as ${account.address}. ` : ""}${status === "syncing" ? "Your recent chats are importing from your phone." : "New messages appear in Conversations within seconds."}`}
+            description={`${account?.address ? `Linked as ${account.address}. ` : ""}${status === "syncing" ? "Your recent chats are importing from your phone." : "New messages appear in the Inbox within seconds."}`}
           />
         </SettingsRows>
       ) : linking ? (
@@ -121,7 +121,7 @@ export function WhatsAppLinkPanel({ link }: { link: WhatsAppLink }) {
               </div>
             )}
             {(account?.qr_code || account?.pairing_code) && <p className="text-xs text-muted-foreground">The code refreshes on its own until it is used.</p>}
-            <Button variant="outline" size="sm" disabled={busy} onClick={cancel}>Cancel</Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={cancel}>Cancel</Button>
             {error && <FieldError>{error}</FieldError>}
           </div>
         </div>

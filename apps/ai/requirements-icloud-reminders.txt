@@ -1,0 +1,5 @@
+# The iCloud Reminders connector only (python3 -m ai icloud-reminders): pip3 install -r apps/ai/requirements-icloud-reminders.txt
+# Pinned: pyicloud (timlaing/pyicloud, published on PyPI as "pyicloud") follows Apple's web endpoints closely
+# and changes often, and the connector calls a few of its private methods (ai/connectors/icloud_reminders/client.py).
+# Check a new release on GitHub before moving the pin.
+pyicloud==2026.10.1

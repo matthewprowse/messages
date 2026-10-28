@@ -13,8 +13,8 @@ export interface CompanySummary {
   name: string;
   domain: string;
   summary: string | null;
-  /** The company's icon in the private avatars bucket, fetched from its own website. */
-  avatarPath?: string;
+  /** The company's shared logo in the "logos" bucket; none shows a building icon. */
+  logoPath?: string;
   people: number;
   addresses: number;
   conversations: number;
@@ -27,6 +27,8 @@ export interface CompanyPerson {
   name: string;
   role: string | null;
   emails: string[];
+  phones: string[];
+  avatarPath?: string;
 }
 
 export interface CompanyConversation {
@@ -47,20 +49,20 @@ export interface CompanyDetail extends Omit<CompanySummary, "people" | "addresse
 }
 
 export async function listCompanies(): Promise<CompanySummary[]> {
-  const select = "id, name, domain, summary, avatar_path, contacts(contact_identities(kind, value), thread_participants(threads(id, status, last_message_at)))";
+  const select = "id, name, domain, summary, logo_path, contacts(contact_identities(kind, value), thread_participants(threads(id, status, is_group, last_message_at)))";
   const data = await openAddresses(await allRows("Load companies", (from, to) => supabase.from("organizations").select(select).order("id").range(from, to)));
   return data
     .filter((o) => o.contacts.length > 0)
     .map((o) => {
       const threads = new Map<string, string | null>();
       // Deleted conversations (in the provider's bin) are not counted, as in Conversations.
-      for (const c of o.contacts) for (const p of c.thread_participants) if (p.threads && p.threads.status !== "trash") threads.set(p.threads.id, p.threads.last_message_at);
+      for (const c of o.contacts) for (const p of c.thread_participants) if (p.threads && p.threads.status !== "trash" && !p.threads.is_group) threads.set(p.threads.id, p.threads.last_message_at);
       return {
         id: o.id,
         name: o.name,
         domain: o.domain,
         summary: o.summary,
-        avatarPath: o.avatar_path ?? undefined,
+        logoPath: o.logo_path ?? undefined,
         people: o.contacts.length,
         addresses: new Set(o.contacts.flatMap((c) => identities(c.contact_identities).emails)).size,
         conversations: threads.size,
@@ -69,12 +71,14 @@ export async function listCompanies(): Promise<CompanySummary[]> {
     });
 }
 
+const pick = ({ emails, phones }: { emails: string[]; phones: string[] }) => ({ emails, phones });
+
 export async function getCompany(id: string): Promise<CompanyDetail | null> {
   if (!isUuid(id)) return null;
   const { data: o, error } = await supabase
     .from("organizations")
     .select(
-      "id, name, domain, summary, avatar_path, contacts(id, display_name, role, contact_identities(kind, value), thread_participants(threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider))))",
+      "id, name, domain, summary, logo_path, contacts(id, display_name, role, avatar_path, contact_identities(kind, value), thread_participants(threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider))))",
     )
     .eq("id", id)
     .maybeSingle();
@@ -83,7 +87,7 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
   await Promise.all([openNestedThreads(o.contacts), openAddresses(o)]);
 
   const people = o.contacts
-    .map((c) => ({ id: c.id, name: c.display_name, role: c.role, emails: identities(c.contact_identities).emails }))
+    .map((c) => ({ id: c.id, name: c.display_name, role: c.role, ...pick(identities(c.contact_identities)), avatarPath: c.avatar_path ?? undefined }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // A conversation with two of its people is listed once, under the first of them.
@@ -91,7 +95,8 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
   for (const c of o.contacts) {
     for (const p of c.thread_participants) {
       const t = p.threads;
-      if (!t || t.status === "trash" || conversations.has(t.id)) continue;
+      // A group is not the company's: someone from it being in the group does not file the group under it.
+      if (!t || t.status === "trash" || t.is_group || conversations.has(t.id)) continue;
       conversations.set(t.id, {
         id: t.id,
         channel: t.channel as CompanyConversation["channel"],
@@ -103,7 +108,7 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
     }
   }
   const sorted = [...conversations.values()].sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? ""));
-  return { id: o.id, name: o.name, domain: o.domain, summary: o.summary, avatarPath: o.avatar_path ?? undefined, people, conversations: sorted, lastAt: sorted[0]?.lastAt ?? null };
+  return { id: o.id, name: o.name, domain: o.domain, summary: o.summary, logoPath: o.logo_path ?? undefined, people, conversations: sorted, lastAt: sorted[0]?.lastAt ?? null };
 }
 
 /** Row-level security lets you change only the name. */

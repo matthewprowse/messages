@@ -1,5 +1,6 @@
-import { lookup } from "node:dns/promises";
+import { request } from "node:https";
 import { isIP } from "node:net";
+import { isPublicAddress, publicAddress } from "@messages/mail-servers/net";
 
 // Unsubscribing acts only on the sender's List-Unsubscribe header. A link in the email body is only
 // shown to you, never followed: body links can confirm your address to spammers or lead to phishing pages.
@@ -72,39 +73,69 @@ export function bodyUnsubscribeLink(text: string | null): string | null {
   }
 }
 
-/** True for loopback, private, link-local and other addresses that are not on the public internet. */
+/** True for loopback, private, link-local, NAT64, 6to4 and other addresses that are not on the public internet. */
 export function isPrivateAddress(ip: string): boolean {
-  if (isIP(ip) === 4) {
-    const [a, b] = ip.split(".").map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
-  }
-  const v6 = ip.toLowerCase();
-  if (v6.startsWith("::ffff:")) return isPrivateAddress(v6.slice(7));
-  return v6 === "::" || v6 === "::1" || v6.startsWith("fc") || v6.startsWith("fd") || v6.startsWith("fe8") ||
-    v6.startsWith("fe9") || v6.startsWith("fea") || v6.startsWith("feb") || v6.startsWith("ff");
+  return !isPublicAddress(ip);
+}
+
+/** One POST to a pinned address, with the host name for TLS and the Host header. No redirects are followed. */
+function postPinned(target: URL, address: string, body: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: address,
+        port: target.port || 443,
+        servername: isIP(target.hostname.replace(/^\[|\]$/g, "")) ? undefined : target.hostname,
+        method: "POST",
+        path: `${target.pathname}${target.search}`,
+        headers: {
+          host: target.host,
+          "content-type": "application/x-www-form-urlencoded",
+          "content-length": Buffer.byteLength(body),
+          "user-agent": "Messages unsubscribe",
+        },
+        timeout: 15_000,
+      },
+      (res) => {
+        res.destroy(); // the body is never read
+        resolve(res.statusCode ?? 0);
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+export interface UnsubscribeDeps {
+  /** The public address to connect to for a host, or null. */
+  resolve?: (host: string) => Promise<string | null>;
+  post?: (target: URL, address: string, body: string) => Promise<number>;
 }
 
 /**
  * RFC 8058 one-click unsubscribe: a POST of "List-Unsubscribe=One-Click" to the sender's https URL.
- * The URL comes from an email, so it must resolve to a public address and redirects are not followed.
+ * The URL comes from an email, so it must resolve to a public address, the connection is made to that exact
+ * address (a second DNS answer cannot swap it), and redirects are not followed.
  */
-export async function oneClickUnsubscribe(url: string): Promise<{ ok: boolean; status?: number; reason?: string }> {
-  const target = new URL(url);
+export async function oneClickUnsubscribe(url: string, deps: UnsubscribeDeps = {}): Promise<{ ok: boolean; status?: number; reason?: string }> {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return { ok: false, reason: "bad url" };
+  }
   if (target.protocol !== "https:") return { ok: false, reason: "not https" };
   const host = target.hostname.replace(/^\[|\]$/g, "");
-  const addresses = isIP(host) ? [{ address: host }] : await lookup(host, { all: true }).catch(() => []);
-  if (addresses.length === 0) return { ok: false, reason: "unknown host" };
-  if (addresses.some((a) => isPrivateAddress(a.address))) return { ok: false, reason: "private address" };
+  const address = isIP(host) ? (isPublicAddress(host) ? host : null) : await (deps.resolve ?? publicAddress)(host);
+  if (!address) return { ok: false, reason: "private or unknown address" };
 
-  const response = await fetch(target, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "Messages unsubscribe" },
-    body: "List-Unsubscribe=One-Click",
-    redirect: "manual",
-    signal: AbortSignal.timeout(15_000),
-  });
-  await response.body?.cancel().catch(() => undefined);
+  let status: number;
+  try {
+    status = await (deps.post ?? postPinned)(target, address, "List-Unsubscribe=One-Click");
+  } catch {
+    return { ok: false, reason: "request failed" };
+  }
   // Some senders answer with a redirect to a "you're unsubscribed" page, which still means it worked.
-  return { ok: response.status >= 200 && response.status < 400, status: response.status };
+  return { ok: status >= 200 && status < 400, status };
 }

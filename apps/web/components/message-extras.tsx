@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Reply, SmilePlus } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Reply, SmilePlus } from "lucide-react";
 import type { Contact, Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -39,17 +39,32 @@ export function QuoteBlock({ quote, me, nameOf, onJump }: { quote: NonNullable<M
 export type NameOf = (who: string) => string;
 export type OnReact = (message: Message, emoji: string) => void;
 
-/** Who a reaction key is: you, a saved contact by number, or the number itself. */
+/**
+ * Who a reaction key is: you, a saved contact by number or WhatsApp privacy ID, or the number itself. A
+ * privacy ID with no contact behind it is a long number nobody would recognise, so it reads "Unknown".
+ */
 export function useReactorName(contacts: Contact[]): NameOf {
   return useMemo(() => {
-    const byPhone = new Map<string, string>();
-    for (const c of contacts) for (const p of c.phones) byPhone.set(p, c.name);
-    return (who: string) => (who === "me" ? "You" : byPhone.get(who) ?? who.replace(/@lid$/, ""));
+    const byKey = new Map<string, string>();
+    for (const c of contacts) {
+      for (const p of c.phones) byKey.set(p, c.name);
+      for (const l of c.lids ?? []) {
+        byKey.set(l, c.name);
+        byKey.set(l.replace(/@lid$/, ""), c.name);
+      }
+    }
+    return (who: string) => {
+      if (who === "me") return "You";
+      const known = byKey.get(who);
+      if (known) return known;
+      return who.endsWith("@lid") || /^\d{13,}$/.test(who) ? "Unknown" : who;
+    };
   }, [contacts]);
 }
 
 /** Reactions under a bubble, one chip per emoji with a count. Tapping one sets or removes yours. */
-export function ReactionChips({ m, me, nameOf, onReact }: { m: Message; me: boolean; nameOf: NameOf; onReact: OnReact }) {
+/** With inline, the chips sit in a line of text rather than under a bubble, so they take no margin or padding of their own. */
+export function ReactionChips({ m, me, nameOf, onReact, inline = false }: { m: Message; me: boolean; nameOf: NameOf; onReact: OnReact; inline?: boolean }) {
   const chips = useMemo(() => {
     const byEmoji = new Map<string, string[]>();
     for (const [who, emoji] of Object.entries(m.reactions ?? {})) byEmoji.set(emoji, [...(byEmoji.get(emoji) ?? []), who]);
@@ -57,7 +72,7 @@ export function ReactionChips({ m, me, nameOf, onReact }: { m: Message; me: bool
   }, [m.reactions]);
   if (chips.length === 0) return null;
   return (
-    <div className={cn("-mt-1 flex flex-wrap gap-1 px-2", me && "justify-end")}>
+    <div className={cn("flex flex-wrap gap-1", !inline && "-mt-1 px-2", me && "justify-end")}>
       {chips.map((chip) => (
         <Tooltip key={chip.emoji}>
           <TooltipTrigger asChild>
@@ -128,7 +143,7 @@ export function useTouchReveal() {
 }
 
 /** Reply, View Original, and React for WhatsApp, beside a message. On touch screens they show once revealed. */
-export function BubbleActions({ m, canReact, revealed = false, onReply, onReact }: { m: Message; canReact: boolean; revealed?: boolean; onReply: (m: Message) => void; onReact: OnReact }) {
+export function BubbleActions({ m, canReact, revealed = false, onReply, onReact, expand }: { m: Message; canReact: boolean; revealed?: boolean; onReply: (m: Message) => void; onReact: OnReact; /** Shows the whole of a long email, or goes back to its preview. */ expand?: { open: boolean; toggle: () => void } }) {
   const [open, setOpen] = useState(false);
   const mine = m.reactions?.me;
   return (
@@ -145,6 +160,14 @@ export function BubbleActions({ m, canReact, revealed = false, onReply, onReact 
         </TooltipTrigger>
         <TooltipContent>Reply</TooltipContent>
       </Tooltip>
+      {expand && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" className="text-muted-foreground" aria-label={expand.open ? "Show Less" : "Show Full Text"} aria-expanded={expand.open} onClick={expand.toggle}>{expand.open ? <ChevronsDownUp /> : <ChevronsUpDown />}</Button>
+          </TooltipTrigger>
+          <TooltipContent>{expand.open ? "Show Less" : "Show Full Text"}</TooltipContent>
+        </Tooltip>
+      )}
       {m.hasOriginal && <ViewOriginal messageId={m.id} />}
       {canReact && (
         <Popover open={open} onOpenChange={setOpen}>

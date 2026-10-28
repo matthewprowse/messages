@@ -8,7 +8,9 @@ import { CheckIcon, ChevronRightIcon } from "lucide-react"
 function DropdownMenu({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
+  // Not modal: a modal menu closed itself the moment the click that opened it was released, with a mouse or a
+  // phone-sized pane. It still closes on a click outside, Escape and choosing an item.
+  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" modal={false} {...props} />
 }
 
 function DropdownMenuPortal({

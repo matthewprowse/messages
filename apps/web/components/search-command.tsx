@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/lib/store";
 import { track, viaNext } from "@/lib/analytics";
 import type { Contact, Thread } from "@/lib/types";
 import { relTime } from "@/lib/format";
-import { providerLabel } from "@/components/primitives";
+import { ContactAvatar, ThreadAvatar, providerLabel } from "@/components/primitives";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { NEW_ITEM_EVENT, isTypingKey } from "@/components/new-menu";
-import { Calendar, CalendarPlus, Inbox, Mail, Newspaper, NotebookPen, Paperclip, Settings, Users, type LucideIcon } from "lucide-react";
+import { Calendar, CalendarPlus, Inbox, Mail, MessageCircle, Newspaper, NotebookPen, Paperclip, Settings, Users, type LucideIcon } from "lucide-react";
 import { formatPhone } from "@/lib/format";
 
 const DEBOUNCE_MS = 150;
@@ -46,15 +46,18 @@ function useDebounced<T>(value: T, ms: number) {
   return settled;
 }
 
-// Same two-line text as a row on the Conversations page: 20px title line, 4px gap, 16px detail line.
-function Row({ title, detail, meta }: { title: string; detail?: string; meta?: string }) {
+// Same two-line text as a row on the Conversations page: 20px title line, 4px gap, 16px detail line, with the person's photo.
+function Row({ avatar, title, detail, meta }: { avatar?: ReactNode; title: string; detail?: string; meta?: string }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
-      <div className="flex h-5 items-center justify-between gap-3">
-        <span className="min-w-0 truncate text-sm font-medium">{title}</span>
-        {meta && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{meta}</span>}
+    <div className="flex min-w-0 flex-1 items-center gap-3">
+      {avatar}
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex h-5 items-center justify-between gap-3">
+          <span className="min-w-0 truncate text-sm font-medium">{title}</span>
+          {meta && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{meta}</span>}
+        </div>
+        {detail && <div className="flex h-4 items-center"><span className="min-w-0 truncate text-xs">{detail}</span></div>}
       </div>
-      {detail && <div className="flex h-4 items-center"><span className="min-w-0 truncate text-xs">{detail}</span></div>}
     </div>
   );
 }
@@ -63,13 +66,28 @@ const ITEM = "p-2 [&>svg:last-child]:hidden";
 
 /** The places the palette and the G chord (G, then the letter) can jump to. */
 export const GO_TO: { href: string; label: string; icon: LucideIcon; key: string }[] = [
-  { href: "/briefing", label: "Summary", icon: Newspaper, key: "s" },
+  { href: "/summary", label: "Summary", icon: Newspaper, key: "s" },
   { href: "/calendar", label: "Calendar", icon: Calendar, key: "c" },
-  { href: "/inbox", label: "Conversations", icon: Inbox, key: "i" },
+  { href: "/inbox", label: "Inbox", icon: Inbox, key: "i" },
   { href: "/contacts", label: "Contacts", icon: Users, key: "o" },
   { href: "/attachments", label: "Attachments", icon: Paperclip, key: "a" },
   { href: "/notes", label: "Notes", icon: NotebookPen, key: "n" },
   { href: "/settings", label: "Settings", icon: Settings, key: "," },
+];
+
+// Settings pages the palette can open directly. Keywords are other ways to spell or name the page.
+const SETTINGS_PAGES: { href: string; label: string; keywords?: string }[] = [
+  { href: "/settings/accounts", label: "Connected Accounts", keywords: "connectors connect email whatsapp calendar linkedin instagram" },
+  { href: "/settings/personalisation", label: "Personalisation", keywords: "personalization personalize personalise voice tone" },
+  { href: "/settings/writing", label: "Writing", keywords: "voice style signature drafts" },
+  { href: "/settings/rules", label: "Rules", keywords: "filters automation" },
+  { href: "/settings/notifications", label: "Notifications", keywords: "alerts push" },
+  { href: "/settings/appearance", label: "Appearance", keywords: "theme dark light" },
+  { href: "/settings/profile", label: "Profile", keywords: "name photo account" },
+  { href: "/settings/usage", label: "Usage", keywords: "billing plan cost" },
+  { href: "/settings/team", label: "Team", keywords: "workspace members" },
+  { href: "/settings/data", label: "Data", keywords: "export delete privacy storage" },
+  { href: "/settings/general", label: "General" },
 ];
 
 /** The chord shown beside a place, in the palette and in rail tooltips. */
@@ -79,8 +97,12 @@ export const goToHint = (href: string) => {
 };
 
 // Actions that open a dialog owned by the New menu, which listens for this event.
-const ACTIONS: { item: "email" | "event"; label: string; icon: LucideIcon }[] = [
+type ActionItem = "email" | "whatsapp" | "linkedin" | "instagram" | "event";
+const ACTIONS: { item: ActionItem; label: string; icon: LucideIcon }[] = [
   { item: "email", label: "New Email", icon: Mail },
+  { item: "whatsapp", label: "New WhatsApp Message", icon: MessageCircle },
+  { item: "linkedin", label: "New LinkedIn Message", icon: MessageCircle },
+  { item: "instagram", label: "New Instagram Message", icon: MessageCircle },
   { item: "event", label: "New Event", icon: CalendarPlus },
 ];
 
@@ -148,6 +170,8 @@ function SearchResults({ onPick }: { onPick: () => void }) {
 
   const words = useMemo(() => term.toLowerCase().split(/\s+/).filter(Boolean), [term]);
   const places = useMemo(() => GO_TO.filter((g) => matches(words, g.label)), [words]);
+  // Settings pages only show once something is typed, so the empty palette stays a short list.
+  const settingsPages = useMemo(() => (words.length ? SETTINGS_PAGES.filter((s) => matches(words, s.label, s.keywords, "settings")) : []), [words]);
   const actions = useMemo(() => ACTIONS.filter((a) => matches(words, a.label)), [words]);
 
   const results = useMemo(() => {
@@ -190,7 +214,7 @@ function SearchResults({ onPick }: { onPick: () => void }) {
     router.push(href);
   }
 
-  function act(item: "email" | "event") {
+  function act(item: ActionItem) {
     onPick();
     // The New menu is mounted for the whole session; the event hands it the dialog to open.
     window.dispatchEvent(new CustomEvent(NEW_ITEM_EVENT, { detail: item }));
@@ -202,17 +226,48 @@ function SearchResults({ onPick }: { onPick: () => void }) {
     return t ? `/inbox/${t.id}` : `/contacts/${c.id}`;
   }
 
+  const goTo = (places.length > 0 || settingsPages.length > 0) && (
+    <CommandGroup heading="Go To">
+      {places.map(({ href, label, icon: Icon }) => (
+        <CommandItem key={href} value={`go-${href}`} className={ITEM} onSelect={() => { onPick(); router.push(href); }}>
+          <Icon />
+          {label}
+          <CommandShortcut>{goToHint(href)}</CommandShortcut>
+        </CommandItem>
+      ))}
+      {settingsPages.map(({ href, label }) => (
+        <CommandItem key={href} value={`go-${href}`} className={ITEM} onSelect={() => { onPick(); router.push(href); }}>
+          <Settings />
+          {label}
+          <CommandShortcut className="tracking-normal">Settings</CommandShortcut>
+        </CommandItem>
+      ))}
+    </CommandGroup>
+  );
+  const doActions = actions.length > 0 && (
+    <CommandGroup heading="Actions">
+      {actions.map(({ item, label, icon: Icon }) => (
+        <CommandItem key={item} value={`action-${item}`} className={ITEM} onSelect={() => act(item)}>
+          <Icon />
+          {label}
+        </CommandItem>
+      ))}
+    </CommandGroup>
+  );
+
   return (
     // Results are filtered here rather than by cmdk, whose fuzzy score matches almost every long message.
     <Command shouldFilter={false}>
-      <CommandInput placeholder="Search Everything" value={query} onValueChange={setQuery} />
+      <CommandInput placeholder="Search Everything" value={query} onValueChange={setQuery} groupClassName="h-8!" />
       <CommandList className="max-h-[50svh] sm:max-h-80">
         <CommandEmpty>No Results Found</CommandEmpty>
+        {/* Pages and actions lead once something is typed, so Enter opens the page you named instead of a message that mentions it. */}
+        {words.length > 0 && <>{goTo}{doActions}</>}
         {results.contacts.length > 0 && (
           <CommandGroup heading="Contacts">
             {results.contacts.map((c, i) => (
               <CommandItem key={c.id} value={`contact-${c.id}`} className={ITEM} onSelect={() => go(contactHref(c), i + 1)}>
-                <Row title={c.name} detail={[c.emails[0] ?? (c.phones[0] && formatPhone(c.phones[0])), c.company].filter(Boolean).join(" · ")} />
+                <Row avatar={<ContactAvatar contact={c} className="size-8" />} title={c.name} detail={[c.emails[0] ?? (c.phones[0] && formatPhone(c.phones[0])), c.company].filter(Boolean).join(" · ")} />
               </CommandItem>
             ))}
           </CommandGroup>
@@ -222,7 +277,7 @@ function SearchResults({ onPick }: { onPick: () => void }) {
             {results.conversations.map((t, i) => (
               // Same second line as the conversation's row: the subject of an email, the latest message of a chat.
               <CommandItem key={t.id} value={`thread-${t.id}`} className={ITEM} onSelect={() => go(`/inbox/${t.id}`, results.contacts.length + i + 1)}>
-                <Row title={titleOf(t, contactOf)} detail={t.channel === "email" ? t.subject : t.preview} meta={relTime(t.lastMessageAt)} />
+                <Row avatar={<ThreadAvatar thread={t} contacts={contactOf} className="size-8" />} title={titleOf(t, contactOf)} detail={t.channel === "email" ? t.subject : t.preview} meta={relTime(t.lastMessageAt)} />
               </CommandItem>
             ))}
           </CommandGroup>
@@ -233,33 +288,13 @@ function SearchResults({ onPick }: { onPick: () => void }) {
               const sender = m.from === "me" ? "You" : t.isGroup ? contactOf(m.from)?.name.split(" ")[0] : undefined;
               return (
                 <CommandItem key={m.id} value={`message-${m.id}`} className={ITEM} onSelect={() => go(`/inbox/${t.id}?message=${m.id}`, results.contacts.length + results.conversations.length + i + 1)}>
-                  <Row title={titleOf(t, contactOf)} detail={sender ? `${sender}: ${text}` : text} meta={relTime(m.sentAt)} />
+                  <Row avatar={<ThreadAvatar thread={t} contacts={contactOf} className="size-8" />} title={titleOf(t, contactOf)} detail={sender ? `${sender}: ${text}` : text} meta={relTime(m.sentAt)} />
                 </CommandItem>
               );
             })}
           </CommandGroup>
         )}
-        {places.length > 0 && (
-          <CommandGroup heading="Go To">
-            {places.map(({ href, label, icon: Icon }) => (
-              <CommandItem key={href} value={`go-${href}`} className={ITEM} onSelect={() => { onPick(); router.push(href); }}>
-                <Icon />
-                {label}
-                <CommandShortcut>{goToHint(href)}</CommandShortcut>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-        {actions.length > 0 && (
-          <CommandGroup heading="Actions">
-            {actions.map(({ item, label, icon: Icon }) => (
-              <CommandItem key={item} value={`action-${item}`} className={ITEM} onSelect={() => act(item)}>
-                <Icon />
-                {label}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
+        {words.length === 0 && <>{goTo}{doActions}</>}
       </CommandList>
     </Command>
   );
@@ -276,22 +311,8 @@ const SHORTCUTS: { heading: string; rows: { label: string; keys: string[] }[] }[
     ],
   },
   {
-    heading: "Lists",
-    rows: [
-      { label: "Next Row", keys: ["J"] },
-      { label: "Previous Row", keys: ["K"] },
-      { label: "Open Row", keys: ["Enter"] },
-      { label: "Clear Selection", keys: ["Esc"] },
-    ],
-  },
-  {
     heading: "Conversations",
     rows: [
-      { label: "Archive", keys: ["E"] },
-      { label: "Delete", keys: ["#"] },
-      { label: "Mark as Junk", keys: ["!"] },
-      { label: "Mark as Unread", keys: ["U"] },
-      { label: "Back to the List", keys: ["Esc"] },
       { label: "Send a Reply", keys: ["⌘", "Enter"] },
     ],
   },

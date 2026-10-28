@@ -16,7 +16,12 @@
     "set-password": "tsx --env-file=.env scripts/set-password.ts",
     "encrypt-existing": "tsx --env-file=.env scripts/encrypt-existing.ts",
     "drop-stored-html": "tsx --env-file=.env scripts/drop-stored-html.ts",
-    "encrypt-addresses": "tsx --env-file=.env scripts/encrypt-addresses.ts"
+    "encrypt-addresses": "tsx --env-file=.env scripts/encrypt-addresses.ts",
+    "refresh-company-logos": "tsx --env-file=.env scripts/refresh-company-logos.ts",
+    "rename-shared-senders": "tsx --env-file=.env scripts/rename-shared-senders.ts",
+    "company-logos": "tsx --env-file=.env scripts/company-logos.ts",
+    "rewrap-keys": "tsx --env-file=.env scripts/rewrap-keys.ts",
+    "credentials:reseal": "tsx --env-file=.env scripts/credentials-reseal.ts"
   },
   "devDependencies": {
     "@types/mailparser": "^3.9.0",
@@ -36,6 +41,7 @@
     "baileys": "7.0.0-rc14",
     "imapflow": "^2.9.1",
     "mailparser": "^3.12.4",
-    "nodemailer": "^10.2.1"
+    "nodemailer": "^10.2.1",
+    "sharp": "0.35.5"
   }
 }

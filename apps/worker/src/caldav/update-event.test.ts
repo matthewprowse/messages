@@ -247,7 +247,7 @@ function row(patch: Partial<CalendarUpdateRow> = {}): CalendarUpdateRow {
   return {
     id: "1", user_id: "u", account_id: "a", event_id: "e", kind: "update", scope: "occurrence", title: null, description: null, location: null,
     starts_at: null, ends_at: null, all_day: null, time_zone: null, attendees: null, send_invites: true, response: null, status: "queued", error: null,
-    created_at: "2026-10-26T08:00:00Z", done_at: null, ...patch,
+    created_at: "2026-10-26T08:00:00Z", done_at: null, recurrence: null, ...patch,
   };
 }
 
@@ -259,4 +259,14 @@ test("readChange trims text and keeps empty location and notes as clears", () =>
   assert.equal(c.location, "");
   assert.equal(c.description, "");
   assert.equal(c.time, undefined);
+});
+
+test("a new rule replaces the series' own, makes a single event repeat, and is refused for one occurrence", () => {
+  const series = lines(ok(run(wrap(SERIES), change({ scope: "series", recurrence: "FREQ=DAILY;COUNT=5" }), second)));
+  assert.ok(series.includes("RRULE:FREQ=DAILY;COUNT=5"));
+  assert.ok(!series.includes("RRULE:FREQ=WEEKLY"));
+  assert.ok(series.includes("UID:WEEKLY"));
+  const single = lines(ok(run(wrap(SINGLE), change({ recurrence: "FREQ=WEEKLY;BYDAY=WE" }))));
+  assert.ok(single.includes("RRULE:FREQ=WEEKLY;BYDAY=WE"));
+  assert.deepEqual(run(wrap(SERIES), change({ recurrence: "FREQ=DAILY" }), second), { error: "A change to how an event repeats is for all of its events." });
 });

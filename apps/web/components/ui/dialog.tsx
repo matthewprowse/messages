@@ -51,11 +51,14 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
-  showCloseButton = false,
+  showCloseButton = true,
+  closeVariant = "ghost",
   track,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /** How the built-in close button looks. Event dialogs use secondary so it always stands out. */
+  closeVariant?: "ghost" | "secondary"
   /** A name for usage analytics: opened, submitted or cancelled, time open, fields touched. */
   track?: string
 }) {
@@ -78,7 +81,7 @@ function DialogContent({
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
             {/* The app's ghost h-8 X, level with the title. */}
             <Button
-              variant="ghost"
+              variant={closeVariant}
               className="absolute top-2 right-2 size-8"
               size="icon"
             >
@@ -115,7 +118,7 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
         className
       )}
       {...props}
@@ -123,7 +126,7 @@ function DialogFooter({
       {children}
       {showCloseButton && (
         <DialogPrimitive.Close asChild>
-          <Button variant="outline">Close</Button>
+          <Button variant="secondary">Close</Button>
         </DialogPrimitive.Close>
       )}
     </div>

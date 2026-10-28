@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   if (!password || password.length > 1024) return fail(400, "Enter your email password.");
   const typed = body.settings == null ? null : readSettings(body.settings);
   if (typed && "error" in typed) return fail(400, typed.error);
-  const wait = overLimit(user.id);
+  const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many tries. Wait a few minutes and try again.", { "Retry-After": String(wait) });
 
   let candidates: Candidates;

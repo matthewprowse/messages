@@ -4,9 +4,11 @@ import { errorCode, log } from "../log";
 import { siteIcon } from "./site-icon";
 import { openAddressRows } from "../vault";
 
-// Company icons for the Companies list, from each company's own website (see site-icon.ts), saved in the
-// private "avatars" bucket at <user id>/org-<organization id>. Each company is looked at again after a
-// month, so a new logo shows up and a site that had none gets another chance.
+// Company logos, for the Companies list and for conversations with a company's senders: from each
+// company's own website (see site-icon.ts), framed alike (logo-image.ts) and saved as a PNG in the private
+// "avatars" bucket at <user id>/org-<organization id>. Each company is looked at again after a month, so a
+// new logo shows up and a site that had none gets another chance; a site that cannot be reached that day
+// keeps the logo it had.
 
 const RECHECK_MS = 30 * 24 * 60 * 60_000;
 const AT_ONCE = 4;
@@ -44,11 +46,17 @@ export async function syncCompanyIcons() {
   log.info("company icons checked", { checked: orgs.length, saved });
 }
 
-async function saveIcon(org: { id: string; user_id: string; domain: string }): Promise<boolean> {
+/**
+ * Fetches, frames and saves one company's logo. With `clearMissing`, a company whose site now offers
+ * nothing sharp enough loses the logo it had (used once, to drop the blurred icons saved before logos
+ * were framed); otherwise it keeps it.
+ */
+export async function saveIcon(org: { id: string; user_id: string; domain: string }, clearMissing = false): Promise<boolean> {
   const icon = await siteIcon(org.domain);
   const now = new Date().toISOString();
   if (!icon) {
-    must(await db.from("organizations").update({ avatar_updated_at: now }).eq("id", org.id), "mark company icon checked");
+    const update = clearMissing ? { avatar_path: null, avatar_updated_at: now } : { avatar_updated_at: now };
+    must(await db.from("organizations").update(update).eq("id", org.id), "mark company icon checked");
     return false;
   }
   const path = `${org.user_id}/org-${org.id}`;

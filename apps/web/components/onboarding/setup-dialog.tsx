@@ -94,7 +94,7 @@ function Setup({ saved, fresh }: { saved: SetupStep; fresh: boolean }) {
     setBusy(true);
     try {
       await saveOnboarding({ onboarding: to, ...(tour ? { tour } : {}) });
-      if (to === "done") router.replace("/briefing");
+      if (to === "done") router.replace("/summary");
       else setStep(to);
     } catch {
       toast("Could not save your progress. Try again.");
@@ -245,7 +245,7 @@ function AccountsStep() {
     setError(null);
     track("account_connect", { provider: "google", step: "app", outcome: "start" });
     try {
-      await connectGoogle("/briefing");
+      await connectGoogle("/summary");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Google could not be connected. Try again.");
       setLeaving(false);

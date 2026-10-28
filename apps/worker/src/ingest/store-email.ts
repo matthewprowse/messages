@@ -6,7 +6,7 @@ import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, chatIndex, domainIndex } from "@messages/crypto/addresses";
 import { keysFor, seal, sealAddress, sealDomain } from "../vault";
 import { bodySource, emphasisRuns, isBulkMail } from "@messages/email-text";
-import { companyDomain, companyNameForDomain } from "@messages/email-text/company";
+import { companyDomain, companyNameFor, senderName } from "@messages/email-text/company";
 import { ownIdentitiesCached } from "../contacts/own";
 
 /** Emails per bulk call: bodies can be large, so fewer than for WhatsApp. */
@@ -92,11 +92,13 @@ async function emailPayload(account: AccountRow, mail: NormalizedEmail, ctx: Ema
   const participants = await Promise.all(
     [...new Map(people.map((p) => [p.address, p])).values()].map(async (p) => {
       const domain = companyDomain(p.address, own);
+      const company = domain ? companyNameFor(domain, p.name) : null;
       return {
         address: await sealAddress(user, p.address),
         index: await addressIndex(keys, p.address),
-        display_name: p.name || nameFromAddress(p.address),
-        company: domain ? { index: await domainIndex(keys, domain), domain: await sealDomain(user, domain), name: companyNameForDomain(domain) } : null,
+        // An automated sender with no real name (noreply@, "No Reply") is named for its company.
+        display_name: senderName(p.address, p.name, company, nameFromAddress),
+        company: domain ? { index: await domainIndex(keys, domain), domain: await sealDomain(user, domain), name: company } : null,
       };
     }),
   );
@@ -129,7 +131,7 @@ async function emailPayload(account: AccountRow, mail: NormalizedEmail, ctx: Ema
     provider_meta: ctx.meta,
     role: ctx.role,
     participants,
-    attachments: mail.attachments.map((a) => ({ filename: a.filename, mime_type: a.mimeType, kind: a.kind, size_bytes: a.sizeBytes })),
+    attachments: await Promise.all(mail.attachments.map(async (a) => ({ filename: (await seal(user, FIELD.filename, a.filename))!, mime_type: a.mimeType, kind: a.kind, size_bytes: a.sizeBytes }))),
     // The sender's unsubscribe instructions, stored with a new message in the same call.
     list_unsubscribe: await seal(user, FIELD.unsubscribe, mail.listUnsubscribe),
     list_unsubscribe_post: mail.listUnsubscribePost,

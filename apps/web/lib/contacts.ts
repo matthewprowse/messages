@@ -1,12 +1,16 @@
 import type { PostgrestError } from "@supabase/supabase-js";
 import type { Json } from "@messages/db";
+import { FIELD, type Field } from "@messages/crypto/fields";
 import { companyRef, identityRefs } from "./address-refs";
 import { openAddresses, openNestedThreads } from "./open-rows";
 import { supabase } from "./supabase";
+import { seal } from "./vault";
 import { formatSize } from "./format";
 import { normalisePhone, PHONE_HINT } from "./new-items";
 import { isEmail } from "./send-from";
 import type { Attachment, FiledAttachment, Provider } from "./types";
+import { companyLogo, isCompanySender, logoAvatar } from "./people";
+import { withSealedColumns } from "./sealed-columns";
 
 // Contacts as the pages need them. The worker creates a contact for every new sender and stores each
 // email address or phone number as an identity, so one person can have several of each.
@@ -23,12 +27,16 @@ export interface ContactSummary {
   lastAt: string | null;
   /** Their photo in the private avatars bucket. */
   avatarPath?: string;
+  /** Writes as a company rather than as themselves, which picks their avatar's icon. */
+  isCompany: boolean;
   /** The company filed for their email domain, if any. */
   organizationName: string | null;
   /** Conversations with them, not counting deleted ones. */
   conversationCount: number;
   /** Has a WhatsApp chat, even when WhatsApp hides the number. */
   hasWhatsApp: boolean;
+  /** Left out of the People list; shown under Hidden. */
+  hidden: boolean;
 }
 
 export interface ContactConversation {
@@ -60,7 +68,7 @@ type Identity = { kind: string; value: string };
 export function identities(rows: Identity[]) {
   const emails = rows.filter((i) => i.kind === "email").map((i) => i.value);
   // WhatsApp privacy IDs ("...@lid") stand in for a hidden number: they are not phone numbers.
-  const phones = [...new Set(rows.filter((i) => i.kind !== "email" && !i.value.includes("@")).map((i) => i.value))];
+  const phones = [...new Set(rows.filter((i) => (i.kind === "phone" || i.kind === "whatsapp") && !i.value.includes("@")).map((i) => i.value))];
   return { emails, phones, hasWhatsApp: rows.some((i) => i.kind === "whatsapp") };
 }
 
@@ -85,7 +93,7 @@ export async function allRows<T>(label: string, page: (from: number, to: number)
 }
 
 export async function listContacts(): Promise<ContactSummary[]> {
-  const select = "id, display_name, company, role, avatar_path, organizations(name), contact_identities(kind, value)";
+  const select = "id, display_name, company, role, hidden, avatar_path, organizations(name, logo_path), contact_identities(kind, value)";
   // Last activity and conversation counts come from one database call (one row per contact, deleted
   // conversations left out), so the list no longer loads every conversation of every contact.
   const [rows, summaries] = await Promise.all([
@@ -96,15 +104,19 @@ export async function listContacts(): Promise<ContactSummary[]> {
   const byContact = new Map(summaries.map((s) => [s.contact_id, s]));
   return data.map((c) => {
     const summary = byContact.get(c.id);
+    const ids = identities(c.contact_identities);
+    const who = { name: c.display_name, ...ids, organizationName: c.organizations?.name ?? null };
     return {
       id: c.id,
       name: c.display_name,
       company: c.organizations?.name ?? c.company,
       role: c.role,
-      ...identities(c.contact_identities),
+      hidden: c.hidden,
+      ...ids,
       // A contact with no conversations has no activity, so they sort last.
       lastAt: (summary?.last_at as string | null | undefined) ?? null,
-      avatarPath: c.avatar_path ?? undefined,
+      avatarPath: c.avatar_path ?? companyLogo(who, logoAvatar(c.organizations?.logo_path)),
+      isCompany: isCompanySender(who),
       organizationName: c.organizations?.name ?? null,
       conversationCount: summary?.conversation_count ?? 0,
     };
@@ -122,7 +134,7 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
   const { data: c, error } = await supabase
     .from("contacts")
     .select(
-      "id, display_name, company, role, relationship, ai_summary, avatar_path, organizations(id, name), contact_identities(id, kind, value), thread_participants(threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider)))",
+      "id, display_name, company, role, relationship, ai_summary, hidden, avatar_path, organizations(id, name, logo_path), contact_identities(id, kind, value), thread_participants(threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider)))",
     )
     .eq("id", id)
     .maybeSingle();
@@ -137,24 +149,28 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
       channel: t.channel as ContactConversation["channel"],
       provider: (t.accounts?.provider ?? undefined) as Provider | undefined,
       isGroup: t.is_group,
-      title: (t.is_group ? t.group_name : t.subject) ?? (t.channel === "whatsapp" ? "WhatsApp" : "No Subject"),
+      title: (t.is_group ? t.group_name : t.subject) ?? (t.channel === "email" ? "No Subject" : ({ whatsapp: "WhatsApp", instagram: "Instagram", linkedin: "LinkedIn", teams: "Teams", zoom: "Zoom", google_chat: "Google Chat" } as Record<string, string>)[t.channel] ?? "Conversation"),
       preview: t.last_message_preview,
       lastAt: t.last_message_at,
     }))
     .sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? ""));
   const groupIds = new Set(conversations.filter((t) => t.isGroup).map((t) => t.id));
+  const ids = identities(c.contact_identities);
+  const who = { name: c.display_name, ...ids, organizationName: c.organizations?.name ?? null };
   return {
     id: c.id,
     name: c.display_name,
     company: c.company,
     role: c.role,
     relationship: c.relationship,
+    hidden: c.hidden,
     summary: c.ai_summary,
     organization: c.organizations ? { id: c.organizations.id, name: c.organizations.name } : null,
     organizationName: c.organizations?.name ?? null,
-    ...identities(c.contact_identities),
+    ...ids,
     lastAt: conversations[0]?.lastAt ?? null,
-    avatarPath: c.avatar_path ?? undefined,
+    avatarPath: c.avatar_path ?? companyLogo(who, logoAvatar(c.organizations?.logo_path)),
+    isCompany: isCompanySender(who),
     conversations,
     conversationCount: conversations.length,
     identityRows: c.contact_identities,
@@ -164,15 +180,17 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
 
 async function contactAttachments(contactId: string, threadIds: string[], groupIds: Set<string>): Promise<FiledAttachment[]> {
   if (threadIds.length === 0) return [];
+  const columns = await withSealedColumns("id, filename, kind, size_bytes, storage_path, team_path, hidden_reason, sealed, not_kept, messages!inner(id, thread_id, sent_at, direction, sender_contact_id)");
   const data = await allRows("Load contact attachments", (from, to) =>
     supabase
       .from("attachments")
-      .select("id, filename, kind, size_bytes, storage_path, hidden_reason, messages!inner(id, thread_id, sent_at, direction, sender_contact_id)")
+      .select(columns)
       .eq("hidden", false)
       .in("messages.thread_id", threadIds)
       .order("id")
       .range(from, to),
   );
+  await openAddresses(data);
   return data
     .filter((a) => !groupIds.has(a.messages.thread_id) || a.messages.sender_contact_id === contactId)
     .map((a) => ({
@@ -180,7 +198,9 @@ async function contactAttachments(contactId: string, threadIds: string[], groupI
       name: a.filename,
       kind: a.kind as Attachment["kind"],
       size: formatSize(a.size_bytes),
-      path: a.storage_path ?? undefined,
+      path: a.team_path ?? a.storage_path ?? undefined,
+      sealed: a.sealed || undefined,
+      notKept: (a.not_kept as Attachment["notKept"]) ?? undefined,
       hiddenReason: (a.hidden_reason as Attachment["hiddenReason"]) ?? undefined,
       messageId: a.messages.id,
       threadId: a.messages.thread_id,
@@ -225,20 +245,21 @@ export async function createContact(c: NewContact): Promise<CreateResult> {
   const { data, error } = await supabase.rpc("create_contact", {
     p_name: c.name,
     p_identities: refs,
-    p_company: c.company,
+    // Company, role and relationship are sealed, which create_contact cannot take; they are saved just after with update_contact.
+    p_company: "",
     p_organization: (await companyRef(emails[0])) as unknown as Json,
   });
   if (!error && data) {
     // create_contact takes no role or relationship, so they are saved with the same call Edit uses.
     const role = c.role?.trim() ?? "";
     const relationship = c.relationship?.trim() ?? "";
-    if (role || relationship) {
+    if (c.company.trim() || role || relationship) {
       const saved = await supabase.rpc("update_contact", {
         p_contact: data,
         p_name: c.name,
-        p_company: c.company,
-        p_role: role,
-        p_relationship: relationship,
+        p_company: await sealText(FIELD.contactCompany, c.company),
+        p_role: await sealText(FIELD.contactRole, role),
+        p_relationship: await sealText(FIELD.contactRelationship, relationship),
         p_add: [] as unknown as Json,
         p_remove: [],
       });
@@ -247,6 +268,12 @@ export async function createContact(c: NewContact): Promise<CreateResult> {
     return { ok: true, id: data };
   }
   return failed(error, "Could not add the contact. Check your connection and try again.");
+}
+
+/** A detail to store: sealed in the browser when it has text, left empty when it has none (the functions read "" as cleared). */
+async function sealText(field: Field, value: string): Promise<string> {
+  const text = value.trim();
+  return text ? seal(field, text) : "";
 }
 
 /** Deduplicated addresses (lowercased) and numbers, as the refs the contact functions take. */
@@ -279,15 +306,21 @@ export interface ContactEdit {
   remove: string[];
 }
 
+/** Hides a contact from the People list, or brings them back. Their conversations are untouched. */
+export async function setContactHidden(id: string, hidden: boolean): Promise<boolean> {
+  const { error } = await supabase.from("contacts").update({ hidden }).eq("id", id);
+  return !error;
+}
+
 /** Saves a person's name, details, and added or removed addresses and numbers. A name set here is kept by syncs. */
 export async function updateContact(id: string, c: ContactEdit): Promise<CreateResult> {
   const { refs } = await newIdentities(c.addEmails, c.addPhones);
   const { error } = await supabase.rpc("update_contact", {
     p_contact: id,
     p_name: c.name,
-    p_company: c.company,
-    p_role: c.role,
-    p_relationship: c.relationship,
+    p_company: await sealText(FIELD.contactCompany, c.company),
+    p_role: await sealText(FIELD.contactRole, c.role),
+    p_relationship: await sealText(FIELD.contactRelationship, c.relationship),
     p_add: refs,
     p_remove: c.remove,
   });

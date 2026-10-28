@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { decryptBytes, isSealedBytes, SEALED_MAGIC_BYTES } from "@messages/crypto";
+import { decryptBytes, decryptTeamBytes, isSealedBytes, SEALED_MAGIC_BYTES } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
-import { userKeys } from "./vault";
+import { teamKeyRing, userKeys } from "./vault";
+import { mimeFor } from "./file-types";
+
+export { mimeFor };
 import { BUCKET } from "./outbox-files";
 
 // Photos and attachments live in private buckets, so each needs a short-lived signed link. Links asked
@@ -199,9 +202,10 @@ function cachedUrl(bucket: string, path: string, thumb: boolean): string | null 
 // ---------------------------------------------------------------------------
 // Files attached to notes
 // ---------------------------------------------------------------------------
-// Note files are sealed in the browser before upload (lib/notes.ts), so a signed link to one would show
-// ciphertext. They are fetched and opened here instead, and handed out as blob links. A file uploaded
-// before sealing began does not start with the sealed-file header, so its signed link is used as it is.
+// Note files are sealed in the browser before upload (lib/notes.ts), and stored attachments (email, WhatsApp,
+// Instagram) are sealed by the workers (attachments.sealed), so a signed link to one would show ciphertext.
+// They are fetched and opened here instead, and handed out as blob links. A file uploaded before sealing began
+// does not start with the sealed-file header, so its signed link is used as it is.
 
 /** A note file's path is "<user id>/notes/<note id>/<uuid>". */
 export function isNotePath(path: string | undefined): path is string {
@@ -209,6 +213,31 @@ export function isNotePath(path: string | undefined): path is string {
 }
 
 const noteMimes = new Map<string, string>();
+
+/** The field a stored object was sealed under: note files by the browser, everything else by the workers. */
+export function sealedField(path: string) {
+  return isNotePath(path) ? FIELD.noteFileData : FIELD.attachmentData;
+}
+
+
+/** A shared chat's file as the team keeps it: "team/<workspace id>/<attachment id>", sealed with the team's key. */
+export function isTeamFilePath(path: string | undefined): path is string {
+  return !!path && path.startsWith("team/");
+}
+
+/** Opens a sealed file: with the team's key for a team copy (the current version first, then older ones), else the user's. */
+async function openSealed(path: string, sealed: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  if (!isTeamFilePath(path)) return decryptBytes(await userKeys(), sealedField(path), sealed);
+  let last: unknown = new Error("No team key.");
+  for (const keys of await teamKeyRing()) {
+    try {
+      return await decryptTeamBytes(keys, sealedField(path), sealed);
+    } catch (err) {
+      last = err; // another version
+    }
+  }
+  throw last;
+}
 
 /** Remembers a note file's content type, which the sealed upload does not carry, for its blob link. */
 export function rememberNoteMime(path: string, mime: string) {
@@ -262,7 +291,7 @@ async function openNoteFile(path: string): Promise<OpenedNoteFile | null> {
     sealed.set(c, at);
     at += c.length;
   }
-  const plain = await decryptBytes(await userKeys(), FIELD.noteFileData, sealed);
+  const plain = await openSealed(path, sealed);
   return { url: URL.createObjectURL(new Blob([plain], { type: noteMimes.get(path) || "application/octet-stream" })), sealed: true };
 }
 
@@ -328,8 +357,10 @@ function useNoteFile(path: string | undefined): OpenedNoteFile | null | undefine
  * A link to a stored file: undefined while asking, null when there is no path or no file. With thumb, a
  * small resized copy for grid tiles (the full file when the project cannot resize images).
  */
-export function useSignedUrl(bucket: string, path: string | undefined, thumb = false): string | null | undefined {
-  const note = bucket === BUCKET && isNotePath(path);
+export function useSignedUrl(bucket: string, path: string | undefined, thumb = false, sealedType?: string): string | null | undefined {
+  // sealedType is the content type of a stored attachment known to be sealed, which is opened here like a note file.
+  if (path && sealedType) rememberNoteMime(path, sealedType);
+  const note = bucket === BUCKET && (isNotePath(path) || (!!path && !!sealedType));
   const opened = useNoteFile(note ? path : undefined);
   const small = thumb && thumbsEnabled() && !note;
   const [got, setGot] = useState<{ key: string; url: string | null } | null>(null);

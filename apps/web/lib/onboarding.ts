@@ -18,12 +18,14 @@ export interface OnboardingMeta {
   tour?: "pending" | "done";
   /** The page hints dismissed (or covered by the tour). */
   hints?: string[];
+  /** The team whose joining review (the chats Konva suggests as work) has been answered, shared or skipped. */
+  teamReview?: string;
 }
 
 export function useOnboardingMeta(): OnboardingMeta {
   const { session } = useAuth();
   const meta = (session?.user.user_metadata ?? {}) as OnboardingMeta & Record<string, unknown>;
-  return { onboarding: meta.onboarding, tour: meta.tour, hints: Array.isArray(meta.hints) ? meta.hints : undefined };
+  return { onboarding: meta.onboarding, tour: meta.tour, hints: Array.isArray(meta.hints) ? meta.hints : undefined, teamReview: typeof meta.teamReview === "string" ? meta.teamReview : undefined };
 }
 
 /** The name the sign-in gave us, from Google, when there is one. */
@@ -51,9 +53,27 @@ export async function postAsUser<T>(path: string, body: unknown = {}): Promise<T
 }
 
 /** Starts connecting Google: off to Google's sign-in, back to `back` afterwards. `meet` also asks for Meet transcripts and Google Chat. */
-export async function connectGoogle(back: "/briefing" | "/settings/accounts/google", opts: { meet?: boolean } = {}) {
+export async function connectGoogle(back: "/summary" | "/settings/accounts/google", opts: { meet?: boolean } = {}) {
   const { url } = await postAsUser<{ url: string }>("/api/connect/google", { back, meet: opts.meet === true });
   window.location.assign(url);
+}
+
+/** Starts connecting Microsoft: off to Microsoft's sign-in, back to `back` afterwards. `teams` also asks for the Teams permissions (work or school accounts). */
+export async function connectMicrosoft(back: "/summary" | "/settings/accounts/microsoft", opts: { teams?: boolean } = {}) {
+  const { url } = await postAsUser<{ url: string }>("/api/connect/microsoft", { back, teams: opts.teams === true });
+  window.location.assign(url);
+}
+
+/** What ?connect_error= from the Microsoft callback means, in words. */
+export function microsoftErrorText(code: string): string {
+  if (code === "cancelled") return "Microsoft sign-in was cancelled. Try again when you are ready.";
+  if (code === "not_granted") return "No access was given. Try again and accept every permission Microsoft asks for.";
+  if (code === "no_refresh") return "Microsoft did not give lasting access. Try again and accept every permission.";
+  if (code === "expired") return "That sign-in took too long or was opened in another browser. Try again.";
+  if (code === "personal_teams") return "Microsoft would not grant the Teams permissions. Teams needs a work or school account. Try again with the Teams box unticked.";
+  if (code === "admin_approval") return "Your organisation needs an IT admin to approve Konva before you can connect it.";
+  if (code === "invalid_client" || code === "unauthorized_client") return "Microsoft rejected the app. The server owner needs to check the Microsoft app registration.";
+  return "Microsoft could not be connected. Try again.";
 }
 
 /** Why Meet and Chat were not connected for a personal Google account. */

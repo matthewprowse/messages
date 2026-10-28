@@ -37,7 +37,7 @@ export async function POST(request: Request) {
   if (body.code === undefined) return Response.json({ step }, { headers: noStore });
 
   // Only codes count against the limit; the app asks for the step every few seconds while it waits.
-  const wait = overLimit(user.id);
+  const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many tries. Wait a few minutes and try again.", { "Retry-After": String(wait) });
 
   const code = body.code.replace(/[\s-]/g, "");

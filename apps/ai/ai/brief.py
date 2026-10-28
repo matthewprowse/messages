@@ -32,6 +32,7 @@ import base64
 import io
 import re
 import sys
+import time
 import wave
 from array import array
 from concurrent.futures import ThreadPoolExecutor
@@ -40,13 +41,16 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import log
-from .fields import BRIEF, NAME, SUMMARY, TASK_TITLE
+from .fields import BRIEF, EVENT_LOCATION, EVENT_TITLE, NAME, SUMMARY, TASK_TITLE
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
 from .text import UNTRUSTED
 from .vault import Vault
 
-POLL_S = 10
+POLL_S = 10  # while briefs are being made or asked for
+IDLE_S = 15  # the longest wait between looks when nothing has been asked for or is due (poll.Backoff)
+PROFILES_TTL_S = 300  # briefing times and time zones are read this often, not on every look
+SCRIPT_MAX_OUTPUT = 6144  # tokens, thinking included: a spoken brief is a few minutes of text
 AUDIO_BUCKET = "brief-audio"
 AUDIO_EXT = "wav"
 PRUNE_BATCH = 200
@@ -290,6 +294,8 @@ class Brief:
         self.voice = voice
         self.vault = vault or Vault(db)
         self._pruned: date | None = None
+        self._profiles: tuple[float, list[dict[str, Any]]] | None = None
+        self._made: set[tuple[str, str]] = set()  # (user, day) briefs known to exist, so they are not asked about again
 
     def run_once(self) -> int:
         """Speaks written briefs people want to hear, writes and speaks asked-for briefs, then writes (without
@@ -303,18 +309,29 @@ class Brief:
         for row in self.db.select("briefs", {"select": "id,user_id,for_date", "status": "eq.pending", "order": "created_at", "limit": "5"}):
             if self._claim(row["id"], "pending"):
                 done += self._write(row["id"], row["user_id"], date.fromisoformat(row["for_date"]), now)
-        profiles = self.db.select("profiles", {"select": "user_id,timezone,briefing_time"})
-        due = {p["user_id"]: d for p in profiles if (d := due_today(now, zone_of(p.get("timezone")), p.get("briefing_time")))}
+        # Who is due is worked out here from profiles read every PROFILES_TTL_S, not selected on each look.
+        due = {p["user_id"]: d for p in self._profile_rows() if (d := due_today(now, zone_of(p.get("timezone")), p.get("briefing_time")))}
+        due = {u: d for u, d in due.items() if (u, d.isoformat()) not in self._made}
         if due:
             have = self.db.select("briefs", {"select": "user_id,for_date", "user_id": in_list(sorted(due)), "for_date": f"gte.{min(due.values())}"})
             made = {(h["user_id"], h["for_date"]) for h in have}
+            self._made |= made
             for user_id, day in due.items():
                 if (user_id, day.isoformat()) in made:
                     continue
+                self._made.add((user_id, day.isoformat()))
                 rows = self.db.insert_new("briefs", {"user_id": user_id, "for_date": day.isoformat(), "status": "working"}, "user_id,for_date")
                 if rows:
                     done += self._write(rows[0]["id"], user_id, day, now, speak=False)
         return done
+
+    def _profile_rows(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        if self._profiles is None or now - self._profiles[0] > PROFILES_TTL_S:
+            self._profiles = (now, self.db.select("profiles", {"select": "user_id,timezone,briefing_time"}))
+            if len(self._made) > 5000:  # only today's and yesterday's matter
+                self._made.clear()
+        return self._profiles[1]
 
     def _claim(self, brief_id: str, status: str) -> bool:
         """Takes a brief that is waiting (status 'pending' to write, 'speak_pending' to speak), so it is
@@ -325,7 +342,7 @@ class Brief:
         self.db.update(
             "briefs",
             {"status": "in.(working,speaking)", "updated_at": f"lt.{_iso(now - STALE_AFTER)}"},
-            {"status": "failed", "error": "Took too long", "updated_at": _iso(now)},
+            {"status": "failed", "error": "timed_out", "updated_at": _iso(now)},
             minimal=True,
         )
         # Nobody took a request to speak: the brief is still there to be spoken, so ask again.
@@ -384,6 +401,9 @@ class Brief:
                     },
                 )
             ]
+            for e in events:  # sealed or plain; never logged
+                e["title"] = self.vault.open(user_id, EVENT_TITLE, e.get("title"))
+                e["location"] = self.vault.open(user_id, EVENT_LOCATION, e.get("location"))
             threads = self.db.select(
                 "threads",
                 {
@@ -418,7 +438,7 @@ class Brief:
                 t["_who"] = (t.get("group_name") if t.get("is_group") else None) or next((n for n in names if n), None) or "Someone"
             prompt = build_prompt(profile.get("display_name") or "", day, zone, events, sections(threads, now), now, task_sections(tasks, day, zone))
             usage = UsageContext(user_id, "brief")
-            script = str(self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, usage, temperature=0.4).get("script") or "").strip()
+            script = str(self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, usage, temperature=0.4, max_output=SCRIPT_MAX_OUTPUT).get("script") or "").strip()
             if not script:
                 raise GeminiError(None, "empty script")
             parts = split_parts(script)
@@ -443,7 +463,7 @@ class Brief:
         except Exception as err:
             reason = getattr(err, "status", None) or type(err).__name__
             log.warn("brief failed", user=user_id, code=reason)
-            self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "failed", "error": "Could not write the brief", "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
+            self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "failed", "error": "write_failed", "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
             return 0
 
     def _voice(self, profile: dict[str, Any]) -> str:
@@ -465,7 +485,7 @@ class Brief:
             return 1
         except Exception as err:
             log.warn("brief speech failed", user=user_id, code=getattr(err, "status", None) or type(err).__name__)
-            self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "failed", "error": "Could not speak the brief", "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
+            self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "failed", "error": "speak_failed", "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
             return 0
 
 

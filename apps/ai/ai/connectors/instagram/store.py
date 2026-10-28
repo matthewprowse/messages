@@ -8,22 +8,105 @@ error codes are ever logged."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import os
+import re
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ... import log
 from ...analytics import Analytics, event
-from ...fields import ADDRESS, BODY
+from ...crypto import encrypt_bytes
+from ...fields import ADDRESS, ATTACHMENT_DATA, BODY, FILENAME
 from ...supabase import Supabase, SupabaseError
+from ...tls import CONTEXT
 from ...vault import Vault
-from .sealing import UserSealer, ensure_user_key, open_json, seal_json
+from .credentials import OFFICIAL, PRIVATE
+from .sealing import AccountSealer, UserSealer, ensure_user_key, open_json
 
 BUCKET = "attachments"
 MAX_FILE_BYTES = 50 * 1024 * 1024  # the sync worker's limit, Supabase's default upload limit
 INLINE = ("image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "audio/mp4")
+MB = 1024 * 1024
+GB = 1024 * MB
+GRACE = 0.1  # a message that has started saving may finish this far past the cap (storage-rules.ts)
+# What the database still needs to know about a name now that it is sealed (apps/worker/src/ingest/file-hints.ts).
+KEPT = re.compile(r"(receipt|invoice|ticket|statement|booking|itinerary|confirmation|reservation|boarding|voucher|order|tax|bill|payslip|payment|purchase|quotation|quote|rechnung|factura|factuur|recibo)", re.I)
+
+
+def video_copy_max() -> int:
+    """Videos over this are kept as a link to the original (VIDEO_COPY_MAX_MB, 25)."""
+    try:
+        return int(float(os.environ.get("VIDEO_COPY_MAX_MB") or 25) * MB)
+    except ValueError:
+        return 25 * MB
+
+
+def seat_cap() -> int:
+    try:
+        return int(float(os.environ.get("STORAGE_CAP_GB") or 20) * GB)
+    except ValueError:
+        return 20 * GB
+
+
+def file_hints(filename: str) -> dict[str, Any]:
+    """file_ext, keep_hint and is_sticker for a name: the only things about it that reach SQL."""
+    m = re.search(r"\.([A-Za-z0-9]{1,8})$", filename or "")
+    return {"file_ext": m.group(1).lower() if m else None, "keep_hint": bool(KEPT.search(filename or "")), "is_sticker": bool(re.match(r"Sticker\.", filename or "", re.I))}
+
+
+def content_hash(index_key: bytes, data: bytes) -> str:
+    """HMAC-SHA256 of the file under the user's index key, base64url without padding (contentHash in packages/crypto)."""
+    return base64.urlsafe_b64encode(hmac.new(index_key, data, hashlib.sha256).digest()).decode("ascii").rstrip("=")
+
+
+def cap_allows(used: int, cap: int, started: bool) -> bool:
+    """Under the cap always; in the 10% grace band only for a message that already has a saved file; never past it."""
+    if used < cap:
+        return True
+    return started and used < cap * (1 + GRACE)
+
+
+AVATARS = "avatars"
+AVATAR_MAX_BYTES = 2 * MB  # the sync worker's photo limit (photos/store.ts)
+AVATAR_REFRESH = timedelta(days=7)  # an Instagram photo is looked at again at most this often
+# Instagram's grey silhouette for accounts with no photo: not worth saving.
+DEFAULT_AVATAR = "44884218_345707102882519_2446069589734326272_n"
+
+
+def image_type(data: bytes) -> str | None:
+    """What a photo looks like from its first bytes (imageType in photos/site-icon.ts). Anything else is not stored."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:3] == b"GIF":
+        return "image/gif"
+    return None
+
+
+def photo_due(contact: dict[str, Any], now: datetime) -> bool:
+    """Whether a contact's photo should be fetched from Instagram: when it has none, or it is Instagram's own and
+    a week old. A photo from the address book or WhatsApp stays (photos/store.ts ranks Instagram with WhatsApp)."""
+    if not contact.get("avatar_path"):
+        return True
+    if contact.get("avatar_source") != "instagram":
+        return False
+    stamp = contact.get("avatar_updated_at")
+    try:
+        return not stamp or now - datetime.fromisoformat(str(stamp).replace("Z", "+00:00")) >= AVATAR_REFRESH
+    except ValueError:
+        return True
+
+
 STATE_SCOPE = "instagram_inbox"
+OFFICIAL_SCOPE = "instagram_official_inbox"  # its own, so switching a username from a personal account to a Business one starts clean
 
 
 def now_iso() -> str:
@@ -34,11 +117,12 @@ class Store:
     def __init__(self, db: Supabase, vault: Vault, *, encryption_key: str, key_wrapping_key: str, encrypt_addresses: bool):
         self.db = db
         self.vault = vault
-        self.encryption_key = encryption_key
+        self.encryption_key = encryption_key  # the old static key: reads "v1:" values and the web app's short-lived sign-in codes
         self.key_wrapping_key = key_wrapping_key
         self.encrypt_addresses = encrypt_addresses
         self.analytics = Analytics(db)
         self._keyed: set[str] = set()  # users whose data key is known to exist
+        self.creds = AccountSealer(db, vault, encryption_key, self._ensure_key)  # stored sign-ins and sessions, "v2:" under the owner's key
 
     # -- accounts ---------------------------------------------------------------------------------------
 
@@ -51,19 +135,25 @@ class Store:
         row = self.db.first("account_credentials", {"select": "ciphertext,refreshed", "account_id": f"eq.{account_id}"})
         if not row:
             return None, None
-        creds = open_json(row["ciphertext"], self.encryption_key) if row.get("ciphertext", "").startswith("v1:") else None
-        session = open_json(row["refreshed"], self.encryption_key) if (row.get("refreshed") or "").startswith("v1:") else None
+        creds = self.creds.open(account_id, row["ciphertext"]) if self.creds.sealed(row.get("ciphertext")) else None
+        session = self.creds.open(account_id, row["refreshed"]) if self.creds.sealed(row.get("refreshed")) else None
         return creds, session
 
     def save_session(self, account_id: str, username: str, settings: dict[str, Any]) -> None:
         """instagrapi's settings (the device, its IDs and the session), sealed. Writing refreshed does not
         move updated_at, so it never restarts the account."""
-        self.db.update("account_credentials", {"account_id": f"eq.{account_id}"}, {"refreshed": seal_json({"username": username, "settings": settings}, self.encryption_key)}, minimal=True)
+        self.db.update("account_credentials", {"account_id": f"eq.{account_id}"}, {"refreshed": self.creds.seal(account_id, {"username": username, "settings": settings})}, minimal=True)
 
-    def forget_password(self, account_id: str, username: str) -> str | None:
+    def save_token(self, account_id: str, token: str, expires_at: int) -> None:
+        """A Business or Creator account's refreshed access token (UNIX seconds it expires at), sealed. Like the
+        session, it goes in refreshed, which does not move updated_at, so refreshing never restarts the account."""
+        self.db.update("account_credentials", {"account_id": f"eq.{account_id}"}, {"refreshed": self.creds.seal(account_id, {"kind": OFFICIAL, "accessToken": token, "expiresAt": expires_at})}, minimal=True)
+
+    def forget_password(self, account_id: str, username: str, proxy: str | None = None) -> str | None:
         """Once signed in the password is not kept: later runs use the session, and a sign-out needs you.
-        Returns the sign-in's new updated_at."""
-        rows = self.db.update("account_credentials", {"account_id": f"eq.{account_id}"}, {"ciphertext": seal_json({"username": username}, self.encryption_key)})
+        The account's own proxy, if it has one, is kept. Returns the sign-in's new updated_at."""
+        kept: dict[str, Any] = {"kind": PRIVATE, "username": username, **({"proxy": proxy} if proxy else {})}
+        rows = self.db.update("account_credentials", {"account_id": f"eq.{account_id}"}, {"ciphertext": self.creds.seal(account_id, kept)})
         return rows[0].get("updated_at") if rows else None
 
     def signed_in(self, account: dict[str, Any], username: str) -> None:
@@ -103,11 +193,14 @@ class Store:
     def emit(self, user_id: str, name: str, **props: Any) -> None:
         self.analytics.emit(user_id, [event(name, **props)])
 
+    def _ensure_key(self, user_id: str) -> None:
+        if user_id not in self._keyed:
+            ensure_user_key(self.db, self.key_wrapping_key, user_id)
+            self._keyed.add(user_id)
+
     def sealer(self, user_id: str) -> UserSealer:
         """The user's keys for sealing and indexing, made first if they have none."""
-        if user_id not in self._keyed:
-            ensure_user_key(self.db, self.key_wrapping_key, user_id)  # before the Vault looks, so it finds it
-            self._keyed.add(user_id)
+        self._ensure_key(user_id)  # before the Vault looks, so it finds it
         keys = self.vault.keys_for(user_id)
         if keys is None:
             raise RuntimeError("no user key")
@@ -115,14 +208,14 @@ class Store:
 
     # -- sync state -------------------------------------------------------------------------------------
 
-    def newest_seen(self, account_id: str) -> int | None:
+    def newest_seen(self, account_id: str, scope: str = STATE_SCOPE) -> int | None:
         """The time of the newest message stored by an earlier poll, in microseconds. None before the first."""
-        row = self.db.first("sync_state", {"select": "sync_token", "account_id": f"eq.{account_id}", "scope": f"eq.{STATE_SCOPE}"})
+        row = self.db.first("sync_state", {"select": "sync_token", "account_id": f"eq.{account_id}", "scope": f"eq.{scope}"})
         token = (row or {}).get("sync_token") or ""
         return int(token) if token.isdigit() else None
 
-    def save_newest(self, account_id: str, timestamp_us: int) -> None:
-        self.db.upsert("sync_state", {"account_id": account_id, "scope": STATE_SCOPE, "sync_token": str(timestamp_us)}, "account_id,scope")
+    def save_newest(self, account_id: str, timestamp_us: int, scope: str = STATE_SCOPE) -> None:
+        self.db.upsert("sync_state", {"account_id": account_id, "scope": scope, "sync_token": str(timestamp_us)}, "account_id,scope")
 
     # -- messages ---------------------------------------------------------------------------------------
 
@@ -141,11 +234,94 @@ class Store:
         indexes = [sealer.chat_index(t) for t in thread_ids]
         return int(self.db.rpc("whatsapp_mark_read", {"p_account_id": account_id, "p_chat_jids": jids, "p_chat_indexes": indexes}) or 0)
 
-    def save_file(self, user_id: str, message_id: str, attachment_id: str, data: bytes, mime_type: str) -> None:
-        """A file in the private attachments bucket at <user id>/<message id>/<attachment id>, as WhatsApp's."""
+    def usage(self, user_id: str) -> tuple[int, int]:
+        """(bytes used, cap) for this person: a team pools its seats' storage, as team_storage_for says."""
+        team = self.db.rpc("team_storage_for", {"p_user": user_id})
+        if isinstance(team, dict) and isinstance(team.get("seats"), (int, float)):
+            return int(team.get("bytes") or 0), int(team["seats"] * seat_cap())
+        rows = self.db.select("storage_usage", {"select": "bytes", "user_id": f"eq.{user_id}"})
+        return sum(int(r.get("bytes") or 0) for r in rows), seat_cap()
+
+    def set_hints(self, attachment_id: str, filename: str) -> None:
+        """The sealed name's three plain hints. The name itself is sealed when the message is ingested."""
+        try:
+            self.db.update("attachments", {"id": f"eq.{attachment_id}"}, file_hints(filename), minimal=True)
+        except SupabaseError as err:
+            log.warn("instagram file hints not saved", attachment=attachment_id, code=err.status)
+
+    def sealed_name(self, user_id: str, filename: str) -> str | None:
+        return self.vault.seal(user_id, FILENAME, filename)
+
+    def save_file(self, user_id: str, message_id: str, attachment_id: str, data: bytes, mime_type: str, kind: str = "image", account_id: str | None = None) -> str:
+        """A file in the private attachments bucket at <user id>/<message id>/<attachment id>, as WhatsApp's, by the
+        rules of the sync worker's keepFile: nothing over 50 MB; a video over 25 MB stays at Instagram
+        (not_kept 'video_link'); at the storage cap it is not copied (not_kept 'over_cap'); the same file again
+        in an account points at the copy already stored; the bytes are sealed with the user's key, with sealed and
+        content_hash set. Returns "saved", "reused", "too_large", "video_link" or "over_cap"."""
+        size = len(data)
+        if size > MAX_FILE_BYTES:
+            return "too_large"
+        unsaved = {"id": f"eq.{attachment_id}", "storage_path": "is.null"}
+        if kind == "video" and size > video_copy_max():
+            self.db.update("attachments", unsaved, {"not_kept": "video_link"}, minimal=True)
+            return "video_link"
+        keys = self.vault.keys_for(user_id)
+        sealing = bool(self.vault.encrypt) and keys is not None
+        digest = content_hash(keys.index, data) if keys is not None else None
+        if digest and account_id:
+            copy = self.db.select(
+                "attachments",
+                {"select": "storage_path,sealed,messages!inner(account_id)", "user_id": f"eq.{user_id}", "content_hash": f"eq.{digest}", "messages.account_id": f"eq.{account_id}", "storage_path": "not.is.null", "limit": "1"},
+            )
+            if copy and copy[0].get("storage_path"):
+                self.db.update(
+                    "attachments",
+                    {"id": f"eq.{attachment_id}"},
+                    {"storage_path": copy[0]["storage_path"], "sealed": bool(copy[0].get("sealed")), "content_hash": digest, "size_bytes": size, "not_kept": None},
+                    minimal=True,
+                )
+                return "reused"
+        try:
+            used, cap = self.usage(user_id)
+        except Exception:  # unreadable usage fails open, as the sync worker does
+            used, cap = 0, seat_cap()
+        if not cap_allows(used, cap, False):  # an Instagram message carries one file, so it has not started saving
+            self.db.update("attachments", unsaved, {"not_kept": "over_cap"}, minimal=True)
+            return "over_cap"
         path = f"{user_id}/{message_id}/{attachment_id}"
-        self.db.upload(BUCKET, path, data, mime_type if mime_type in INLINE else "application/octet-stream")
-        self.db.update("attachments", {"id": f"eq.{attachment_id}"}, {"storage_path": path, "size_bytes": len(data)}, minimal=True)
+        content_type = mime_type if mime_type in INLINE else "application/octet-stream"
+        if sealing:
+            # Sealed before upload, in the format of packages/crypto encryptBytes (what the sync worker does for
+            # WhatsApp files), under the attachment_data field. The stored type is generic: the real one is on the row.
+            data = encrypt_bytes(keys, ATTACHMENT_DATA, data)  # type: ignore[arg-type]
+            content_type = "application/octet-stream"
+        self.db.upload(BUCKET, path, data, content_type)
+        self.db.update("attachments", {"id": f"eq.{attachment_id}"}, {"storage_path": path, "sealed": sealing, "content_hash": digest, "size_bytes": size, "not_kept": None}, minimal=True)
+        return "saved"
+
+    # -- contact photos ---------------------------------------------------------------------------------
+
+    def contact_to_photograph(self, user_id: str, sealer: UserSealer, pk: str) -> dict[str, Any] | None:
+        """The contact an Instagram person was filed under and what photo it has, or None when there is no
+        contact yet or its photo is not due."""
+        link = self.db.first("contact_identities", {"select": "contact_id", "user_id": f"eq.{user_id}", "kind": "eq.instagram", "value_index": f"eq.{sealer.address_index(pk)}"})
+        if not link:
+            return None
+        contact = self.db.first("contacts", {"select": "id,avatar_path,avatar_source,avatar_updated_at", "id": f"eq.{link['contact_id']}", "user_id": f"eq.{user_id}"})
+        return contact if contact and photo_due(contact, datetime.now(timezone.utc)) else None
+
+    def save_contact_photo(self, user_id: str, contact: dict[str, Any], data: bytes) -> bool:
+        """The photo in the private avatars bucket at <user id>/<contact id>, as the sync worker saves them
+        (avatars are not sealed), with source 'instagram'. Never replaces one from another source."""
+        kind = image_type(data)
+        if not kind or len(data) > AVATAR_MAX_BYTES:
+            return False
+        if contact.get("avatar_path") and contact.get("avatar_source") != "instagram":
+            return False
+        path = f"{user_id}/{contact['id']}"
+        self.db.upload(AVATARS, path, data, kind)
+        self.db.update("contacts", {"id": f"eq.{contact['id']}"}, {"avatar_path": path, "avatar_source": "instagram", "avatar_updated_at": now_iso()}, minimal=True)
+        return True
 
     # -- outbox -----------------------------------------------------------------------------------------
 
@@ -161,6 +337,53 @@ class Store:
                 "order": "created_at",
                 "limit": "10",
             },
+        )
+
+    def queued_new_chats(self, account_id: str) -> list[dict[str, Any]]:
+        """New conversations queued in the app for this account: no thread yet and one sealed recipient,
+        oldest first. Only the sign-in connector can send them."""
+        return self.db.select(
+            "outbox",
+            {
+                "select": "id,user_id,account_id,body,attachment_count,to_addresses",
+                "status": "eq.queued",
+                "account_id": f"eq.{account_id}",
+                "thread_id": "is.null",
+                "order": "created_at",
+                "limit": "10",
+            },
+        )
+
+    def count_outbox_files(self, outbox_id: str) -> int:
+        """How many files the app has added to this outbox row so far."""
+        return self.db.count("outbox_attachments", {"outbox_id": f"eq.{outbox_id}"})
+
+    def outbox_files(self, outbox_id: str, limit: int) -> list[dict[str, Any]]:
+        """The row's files in the order they were added (outbox-attachments.ts loadAttachmentFiles)."""
+        return self.db.select(
+            "outbox_attachments",
+            {"select": "id,user_id,storage_path,filename,mime_type,size_bytes,position", "outbox_id": f"eq.{outbox_id}", "order": "position,created_at", "limit": str(limit)},
+        )
+
+    def download_outbox_file(self, path: str) -> bytes | None:
+        """An uploaded file's bytes, None when it is gone. The caller has checked the path is the user's own."""
+        try:
+            return self.db.download(BUCKET, path)
+        except SupabaseError as err:
+            if err.status in (400, 404):
+                return None
+            raise
+
+    def link_thread(self, outbox_id: str, thread_id: str) -> None:
+        """Points a sent new conversation's row at its thread, so the app can open it."""
+        self.db.update("outbox", {"id": f"eq.{outbox_id}", "thread_id": "is.null"}, {"thread_id": thread_id}, minimal=True)
+
+    def last_inbound(self, thread_id: str) -> dict[str, Any] | None:
+        """The newest message someone else sent in a thread: when (sent_at) and who from (sender_address,
+        sealed). Instagram lets a Business account reply only within 24 hours of it, and to that person."""
+        return self.db.first(
+            "messages",
+            {"select": "sent_at,sender_address", "thread_id": f"eq.{thread_id}", "direction": "eq.inbound", "order": "sent_at.desc"},
         )
 
     def claim(self, outbox_id: str) -> bool:
@@ -277,7 +500,9 @@ class SignInRow:
 def fetch(url: str, proxy: str | None, user_agent: str | None, limit: int = MAX_FILE_BYTES, timeout: float = 60) -> bytes | None:
     """A file from Instagram's CDN, as the app would fetch it and through the proxy when one is set. None
     when it is too large to keep."""
-    handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy})] if proxy else []
+    handlers: list[Any] = [urllib.request.HTTPSHandler(context=CONTEXT)]  # the system's root certificates, which this Python lacks
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
     opener = urllib.request.build_opener(*handlers)
     request = urllib.request.Request(url, headers={"User-Agent": user_agent or "Instagram"})
     with opener.open(request, timeout=timeout) as res:

@@ -382,7 +382,7 @@ export class GoogleMeetConnector {
     const event = eventForMeeting(events, { meetingCode, startedAt });
     if (!event) return null;
     return {
-      title: event.title && !isCiphertext(event.title) ? event.title : null,
+      title: (await open(this.account.user_id, FIELD.eventTitle, event.title)) || null,
       attendees: attendeesOf(event.attendees).filter((a) => !isCiphertext(a.email)),
     };
   }

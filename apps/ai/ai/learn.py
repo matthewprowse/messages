@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
-from .fields import BODY, DRAFT, HTML
+from .fields import BODY, DRAFT, HTML, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
 from .text import clean
@@ -23,6 +23,7 @@ from .vault import Vault
 LEARN_FROM_RATIO = 0.1  # below this the draft was sent more or less as written
 REWRITE_DAYS = 14  # thrown away drafts this recent are checked for a reply you wrote yourself
 REWRITE_GAP_DAYS = 3  # that reply must follow the draft within this long
+LEARN_MAX_OUTPUT = 2048  # tokens, thinking included: at most three short rules
 REWRITES_EVERY_S = 600  # thrown away drafts are looked at this often; sent ones on every run
 
 SCHEMA = {
@@ -219,6 +220,8 @@ class Learn:
         existing = self.db.select(
             "style_rules", {"select": "id,rule,scope,contact_id,support_count", "user_id": f"eq.{row['user_id']}", "limit": "100"}
         )
+        for r in existing:  # rules written sealed are opened here; plain ones pass through
+            r["rule"] = self.vault.open(row["user_id"], STYLE_RULE, r.get("rule")) or ""
         prompt = "\n".join(
             ["Existing rules:"]
             + [f"- {r['rule']}" for r in existing]
@@ -226,7 +229,12 @@ class Learn:
         )
         try:
             result = self.gemini.json(
-                self.model, SYSTEM, prompt, SCHEMA, UsageContext(row["user_id"], "learn", thread["account_id"], row["thread_id"])
+                self.model,
+                SYSTEM,
+                prompt,
+                SCHEMA,
+                UsageContext(row["user_id"], "learn", thread["account_id"], row["thread_id"]),
+                max_output=LEARN_MAX_OUTPUT,
             )
         except GeminiError as err:
             log.warn("learning failed", draft=row["draft_id"], status=err.status)
@@ -245,6 +253,6 @@ class Learn:
             else:
                 self.db.insert(
                     "style_rules",
-                    {"user_id": row["user_id"], "scope": scope, "contact_id": contact_id if scope == "contact" else None, "rule": text},
+                    {"user_id": row["user_id"], "scope": scope, "contact_id": contact_id if scope == "contact" else None, "rule": self.vault.seal(row["user_id"], STYLE_RULE, text)},
                 )
         log.info("rules learned", draft=row["draft_id"], rules=len(result.get("rules") or []))

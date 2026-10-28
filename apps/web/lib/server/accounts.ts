@@ -1,18 +1,24 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { encryptField } from "@messages/crypto";
+import { flagOn } from "@messages/crypto/flags";
 import { addressIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
+import { openCredential, sealCredential } from "@messages/crypto/wrap";
 import type { TablesInsert } from "@messages/db";
-import { userKeys } from "./keys";
+import { credentialKey, keysReady, userKeys } from "./keys";
 import { admin } from "./request";
 
 // Saving a connected account from the app: the account row and its sign-in, stored exactly as the terminal
 // connect commands store them (apps/worker/scripts/owner.ts), so the sync worker cannot tell them apart.
 
-/** Encrypts account sign-ins, as the sync worker does. The same value as ENCRYPTION_KEY in apps/worker/.env. */
+/**
+ * The old static key. It now seals only short-lived handoffs that no account owns yet (the 10 minute OAuth cookies,
+ * a sign-in code waiting for the connector): sealJson and openJson below. Stored sign-ins and sessions use the owner's
+ * own key (sealAccountJson). The same value as ENCRYPTION_KEY in apps/worker/.env, which still reads old "v1:" rows.
+ */
 const encryptionKey = process.env.ENCRYPTION_KEY;
 
-export const accountsReady = () => !!admin && !!encryptionKey;
+export const accountsReady = () => !!admin && !!encryptionKey && keysReady();
 
 function key(): Buffer {
   const buf = Buffer.from(encryptionKey ?? "", "base64");
@@ -20,7 +26,7 @@ function key(): Buffer {
   return buf;
 }
 
-/** AES-256-GCM, "v1:" + base64(iv | tag | ciphertext): apps/worker/src/crypto.ts reads it. */
+/** AES-256-GCM under the static key, "v1:" + base64(iv | tag | ciphertext): apps/worker/src/crypto.ts reads it. For short-lived handoffs only. */
 export function sealJson(value: unknown): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key(), iv);
@@ -34,6 +40,39 @@ export function openJson<T>(payload: string): T {
   const decipher = createDecipheriv("aes-256-gcm", key(), buf.subarray(0, 12));
   decipher.setAuthTag(buf.subarray(12, 28));
   return JSON.parse(Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8")) as T;
+}
+
+/** The user an account belongs to. */
+async function ownerOf(accountId: string): Promise<string> {
+  if (!admin) throw new Error("Supabase is not set up.");
+  const { data, error } = await admin.from("accounts").select("user_id").eq("id", accountId).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Unknown account.");
+  return data.user_id;
+}
+
+/**
+ * Seals an account's sign-in or session as "v2:": under a key derived from its owner's data key, the account's ID as
+ * additional data (packages/crypto/src/wrap.ts, sealCredential). apps/worker/src/crypto.ts and the AI worker read it.
+ */
+export async function sealAccountJson(accountId: string, value: unknown): Promise<string> {
+  const key = await credentialKey(await ownerOf(accountId));
+  try {
+    return await sealCredential(key, accountId, JSON.stringify(value));
+  } finally {
+    key.fill(0);
+  }
+}
+
+/** Opens an account's sign-in or session: "v2:" with its owner's key, or an older "v1:" with the static key. */
+export async function openAccountJson<T>(accountId: string, payload: string): Promise<T> {
+  if (!payload.startsWith("v2:")) return openJson<T>(payload);
+  const key = await credentialKey(await ownerOf(accountId));
+  try {
+    return JSON.parse(await openCredential(key, accountId, payload)) as T;
+  } finally {
+    key.fill(0);
+  }
 }
 
 /**
@@ -65,7 +104,7 @@ export async function saveAccountRow(
     if (error) throw error;
     return existing.id;
   }
-  const sealed = process.env.NEXT_PUBLIC_ENCRYPT_ADDRESSES === "true" ? await encryptField(keys, FIELD.address, address) : address;
+  const sealed = flagOn(process.env.NEXT_PUBLIC_ENCRYPT_ADDRESSES) ? await encryptField(keys, FIELD.address, address) : address;
   if (opts.onePerUser) {
     const { data: only, error: findError } = await db.from("accounts").select("id").eq("user_id", userId).eq("provider", provider).order("created_at").limit(1);
     if (findError) throw findError;
@@ -89,7 +128,7 @@ export async function saveCredentials(accountId: string, credentials: unknown) {
   if (!admin) throw new Error("Supabase is not set up.");
   const { error } = await admin
     .from("account_credentials")
-    .upsert({ account_id: accountId, ciphertext: sealJson(credentials), refreshed: null, updated_at: new Date().toISOString() }, { onConflict: "account_id" });
+    .upsert({ account_id: accountId, ciphertext: await sealAccountJson(accountId, credentials), refreshed: null, updated_at: new Date().toISOString() }, { onConflict: "account_id" });
   if (error) throw error;
 }
 

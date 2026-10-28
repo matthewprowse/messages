@@ -6,6 +6,7 @@ import { parseEvents, storedIcsEvent } from "./ical";
 
 const row = (patch: Partial<CalendarOutboxRow> = {}): CalendarOutboxRow => ({
   id: "0a1b2c3d-1111-2222-3333-444455556666",
+  recurrence: null,
   user_id: "u1",
   account_id: "a1",
   calendar_id: "primary",
@@ -112,4 +113,11 @@ test("keeps a timed event made in UTC as a UTC time", () => {
   const lines = unfold(ok(buildIcs(row({ time_zone: "UTC" }), null, now)).ics);
   assert.ok(lines.includes("DTSTART:20261024T100000Z"));
   assert.ok(lines.includes("DTEND:20261024T113000Z"));
+});
+
+test("a repeating event is written with its rule, which the sync reads back", () => {
+  const { ics } = ok(buildIcs(row({ recurrence: "FREQ=MONTHLY;BYMONTHDAY=24" }), null, now));
+  assert.ok(ics.split("\r\n").includes("RRULE:FREQ=MONTHLY;BYMONTHDAY=24"));
+  assert.equal(parseEvents(ics)[0].rrule, "FREQ=MONTHLY;BYMONTHDAY=24");
+  assert.deepEqual(buildIcs(row({ recurrence: "FREQ=DAILY\nX:1" }), null, now), { error: "This repeat is not one the calendar knows." });
 });

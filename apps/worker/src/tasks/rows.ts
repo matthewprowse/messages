@@ -8,6 +8,8 @@ import { FIELD, type Field } from "@messages/crypto/fields";
 export type TaskRow = Tables<"tasks">;
 export type TaskUpdateRow = Tables<"task_updates">;
 export type TaskAction = "complete" | "reopen";
+/** The changes made in the app that are not ticks: a new task, new values for one, or its removal. */
+export type TaskWriteAction = "create" | "update" | "delete";
 
 /** The accounts whose tasks are stored in public.tasks, with the name the app shows for each. */
 export const TASK_PROVIDERS: Record<string, string> = {
@@ -18,6 +20,10 @@ export const TASK_PROVIDERS: Record<string, string> = {
 
 export const INTERRUPTED = "Ticking this task was interrupted. Reload to check whether it changed.";
 export const NOT_A_TASK_ACCOUNT = "Tasks can only be ticked in Microsoft To Do, Google Tasks or iCloud Reminders.";
+export const TASK_GONE = "This task is no longer there, so it was not changed.";
+export const NO_TITLE = "A task needs a title.";
+export const NOT_SUPPORTED_WRITE = "Adding, changing or deleting tasks is not supported for this account yet.";
+export const NOT_SUPPORTED_TICK = "Tasks in this account cannot be ticked from here yet.";
 
 /**
  * A task as a connector read it from the provider: the tasks columns it owns, in plain text. user_id and
@@ -77,21 +83,56 @@ export function isTaskAction(action: string): action is TaskAction {
   return action === "complete" || action === "reopen";
 }
 
+export function isTaskWriteAction(action: string): action is TaskWriteAction {
+  return action === "create" || action === "update" || action === "delete";
+}
+
+/** What a task_updates row is about: its task, or for a task not made yet the row itself. Rows with one key go one at a time. */
+export function taskKey(row: Pick<TaskUpdateRow, "id" | "task_id">): string {
+  return row.task_id ?? `new:${row.id}`;
+}
+
+/** The wanted state of a task made or changed in the app, in plain text. */
+export interface TaskWrite {
+  title: string;
+  notes: string | null;
+  /** A time, or midnight UTC of the day when allDay. Null for no date. */
+  dueAt: string | null;
+  dueAllDay: boolean;
+  priority: 1 | 2 | 3 | null;
+}
+
+/** Opens one sealed value for a user, as the worker's vault.open does. */
+export type Opener = (userId: string, field: Field, value: string | null | undefined) => Promise<string | null>;
+
+/** The state a create or update row asks for, its sealed title and notes opened. The title is trimmed; notes that are empty are null. */
+export async function taskWriteOf(row: TaskUpdateRow, open: Opener): Promise<TaskWrite> {
+  const [title, notes] = await Promise.all([open(row.user_id, FIELD.taskTitle, row.title), open(row.user_id, FIELD.taskNotes, row.notes)]);
+  const priority = row.priority === 1 || row.priority === 2 || row.priority === 3 ? row.priority : null;
+  const ms = row.due_at ? Date.parse(row.due_at) : NaN;
+  // An all-day task is its date at midnight UTC, whatever time was sent with it.
+  const dueAt = Number.isNaN(ms) ? null : row.due_all_day ? `${new Date(ms).toISOString().slice(0, 10)}T00:00:00.000Z` : new Date(ms).toISOString();
+  return { title: (title ?? "").trim(), notes: notes?.trim() || null, dueAt, dueAllDay: row.due_all_day, priority };
+}
+
 /**
- * Which queued ticks to make: for each task only its latest, as ticking a task off and on again quickly
- * should leave it as it was last left, without asking the provider twice. The rest are superseded.
- * Rows that are not queued are left out.
+ * Which queued changes to make, oldest first. Ticks replace each other: of the ticks for one task only the latest
+ * is made, as ticking a task off and on again quickly should leave it as it was last left, without asking the
+ * provider twice. Creates, updates and deletes are never replaced: each is made, in order. Rows that are not
+ * queued are left out.
  */
 export function planTaskUpdates(rows: TaskUpdateRow[]): { apply: TaskUpdateRow[]; superseded: TaskUpdateRow[] } {
-  const latest = new Map<string, TaskUpdateRow>();
+  const lastTick = new Map<string, TaskUpdateRow>();
   const superseded: TaskUpdateRow[] = [];
   const queued = rows.filter((r) => r.status === "queued").sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
   for (const row of queued) {
-    const before = latest.get(row.task_id);
+    if (!isTaskAction(row.action)) continue;
+    const before = lastTick.get(taskKey(row));
     if (before) superseded.push(before);
-    latest.set(row.task_id, row);
+    lastTick.set(taskKey(row), row);
   }
-  return { apply: [...latest.values()], superseded };
+  const apply = queued.filter((r) => !isTaskAction(r.action) || lastTick.get(taskKey(r)) === r);
+  return { apply, superseded };
 }
 
 /** Why an account cannot take a tick, or null when it can. */
@@ -121,7 +162,8 @@ export function taskFailureCode(reason: string): string {
   const r = reason.toLowerCase();
   if (r.includes("interrupted")) return "interrupted";
   if (r.includes("needs attention")) return "account_needs_attention";
-  if (r.includes("can only be ticked") || r.includes("cannot be ticked")) return "not_supported";
+  if (r.includes("can only be ticked") || r.includes("cannot be ticked") || r.includes("not supported")) return "not_supported";
+  if (r.includes("no longer there")) return "task_gone";
   if (r.includes("could not be reached")) return "unreachable";
   return "provider_refused";
 }

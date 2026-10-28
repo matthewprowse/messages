@@ -190,6 +190,29 @@ export function AppearanceSection() {
   );
 }
 
+const LANGUAGES = [
+  { value: "auto", label: "Follow How I Write" },
+  { value: "en-GB", label: "British English" },
+  { value: "en-US", label: "American English" },
+  { value: "af", label: "Afrikaans" },
+] as const;
+
+export function LanguageSection() {
+  const { dispatch, profile } = useApp();
+  return (
+    <SettingsSection id="language" title="Language">
+      <SettingsRows>
+        <SettingsRow title="Summaries and Briefs" description="The language and spelling the AI writes in. Following how you write, it matches your own messages in each conversation, so it can differ between people.">
+          <Select value={profile.language ?? "auto"} onValueChange={(v) => dispatch({ type: "patchProfile", patch: { language: v === "auto" ? null : (v as "en-GB" | "en-US" | "af") } })}>
+            <SelectTrigger className="w-48" aria-label="Language"><SelectValue /></SelectTrigger>
+            <SelectContent>{LANGUAGES.map((l) => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </SettingsRow>
+      </SettingsRows>
+    </SettingsSection>
+  );
+}
+
 export function DataSection() {
   const { dispatch, profile } = useApp();
   return (

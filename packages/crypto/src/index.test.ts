@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { blindIndex, decryptBytes, decryptField, encryptBytes, isSealedBytes, deriveUserKeys, encryptField, encryptOptional, isCiphertext, newDataKey } from "./index";
+import {
+  blindIndex, decryptAny, decryptBytes, decryptField, decryptTeamField, deriveTeamKeys, deriveUserKeys, encryptBytes, encryptField, encryptOptional,
+  encryptTeamField, encryptTeamOptional, isCiphertext, isSealedBytes, isTeamCiphertext, newDataKey, teamBlindIndex,
+} from "./index";
 
 const vectors = JSON.parse(readFileSync(new URL("../vectors.json", import.meta.url), "utf8"));
 const FILE_VECTOR = "6531623a00ff4b4e32333435363738393a3b3c3d43c5de354faa82729b486ed50c6d879e3fdd4418a1cd5b6d362a";
@@ -66,4 +69,70 @@ test("sealed file bytes fail when moved to another field, altered, cut short, op
   const a = await encryptBytes(keys, "note_file_data", Uint8Array.from([9]));
   const b = await encryptBytes(keys, "note_file_data", Uint8Array.from([9]));
   assert.notDeepEqual(a, b);
+});
+
+const teamKeys = await deriveTeamKeys(Uint8Array.from(Buffer.from(vectors.teamDataKeyHex, "hex")));
+
+test("team encryption matches the saved vectors byte for byte, and decrypts them", async () => {
+  for (const v of vectors.teamFields) {
+    assert.ok(v.ciphertext.startsWith("t1:"));
+    assert.equal(await encryptTeamField(teamKeys, v.field, v.plaintext, Uint8Array.from(v.nonce)), v.ciphertext);
+    assert.equal(await decryptTeamField(teamKeys, v.field, v.ciphertext), v.plaintext);
+  }
+});
+
+test("team blind indexes match the saved vectors, share the address normalisation, and never equal a user's", async () => {
+  const { addressKey, teamAddressIndex, teamChatIndex, teamDomainIndex } = await import("./addresses");
+  for (const v of vectors.teamBlindIndexes) {
+    assert.equal(await teamBlindIndex(teamKeys, addressKey(v.value)), v.token);
+    assert.equal(await teamAddressIndex(teamKeys, v.value), v.token);
+    assert.notEqual(await blindIndex(keys, addressKey(v.value)), v.token);
+  }
+  assert.equal(await teamAddressIndex(teamKeys, " Sam@Example.com "), await teamAddressIndex(teamKeys, "sam@example.com"));
+  assert.equal(await teamAddressIndex(teamKeys, "+27 82 416 0503"), await teamAddressIndex(teamKeys, "27824160503"));
+  assert.equal(await teamDomainIndex(teamKeys, "@Example.co.za"), await teamBlindIndex(teamKeys, "domain:example.co.za"));
+  assert.equal(await teamChatIndex(teamKeys, "120363025246125486@G.US"), await teamBlindIndex(teamKeys, "chat:120363025246125486@g.us"));
+  // The same data key under the user's and the team's HKDF info gives different keys, so a team key is never a user key.
+  const same = Uint8Array.from(Buffer.from(vectors.dataKeyHex, "hex"));
+  assert.notEqual(await teamBlindIndex(await deriveTeamKeys(same), "sam@example.com"), await blindIndex(keys, "sam@example.com"));
+});
+
+test("a team value is not a user value: each key opens only its own prefix", async () => {
+  const user = vectors.fields[0];
+  const team = vectors.teamFields[0];
+  assert.ok(isCiphertext(team.ciphertext) && isTeamCiphertext(team.ciphertext));
+  assert.ok(isCiphertext(user.ciphertext) && !isTeamCiphertext(user.ciphertext));
+  await assert.rejects(decryptField(keys, team.field, team.ciphertext));
+  await assert.rejects(decryptTeamField(teamKeys, user.field, user.ciphertext));
+  // Swapping the prefix does not help: the keys differ.
+  await assert.rejects(decryptTeamField(teamKeys, user.field, `t1:${user.ciphertext.slice(3)}`));
+  await assert.rejects(decryptField(keys, team.field, `e1:${team.ciphertext.slice(3)}`));
+  await assert.rejects(decryptTeamField(teamKeys, "messages.subject", team.ciphertext));
+  await assert.rejects(decryptTeamField(await deriveTeamKeys(newDataKey()), team.field, team.ciphertext));
+  const bytes = Buffer.from(team.ciphertext.slice(3), "base64");
+  bytes[20] ^= 1;
+  await assert.rejects(decryptTeamField(teamKeys, team.field, `t1:${bytes.toString("base64")}`));
+});
+
+test("decryptAny picks the key by prefix and says so when the team's keys are missing", async () => {
+  const user = vectors.fields[0];
+  const team = vectors.teamFields[0];
+  assert.equal(await decryptAny({ user: keys, team: teamKeys }, user.field, user.ciphertext), user.plaintext);
+  assert.equal(await decryptAny({ user: keys, team: teamKeys }, team.field, team.ciphertext), team.plaintext);
+  assert.equal(await decryptAny({ user: keys }, user.field, user.ciphertext), user.plaintext);
+  assert.equal(await decryptAny({ team: teamKeys }, team.field, team.ciphertext), team.plaintext);
+  await assert.rejects(decryptAny({ user: keys }, team.field, team.ciphertext), /team's keys/);
+  await assert.rejects(decryptAny({ user: keys, team: null }, team.field, team.ciphertext), /team's keys/);
+  await assert.rejects(decryptAny({ team: teamKeys }, user.field, user.ciphertext), /user's keys/);
+});
+
+test("fresh team encryptions use a new nonce each time", async () => {
+  const a = await encryptTeamField(teamKeys, "threads.subject", "Hello");
+  const b = await encryptTeamField(teamKeys, "threads.subject", "Hello");
+  assert.notEqual(a, b);
+  assert.ok(isTeamCiphertext(a));
+  assert.equal(await decryptTeamField(teamKeys, "threads.subject", a), "Hello");
+  assert.equal(await encryptTeamOptional(teamKeys, "threads.subject", null), null);
+  // e1 is untouched by the team helpers.
+  assert.ok((await encryptField(keys, "threads.subject", "Hello")).startsWith("e1:"));
 });

@@ -100,10 +100,10 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="new_whatsapp" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="new_whatsapp" showCloseButton className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New WhatsApp Message</DialogTitle>
-          <DialogDescription>Sent from your linked WhatsApp, then shown in Conversations.</DialogDescription>
+          <DialogDescription>Sent from your linked WhatsApp, then shown in the Inbox.</DialogDescription>
         </DialogHeader>
         {!account ? (
           <p className="text-sm text-muted-foreground">
@@ -119,8 +119,8 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
                     {picked.name && <span className="mr-2">{picked.name}</span>}
                     <span className="text-muted-foreground tabular-nums">{formatPhone(picked.phone)}</span>
                   </span>
-                  <Button type="button" variant="ghost" size="icon-sm" aria-label="Change Recipient" disabled={locked} onClick={() => setPicked(null)}>
-                    <X />
+                  <Button type="button" variant="ghost" size="icon-xs" aria-label="Change Recipient" disabled={locked} onClick={() => setPicked(null)}>
+                    <X className="size-3.5" />
                   </Button>
                 </div>
               ) : (
@@ -201,8 +201,8 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
             {sent && <p className="text-xs text-muted-foreground">Sent. The chat opens here once it is stored.</p>}
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The message could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
-              <Button type="submit" disabled={!ready || (checked && !!toError)}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
+              <Button type="submit" variant="secondary" disabled={!ready || (checked && !!toError)}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
             </div>
           </form>
         )}

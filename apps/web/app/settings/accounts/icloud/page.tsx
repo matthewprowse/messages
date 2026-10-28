@@ -1,34 +1,45 @@
 "use client";
 
+import { useEffect } from "react";
 import { toast } from "sonner";
+import { track } from "@/lib/analytics";
 import { useAuth } from "@/lib/auth";
+import { SettingsHeader } from "@/components/settings-header";
+import { SettingsSection } from "@/components/settings/sections";
 import { ICloudConnectForm } from "@/components/icloud-connect";
-import { Command, SetupSteps, type SetupStep } from "../setup-steps";
+import { ICloudRemindersConnect } from "@/components/icloud-reminders-connect";
 
-const STEPS: SetupStep[] = [
-  { title: "Create an App-Specific Password", body: "At account.apple.com, under Sign-In and Security. It is four groups of four letters." },
-  { title: "Run the Connect Command", body: <><p>From the project folder:</p><Command>pnpm connect:icloud</Command></> },
-  { title: "Keep the Worker Running", body: <><Command>pnpm worker</Command><p className="mt-2">New mail then appears in Conversations within seconds.</p></> },
-];
-
+// One page for everything iCloud: Mail and Calendar share an app-specific password, and Reminders is the one
+// part Apple only opens to a full Apple ID sign-in, so it is the second form here, not a separate setup.
 export default function ICloudSetup() {
   const { session } = useAuth();
+  useEffect(() => { track("account_connect", { provider: "icloud", step: "setup", outcome: "start" }); }, []);
   return (
-    <SetupSteps
-      provider="icloud"
-      title="Connect iCloud+ Mail"
-      description="iCloud Mail connects with an app-specific password, which is checked with iCloud and stored encrypted. iCloud Calendar can connect with it too."
-      steps={STEPS}
-      label="iCloud+ Mail"
-      watch={["icloud"]}
-      connect={
-        <div className="max-w-sm">
+    <>
+      <SettingsHeader
+        title="Connect iCloud"
+        description="iCloud Mail, Calendar and Reminders, each connected from this page. Nothing is installed."
+        back="/settings/accounts"
+      />
+      <div className="max-w-sm space-y-10">
+        <SettingsSection
+          id="mail-and-calendar"
+          title="Mail and Calendar"
+          description="Create an app-specific password at account.apple.com, under Sign-In and Security, and paste it here. It is four groups of four letters, and it is checked with iCloud and stored encrypted."
+        >
           <ICloudConnectForm
             defaultEmail={session?.user.email ?? ""}
             onConnected={({ calendar }) => toast(calendar ? "iCloud Mail and Calendar are connected." : "iCloud Mail is connected. Calendar did not accept the same sign-in.")}
           />
-        </div>
-      }
-    />
+        </SettingsSection>
+        <SettingsSection
+          id="reminders"
+          title="Reminders"
+          description="Apple opens Reminders only to your Apple ID and password, so they are asked for here. The password is used once to sign in and is not kept."
+        >
+          <ICloudRemindersConnect />
+        </SettingsSection>
+      </div>
+    </>
   );
 }

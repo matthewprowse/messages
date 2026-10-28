@@ -1,0 +1,35 @@
+import { contentHash, decryptBytes, encryptBytes, isSealedBytes, type UserKeys } from "@messages/crypto";
+import { FIELD } from "@messages/crypto/fields";
+
+// How scripts/encrypt-attachments.ts works out one stored object. Pure, so it is tested without a bucket.
+
+export interface Planned {
+  /** What to upload in place of the object, or null to leave the bytes alone. */
+  upload: Uint8Array<ArrayBuffer> | null;
+  /** The keyed hash of the plain bytes, for attachments.content_hash. */
+  hash: string;
+  /** What attachments.sealed should say afterwards. */
+  sealed: boolean;
+}
+
+const plainOf = async (keys: UserKeys, stored: Uint8Array<ArrayBuffer>) =>
+  isSealedBytes(stored) ? decryptBytes(keys, FIELD.attachmentData, stored) : stored;
+
+/** Encrypt mode: a plain object is sealed; one already sealed is left as it is (its hash is still worked out). */
+export async function planSeal(keys: UserKeys, stored: Uint8Array<ArrayBuffer>): Promise<Planned> {
+  const plain = await plainOf(keys, stored);
+  const hash = await contentHash(keys, plain);
+  if (isSealedBytes(stored)) return { upload: null, hash, sealed: true };
+  const sealed = await encryptBytes(keys, FIELD.attachmentData, plain);
+  // Checked before anything is written: it must open back to exactly the original.
+  const back = await decryptBytes(keys, FIELD.attachmentData, sealed);
+  if (back.length !== plain.length || !back.every((b, i) => b === plain[i])) throw new Error("does not round-trip");
+  return { upload: sealed, hash, sealed: true };
+}
+
+/** Decrypt mode: a sealed object is opened and put back as plain bytes; a plain one is left as it is. */
+export async function planOpen(keys: UserKeys, stored: Uint8Array<ArrayBuffer>): Promise<Planned> {
+  if (!isSealedBytes(stored)) return { upload: null, hash: await contentHash(keys, stored), sealed: false };
+  const plain = await decryptBytes(keys, FIELD.attachmentData, stored);
+  return { upload: plain, hash: await contentHash(keys, plain), sealed: false };
+}

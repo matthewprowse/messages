@@ -108,6 +108,8 @@ export interface MeetingStore {
 export interface Sealer {
   seal(field: Field, value: string | null): Promise<string | null>;
   sealAddress(value: string | null): Promise<string | null>;
+  /** A file's bytes sealed with the user's key, or null when sealing is off (the bytes are then stored as they are). */
+  sealBytes?(field: Field, bytes: Buffer): Promise<Buffer | null>;
 }
 
 export interface RecordingSyncContext {
@@ -126,7 +128,7 @@ interface ZoomMeetingMeta {
   uuid: string;
   meeting_id: number;
   join_url: string | null;
-  recording?: { storage_path: string; mime_type: string };
+  recording?: { storage_path: string; mime_type: string; /** True when the stored object is sealed (fields.ts recordingData); the AI worker opens it before transcribing. */ sealed?: boolean };
 }
 
 /** A day as Zoom's from and to take it. */
@@ -238,8 +240,9 @@ export class RecordingSync {
       await this.store.update(meetingId, { status: "failed", error: "The recording is too long to transcribe." });
       return;
     }
-    const recording = { storage_path: `${this.ctx.userId}/meetings/${meetingId}/${randomUUID()}`, mime_type: "audio/mp4" };
-    await this.store.upload(recording.storage_path, bytes, recording.mime_type);
+    const sealed = (await this.sealer.sealBytes?.(FIELD.recordingData, bytes)) ?? null;
+    const recording = { storage_path: `${this.ctx.userId}/meetings/${meetingId}/${randomUUID()}`, mime_type: "audio/mp4", ...(sealed ? { sealed: true } : {}) };
+    await this.store.upload(recording.storage_path, sealed ?? bytes, sealed ? "application/octet-stream" : recording.mime_type);
     await this.store.update(meetingId, { status: "waiting", transcript_source: "recording", provider_meta: { ...meta, recording } as unknown as Json });
   }
 

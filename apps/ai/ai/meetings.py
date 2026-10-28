@@ -29,14 +29,17 @@ IDs and counts are logged, never what was said."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from . import log
-from .fields import MEETING_ACTIONS, MEETING_TITLE, NAME, SUMMARY, TRANSCRIPT
+from .crypto import is_sealed_bytes
+from .fields import MEETING_ACTIONS, MEETING_TITLE, NAME, RECORDING_DATA, SUMMARY, TRANSCRIPT
 from .gemini import Gemini, GeminiError, UsageContext
+from .pricing import AUDIO_TOKENS_PER_SECOND, cost_usd
 from .supabase import Supabase, SupabaseError
 from .text import UNTRUSTED
 from .transcribe import audio_type
@@ -57,9 +60,13 @@ SUMMARY_OUTPUT = 4096
 MAX_ACTIONS = 10
 MAX_TRIES = 3
 RETRY_S = 600
+DEFAULT_MAX_MINUTES = 240  # a recording longer than this is not transcribed (MEETING_MAX_MINUTES)
+OUTPUT_PER_HOUR = 22_000  # tokens written for an hour of talk, as reserved: about 15,000 seen, and a margin
+CACHE_TTL_S = 1800  # a recording's cache lives this long at most; it is deleted as soon as the windows are done
 
 NO_SPEECH = "The recording has no speech in it."
 TOO_LARGE = "The recording is too large to transcribe."
+TOO_LONG = "The recording is too long to transcribe."
 NOT_TRANSCRIBED = "Could not transcribe the recording."
 NOT_SUMMARISED = "Could not summarise the meeting."
 NO_RECORDING = "The recording could not be found."
@@ -168,14 +175,48 @@ def recording_length(meeting: dict[str, Any]) -> float | None:
     return seconds_between(meeting.get("started_at"), meeting.get("ended_at")) if meeting.get("ended_at") else None
 
 
-def windows(length: float | None) -> list[tuple[int, int | None]]:
+def max_minutes() -> int:
+    """The longest recording that is transcribed, in minutes (MEETING_MAX_MINUTES)."""
+    try:
+        value = int(os.environ.get("MEETING_MAX_MINUTES", "") or DEFAULT_MAX_MINUTES)
+    except ValueError:
+        return DEFAULT_MAX_MINUTES
+    return value if value > 0 else DEFAULT_MAX_MINUTES
+
+
+def windows(length: float | None, limit_s: float | None = None) -> list[tuple[int, int | None]]:
     """The parts of a recording asked for one call at a time, as (from, to) seconds; to None is to the end.
     A short one is one call; a long one, or one of unknown length, an hour at a time (an unknown one stops
-    early once the model says it has ended)."""
+    early once the model says it has ended). limit_s keeps the parts within the longest recording allowed."""
     if length is not None and length <= SINGLE_S:
         return [(0, None)]
-    count = MAX_WINDOWS if length is None else min(MAX_WINDOWS, int(-(-length // WINDOW_S)))
+    most = MAX_WINDOWS if limit_s is None else max(1, min(MAX_WINDOWS, int(-(-limit_s // WINDOW_S))))
+    count = most if length is None else min(most, int(-(-length // WINDOW_S)))
     return [(i * WINDOW_S, (i + 1) * WINDOW_S) for i in range(count)]
+
+
+def estimated_seconds(length: float | None, size: Any, limit_s: float) -> float:
+    """How long a recording is taken to be, for reserving its cost: as known, else from its size at 64 kbit/s,
+    else the longest allowed."""
+    if length:
+        return min(length, limit_s)
+    if isinstance(size, (int, float)) and not isinstance(size, bool) and size > 0:
+        return min(limit_s, max(60.0, size / 8000))
+    return limit_s
+
+
+def meeting_estimate(model: str, seconds: float, parts: int, cached: bool) -> float:
+    """The dollars to reserve for transcribing a recording: its audio read once and then once per window at the
+    cached rate when the windows share a cache, or in full every window when they do not, and the transcript
+    written. Audio and cached rates are estimates (see pricing.py), kept on the high side."""
+    today = datetime.now(timezone.utc).date()
+    tokens = int(seconds * AUDIO_TOKENS_PER_SECOND)
+    out = min(TRANSCRIBE_OUTPUT, int(OUTPUT_PER_HOUR * min(seconds, WINDOW_S) / 3600) + 500)
+    if parts <= 1:
+        return cost_usd(model, today, tokens, 0, out, tokens)
+    if cached:
+        return cost_usd(model, today, tokens, 0, 0, tokens) + parts * cost_usd(model, today, tokens, tokens, out, tokens, tokens)
+    return parts * cost_usd(model, today, tokens, 0, out, tokens)
 
 
 def clock(s: float) -> str:
@@ -283,10 +324,13 @@ def tidy(text: Any, limit: int) -> str:
 class Meetings:
     """Both steps, in one job: recordings to transcripts, then transcripts to summaries."""
 
-    def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
+    def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None, transcribe_model: str | None = None):
         self.db = db
         self.gemini = gemini
-        self.model = model
+        self.model = model  # summaries
+        # Recordings. The same as model unless GEMINI_TRANSCRIBE_MODEL says otherwise: nothing here shows that a cheaper
+        # model keeps who-said-what and the turn format as well on a long recording, so the default is not changed.
+        self.transcribe_model = transcribe_model or model
         self.vault = vault or Vault(db)
         self._tries: dict[str, tuple[int, float]] = {}  # meeting id -> (failed tries, monotonic time to try again)
 
@@ -322,6 +366,21 @@ class Meetings:
         if isinstance(size, int) and size > MAX_RECORDING_BYTES:
             self._finish(m["id"], "waiting", {"status": "failed", "error": TOO_LARGE})
             return 0
+        # The length cap is checked before anything is downloaded or sent.
+        limit_s = max_minutes() * 60.0
+        length = recording_length(m)
+        if length is not None and length > limit_s:
+            self._finish(m["id"], "waiting", {"status": "failed", "error": TOO_LONG})
+            return 0
+        parts = windows(length, limit_s)
+        usage = UsageContext(m["user_id"], "transcribe", m.get("account_id"))
+        seconds = estimated_seconds(length, size, limit_s)
+        # The whole job's estimated cost is held against the transcribe share before the first call. Without
+        # enough room the meeting waits (budget_paused) and nothing is downloaded or uploaded.
+        with self.gemini.hold(usage, meeting_estimate(self.transcribe_model, seconds, len(parts), len(parts) > 1)) as hold:
+            return self._transcribe_held(m, rec, path, parts, usage, seconds, hold)
+
+    def _transcribe_held(self, m: dict[str, Any], rec: dict[str, Any], path: str, parts: list[tuple[int, int | None]], usage: UsageContext, seconds: float, hold: Any) -> int:
         try:
             audio = self.db.download(BUCKET, path, timeout=600)
         except SupabaseError as err:
@@ -332,12 +391,19 @@ class Meetings:
         if len(audio) > MAX_RECORDING_BYTES:
             self._finish(m["id"], "waiting", {"status": "failed", "error": TOO_LARGE})
             return 0
+        # A recording the sync worker sealed (recording.sealed, or the header on an older object) is opened
+        # here, in memory; a plain legacy object passes through.
+        if rec.get("sealed") or is_sealed_bytes(audio):
+            opened = self.vault.open_bytes(m["user_id"], RECORDING_DATA, audio)
+            if opened is None:
+                self._finish(m["id"], "waiting", {"status": "failed", "error": NO_RECORDING})
+                return 0
+            audio = opened
         mime = audio_type(rec.get("mime_type") or "audio/mp4")
         names = self._names(m)
-        parts = windows(recording_length(m))
-        usage = UsageContext(m["user_id"], "transcribe", m.get("account_id"))
 
         uploaded: str | None = None
+        cache: str | None = None
         media: dict[str, Any]
         if len(parts) == 1 and len(audio) <= INLINE_BYTES:
             media = {"audio": (audio, mime)}
@@ -348,10 +414,17 @@ class Meetings:
         segments: list[dict[str, Any]] = []
         heard = False
         try:
+            if len(parts) > 1:
+                # Every window asks about the same recording: it is stored once as a cache, so it is billed in full
+                # once and the windows read it at the cached rate. If no cache can be made, each window sends the
+                # file in full, and the difference is asked of the share first.
+                cache = self.gemini.cache_file(self.transcribe_model, TRANSCRIBE_SYSTEM, media["file"], usage, ttl_s=CACHE_TTL_S)
+                if cache is None:
+                    hold.top_up(meeting_estimate(self.transcribe_model, seconds, len(parts), False) - meeting_estimate(self.transcribe_model, seconds, len(parts), True))
             for window in parts:
                 speakers = list(dict.fromkeys(s["speaker"] for s in segments))
                 result = self.gemini.json(
-                    self.model,
+                    self.transcribe_model,
                     TRANSCRIBE_SYSTEM,
                     transcribe_prompt(names, window, speakers),
                     TRANSCRIBE_SCHEMA,
@@ -361,6 +434,8 @@ class Meetings:
                     max_output=TRANSCRIBE_OUTPUT,
                     timeout=600,
                     attempts=2,
+                    hold=hold,
+                    cached=cache,
                     **media,
                 )
                 found = turns_in(result.get("turns"), window)
@@ -370,6 +445,8 @@ class Meetings:
                 if window[1] is None or result.get("ends") or not found:
                     break
         finally:
+            if cache:
+                self.gemini.delete_cache(cache)
             if uploaded:
                 self.gemini.delete_file(uploaded)
         segments.sort(key=lambda s: s["start_ms"])
@@ -442,6 +519,11 @@ class Meetings:
         self.db.update("meetings", {"id": f"eq.{meeting_id}", "status": f"eq.{status}"}, patch, minimal=True)
 
     def _failed(self, m: dict[str, Any], status: str, reason: str, err: Exception) -> None:
+        if isinstance(err, GeminiError) and err.args and "budget_" in str(err):
+            # The share is used up (or could not be read): not this meeting's fault, so it is not a try. Wait and look again.
+            self._tries[m["id"]] = (self._tries.get(m["id"], (0, 0.0))[0], time.monotonic() + RETRY_S)
+            log.info("meeting step waiting on the allowance", meeting=m["id"], step=status)
+            return
         tries = self._tries.get(m["id"], (0, 0.0))[0] + 1
         log.warn("meeting step failed", meeting=m["id"], step=status, tries=tries, code=getattr(err, "status", None) or type(err).__name__)
         if tries >= MAX_TRIES:

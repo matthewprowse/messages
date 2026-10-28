@@ -1,5 +1,5 @@
 import type { Tables } from "@messages/db";
-import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "./open-rows";
+import { openAddresses, openDrafts, openExamples, openMessages, openTasks, openThreads } from "./open-rows";
 import { supabase } from "./supabase";
 import type { Account, AccountStatus, Attachment, Category, Contact, Draft, FiledAttachment, Message, Priority, Profile, Provider, Rule, Task, Thread, Unsubscribe, WritingExample } from "./types";
 import { formatPhone, formatSize } from "./format";
@@ -7,38 +7,45 @@ import { emailParts, emphasisRuns, type Emphasis } from "./email-text";
 import type { ChoiceKind } from "./choices";
 import { allRows } from "./contacts";
 import { mapTask, TASK_COLUMNS } from "./tasks";
+import { withSealedColumns } from "./sealed-columns";
+import { companyLogo, isCompanySender, logoAvatar } from "./people";
 
 // Turns database rows into the shapes the screens use, and loads them for the signed-in user.
-// Row-level security means every query here only ever returns that user's own rows.
+// Row-level security keeps these to the user's own rows, with one exception: a team's work chats can also be read by
+// whoever they are assigned to, and by Compliance under strict sharing (supabase/migrations/20261101120000). A list
+// of chats or files asks for the user's own with user_id, so a colleague's chat never lands in someone's inbox.
 
-type ContactRow = Pick<Tables<"contacts">, "id" | "display_name" | "company" | "role" | "avatar_path">;
+type ContactRow = Pick<Tables<"contacts">, "id" | "display_name" | "company" | "role" | "avatar_path"> & {
+  organizations?: Pick<Tables<"organizations">, "id" | "name" | "logo_path"> | null;
+};
 type IdentityRow = Pick<Tables<"contact_identities">, "kind" | "value">;
 type ThreadRow = Pick<
   Tables<"threads">,
   | "id" | "account_id" | "channel" | "subject" | "is_group" | "group_name" | "avatar_path" | "provider_thread_id" | "last_message_at"
   | "created_at" | "last_message_preview" | "junk" | "subscription" | "last_sender_contact_id" | "unread_count" | "pinned" | "status" | "priority" | "category" | "summary" | "needs_reply" | "last_from_me"
->;
-type AttachmentRow = Pick<Tables<"attachments">, "id" | "message_id" | "filename" | "kind" | "size_bytes" | "storage_path" | "hidden">;
+> & { workspace_id?: string | null; shared_by?: string | null; share_match?: string | null; share_suggestion?: string | null };
+type AttachmentRow = Pick<Tables<"attachments">, "id" | "message_id" | "filename" | "kind" | "size_bytes" | "storage_path" | "hidden" | "sealed" | "not_kept"> & { team_path?: string | null };
 export type MessageRow = Pick<
   Tables<"messages">,
   "id" | "provider_message_id" | "thread_id" | "direction" | "sender_contact_id" | "sender_address" | "to_addresses" | "sent_at" | "subject" | "body_text" | "body_html" | "provider_meta" | "has_original" | "is_bulk" | "body_marks" | "transcript"
 > & { attachments: AttachmentRow[] };
 
-const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path";
+// With the company, whose logo stands in for the photo of a sender that writes as the company.
+const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path, organizations(id, name, logo_path)";
 const THREAD_COLUMNS =
   "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me";
 // Threads with their account's provider and their people, so the list can draw names in one request.
 const THREAD_WITH_PEOPLE = `${THREAD_COLUMNS}, accounts(provider), thread_participants(contact_id, contacts(${CONTACT_COLUMNS}, contact_identities(kind, value)))` as const;
 // Explicit lists, so a column the app never reads (a WhatsApp QR or pairing code) never reaches every page.
-const ACCOUNT_COLUMNS = "id, provider, label, address, status, status_detail, last_synced_at, send_addresses";
-const PROFILE_COLUMNS = "display_name, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage";
+const ACCOUNT_COLUMNS = "id, provider, label, nickname, address, status, status_detail, last_synced_at, send_addresses";
+const PROFILE_COLUMNS = "display_name, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage, language";
 const DRAFT_COLUMNS = "id, thread_id, body, tone, instruction, decision, decision_kind, source, auto, updated_at";
 export const UNSUBSCRIBE_COLUMNS = "id, account_id, sender_address, status, manual_url, error";
-type AccountRow = Pick<Tables<"accounts">, "id" | "provider" | "label" | "address" | "status" | "status_detail" | "last_synced_at" | "send_addresses">;
-type ProfileRow = Pick<Tables<"profiles">, "display_name" | "about" | "important_people" | "quiet_start" | "quiet_end" | "push_urgent" | "push_important" | "auto_draft_top" | "whatsapp_read_receipts" | "share_usage">;
+type AccountRow = Pick<Tables<"accounts">, "id" | "provider" | "label" | "nickname" | "address" | "status" | "status_detail" | "last_synced_at" | "send_addresses">;
+type ProfileRow = Pick<Tables<"profiles">, "display_name" | "about" | "important_people" | "quiet_start" | "quiet_end" | "push_urgent" | "push_important" | "auto_draft_top" | "whatsapp_read_receipts" | "share_usage" | "language">;
 type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruction" | "decision" | "decision_kind" | "source" | "auto" | "updated_at">;
 type UnsubscribeRow = Pick<Tables<"unsubscribes">, "id" | "account_id" | "sender_address" | "status" | "manual_url" | "error">;
-const ATTACHMENT_COLUMNS = "id, message_id, filename, kind, size_bytes, storage_path, hidden";
+const ATTACHMENT_COLUMNS = "id, message_id, filename, kind, size_bytes, storage_path, team_path, hidden, sealed, not_kept";
 // Named columns, never select("*"). body_html is only still set on emails stored before the HTML stopped
 // being kept (View Original now fetches it); is_bulk and has_original carry what it was needed for.
 const MESSAGE_COLUMNS = `id, provider_message_id, thread_id, direction, sender_contact_id, sender_address, to_addresses, sent_at, subject, body_text, body_html, provider_meta, has_original, is_bulk, body_marks, transcript, attachments(${ATTACHMENT_COLUMNS})` as const;
@@ -57,6 +64,7 @@ export const EMPTY_PROFILE: Profile = {
   autoDraftTop: true,
   whatsappReadReceipts: true,
   shareUsage: true,
+  language: null,
 };
 
 function initialsOf(name: string) {
@@ -65,17 +73,28 @@ function initialsOf(name: string) {
 }
 
 export function mapContact(row: ContactRow, identities: IdentityRow[]): Contact {
+  const emails = identities.filter((i) => i.kind === "email").map((i) => i.value);
+  // WhatsApp privacy IDs ("...@lid") stand in for a hidden number: they are not phone numbers.
+  // Only phone and WhatsApp identities are numbers: an Instagram ID is a long number and a username is text.
+  const phones = identities.filter((i) => (i.kind === "phone" || i.kind === "whatsapp") && !i.value.includes("@")).map((i) => i.value);
+  const handles = identities.filter((i) => i.kind === "instagram_username").map((i) => i.value);
+  const lids = identities.filter((i) => i.value.endsWith("@lid")).map((i) => i.value);
+  const org = row.organizations ?? null;
+  const who = { name: row.display_name, emails, phones, organizationName: org?.name ?? null };
   return {
     id: row.id,
     name: row.display_name,
     initials: initialsOf(row.display_name),
     hue: 0,
-    emails: identities.filter((i) => i.kind === "email").map((i) => i.value),
-    // WhatsApp privacy IDs ("...@lid") stand in for a hidden number: they are not phone numbers.
-    phones: identities.filter((i) => i.kind !== "email" && !i.value.includes("@")).map((i) => i.value),
+    emails,
+    phones,
+    handles: handles.length ? handles : undefined,
+    lids: lids.length ? lids : undefined,
     company: row.company ?? undefined,
     role: row.role ?? undefined,
-    avatarPath: row.avatar_path ?? undefined,
+    avatarPath: row.avatar_path ?? companyLogo(who, logoAvatar(org?.logo_path)),
+    isCompany: isCompanySender(who),
+    organization: org ? { id: org.id, name: org.name, logoPath: org.logo_path ?? undefined } : undefined,
   };
 }
 
@@ -116,6 +135,11 @@ export function mapThread(row: ThreadRow, participantIds: string[], provider: Pr
     summary: row.summary ?? "",
     needsReply: row.needs_reply,
     lastFromMe: row.last_from_me,
+    lastSenderId: row.last_sender_contact_id ?? undefined,
+    workspaceId: row.workspace_id ?? undefined,
+    sharedBy: (row.shared_by as Thread["sharedBy"]) ?? undefined,
+    shareMatch: row.share_match ?? undefined,
+    shareSuggestion: row.share_suggestion === "suggested" ? "suggested" : undefined,
   };
 }
 
@@ -133,12 +157,13 @@ function threadWithPeople(row: ThreadWithPeople, contacts: Map<string, Contact>)
 }
 
 /** What a WhatsApp message carries in provider_meta besides where it lives: its quote, reactions and state. */
-export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reactions" | "deleted" | "edited"> {
+export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reactions" | "deleted" | "edited" | "receipt"> {
   const m = (meta ?? {}) as {
     quoted?: { id?: string; author?: string; from_me?: boolean; text?: string };
     reactions?: Record<string, string>;
     deleted?: boolean;
     edited?: boolean;
+    receipt?: string;
   };
   const q = m.quoted;
   return {
@@ -146,11 +171,15 @@ export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reaction
     reactions: m.reactions && Object.keys(m.reactions).length ? m.reactions : undefined,
     deleted: m.deleted || undefined,
     edited: m.edited || undefined,
+    receipt: m.receipt === "sent" || m.receipt === "delivered" || m.receipt === "read" ? m.receipt : undefined,
   };
 }
 
 export function mapAttachment(a: Omit<AttachmentRow, "message_id" | "hidden">): Attachment {
-  return { id: a.id, name: a.filename, kind: a.kind as Attachment["kind"], size: formatSize(a.size_bytes), path: a.storage_path ?? undefined };
+  return {
+    id: a.id, name: a.filename, kind: a.kind as Attachment["kind"], size: formatSize(a.size_bytes), bytes: a.size_bytes ?? undefined, path: a.team_path ?? a.storage_path ?? undefined,
+    sealed: a.sealed || undefined, notKept: (a.not_kept as Attachment["notKept"]) ?? undefined,
+  };
 }
 
 /** Only WhatsApp rows say which chat they are in. */
@@ -224,6 +253,7 @@ export function mapAccount(row: AccountRow): Account {
     id: row.id,
     provider: row.provider as Provider,
     label: row.label,
+    nickname: row.nickname ?? undefined,
     detail: row.address,
     status: row.status as AccountStatus,
     statusDetail: row.status_detail ?? undefined,
@@ -245,6 +275,7 @@ function mapProfile(row: ProfileRow | null): Profile {
     autoDraftTop: row.auto_draft_top,
     whatsappReadReceipts: row.whatsapp_read_receipts,
     shareUsage: row.share_usage,
+    language: row.language as Profile["language"],
   };
 }
 
@@ -261,6 +292,7 @@ export function profilePatch(patch: Partial<Profile>) {
   if (patch.autoDraftTop !== undefined) out.auto_draft_top = patch.autoDraftTop;
   if (patch.whatsappReadReceipts !== undefined) out.whatsapp_read_receipts = patch.whatsappReadReceipts;
   if (patch.shareUsage !== undefined) out.share_usage = patch.shareUsage;
+  if (patch.language !== undefined) out.language = patch.language;
   return out;
 }
 
@@ -307,12 +339,27 @@ const TASK_LIMIT = 2000;
 const TASK_DAYS = 60;
 
 
+/** The signed-in user's ID, from the session held in the browser. */
+async function myId(): Promise<string> {
+  return (await supabase.auth.getSession()).data.session?.user.id ?? "";
+}
+
+/** A chat's sharing state beyond whether it is shared, from the small query in loadEverything. */
+function shareFields(row: { shared_by: string | null; share_match: string | null; share_suggestion: string | null } | undefined): Pick<Thread, "sharedBy" | "shareMatch" | "shareSuggestion"> {
+  return {
+    sharedBy: (row?.shared_by as Thread["sharedBy"]) ?? undefined,
+    shareMatch: row?.share_match || undefined,
+    shareSuggestion: row?.share_suggestion === "suggested" ? "suggested" : undefined,
+  };
+}
+
 /** Everything the list screens need, in parallel. Messages load per conversation when it is opened. */
 export async function loadEverything(): Promise<Loaded> {
+  const me = await myId();
   const taskSince = new Date(Date.now() - TASK_DAYS * 86_400_000).toISOString();
-  const [threads, accounts, profile, rules, examples, drafts, unsubscribes, followUps, tasks] = await Promise.all([
+  const [threads, accounts, profile, rules, examples, drafts, unsubscribes, followUps, shared, shareState, tasks] = await Promise.all([
     // Deleted conversations (in the provider's bin) are never shown, so they are not loaded.
-    supabase.from("threads").select(THREAD_WITH_PEOPLE).neq("status", "trash")
+    supabase.from("threads").select(THREAD_WITH_PEOPLE).eq("user_id", me).neq("status", "trash")
       .order("last_message_at", { ascending: false, nullsFirst: false }).limit(THREAD_LIMIT),
     supabase.from("accounts").select(ACCOUNT_COLUMNS),
     supabase.from("profiles").select(PROFILE_COLUMNS).maybeSingle(),
@@ -322,6 +369,10 @@ export async function loadEverything(): Promise<Loaded> {
     supabase.from("drafts").select(DRAFT_COLUMNS).eq("status", "active").not("thread_id", "is", null),
     supabase.from("unsubscribes").select(UNSUBSCRIBE_COLUMNS),
     supabase.from("follow_ups").select("thread_id").eq("expects_reply", true),
+    // Which of them are work chats. Its own small query, so the list still loads before that migration is applied.
+    supabase.from("threads").select("id, workspace_id").eq("user_id", me).not("workspace_id", "is", null),
+    // How a work chat was shared and which personal chats Konva suggests as work: another small query, for the same reason.
+    supabase.from("threads").select("id, shared_by, share_match, share_suggestion").eq("user_id", me).or("workspace_id.not.is.null,share_suggestion.eq.suggested"),
     supabase.from("tasks").select(TASK_COLUMNS).not("due_at", "is", null).or(`status.eq.open,due_at.gte.${taskSince}`).order("due_at").limit(TASK_LIMIT),
   ]);
   const failed = [threads, accounts, profile, rules, examples, drafts, unsubscribes].find((r) => r.error);
@@ -331,14 +382,18 @@ export async function loadEverything(): Promise<Loaded> {
     openDrafts(drafts.data ?? []),
     openAddresses([accounts.data ?? [], rules.data ?? [], unsubscribes.data ?? []]),
     openTasks(tasks.data ?? []),
+    openExamples(examples.data ?? []),
+    openThreads(shareState.data ?? []),
   ]);
 
   const draftOf = new Map((drafts.data ?? []).map((d) => [d.thread_id, mapDraft(d)]));
   // Not required: without it (the table not there yet) the Waiting filter is just empty.
   const waiting = new Set((followUps.data ?? []).map((f) => f.thread_id));
+  const work = new Map((shared.data ?? []).map((t) => [t.id, t.workspace_id ?? undefined]));
+  const sharing = new Map((shareState.data ?? []).map((t) => [t.id, t]));
   const contacts = new Map<string, Contact>();
   return {
-    threads: (threads.data ?? []).map((t) => ({ ...threadWithPeople(t, contacts), draft: draftOf.get(t.id), waiting: waiting.has(t.id) })),
+    threads: (threads.data ?? []).map((t) => ({ ...threadWithPeople(t, contacts), draft: draftOf.get(t.id), waiting: waiting.has(t.id), workspaceId: work.get(t.id), ...shareFields(sharing.get(t.id)) })),
     contacts: [...contacts.values()],
     accounts: (accounts.data ?? []).map(mapAccount),
     rules: (rules.data ?? []).map((r) => ({ id: r.id, kind: r.kind as Rule["kind"], target: r.target })),
@@ -406,7 +461,7 @@ export async function loadThreadMessages(threadId: string, at: { before?: Pick<M
 
 /** Up to limit messages older than before (if given) and no older than from (if given), newest first. */
 async function messagePage(threadId: string, before: Pick<Message, "id" | "sentAt"> | undefined, from: string | undefined, limit: number): Promise<Message[]> {
-  let query = supabase.from("messages").select(MESSAGE_COLUMNS).eq("thread_id", threadId);
+  let query = supabase.from("messages").select(await withSealedColumns(MESSAGE_COLUMNS)).eq("thread_id", threadId);
   // Keyset paging on (sent_at, id), so messages sent in the same second are neither missed nor repeated.
   if (before) query = query.or(`sent_at.lt."${before.sentAt}",and(sent_at.eq."${before.sentAt}",id.lt.${before.id})`);
   if (from) query = query.gte("sent_at", from);
@@ -422,32 +477,40 @@ export async function messageSentAt(threadId: string, messageId: string): Promis
 }
 
 export async function loadMessage(messageId: string): Promise<Message | null> {
-  const { data, error } = await supabase.from("messages").select(MESSAGE_COLUMNS).eq("id", messageId).maybeSingle();
+  const { data, error } = await supabase.from("messages").select(await withSealedColumns(MESSAGE_COLUMNS)).eq("id", messageId).maybeSingle();
   if (error) throw error;
   return data ? mapMessage((await openMessages([data]))[0]) : null;
 }
 
 /** A message's files, for a message that arrived over Realtime, whose payload carries none. */
 export async function loadMessageAttachments(messageId: string): Promise<AttachmentRow[]> {
-  const { data, error } = await supabase.from("attachments").select(ATTACHMENT_COLUMNS).eq("message_id", messageId).order("id");
+  const { data, error } = await supabase.from("attachments").select(await withSealedColumns(ATTACHMENT_COLUMNS)).eq("message_id", messageId).order("id");
   if (error) throw error;
-  return data;
+  return openAddresses(data);
 }
 
 const ATTACHMENT_LIMIT = 1000;
 
-/** Every file from every conversation, newest message first. Hidden files only when asked for. */
+/**
+ * Every file from every conversation, newest message first. Hidden files only when asked for.
+ * Voice notes and stickers belong to their chats and are left out: this is the library of pictures,
+ * video, PDFs and documents.
+ */
 export async function loadAttachments(includeHidden = false): Promise<FiledAttachment[]> {
   let query = supabase
     .from("attachments")
-    .select("id, filename, kind, size_bytes, storage_path, hidden_reason, messages!inner(id, thread_id, sent_at, direction, sender_contact_id, threads!inner(status))")
+    .select(await withSealedColumns("id, filename, kind, size_bytes, storage_path, hidden_reason, sealed, not_kept, messages!inner(id, thread_id, sent_at, direction, sender_contact_id, threads!inner(status))"))
+    .eq("user_id", await myId())
     // Files in deleted conversations (in the provider's bin) are left out, as the conversations are.
     .neq("messages.threads.status", "trash")
+    .neq("kind", "audio")
+    .eq("is_sticker", false)
     .order("created_at", { ascending: false })
     .limit(ATTACHMENT_LIMIT);
   if (!includeHidden) query = query.eq("hidden", false);
-  const { data, error } = await query;
+  const { data: sealedRows, error } = await query;
   if (error) throw error;
+  const data = await openAddresses(sealedRows);
   return data
     .flatMap(({ messages: m, ...a }) =>
       m

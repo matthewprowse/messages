@@ -1,7 +1,7 @@
 // Prints the test vectors that pin the ciphertext format. Run once; the TS and Python tests check against
 // the saved vectors.json, so a change to the format shows up as a failing test in both languages.
 import { addressKey, chatKey, domainKey } from "../src/addresses";
-import { blindIndex, deriveUserKeys, encryptField } from "../src/index";
+import { blindIndex, deriveTeamKeys, deriveUserKeys, encryptField, encryptTeamField, teamBlindIndex } from "../src/index";
 import { localWrapper } from "../src/wrap";
 
 const dataKey = Uint8Array.from({ length: 32 }, (_, i) => i);
@@ -22,8 +22,21 @@ const out = {
     ...["Example.co.za", "@example.co.za", "example.co.za."].map((value) => ({ kind: "domain", value, key: domainKey(value) })),
   ],
 };
+// A team's data key and what is sealed under it ("t1:"), with the same fields and values as the user's so a
+// team value can be told apart from a user's. The key is 32..63, the nonces 100.., 200.. and 7 as above.
+const teamDataKey = Uint8Array.from({ length: 32 }, (_, i) => 32 + i);
+const teamKeys = await deriveTeamKeys(teamDataKey);
+const teamOut = {
+  teamDataKeyHex: Buffer.from(teamDataKey).toString("hex"),
+  teamFields: await Promise.all(cases.map(async (c) => ({ ...c, ciphertext: await encryptTeamField(teamKeys, c.field, c.plaintext, Uint8Array.from(c.nonce)) }))),
+  // The team's blind index of the address key of each value, so the team index is checked with the same normalisation.
+  teamBlindIndexes: await Promise.all(["sam@example.com", "+27824160503"].map(async (value) => ({ value, token: await teamBlindIndex(teamKeys, addressKey(value)) }))),
+};
 // A data key wrapped by the local wrapper, which the Python worker must be able to unwrap.
 const masterKeyBase64 = Buffer.from(Uint8Array.from({ length: 32 }, (_, i) => 255 - i)).toString("base64");
 const userId = "caabe3e9-0000-4000-8000-000000000001";
 const wrapped = await (await localWrapper(masterKeyBase64)).wrap(dataKey, userId);
-console.log(JSON.stringify({ ...out, localWrap: { masterKeyBase64, userId, wrapped } }, null, 2));
+// The team's data key wrapped for a workspace ("team_keys:<id>" as additional data).
+const workspaceId = "caabe3e9-0000-4000-8000-0000000000a1";
+const teamWrapped = await (await localWrapper(masterKeyBase64)).wrap(teamDataKey, workspaceId, "team");
+console.log(JSON.stringify({ ...out, localWrap: { masterKeyBase64, userId, wrapped }, ...teamOut, teamWrap: { masterKeyBase64, workspaceId, wrapped: teamWrapped } }, null, 2));

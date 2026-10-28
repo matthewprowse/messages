@@ -5,7 +5,7 @@ import type { Provider } from "@/lib/types";
 // trimmed of editor metadata). A conversation shows the product it came through (Gmail, Outlook);
 // connecting an account shows the company you sign in with (Google, Microsoft).
 
-export type Brand = "google" | "microsoft" | "icloud" | "whatsapp" | "gmail" | "outlook";
+export type Brand = "google" | "microsoft" | "icloud" | "whatsapp" | "gmail" | "outlook" | "instagram" | "linkedin";
 
 const NAMES: Record<Brand, string> = {
   google: "Google",
@@ -14,6 +14,8 @@ const NAMES: Record<Brand, string> = {
   whatsapp: "WhatsApp",
   gmail: "Gmail",
   outlook: "Outlook",
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
 };
 
 const BY_PROVIDER: Partial<Record<Provider, Brand>> = {
@@ -21,6 +23,8 @@ const BY_PROVIDER: Partial<Record<Provider, Brand>> = {
   whatsapp: "whatsapp",
   icloud: "icloud",
   outlook: "outlook",
+  instagram: "instagram",
+  linkedin: "linkedin",
 };
 
 /** A brand's logo. Decorative unless `label` is set, since it usually sits beside the brand's name. */

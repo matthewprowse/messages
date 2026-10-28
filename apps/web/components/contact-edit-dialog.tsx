@@ -17,7 +17,7 @@ import { ContactFields, useContactFields } from "@/components/contact-list";
 export function EditContactDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="edit_contact" className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md" showCloseButton={false}>
+      <DialogContent track="edit_contact" className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit Contact</DialogTitle>
           <DialogDescription>A name you set here stays, even when their address book or WhatsApp name changes.</DialogDescription>
@@ -101,11 +101,11 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
       />
       {failure && <p role="alert" className="text-sm text-destructive">{failure.text}</p>}
       <div className={DIALOG_BUTTONS}>
-        <Button type="button" variant="outline" onClick={onDone}>Cancel</Button>
+        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
         {failure?.existingId && (
           <Button type="button" variant="secondary" onClick={() => { onDone(); router.push(`/contacts/${failure.existingId}`); }}>Open Contact</Button>
         )}
-        <Button type="submit" disabled={saving}>{saving ? "Saving" : "Save"}</Button>
+        <Button type="submit" variant="secondary" disabled={saving}>{saving ? "Saving" : "Save"}</Button>
       </div>
     </form>
   );

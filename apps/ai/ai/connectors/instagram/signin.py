@@ -30,7 +30,7 @@ FAILED = {
     "banned": "Instagram has suspended or disabled this account. Open the Instagram app to see why.",
     "rate": "Instagram is limiting sign-ins right now. Wait an hour, then connect again.",
     "feedback": "Instagram is limiting sign-ins right now. Wait an hour, then connect again.",
-    "blocked_ip": "Instagram blocked sign-ins from this server's internet address. Set INSTAGRAM_PROXY to a home or mobile proxy, then connect again.",
+    "blocked_ip": "Instagram blocked sign-ins from this server's internet address. This needs a fix on Konva's side. Try connecting again later.",
     "network": "Could not reach Instagram. Connect again in a few minutes.",
     "login": "Instagram did not let Konva sign in. Wait a while, then connect again.",
     "other": "Instagram did not let Konva sign in. Wait a while, then connect again.",

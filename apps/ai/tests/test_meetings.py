@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 import unittest
 from unittest import mock
 
@@ -11,6 +12,7 @@ from ai.meetings import (
     NO_RECORDING,
     NO_SPEECH,
     NOT_SUMMARISED,
+    TOO_LONG,
     SINGLE_S,
     SUMMARY_CHARS,
     WINDOW_S,
@@ -79,13 +81,45 @@ class FakeDb:
         return self.audio
 
 
+class FakeHold:
+    def __init__(self, amount):
+        self.amount = amount
+        self.topped = []
+
+    def top_up(self, more):
+        self.topped.append(more)
+        self.amount += more
+
+
 class FakeGemini:
-    def __init__(self, answers=None, fail=0):
+    def __init__(self, answers=None, fail=0, cache=True, refuse=False):
         self.answers = list(answers or [])
         self.calls = []
         self.uploads = []
         self.deleted = []
         self.fail = fail
+        self.cache = cache
+        self.refuse = refuse
+        self.holds = []
+        self.caches = []
+        self.caches_deleted = []
+
+    @contextmanager
+    def hold(self, usage, estimate, strict=True):
+        if self.refuse:
+            raise GeminiError(None, "budget_paused")
+        held = FakeHold(estimate)
+        self.holds.append((usage, estimate, held))
+        yield held
+
+    def cache_file(self, model, system, file, usage, ttl_s=1500):
+        if not self.cache:
+            return None
+        self.caches.append((model, file))
+        return "cachedContents/c1"
+
+    def delete_cache(self, name):
+        self.caches_deleted.append(name)
 
     def json(self, model, system, prompt, schema, usage, **kw):
         self.calls.append({"prompt": prompt, "usage": usage, **kw})
@@ -246,6 +280,80 @@ class Transcribing(unittest.TestCase):
         self.assertIn("Speakers labelled so far, to keep using for the same voices: Sarah Lee.", gemini.calls[1]["prompt"])
         stored = json.loads(meeting["transcript"].split(":", 2)[2])
         self.assertEqual([s["text"] for s in stored], ["First hour.", "Heard twice, kept in the second.", "Second hour.", "Last bit."])
+
+    def test_each_recording_is_sent_once_and_the_windows_share_one_cache(self):
+        db = FakeDb([waiting(ended_at="2026-10-27T10:30:00+00:00")], audio=b"y" * 100)
+        gemini = FakeGemini([turns(("A", 10, "one")), turns(("A", 3700, "two")), turns(("A", 7300, "three"), ends=True)])
+        Meetings(db, gemini, "model", FakeVault()).transcribe_once()
+        self.assertEqual(len(gemini.uploads), 1)  # the file goes up once
+        self.assertEqual(len(gemini.caches), 1)  # and is cached once, for all three windows
+        self.assertEqual({c["cached"] for c in gemini.calls}, {"cachedContents/c1"})
+        self.assertEqual(len(gemini.calls), 3)
+        self.assertEqual(gemini.caches_deleted, ["cachedContents/c1"])
+        self.assertEqual(gemini.deleted, ["files/f1"])
+
+    def test_a_recording_that_cannot_be_cached_falls_back_and_asks_for_the_difference(self):
+        db = FakeDb([waiting(ended_at="2026-10-27T10:30:00+00:00")])
+        gemini = FakeGemini([turns(("A", 10, "one")), turns(("A", 3700, "two")), turns(("A", 7300, "three"), ends=True)], cache=False)
+        Meetings(db, gemini, "gemini-3.8-flash", FakeVault()).transcribe_once()
+        self.assertEqual(len(gemini.calls), 3)
+        self.assertTrue(all(c.get("cached") is None for c in gemini.calls))
+        self.assertEqual(len(gemini.holds[0][2].topped), 1)
+        self.assertGreater(gemini.holds[0][2].topped[0], 0)
+
+    def test_the_whole_cost_is_held_once_before_the_first_call_and_passed_to_every_call(self):
+        db = FakeDb([waiting(ended_at="2026-10-27T10:30:00+00:00")])
+        gemini = FakeGemini([turns(("A", 10, "one")), turns(("A", 3700, "two")), turns(("A", 7300, "three"), ends=True)])
+        Meetings(db, gemini, "gemini-3.8-flash", FakeVault()).transcribe_once()
+        self.assertEqual(len(gemini.holds), 1)
+        usage, estimate, held = gemini.holds[0]
+        self.assertEqual(usage.feature, "transcribe")
+        self.assertGreater(estimate, 0)
+        self.assertTrue(all(c["hold"] is held for c in gemini.calls))
+
+    def test_a_meeting_the_share_cannot_cover_waits_without_a_try_or_any_upload(self):
+        db = FakeDb([waiting()])
+        gemini = FakeGemini(refuse=True)
+        job = Meetings(db, gemini, "model", FakeVault())
+        job.transcribe_once()
+        self.assertEqual(db.meetings[0]["status"], "waiting")
+        self.assertEqual(gemini.calls, [])
+        self.assertEqual(gemini.uploads, [])
+        self.assertEqual(job._tries[MEETING][0], 0)  # not counted against the meeting
+        self.assertEqual(job.waiting(), [MEETING])
+
+    def test_a_recording_over_the_minutes_cap_is_refused_before_download_or_hold(self):
+        db = FakeDb([waiting(ended_at="2026-10-27T13:00:01+00:00")])  # five hours
+        gemini = FakeGemini()
+        Meetings(db, gemini, "model", FakeVault()).transcribe_once()
+        self.assertEqual((db.meetings[0]["status"], db.meetings[0]["error"]), ("failed", TOO_LONG))
+        self.assertEqual(gemini.holds, [])
+        self.assertEqual(gemini.calls, [])
+
+    def test_the_cap_comes_from_the_environment(self):
+        import os
+
+        os.environ["MEETING_MAX_MINUTES"] = "30"
+        try:
+            db = FakeDb([waiting()])  # 40 minutes
+            Meetings(db, FakeGemini(), "model", FakeVault()).transcribe_once()
+            self.assertEqual(db.meetings[0]["error"], TOO_LONG)
+        finally:
+            del os.environ["MEETING_MAX_MINUTES"]
+
+    def test_windows_never_run_past_the_cap(self):
+        from ai.meetings import windows
+
+        self.assertEqual(len(windows(None, 2 * 3600)), 2)
+        self.assertEqual(len(windows(None)), 6)
+
+    def test_recordings_use_the_transcribe_model(self):
+        calls = []
+        gemini = FakeGemini([turns(("A", 1, "x"))])
+        original = gemini.json
+        gemini.json = lambda model, *a, **k: (calls.append(model), original(model, *a, **k))[1]
+        Meetings(FakeDb([waiting()]), gemini, "full", FakeVault(), transcribe_model="cheap").transcribe_once()
+        self.assertEqual(calls, ["cheap"])
 
     def test_an_unknown_length_stops_where_the_recording_ends(self):
         db = FakeDb([waiting(ended_at=None)])

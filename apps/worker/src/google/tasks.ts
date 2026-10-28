@@ -1,5 +1,6 @@
 import { GoogleApiError, type GoogleClient } from "./client";
 import { GoogleAuthError } from "./oauth";
+import type { TaskWrite } from "../tasks/rows";
 
 // The Google Tasks API, with plain HTTPS calls through GoogleClient: task lists, the tasks in each, and
 // what a task becomes when it is stored. Kept apart from the connector so the mapping can be tested
@@ -119,6 +120,19 @@ export function patchBody(action: string): { status: "completed" } | { status: "
   if (action === "complete") return { status: "completed" };
   if (action === "reopen") return { status: "needsAction", completed: null };
   return null;
+}
+
+/**
+ * The body that makes or changes a task from what the app asked for. Google keeps only the date, so a time is
+ * dropped and the day sent as midnight UTC. A create leaves out what is empty; a change sends null for it, which
+ * clears it. Google Tasks has no priority.
+ */
+export function writeBody(write: TaskWrite, create: boolean): { title: string; notes?: string | null; due?: string | null } {
+  const due = write.dueAt ? `${write.dueAt.slice(0, 10)}T00:00:00.000Z` : null;
+  const body: { title: string; notes?: string | null; due?: string | null } = { title: write.title };
+  if (write.notes !== null || !create) body.notes = write.notes;
+  if (due !== null || !create) body.due = due;
+  return body;
 }
 
 /** Google's reasons for "too many requests" sent as a 403, as GoogleClient retries them. */

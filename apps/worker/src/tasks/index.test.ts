@@ -7,7 +7,8 @@ import type { TaskUpdateRow } from "./rows";
 process.env.SUPABASE_URL ??= "http://127.0.0.1:1";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test";
 process.env.ENCRYPTION_KEY ??= "test";
-delete process.env.ENCRYPT_CONTENT;
+// Encryption is on unless "false"; these tests read the plain rows.
+process.env.ENCRYPT_CONTENT = "false";
 
 const { db } = await import("../db");
 const tasks = await import("./index");
@@ -48,7 +49,7 @@ function fake(answer: (q: Query) => unknown = () => []) {
 const filter = (q: Query, column: string) => q.filters.find(([, c]) => c === column)?.[2];
 
 function row(patch: Partial<TaskUpdateRow> = {}): TaskUpdateRow {
-  return { id: "up1", user_id: "u", task_id: "t1", action: "complete", status: "updating", error: null, created_at: "2026-10-26T08:00:00Z", ...patch };
+  return { id: "up1", user_id: "u", task_id: "t1", action: "complete", status: "updating", error: null, created_at: "2026-10-26T08:00:00Z", account_id: null, title: null, notes: null, due_at: null, due_all_day: false, priority: null, ...patch };
 }
 
 test("a tick the provider took writes the task's status, then settles the row as done", async () => {

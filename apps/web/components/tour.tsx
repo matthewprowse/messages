@@ -22,9 +22,9 @@ interface Stop {
 
 const STOPS: Stop[] = [
   {
-    id: "briefing",
-    href: "/briefing",
-    target: ["briefing"],
+    id: "summary",
+    href: "/summary",
+    target: ["summary"],
     title: "Summary: Your Day at a Glance",
     points: [
       "Needs Reply lists everyone waiting on an answer from you.",
@@ -36,7 +36,7 @@ const STOPS: Stop[] = [
     id: "inbox",
     href: "/inbox",
     target: ["inbox"],
-    title: "Conversations: Email and WhatsApp Together",
+    title: "Inbox: Email and WhatsApp Together",
     points: [
       "Every client conversation in one list, whichever app they used.",
       "Priority, Junk and Subscriptions keep the noise out of your way.",

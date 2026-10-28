@@ -61,3 +61,60 @@ export function companyDomain(address: string, own: Iterable<string>): string | 
   for (const mine of own) if (mine.includes("@") && domainOf(mine.trim().toLowerCase()) === domain) return null;
   return domain;
 }
+
+const squash = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * The company a shared sender writes for: "LinkedIn" in "Nicholas van Schalkwyk via LinkedIn" or
+ * "Geordin Hill-Lewis on LinkedIn", else null. Services send everyone's notifications from one address
+ * under the person's name, so such a name says who the notice is about, not who sent it.
+ */
+export function viaCompany(displayName: string | null | undefined): string | null {
+  const m = (displayName ?? "").trim().match(/^.+?\s(?:via|on)\s+(\S.*)$/i);
+  return m ? m[1].trim() : null;
+}
+
+/**
+ * The company's name for a domain, written as the company writes it when the sender's display name is
+ * just that name ("LinkedIn" from linkedin.com, "Prime Video" from primevideo.com) or ends in it
+ * ("Geordin Hill-Lewis on LinkedIn"), else the readable default from the domain (companyNameForDomain).
+ */
+export function companyNameFor(domain: string, displayName?: string | null): string {
+  const name = viaCompany(displayName) ?? displayName?.trim() ?? "";
+  const label = squash(domain.split(".")[0]);
+  if (name && label && squash(name) === label && name.length <= 40) return name;
+  return companyNameForDomain(domain);
+}
+
+// Names that only say the sender is automated, never who it is: "No Reply", "noreply", "Do Not Reply",
+// "Notifications", "Mailer Daemon".
+const PLACEHOLDER_NAME = /^(no[\s._-]*reply|do[\s._-]*not[\s._-]*reply|no[\s._-]*response|mailer[\s._-]*daemon|postmaster|auto[\s._-]*reply|automated|notifications?|notify|alerts?|info|information|news(letters?)?|hello|support|team|mail(er)?|bounces?|system|admin|updates?)$/i;
+// Local parts of automated addresses, whose made-up name ("Noreplycapetownnewlands") is no name at all.
+// A local part that names something besides the role ("capitec-jobnotification") keeps its name.
+const AUTOMATED_LOCAL = /(no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|^(info|news|hello|mail|mailer|support|team|updates?|alerts?|notifications?|newsletters?|bounces?)$)/i;
+
+/** True when a sender's name says nothing about who sent it: missing, an address, or a word like "No Reply". */
+export function isPlaceholderName(name: string | null | undefined, address: string): boolean {
+  const n = (name ?? "").trim();
+  if (!n || /^\S+@\S+\.\S+$/.test(n)) return true;
+  if (PLACEHOLDER_NAME.test(n) || /no-?reply|donotreply/i.test(squash(n))) return true;
+  // A name made from the address ("Noreply", "Info"), for an automated address.
+  const local = address.split("@")[0] ?? "";
+  return squash(n) === squash(local) && AUTOMATED_LOCAL.test(local);
+}
+
+/**
+ * The name to show for an email sender: their display name, or for an automated sender that gives none
+ * (or only "No Reply") or writes "<person> via <Company>", the company it belongs to. `fromAddress` makes a name from the address itself
+ * when there is no company (sarah.okafor@x.com is Sarah Okafor).
+ */
+export function senderName(address: string, displayName: string | null | undefined, company: string | null, fromAddress: (address: string) => string): string {
+  const name = displayName?.trim() ?? "";
+  // "Max Bishop via LinkedIn" from the company's own address is the company: the address is shared by
+  // everyone it writes about, so it must not be named after one of them.
+  const via = viaCompany(name);
+  if (company && via && squash(via).startsWith(squash(company))) return company;
+  if (!isPlaceholderName(name, address)) return name;
+  if (company) return company;
+  return name && !name.includes("@") ? name : fromAddress(address);
+}

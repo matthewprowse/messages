@@ -9,7 +9,8 @@ import { parseEmail, type NormalizedEmail } from "../ingest/normalize-email";
 import { applyReadState, storeEmail, storeEmails, type FolderRole } from "../ingest/store-email";
 import { isFailure } from "../ingest/batch-rpc";
 import { sideFolderDue, type FolderCheck, type FolderStatus } from "../ingest/folder-status";
-import { MissingFiles, saveFilesQuietly } from "../ingest/attachment-files";
+import { saveFilesQuietly } from "../ingest/attachment-files";
+import { BackoffMissingFiles } from "../missing-files";
 import { claimReady, composeOutgoing, freshAccount, linkNewEmails, linkThread, markFailed, settleSent, type OutboxRow, type SendAccount } from "../send/outbox";
 import { normAddresses } from "../send/from-address";
 import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe-flow";
@@ -77,7 +78,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
   /** Archive, Trash and Junk on this server, where it has them. */
   private paths: FolderPaths = {};
   /** Attachments with no stored file yet, a page per catch-up pass. One that cannot be saved is not retried every pass. */
-  private readonly missingFiles: MissingFiles;
+  private readonly missingFiles: BackoffMissingFiles;
   /**
    * Each folder's sync state as last saved. This connector is the only writer, so it is read from the
    * database once a session and kept up to date on every save.
@@ -90,7 +91,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     private readonly account: AccountRow,
     private readonly service: MailService<C>,
   ) {
-    this.missingFiles = new MissingFiles(account.id);
+    this.missingFiles = new BackoffMissingFiles(account.id);
   }
 
   get id() {

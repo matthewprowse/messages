@@ -15,11 +15,15 @@ import type { RelayAccount } from "../reminders/server";
 // This connector holds no connection of its own: it waits for its relay, stores each sync into tasks, and hands
 // the relay the ticks made in the app (task_updates), which the relay applies in Reminders and reports back.
 // The account's credentials are only the hash of its relay token.
+//
+// An account signed in on the web (kind "web": the Apple ID typed in Konva, read by the AI worker's iCloud
+// Reminders connector, apps/ai/ai/connectors/icloud_reminders) is not the relay's: this connector leaves its
+// status alone and only waits for the AI worker to settle the ticks the worker hands it.
 
-export interface ICloudRemindersCredentials {
-  /** SHA-256 of the relay token, as relayTokenHash makes it. The token itself is shown once and never stored. */
-  tokenHash: string;
-}
+export type ICloudRemindersCredentials =
+  | { kind: "web" }
+  /** tokenHash is the SHA-256 of the relay token, as relayTokenHash makes it. The token itself is shown once and never stored. */
+  | { kind?: undefined; tokenHash: string };
 
 const STALE_MS = 30 * 60_000; // a relay that has not checked in for this long is marked as needing attention
 const CHECK_MS = 60_000;
@@ -32,6 +36,10 @@ const STALE = "Konva Relay on your Mac has not checked in for 30 minutes. Check 
 const DENIED = "Konva Relay is not allowed to read Reminders on your Mac. Allow it in System Settings, Privacy and Security, Reminders.";
 const OFF = "The reminders relay is switched off in the worker. Set RELAY_PORT in apps/worker/.env, then restart it.";
 const OFFLINE = "Konva Relay on your Mac is not checking in, so this was not changed in Reminders. Check the Mac is on, then try again.";
+const RELAY_TICKS_ONLY = "Konva Relay can only tick reminders. Adding, changing or deleting them is not supported for this account yet.";
+const WEB_WAIT_MS = 75_000; // how long a tick waits for the AI worker's connector to settle it
+const WEB_POLL_MS = 1_000;
+const WEB_SLOW = "iCloud Reminders did not confirm the change in time. If it is syncing, the change may still go through.";
 
 /** Running connectors by their relay token's hash: the relay endpoint finds an account only through here. */
 const relays = new Map<string, ICloudRemindersConnector>();
@@ -45,6 +53,9 @@ const fingerprint = (fields: TaskFields) => createHash("sha256").update(JSON.str
 
 export class ICloudRemindersConnector implements RelayAccount {
   private stopped = false;
+  private starting: Promise<void> = Promise.resolve();
+  /** The account is a web sign-in, read by the AI worker, so there is no relay to wait for. */
+  private web = false;
   private tokenHash: string | null = null;
   private status: "connecting" | "connected" | "error" = "connecting";
   /** When the relay last made any request. Starts at now, so a restart gives it time to come back. */
@@ -68,7 +79,7 @@ export class ICloudRemindersConnector implements RelayAccount {
   }
 
   start() {
-    void this.run();
+    this.starting = this.run();
   }
 
   async stop() {
@@ -81,12 +92,16 @@ export class ICloudRemindersConnector implements RelayAccount {
 
   private async run() {
     try {
+      const creds = await loadCredentials<ICloudRemindersCredentials>(this.id);
+      if (this.stopped) return;
+      if (creds.kind === "web") {
+        this.web = true;
+        return;
+      }
       if (!env.relayPort) {
         await setAccountStatus(this.id, "error", OFF);
         return;
       }
-      const creds = await loadCredentials<ICloudRemindersCredentials>(this.id);
-      if (this.stopped) return;
       this.tokenHash = creds.tokenHash;
       relays.set(creds.tokenHash, this);
       await setAccountStatus(this.id, "connecting", WAITING);
@@ -231,6 +246,8 @@ export class ICloudRemindersConnector implements RelayAccount {
    * quiet the change fails at once rather than waiting for a Mac that may be off.
    */
   async updateTask(row: Tables<"task_updates">): Promise<void> {
+    await this.starting;
+    if (this.web) return this.settledByAiWorker(row);
     if (this.stopped) throw new TaskUpdateError(OFFLINE);
     const task = await taskOfUpdate(row);
     if (!task || task.account_id !== this.id || row.user_id !== this.account.user_id) throw new TaskUpdateError("This task belongs to another account.");
@@ -247,5 +264,34 @@ export class ICloudRemindersConnector implements RelayAccount {
     });
     if (!result) throw new TaskUpdateError("Your Mac did not confirm the change in time. If it is on, the change may still go through.");
     if (!result.ok) throw new TaskUpdateError(result.error);
+  }
+
+  /**
+   * A task made, changed or deleted in the app. The relay only ticks, so only a web sign-in can take these: the
+   * AI worker's connector makes them in iCloud and settles the row, as it does a tick.
+   */
+  createTask = (row: Tables<"task_updates">) => this.writeTask(row);
+  editTask = (row: Tables<"task_updates">) => this.writeTask(row);
+  deleteTask = (row: Tables<"task_updates">) => this.writeTask(row);
+
+  private async writeTask(row: Tables<"task_updates">): Promise<void> {
+    await this.starting;
+    if (this.web) return this.settledByAiWorker(row);
+    throw new TaskUpdateError(RELAY_TICKS_ONLY);
+  }
+
+  /**
+   * A tick for a web sign-in, claimed by the worker: the AI worker's connector applies it in iCloud and settles
+   * the row itself (task status first), so this only waits for that and passes its reason on if it failed.
+   */
+  private async settledByAiWorker(row: Tables<"task_updates">): Promise<void> {
+    for (const deadline = Date.now() + WEB_WAIT_MS; !this.stopped && Date.now() < deadline; ) {
+      const current = must(await db.from("task_updates").select("status, error").eq("id", row.id).maybeSingle(), "load task update");
+      if (current?.status === "done") return;
+      if (current?.status === "failed") throw new TaskUpdateError(current.error || WEB_SLOW);
+      if (current?.status !== "updating") return; // the row is gone
+      await new Promise((resolve) => setTimeout(resolve, WEB_POLL_MS));
+    }
+    throw new TaskUpdateError(WEB_SLOW);
   }
 }

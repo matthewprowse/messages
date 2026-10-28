@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dueDay, graphInstant, statusPatch, storedTodoTask, taskDue, taskNotes, throttleWait, todoUpdateFailure, type GraphTodoTask } from "./todo-task";
+import { defaultTodoList, dueDay, graphInstant, importanceOf, statusPatch, storedTodoTask, taskDue, taskNotes, throttleWait, todoUpdateFailure, todoWriteBody, wallClock, type GraphTodoTask } from "./todo-task";
 import { ianaZone } from "./windows-zones";
 
 const SA = "Africa/Johannesburg";
@@ -184,4 +184,56 @@ test("a throttled sync waits as long as Retry-After asks, within limits", () => 
   assert.equal(throttleWait("later", 5_000, now), 5_000);
   assert.equal(throttleWait("Mon, 26 Oct 2026 08:03:00 GMT", 5_000, now), 180_000);
   assert.equal(throttleWait("86400", 5_000, now), 15 * 60_000);
+});
+
+test("a new task goes in To Do's default list, else the first", () => {
+  assert.equal(defaultTodoList([{ id: "a", wellknownListName: "none" }, { id: "b", wellknownListName: "defaultList" }])?.id, "b");
+  assert.equal(defaultTodoList([{ id: "a" }, { id: "b" }])?.id, "a");
+  assert.equal(defaultTodoList([]), null);
+});
+
+test("priorities become To Do's importance, with medium as normal", () => {
+  assert.deepEqual([1, 2, 3, null].map((p) => importanceOf(p as 1 | 2 | 3 | null)), ["high", "normal", "low", "normal"]);
+});
+
+test("a wall clock is the time a zone shows", () => {
+  assert.equal(wallClock(new Date("2026-11-03T07:30:00Z"), SA), "2026-11-03T09:30:00.0000000");
+  assert.equal(wallClock(new Date("2026-11-02T22:00:00Z"), SA), "2026-11-03T00:00:00.0000000");
+});
+
+test("a task made in the app is sent with its day, and a time as a reminder on that day", () => {
+  const base = { title: "Call Sam", notes: "Ask about the offer", priority: 1 as const };
+  const allDay = todoWriteBody({ ...base, dueAt: "2026-11-03T00:00:00.000Z", dueAllDay: true }, SA, true);
+  assert.deepEqual(allDay, {
+    title: "Call Sam",
+    importance: "high",
+    body: { content: "Ask about the offer", contentType: "text" },
+    dueDateTime: { dateTime: "2026-11-03T00:00:00.0000000", timeZone: SA },
+  });
+  const timed = todoWriteBody({ ...base, dueAt: "2026-11-03T07:30:00.000Z", dueAllDay: false }, SA, true);
+  assert.deepEqual(timed.dueDateTime, { dateTime: "2026-11-03T00:00:00.0000000", timeZone: SA });
+  assert.deepEqual(timed.reminderDateTime, { dateTime: "2026-11-03T09:30:00.0000000", timeZone: SA });
+  assert.equal(timed.isReminderOn, true);
+  // Read back the way a sync reads it: the same day, at the same time.
+  const back = storedTodoTask({ id: "t", ...timed }, ctx);
+  assert.deepEqual([back.due_at, back.due_all_day, back.priority], ["2026-11-03T07:30:00.000Z", false, 1]);
+});
+
+test("changing a task clears the date and notes it no longer has, creating leaves them out", () => {
+  const none = { title: "Call Sam", notes: null, dueAt: null, dueAllDay: true, priority: null };
+  const created = todoWriteBody(none, SA, true);
+  assert.equal("dueDateTime" in created, false);
+  assert.deepEqual(created.body, { content: "", contentType: "text" });
+  const changed = todoWriteBody(none, SA, false);
+  assert.equal(changed.dueDateTime, null);
+  assert.equal(changed.reminderDateTime, null);
+  assert.equal(changed.isReminderOn, false);
+  assert.equal(changed.importance, "normal");
+  // A day without a time turns an earlier reminder off.
+  const dayOnly = todoWriteBody({ ...none, dueAt: "2026-11-03T00:00:00.000Z" }, SA, false);
+  assert.deepEqual([dayOnly.reminderDateTime, dayOnly.isReminderOn], [null, false]);
+});
+
+test("a rejected change is worded", () => {
+  assert.match(todoUpdateFailure(400), /did not accept/);
 });

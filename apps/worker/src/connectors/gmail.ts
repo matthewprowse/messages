@@ -2,6 +2,7 @@ import { simpleParser } from "mailparser";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { Json, Tables } from "@messages/db";
 import { Backoff, SerialQueue, Sleeper } from "../backoff";
+import { activity, GMAIL_POLL, markActivity, nextPollDelay } from "../polling";
 import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -9,7 +10,8 @@ import { chunks, mapLimit, push } from "../util";
 import { normalizeEmail, type NormalizedEmail } from "../ingest/normalize-email";
 import { storeEmail, storeEmails, type EmailContext } from "../ingest/store-email";
 import { isFailure } from "../ingest/batch-rpc";
-import { MissingFiles, saveFilesQuietly } from "../ingest/attachment-files";
+import { saveFilesQuietly } from "../ingest/attachment-files";
+import { BackoffMissingFiles } from "../missing-files";
 import { claimReady, composeOutgoing, linkNewEmails, linkThread, markFailed, settleSent, startedHere, type OutboxRow } from "../send/outbox";
 import { finishAction } from "../send/actions";
 import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe-flow";
@@ -30,7 +32,6 @@ import { freshAccount } from "../send/outbox";
 // Bin or Spam in Gmail leaves the app's inbox. Replies are sent through Gmail, which files them in Sent itself.
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
-const POLL_MS = 5_000;
 const MAX_FAILED_CHECKS = 12; // about a minute of checks failing in a row
 const FETCH_AT_ONCE = 8; // Gmail allows about 50 message fetches a second per user
 const STORE_AT_ONCE = 25; // messages per database call during imports; the next chunk is fetched meanwhile
@@ -87,10 +88,10 @@ export class GmailConnector {
   /** Where Gmail's change history was last read up to. Loaded once per session, then kept here. */
   private historyId: string | null = null;
   /** Attachment rows with no stored file yet, a page per catch-up. */
-  private readonly missingFiles: MissingFiles;
+  private readonly missingFiles: BackoffMissingFiles;
 
   constructor(private readonly account: AccountRow) {
-    this.missingFiles = new MissingFiles(account.id, FILES_AT_ONCE);
+    this.missingFiles = new BackoffMissingFiles(account.id, FILES_AT_ONCE);
   }
 
   get id() {
@@ -170,31 +171,38 @@ export class GmailConnector {
     let lastFiles = Date.now();
     let lastTouch = Date.now();
     let failures = 0;
-    while (!this.stopped) {
-      await this.sleeper.wait(POLL_MS);
-      if (this.stopped) break;
-      // One failed check (a Gmail rate limit, a database hiccup) is retried at the next one rather than
-      // ending the session. A revoked sign-in ends it at once, and a minute of failures in a row ends it
-      // too, so the reconnect (with backoff) takes over instead of logging forever.
-      try {
-        await this.queue.run(async () => {
-          if (this.historyId) await this.catchUp(this.historyId);
-        });
-        failures = 0;
-      } catch (err) {
-        if (signInRevoked(err) || ++failures >= MAX_FAILED_CHECKS) throw err;
-        log.warn("gmail history check failed", { account: this.id, code: errorCode(err), failures });
+    // Work queued in the app, or mail seen on another account, ends an idle wait early.
+    const wakeOnActivity = activity.onMark(() => this.sleeper.interrupt());
+    try {
+      while (!this.stopped) {
+        // 5 s while there has been recent activity, backing off when quiet (see polling.ts); a failed check retries quickly.
+        await this.sleeper.wait(failures > 0 ? GMAIL_POLL.activeMs : nextPollDelay(Date.now(), activity.since(), GMAIL_POLL));
+        if (this.stopped) break;
+        // One failed check (a Gmail rate limit, a database hiccup) is retried at the next one rather than
+        // ending the session. A revoked sign-in ends it at once, and a minute of failures in a row ends it
+        // too, so the reconnect (with backoff) takes over instead of logging forever.
+        try {
+          await this.queue.run(async () => {
+            if (this.historyId) await this.catchUp(this.historyId);
+          });
+          failures = 0;
+        } catch (err) {
+          if (signInRevoked(err) || ++failures >= MAX_FAILED_CHECKS) throw err;
+          log.warn("gmail history check failed", { account: this.id, code: errorCode(err), failures });
+        }
+        if (Date.now() - lastTouch > 60_000) {
+          lastTouch = Date.now();
+          await touchAccount(this.id);
+          // A new email whose sent copy arrived through the history check rather than right after sending.
+          await linkNewEmails(this.id).catch((err) => log.warn("link new emails failed", { account: this.id, code: errorCode(err) }));
+        }
+        if (Date.now() - lastFiles > FILES_EVERY_MS) {
+          lastFiles = Date.now();
+          this.background(() => this.saveMissingFiles());
+        }
       }
-      if (Date.now() - lastTouch > 60_000) {
-        lastTouch = Date.now();
-        await touchAccount(this.id);
-        // A new email whose sent copy arrived through the history check rather than right after sending.
-        await linkNewEmails(this.id).catch((err) => log.warn("link new emails failed", { account: this.id, code: errorCode(err) }));
-      }
-      if (Date.now() - lastFiles > FILES_EVERY_MS) {
-        lastFiles = Date.now();
-        this.background(() => this.saveMissingFiles());
-      }
+    } finally {
+      wakeOnActivity();
     }
   }
 
@@ -273,7 +281,10 @@ export class GmailConnector {
       throw err;
     }
 
-    if (records.length > 0) await this.applyChanges(records);
+    if (records.length > 0) {
+      markActivity(); // something happened in this mailbox: keep checking quickly for a while
+      await this.applyChanges(records);
+    }
     if (latest !== startHistoryId) await saveSyncState(this.id, "history", { history_id: latest });
     this.historyId = latest;
   }

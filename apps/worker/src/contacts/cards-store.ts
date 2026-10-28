@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { addressIndex } from "@messages/crypto/addresses";
 import { allRows, db, must } from "../db";
-import { keysFor, openAddresses, sealAddress } from "../vault";
+import { FIELD } from "@messages/crypto/fields";
+import { keysFor, openAddresses, seal, sealAddress } from "../vault";
 import { errorCode, log } from "../log";
 import type { Card } from "../photos/cards";
 import { chunks } from "../util";
@@ -64,6 +65,7 @@ export async function saveCards(account: { id: string; user_id: string }, cards:
       const stored = await Promise.all(
         batch.map(async (r) => ({
           ...r,
+          name: await seal(account.user_id, FIELD.cardName, r.name),
           emails: await Promise.all(r.emails.map((e) => sealAddress(account.user_id, e))),
           phones: await Promise.all(r.phones.map((p) => sealAddress(account.user_id, p))),
           email_indexes: await Promise.all(r.emails.map((e) => addressIndex(keys, e))),

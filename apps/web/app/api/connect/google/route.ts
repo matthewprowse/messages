@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   if (foreignOrigin(request)) return fail(403, "Not allowed from this site.");
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
-  if (overLimit(user.id) > 0) return fail(429, "Too many tries. Wait a minute and try again.");
+  if (await overLimit(user.id) > 0) return fail(429, "Too many tries. Wait a minute and try again.");
 
   const body = (await request.json().catch(() => ({}))) as { back?: string; meet?: boolean };
   const back = GOOGLE_RETURNS.find((r) => r === body.back) ?? GOOGLE_RETURNS[0];

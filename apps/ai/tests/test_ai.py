@@ -9,7 +9,7 @@ from typing import Any
 from ai.drafts import build_prompt as draft_prompt
 from ai.chasers import build_prompt as follow_up_prompt, latest_per_thread
 from ai.drafts import describe, is_adjust, pick_facts, keep_quotes, revises, pick_drafts, pick_more_voice, pick_similar, pick_voice, stale
-from ai.embed import PREFIX, Embeddings as EmbeddingStore, embed_text, embedding_rows, queue_row, vector_literal
+from ai.embed import PREFIX, embed_text, embedding_rows, queue_row
 from ai.gemini import Gemini, GeminiError, UsageContext, error_reason, normalise, read_usage, retry_wait
 from ai.http import Pool
 from ai.supabase import SupabaseError, missing_relation
@@ -171,10 +171,9 @@ class Similar(unittest.TestCase):
 
 
 class Embeddings(unittest.TestCase):
-    def test_text_and_literal(self):
+    def test_text(self):
         self.assertEqual(embed_text("Hello", "Body\n\nOn Tue, A wrote:\n> old", None), PREFIX + "Hello\n\nBody")
         self.assertEqual(embed_text(None, None, None), PREFIX + "(no text)")
-        self.assertEqual(vector_literal([0.5, -0.25]), "[0.500000,-0.250000]")
 
     def test_normalise(self):
         self.assertEqual(normalise([3.0, 4.0]), [0.6, 0.8])
@@ -300,6 +299,35 @@ class PeopleNotes(unittest.TestCase):
     def test_future_dated_mail_does_not_keep_notes_due(self):
         orgs = [{"id": "b", "summary": "Bank.", "summary_updated_at": "2026-10-01T00:00:00Z"}]
         self.assertEqual(orgs_due(orgs, {"b": ["2999-01-01T00:00:00Z"] * 5}), [])
+
+    def test_person_notes_use_the_fast_model(self):
+        from ai.people import People
+
+        calls = []
+
+        class Db:
+            def select(self, table, params):
+                if table == "messages":
+                    return [{"direction": "inbound", "subject": "Hi", "body_text": "Can you call me?", "body_html": None, "sent_at": "2026-10-01T00:00:00Z"}]
+                return []
+
+            def count(self, table, params):
+                return 0
+
+            def update(self, *args, **kwargs):
+                pass
+
+        class G:
+            def limits(self):
+                return {"summaries_per_day": 100}
+
+            def json(self, model, system, prompt, schema, ctx, **kw):
+                calls.append((model, kw))
+                return {"style_note": "Brief.", "summary": "Sam writes about calls."}
+
+        p = People(Db(), G(), "main-model", "fast-model")
+        self.assertTrue(p._person("u", ["a1"], {"id": "c1", "display_name": "Sam"}))
+        self.assertEqual(calls, [("fast-model", {"thinking": "minimal", "max_output": 2048})])
 
     def test_person_prompt_keeps_newest_within_budget(self):
         emails = [("Sam", "Old", "x" * 20000), ("You", "New", "See you then")]
@@ -749,6 +777,9 @@ class GeminiErrors(unittest.TestCase):
             def insert(self, table, row):
                 return []
 
+            def rpc(self, function, args):
+                return {"features": {}}
+
         class Stub(Gemini):
             def __init__(self):
                 super().__init__("key", FakeDb())
@@ -777,8 +808,8 @@ class CachedUsage(unittest.TestCase):
 
 class EmbeddingStorage(unittest.TestCase):
     def test_rows(self):
-        rows = embedding_rows([{"id": "m1", "user_id": "u", "sent_at": "t"}], [[0.5, -0.25]])
-        self.assertEqual(rows, [{"message_id": "m1", "user_id": "u", "sent_at": "t", "embedding": "[0.500000,-0.250000]"}])
+        rows = embedding_rows([{"id": "m1", "user_id": "u", "sent_at": "t"}], ["sealed"])
+        self.assertEqual(rows, [{"message_id": "m1", "user_id": "u", "sent_at": "t", "embedding_data": "sealed"}])
         flat = queue_row({"message_id": "m1", "user_id": "u", "sent_at": "t", "messages": {"account_id": "a", "subject": "Hi"}})
         self.assertEqual(flat, {"id": "m1", "user_id": "u", "sent_at": "t", "account_id": "a", "subject": "Hi"})
 
@@ -787,44 +818,6 @@ class EmbeddingStorage(unittest.TestCase):
         self.assertTrue(missing_relation(SupabaseError(400, "42703")))
         self.assertFalse(missing_relation(SupabaseError(500, None)))
         self.assertFalse(missing_relation(ValueError()))
-
-    def _store(self, new_table: bool):
-        calls = []
-
-        class Db:
-            def select(self, table, params):
-                calls.append(("select", table))
-                if table == "message_embeddings" and not new_table:
-                    raise SupabaseError(404, "PGRST205")
-                if table == "message_embeddings":
-                    return [{"message_id": "m1", "user_id": "u", "sent_at": "t", "messages": {"account_id": "a", "subject": "Hi", "body_text": "x", "body_html": None}}]
-                return [{"id": "m1", "user_id": "u", "account_id": "a", "sent_at": "t", "subject": "Hi", "body_text": "x", "body_html": None}]
-
-            def upsert(self, table, rows, on_conflict):
-                calls.append(("upsert", table, len(rows)))
-
-            def update(self, table, filters, patch, minimal=False):
-                calls.append(("update", table))
-                return []
-
-        class Gem:
-            def embed(self, model, texts, usage):
-                return [[1.0] + [0.0] * 767 for _ in texts]
-
-        return EmbeddingStore(Db(), Gem(), "e"), calls
-
-    def test_new_table_is_one_write(self):
-        store, calls = self._store(True)
-        self.assertEqual(store.run_once(), 1)
-        self.assertEqual(calls, [("select", "message_embeddings"), ("upsert", "message_embeddings", 1)])
-
-    def test_falls_back_to_messages_before_the_migration(self):
-        store, calls = self._store(False)
-        self.assertEqual(store.run_once(), 1)
-        self.assertEqual(calls, [("select", "message_embeddings"), ("select", "messages"), ("update", "messages")])
-        calls.clear()
-        store.run_once()  # remembers for a while instead of asking for the table every time
-        self.assertEqual(calls[0], ("select", "messages"))
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):

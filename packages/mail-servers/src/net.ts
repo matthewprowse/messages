@@ -13,16 +13,36 @@ for (const [net, prefix] of [
   ["224.0.0.0", 4], ["240.0.0.0", 4],
 ] as const) PRIVATE.addSubnet(net, prefix, "ipv4");
 for (const [net, prefix] of [
-  ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["100::", 64], ["2001:db8::", 32], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
+  ["::", 96], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["100::", 64], ["2001::", 32], ["2001:db8::", 32], ["2002::", 16],
+  ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
 ] as const) PRIVATE.addSubnet(net, prefix, "ipv6");
 
-/** Whether an IP address is on the public internet. IPv4 written inside IPv6 is judged as IPv4. */
+/**
+ * Whether an IP address is on the public internet. IPv4 written inside IPv6 (::ffff:1.2.3.4 or the hex form
+ * ::ffff:102:304) is judged as IPv4. NAT64 (64:ff9b::/96), 6to4 (2002::/16), Teredo (2001::/32) and the old
+ * IPv4-compatible form (::/96) are refused outright, since they can carry a private IPv4 address.
+ */
 export function isPublicAddress(ip: string): boolean {
-  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
-  if (mapped) return isPublicAddress(mapped);
   const family = isIP(ip);
-  if (family === 0 || /^::ffff:/i.test(ip)) return false; // a mapped IPv4 address in hex form is not judged
-  return !PRIVATE.check(ip, family === 4 ? "ipv4" : "ipv6");
+  if (family === 0) return false;
+  if (family === 6) {
+    // The URL parser writes any IPv6 form the same way, so ::ffff:7f00:1 and ::ffff:127.0.0.1 look alike.
+    let canonical: string;
+    try {
+      canonical = new URL(`http://[${ip}]`).hostname.slice(1, -1).toLowerCase();
+    } catch {
+      return false;
+    }
+    const hex = canonical.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hex) {
+      const hi = parseInt(hex[1], 16);
+      const lo = parseInt(hex[2], 16);
+      return isPublicAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    }
+    if (canonical.startsWith("::ffff:")) return false;
+    return !PRIVATE.check(canonical, "ipv6");
+  }
+  return !PRIVATE.check(ip, "ipv4");
 }
 
 /**

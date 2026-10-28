@@ -1,7 +1,7 @@
 "use client";
 
 import { SettingsHeader } from "@/components/settings-header";
-import { AppearanceSection, DataSection, SignInSection, TourSection } from "@/components/settings/sections";
+import { AppearanceSection, DataSection, LanguageSection, SignInSection, TourSection } from "@/components/settings/sections";
 
 export default function GeneralPage() {
   return (
@@ -9,6 +9,7 @@ export default function GeneralPage() {
       <SettingsHeader title="General" />
       <div className="space-y-8">
         <AppearanceSection />
+        <LanguageSection />
         <DataSection />
         <TourSection />
         <SignInSection />

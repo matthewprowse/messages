@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import random
+import re
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -19,15 +21,20 @@ from typing import Any, Callable
 from ... import log
 from .backoff import Backoff, kind_of, poll_wait, trouble
 from .client import quiet
-from .mapping import Thread, inbox, is_unread, payload, sent_item, thread as map_thread
+from .credentials import proxy_for
+from . import outgoing
+from .mapping import Person, Thread, inbox, is_unread, payload, sent_item, thread as map_thread
 from .signin import SignInFailed, SignInStopped, sign_in
-from .store import SignInRow, Store, fetch
+from .store import AVATAR_MAX_BYTES, DEFAULT_AVATAR, SignInRow, Store, fetch
 
 LOOP_S = 5.0  # the outbox and actions are checked this often; they are database reads until there is work
 FIRST_PAGES = 2  # the first sync reads the 40 most recent threads
 THREAD_PAGES = 2  # at most 40 messages of one thread per poll, when more arrived than the inbox shows
 SESSION_SAVE_S = 600.0
 PAUSE_S = (2.0, 5.0)  # between reading one thread and the next, like scrolling
+FILE_PAUSE_S = (1.0, 2.5)  # between the items of one message with files
+PHOTOS_PER_THREAD = 5  # profile photos fetched per thread per poll
+PHOTO_RECHECK_S = 86400.0  # a person's photo is looked at no more than daily per run, whatever came of it
 
 INBOX_PARAMS = {
     "visual_message_return_type": "unseen",
@@ -40,10 +47,32 @@ INBOX_PARAMS = {
     "no_pending_badge": "true",
     "push_disabled": "true",
 }
+# Primary is the default inbox. General is the folder Instagram files business chats into, and requests are
+# people you do not follow. Each has its own "newest seen" mark, so a quiet one is never skipped by a busy one.
+GENERAL_SCOPE = "instagram_inbox_general"
+REQUESTS_SCOPE = "instagram_inbox_requests"
+BOXES: tuple[tuple[str, dict[str, str] | None, str | None], ...] = (
+    ("direct_v2/inbox/", None, None),
+    ("direct_v2/inbox/", {"folder": "1"}, GENERAL_SCOPE),
+    ("direct_v2/pending_inbox/", {}, REQUESTS_SCOPE),
+)
 THREAD_PARAMS = {"visual_message_return_type": "unseen", "direction": "older", "seq_id": "40065", "limit": "20"}
 
 TEXT_ONLY = "Instagram replies can only be text for now. Remove the attachments and send again."
 MAY_HAVE_SENT = "The message may not have been sent. Check Instagram before sending again."
+PARTIAL = "Only part of this message was sent ({done} of {total} items). Check Instagram before sending again."
+USERNAME = re.compile(r"^[a-z0-9._]{1,30}$")  # what Instagram allows in a username, once lowercased
+BAD_USERNAME = "Enter an Instagram username, like ana.m."
+NO_SUCH_USER = "No Instagram account has that username."
+LOOKUP_FAILED = "Could not look up that Instagram username. Nothing was sent. Try again in a little while."
+OWN_USERNAME = "That is your own Instagram account."
+
+
+def username_of(value: str) -> str:
+    """The username in what was typed: no spaces, no @, no profile link, lowercase. May still be invalid."""
+    text = value.strip().lower()
+    text = re.sub(r"^(https?://)?(www\.)?instagram\.com/", "", text)
+    return text.split("/", 1)[0].split("?", 1)[0].lstrip("@")
 
 
 @dataclass(frozen=True)
@@ -70,6 +99,7 @@ class AccountSync:
         self.id = account["id"]
         self.user_id = account["user_id"]
         self.settings = settings
+        self.proxy = settings.proxy  # this account's own when its credentials have one (connect), else the global one
         self.stop = stop
         self.on_credentials = on_credentials
         self.make_client = make_client
@@ -82,6 +112,7 @@ class AccountSync:
         self.saved_at = 0.0
         self.paused_until = 0.0
         self.connected = False
+        self.photo_checked: dict[str, float] = {}  # person pk -> when their photo was last looked at, this run
 
     # -- starting ---------------------------------------------------------------------------------------
 
@@ -98,10 +129,10 @@ class AccountSync:
 
     def _client(self, settings: dict[str, Any] | None) -> Any:
         if self.make_client:
-            return self.make_client(settings, self.settings.proxy)
+            return self.make_client(settings, self.proxy)
         from .client import make_client
 
-        return make_client(settings, self.settings.proxy)
+        return make_client(settings, self.proxy)
 
     def connect(self) -> Any:
         """A signed-in client: signed in now when the app has just saved a password, else the saved session
@@ -111,6 +142,7 @@ class AccountSync:
             self.store.set_status(self.account, "error", "Connect Instagram again in Settings.")
             return None
         username = str(creds["username"])
+        self.proxy = proxy_for(creds, self.settings.proxy)
         same = session and str(session.get("username", "")).lower() == username.lower()
         # The saved device is kept for every later sign-in, so Instagram keeps seeing the same phone.
         client = self._client(session.get("settings") if same and session else None)
@@ -125,7 +157,7 @@ class AccountSync:
                 self.store.set_status(self.account, "error", failed.detail)
                 return None
             self.save_session(client, username, force=True)
-            self.on_credentials(self.store.forget_password(self.id, username))
+            self.on_credentials(self.store.forget_password(self.id, username, proxy_for(creds, None)))
             self.store.signed_in(self.account, username)
             log.info("instagram signed in", account=self.id)
         elif not same:
@@ -192,16 +224,32 @@ class AccountSync:
     # -- reading ----------------------------------------------------------------------------------------
 
     def poll(self, client: Any) -> int:
-        """Reads the inbox and stores what is new. Returns how many new messages from others were stored."""
-        newest = self.store.newest_seen(self.id)
+        """Reads the primary inbox, then general and message requests, and stores what is new. Returns how many
+        new messages from others were stored. Only the primary read may stop the sync: a failure in the other
+        two is logged and tried again next time."""
+        stored = 0
+        for endpoint, extra, scope in BOXES:
+            if scope is None:
+                stored += self.poll_box(client, endpoint, extra, scope)
+                continue
+            self.pause()
+            try:
+                stored += self.poll_box(client, endpoint, extra, scope)
+            except Exception as err:
+                log.warn("instagram folder failed", account=self.id, folder=scope, code=log.code_of(err))
+        return stored
+
+    def poll_box(self, client: Any, endpoint: str, extra: dict[str, str] | None, scope: str | None) -> int:
+        """One folder of the inbox, with its own newest-seen mark."""
+        newest = self.store.newest_seen(self.id, scope) if scope else self.store.newest_seen(self.id)
         first = newest is None
         threads: list[Thread] = []
         cursor = None
         for _ in range(FIRST_PAGES if first else 1):
-            params = {**INBOX_PARAMS, "eb_device_id": "0", "igd_request_log_tracking_id": client.generate_uuid()}
+            params = {**INBOX_PARAMS, "eb_device_id": "0", "igd_request_log_tracking_id": client.generate_uuid(), **(extra or {})}
             if cursor:
                 params.update({"cursor": cursor, "direction": "older", "fetch_reason": "page_scroll"})
-            found, cursor = inbox(client.private_request("direct_v2/inbox/", params=params), self.viewer)
+            found, cursor = inbox(client.private_request(endpoint, params=params), self.viewer)
             threads.extend(found)
             if not cursor:
                 break
@@ -218,6 +266,7 @@ class AccountSync:
             if not any(is_unread(t, i, self.viewer) for i in t.items):
                 read_here.append(t.id)
             if newest is not None and t.items[0].timestamp_us <= newest:
+                self.save_photos(client, sealer, t)  # quiet, but a photo it lacks is still fetched, once a day at most
                 continue  # nothing new in this thread since the last poll
             if newest is not None and t.items[-1].timestamp_us > newest and (t.has_older or t.oldest_cursor):
                 self.pause()
@@ -226,9 +275,9 @@ class AccountSync:
         if threads:
             self.store.mark_read_on_phone(self.id, sealer, read_here)
         if latest and latest != newest:
-            self.store.save_newest(self.id, latest)
+            self.store.save_newest(self.id, latest, scope) if scope else self.store.save_newest(self.id, latest)
         if stored:
-            log.info("instagram messages stored", account=self.id, threads=len(threads), inserted=stored)
+            log.info("instagram messages stored", account=self.id, folder=scope or "primary", threads=len(threads), inserted=stored)
         return stored
 
     def older(self, client: Any, t: Thread, newest: int) -> None:
@@ -263,15 +312,42 @@ class AccountSync:
             if item.sender_pk != self.viewer:
                 stored += 1
             attachment = (result.get("attachment_ids") or [None])[0]
+            if item.media and attachment:
+                self.store.set_hints(attachment, item.media.filename)
             if item.media and attachment and (newest is not None or item.sent_at >= since):
                 self.save_file(client, item.media, result["message_id"], attachment)
+        self.save_photos(client, sealer, t)
         return stored
+
+    def save_photos(self, client: Any, sealer: Any, t: Thread) -> None:
+        """Profile photos for the people of a thread that has news, as their contacts' avatars. Fetched only
+        when a contact has none or an Instagram one over a week old, and never allowed to hold up or fail the sync."""
+        fetched = 0
+        for p in t.people:
+            if fetched >= PHOTOS_PER_THREAD:
+                return
+            if not p.picture or DEFAULT_AVATAR in p.picture:
+                continue
+            last = self.photo_checked.get(p.pk)
+            if last is not None and self.clock() - last < PHOTO_RECHECK_S:
+                continue
+            self.photo_checked[p.pk] = self.clock()
+            try:
+                contact = self.store.contact_to_photograph(self.user_id, sealer, p.pk)
+                if not contact:
+                    continue
+                fetched += 1
+                data = fetch(p.picture, self.proxy, getattr(client, "user_agent", None), limit=AVATAR_MAX_BYTES, timeout=20)
+                if data:
+                    self.store.save_contact_photo(self.user_id, contact, data)
+            except Exception as err:  # the URL is signed and personal: only the code is logged
+                log.warn("instagram photo failed", account=self.id, code=log.code_of(err))
 
     def save_file(self, client: Any, media: Any, message_id: str, attachment_id: str) -> None:
         try:
-            data = fetch(media.url, self.settings.proxy, getattr(client, "user_agent", None))
+            data = fetch(media.url, self.proxy, getattr(client, "user_agent", None))
             if data is not None:
-                self.store.save_file(self.user_id, message_id, attachment_id, data, media.mime_type)
+                self.store.save_file(self.user_id, message_id, attachment_id, data, media.mime_type, media.kind, self.id)
         except Exception as err:  # the message is stored either way; a lost file is not worth stopping for
             log.warn("instagram file failed", account=self.id, attachment=attachment_id, code=log.code_of(err))
 
@@ -286,18 +362,33 @@ class AccountSync:
             if self.stop.is_set():
                 return
             self.send(client, row)
+        for n, row in enumerate(self.store.queued_new_chats(self.id)):
+            if self.stop.is_set():
+                return
+            if n:
+                self.pause()  # first messages to strangers are the ones Instagram watches most
+            self.send_new(client, row)
 
     def send(self, client: Any, row: dict[str, Any]) -> None:
         thread_row = row.get("threads") or {}
         if thread_row.get("account_id") != self.id or thread_row.get("user_id") != row.get("user_id") or thread_row.get("channel") != "instagram":
             return
+        files = int(row.get("attachment_count") or 0)
+        # The app adds the file rows only while the row is queued, so they are waited for before it is claimed.
+        waited = outgoing.wait_for_files(self.store, row, self.stop) if files else None
         if not self.store.claim(row["id"]):
             return
-        if (row.get("attachment_count") or 0) > 0:
-            self.store.fail(row["id"], TEXT_ONLY)
+        if waited:
+            self.store.fail(row["id"], waited)
             return
         text = self.store.body(row["user_id"], row.get("body")).strip()
         thread_id = self.store.address(row["user_id"], thread_row.get("provider_thread_id"))
+        if files:
+            if not thread_id.isdigit():
+                self.store.fail(row["id"], "This conversation could not be found on Instagram.")
+                return
+            self.send_files(client, row, thread_row, thread_id, text)
+            return
         if not text:
             self.store.fail(row["id"], "There is nothing to send.")
             return
@@ -322,6 +413,129 @@ class AccountSync:
         t = Thread(id=thread_id, title=thread_row.get("group_name"), is_group=bool(thread_row.get("is_group")), people=[])
         try:
             self.store.ingest(self.id, [payload(self.store.sealer(self.user_id), t, item, self.viewer, live=True, unread=False)])
+        except Exception as err:
+            log.warn("store sent instagram failed", account=self.id, outbox=row["id"], code=log.code_of(err))
+
+    def send_files(self, client: Any, row: dict[str, Any], thread_row: dict[str, Any], thread_id: str, text: str) -> None:
+        """A reply with photos or videos: everything is checked and written to a private temporary folder
+        first, so a bad file fails the row before anything goes out. Then the text, then each file in order,
+        one at a time. What already went is never sent again: a failure part way says how far it got, and an
+        item whose outcome is unknown is treated as maybe sent, like a single reply."""
+        with tempfile.TemporaryDirectory(prefix="konva-ig-") as folder:  # created 0700
+            try:
+                files = outgoing.load_files(self.store, row, folder)
+            except outgoing.Rejected as rejected:
+                self.store.fail(row["id"], rejected.reason)
+                return
+            except Exception as err:  # storage down: nothing was sent, so say so
+                self.store.fail(row["id"], outgoing.UNREADABLE)
+                log.warn("instagram attachments failed", account=self.id, outbox=row["id"], code=log.code_of(err))
+                return
+            steps: list[outgoing.OutFile | None] = ([None] if text else []) + list(files)  # None is the text
+            first_id = ""
+            for n, step in enumerate(steps):
+                if n:
+                    self.stop.wait(FILE_PAUSE_S[0] + (FILE_PAUSE_S[1] - FILE_PAUSE_S[0]) * self.rand())
+                client.last_json = {}  # so an ID from an earlier request can never be read as this one's
+                try:
+                    if step is None:
+                        sent = client.direct_send(text, thread_ids=[int(thread_id)])
+                    elif step.kind == "photo":
+                        sent = client.direct_send_photo(step.path, thread_ids=[int(thread_id)])
+                    else:
+                        sent = client.direct_send_video(step.path, thread_ids=[int(thread_id)])
+                    item_id = str(getattr(sent, "id", "") or "")
+                except Exception as err:
+                    item_id = "" if kind_of(err) != "other" else str(((getattr(client, "last_json", None) or {}).get("payload") or {}).get("item_id") or "")
+                    if not item_id:
+                        self.store.fail(row["id"], PARTIAL.format(done=n, total=len(steps)) if n else MAY_HAVE_SENT)
+                        log.warn("instagram reply failed", account=self.id, outbox=row["id"], sent=n, of=len(steps), code=log.code_of(err))
+                        raise
+                first_id = first_id or item_id
+                if step is None:
+                    self.store_sent_text(row, thread_row, thread_id, item_id, text)
+            if self.store.settle(row["id"], first_id):
+                log.info("instagram reply sent", account=self.id, outbox=row["id"], files=len(files))
+
+    def store_sent_text(self, row: dict[str, Any], thread_row: dict[str, Any], thread_id: str, item_id: str, text: str) -> None:
+        item = sent_item(item_id, self.viewer, text)
+        t = Thread(id=thread_id, title=thread_row.get("group_name"), is_group=bool(thread_row.get("is_group")), people=[])
+        try:
+            self.store.ingest(self.id, [payload(self.store.sealer(self.user_id), t, item, self.viewer, live=True, unread=False)])
+        except Exception as err:
+            log.warn("store sent instagram failed", account=self.id, outbox=row["id"], code=log.code_of(err))
+
+    def send_new(self, client: Any, row: dict[str, Any]) -> None:
+        """A first message to a username: looked up, sent, stored, and the row pointed at the new thread.
+        Instagram puts it in their requests unless they follow you, and gives the same thread back when one
+        already exists, so a person is never started twice."""
+        if row.get("account_id") != self.id or row.get("user_id") != self.user_id:
+            return
+        if not self.store.claim(row["id"]):
+            return
+        if (row.get("attachment_count") or 0) > 0:
+            self.store.fail(row["id"], TEXT_ONLY)
+            return
+        text = self.store.body(row["user_id"], row.get("body")).strip()
+        if not text:
+            self.store.fail(row["id"], "There is nothing to send.")
+            return
+        addresses = row.get("to_addresses") or []
+        username = username_of(self.store.address(row["user_id"], addresses[0])) if len(addresses) == 1 else ""
+        if not USERNAME.match(username):
+            self.store.fail(row["id"], BAD_USERNAME)
+            return
+        if username == self.username.lower():
+            self.store.fail(row["id"], OWN_USERNAME)
+            return
+        try:
+            # The private API's own lookup, not the public web one that blocks servers quickly.
+            who = client.user_info_by_username_v1(username)
+        except Exception as err:
+            # Nothing has gone out yet, so a plain failure is safe to show; only an account-level problem stops the account.
+            kind = kind_of(err)
+            if type(err).__name__ == "UserNotFound":
+                self.store.fail(row["id"], NO_SUCH_USER)
+                return
+            self.store.fail(row["id"], LOOKUP_FAILED)
+            log.warn("instagram lookup failed", account=self.id, outbox=row["id"], code=log.code_of(err))
+            if kind != "other":
+                raise
+            return
+        pk = str(getattr(who, "pk", "") or "")
+        if not pk.isdigit():
+            self.store.fail(row["id"], NO_SUCH_USER)
+            return
+        if pk == self.viewer:
+            self.store.fail(row["id"], OWN_USERNAME)
+            return
+        client.last_json = {}
+        try:
+            sent = client.direct_send(text, user_ids=[int(pk)])
+            item_id = str(getattr(sent, "id", "") or "")
+            thread_id = str(getattr(sent, "thread_id", "") or "")
+        except Exception as err:
+            sent_payload = (getattr(client, "last_json", None) or {}).get("payload") or {}
+            item_id = "" if kind_of(err) != "other" else str(sent_payload.get("item_id") or "")
+            thread_id = str(sent_payload.get("thread_id") or "")
+            if not item_id:
+                self.store.fail(row["id"], MAY_HAVE_SENT)
+                log.warn("instagram new chat failed", account=self.id, outbox=row["id"], code=log.code_of(err))
+                raise
+        if self.store.settle(row["id"], item_id):
+            log.info("instagram new chat sent", account=self.id, outbox=row["id"])
+        if not thread_id.isdigit():
+            thread_id = str(((getattr(client, "last_json", None) or {}).get("payload") or {}).get("thread_id") or "")
+        if not thread_id.isdigit():
+            log.warn("instagram new chat has no thread", account=self.id, outbox=row["id"])
+            return  # the next poll finds the thread; the row stays unlinked
+        item = sent_item(item_id, self.viewer, text)
+        t = Thread(id=thread_id, title=None, is_group=False, people=[Person(pk, getattr(who, "username", None) or username, getattr(who, "full_name", None))])
+        try:
+            stored = self.store.ingest(self.id, [payload(self.store.sealer(self.user_id), t, item, self.viewer, live=True, unread=False)])
+            stored_thread = (stored[0] if stored else {}).get("thread_id")
+            if stored_thread:
+                self.store.link_thread(row["id"], stored_thread)
         except Exception as err:
             log.warn("store sent instagram failed", account=self.id, outbox=row["id"], code=log.code_of(err))
 

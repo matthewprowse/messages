@@ -9,6 +9,11 @@ export function formatPhone(raw: string): string {
   return n?.isValid() ? n.formatInternational() : raw;
 }
 
+/** A name that is really a phone number ("27821234567", "+27 82 123 4567") written the way its country writes it. */
+export function niceName(name: string): string {
+  return /^\+?[\d\s().-]{7,}$/.test(name) ? formatPhone(name.replace(/[\s().-]/g, "")) : name;
+}
+
 // Formatters are built once: a new Intl formatter per call is slow across a long list.
 const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
 const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "long" });
@@ -39,8 +44,15 @@ export function timeOf(iso: string) {
   return time.format(new Date(iso));
 }
 
+/** "10 October 2026". */
+export function fullDate(iso: string) {
+  return dayMonthYear.format(new Date(iso));
+}
+
 export function longDate(iso: string) {
-  return fullDay.format(new Date(iso));
+  // "Tuesday, 27 October": en-GB leaves the comma out.
+  const parts = Object.fromEntries(fullDay.formatToParts(new Date(iso)).map((p) => [p.type, p.value]));
+  return `${parts.weekday}, ${parts.day} ${parts.month}`;
 }
 
 /** The full date and time under each message, such as "15 October, 14:32". Other years add the year. */

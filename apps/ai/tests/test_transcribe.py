@@ -12,7 +12,7 @@ class Transcribe(unittest.TestCase):
 
     def test_pending_query_finds_saved_voice_notes_without_a_transcript(self):
         q = pending_query([])
-        self.assertEqual(q["filename"], "like.Voice Note.*")
+        self.assertEqual(q["kind"], "eq.audio")  # the name is sealed: voice notes are told apart after it is opened
         self.assertEqual(q["storage_path"], "not.is.null")
         self.assertEqual(q["messages.transcript_status"], "is.null")
         self.assertNotIn("messages.id", q)

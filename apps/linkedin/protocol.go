@@ -9,9 +9,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"go.mau.fi/mautrix-linkedin/pkg/linkedingo"
@@ -35,10 +38,14 @@ type Response struct {
 }
 
 // Error is why a command or the real-time stream failed, as a kind the worker acts on. It never carries
-// what LinkedIn said, only the HTTP status when there was one.
+// what LinkedIn said, only the HTTP status when there was one and, for a sign-in, the step it failed at (a
+// fixed label from linkedingo, such as "authenticate").
 type Error struct {
 	Kind   string `json:"kind"`
 	Status int    `json:"status,omitempty"`
+	Stage  string `json:"stage,omitempty"`
+	// Sent is, for a partial send, how many of its messages are already on LinkedIn.
+	Sent int `json:"sent,omitempty"`
 }
 
 // The kinds of Error.
@@ -49,6 +56,16 @@ const (
 	KindForbidden      = "forbidden"       // 403: not allowed, or the account is restricted
 	KindBadRequest     = "bad_request"     // a command the worker should not have sent
 	KindFailed         = "failed"          // anything else
+)
+
+// The kinds of Error a sign-in adds. rate_limited is shared with the rest.
+const (
+	KindRejected    = "rejected"    // LinkedIn did not accept the email and password, or the code
+	KindBlocked     = "blocked"     // LinkedIn turned the sign-in away (403 or 999, or a redirect off its site)
+	KindChallenge   = "challenge"   // a check Konva cannot complete: a CAPTCHA or one it does not know
+	KindUnavailable = "unavailable" // LinkedIn could not be reached, or answered 5xx
+	KindUnsupported = "unsupported" // LinkedIn's sign-in page is not one the library understands any more
+	KindCancelled   = "cancelled"   // a wait for approval in the app that another command ended
 )
 
 // Event is something that happened without a command: from the real-time stream, or the helper itself.
@@ -68,6 +85,9 @@ type Person struct {
 	LastName  string `json:"lastName,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Headline  string `json:"headline,omitempty"`
+	// Picture is the address of the profile picture (or a page's logo) on LinkedIn's image servers. It is
+	// signed and expires, so it is for fetching soon, with the picture command, and never for keeping or logging.
+	Picture string `json:"picture,omitempty"`
 }
 
 // File is an attachment's name, type and size. Its bytes are not fetched.
@@ -121,16 +141,25 @@ func PersonFrom(p linkedingo.MessagingParticipant) (Person, bool) {
 	switch {
 	case p.ParticipantType.Organization != nil:
 		org := p.ParticipantType.Organization
-		return Person{ID: id, URN: urn, Kind: "organization", Name: strings.TrimSpace(org.Name.Text)}, true
+		return Person{ID: id, URN: urn, Kind: "organization", Name: strings.TrimSpace(org.Name.Text), Picture: pictureURL(org.Logo)}, true
 	default:
 		person := Person{ID: id, URN: "urn:li:fsd_profile:" + id, Kind: "member"}
 		if m := p.ParticipantType.Member; m != nil {
 			person.FirstName = strings.TrimSpace(m.FirstName.Text)
 			person.LastName = strings.TrimSpace(m.LastName.Text)
 			person.Headline = strings.TrimSpace(m.Headline.Text)
+			person.Picture = pictureURL(m.ProfilePicture)
 		}
 		return person, true
 	}
+}
+
+// pictureURL is the largest version of an image, or "" when there is none.
+func pictureURL(vi *linkedingo.VectorImage) string {
+	if vi == nil || vi.RootURL == "" || len(vi.Artifacts) == 0 {
+		return ""
+	}
+	return vi.GetLargestArtifactURL()
 }
 
 // MeFrom turns your own profile into a Person.
@@ -270,4 +299,91 @@ func Fail(id int64, err *Error) Response {
 // Done is the Response for a command that worked.
 func Done(id int64, result any) Response {
 	return Response{ID: id, OK: true, Result: result}
+}
+
+// Sign-in
+
+// The states a sign-in command answers with, in its result.
+const (
+	StateDone = "done" // signed in: cookies and headers follow
+	StateCode = "code" // LinkedIn wants a six-digit code, by email, SMS or an authenticator app
+	StateApp  = "app"  // LinkedIn wants the sign-in approved in its app
+)
+
+// ProxyClient is the HTTP client a sign-in goes through: nil (the library's default) with no proxy, else one
+// that connects through it. Only http, https and socks5 proxies are taken.
+func ProxyClient(raw string) (*http.Client, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("proxy is not a URL")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, fmt.Errorf("proxy scheme %q is not supported", u.Scheme)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(u)
+	return &http.Client{Transport: transport}, nil
+}
+
+// CookieHeader is a session's cookies as one Cookie header, the form the login command takes back.
+func CookieHeader(jar *linkedingo.StringCookieJar) string {
+	var parts []string
+	for _, c := range jar.Cookies(linkedingo.CookieBaseURL) {
+		parts = append(parts, c.Name+"="+c.Value)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// SessionResult is the result of a sign-in that finished: the cookies and the browser headers (the
+// User-Agent and its companions) it signed in with, which the session must keep using.
+func SessionResult(s *linkedingo.PasswordLoginSession) map[string]any {
+	return map[string]any{"state": StateDone, "cookies": CookieHeader(s.Cookies), "headers": s.BrowserHeaders}
+}
+
+// CheckpointState is what a sign-in is waiting at, as a result, or nil for a page that asks for neither a
+// code nor an approval (a CAPTCHA, or one the library does not know).
+func CheckpointState(cp *linkedingo.PasswordCheckpoint) map[string]any {
+	if cp == nil {
+		return nil
+	}
+	switch kind := cp.Kind(); kind {
+	case linkedingo.PasswordCheckpointEmail, linkedingo.PasswordCheckpointSMS, linkedingo.PasswordCheckpointTOTP:
+		return map[string]any{"state": StateCode, "method": string(kind)}
+	case linkedingo.PasswordCheckpointApp:
+		return map[string]any{"state": StateApp, "canTryAnotherWay": cp.CanTryAnotherWay()}
+	}
+	return nil
+}
+
+// ClassifySignIn turns a sign-in error into an Error.
+func ClassifySignIn(err error) *Error {
+	if errors.Is(err, context.Canceled) {
+		return &Error{Kind: KindCancelled}
+	}
+	var le *linkedingo.PasswordLoginError
+	if !errors.As(err, &le) {
+		return &Error{Kind: KindFailed}
+	}
+	kind := KindFailed
+	switch le.Kind {
+	case linkedingo.PasswordLoginRateLimited:
+		kind = KindRateLimited
+	case linkedingo.PasswordLoginBlocked:
+		kind = KindBlocked
+	case linkedingo.PasswordLoginRejected:
+		kind = KindRejected
+	case linkedingo.PasswordLoginChallenge:
+		kind = KindChallenge
+	case linkedingo.PasswordLoginUnavailable:
+		kind = KindUnavailable
+	case linkedingo.PasswordLoginUnsupported:
+		kind = KindUnsupported
+	}
+	return &Error{Kind: kind, Status: le.Status, Stage: le.Stage}
 }

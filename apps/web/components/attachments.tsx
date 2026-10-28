@@ -3,19 +3,23 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { track } from "@/lib/analytics";
 import Link from "next/link";
-import { CalendarDays, ChevronLeft, ChevronRight, Cloud, File, FileArchive, FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Mail, MessageCircle, Presentation, RotateCcw, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, ExternalLink, File, FileArchive, FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Maximize, Presentation, RotateCw, User, X, ZoomIn, ZoomOut, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
-import { acquireNoteFile, downloadUrl, isNotePath, reportThumb, signedUrl, thumbsEnabled, useSignedUrl } from "@/lib/signed-urls";
-import type { Attachment, FiledAttachment, Provider } from "@/lib/types";
-import { relTime, stampOf } from "@/lib/format";
+import { withSealedColumns } from "@/lib/sealed-columns";
+import { acquireNoteFile, downloadUrl, isNotePath, mimeFor, rememberNoteMime, reportThumb, signedUrl, thumbsEnabled, useSignedUrl } from "@/lib/signed-urls";
+import type { Attachment, Contact, FiledAttachment, Provider } from "@/lib/types";
+import { fullDate, stampOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { ContactAvatar } from "@/components/primitives";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PdfThumbnail, PdfViewer } from "@/components/pdf-viewer";
-import { VideoPlayer, VoiceNote } from "@/components/media-player";
+import { STAGE_HEIGHT, VideoPlayer, VoiceNote } from "@/components/media-player";
 
 export const KIND_LABEL: Record<Attachment["kind"], string> = { image: "Image", pdf: "PDF", video: "Video", audio: "Audio", file: "File" };
 
@@ -29,7 +33,7 @@ export const HIDDEN_LABEL: Record<NonNullable<Attachment["hiddenReason"]>, strin
 /** Where a file came from, for the filter and the icon on a tile. */
 export type Source = "gmail" | "whatsapp" | "icloud" | "imap";
 export const SOURCE_LABEL: Record<Source, string> = { gmail: "Gmail", whatsapp: "WhatsApp", icloud: "iCloud", imap: "Other Email" };
-const SOURCE_ICON: Record<Source, LucideIcon> = { gmail: Mail, whatsapp: MessageCircle, icloud: Cloud, imap: Mail };
+// Each service shows its own logo; other mail has none, so it gets a plain envelope.
 
 export function sourceOf(provider: Provider | undefined): Source | undefined {
   return provider === "gmail" || provider === "whatsapp" || provider === "icloud" || provider === "imap" ? provider : undefined;
@@ -87,7 +91,7 @@ function whenSeen(el: Element, callback: () => void) {
       seenCallbacks.delete(e.target);
       observer?.unobserve(e.target);
     }
-  }, { rootMargin: "300px" });
+  }, { rootMargin: "800px" });
   seenCallbacks.set(el, callback);
   observer.observe(el);
   return () => {
@@ -108,7 +112,7 @@ function useSeen(ref: RefObject<HTMLElement | null>) {
 }
 
 /** The picture inside a tile: the image itself, a PDF's first page, or the file type's icon. */
-function Thumb({ attachment: a }: { attachment: Attachment }) {
+function Thumb({ attachment: a, onReady }: { attachment: Attachment; /** Called with "picture" once a picture has loaded, or "glyph" when the tile shows the file type's icon. */ onReady?: (kind: "picture" | "glyph") => void }) {
   const pictured = !!a.path && (a.kind === "image" || a.kind === "pdf");
   // Links are only asked for, and images only downloaded, once a tile scrolls near the screen.
   // The browser's own lazy loading is not used: it does not fire in every webview.
@@ -117,14 +121,16 @@ function Thumb({ attachment: a }: { attachment: Attachment }) {
   // Images load as small resized copies. If one will not load that way, the original is tried before giving up.
   const [stage, setStage] = useState<"small" | "original">("small");
   const fellBack = useRef(false);
-  // Note files are sealed, so they have no resized copies: the picture comes from the opened file.
-  const small = a.kind === "image" && stage === "small" && thumbsEnabled() && !isNotePath(a.path);
-  const url = useSignedUrl(BUCKET, pictured && seen ? a.path : undefined, small);
+  // Note files and sealed attachments are encrypted, so they have no resized copies: the picture comes from the opened file.
+  const small = a.kind === "image" && stage === "small" && thumbsEnabled() && !isNotePath(a.path) && !a.sealed;
+  const url = useSignedUrl(BUCKET, pictured && seen ? a.path : undefined, small, a.sealed ? mimeFor(a) : undefined);
   const [broken, setBroken] = useState(false);
   const onError = useCallback(() => setBroken(true), []);
-  if (!pictured || broken || (seen && url === null)) return <FileGlyph attachment={a} />;
+  const glyph = !pictured || broken || (seen && url === null);
+  useEffect(() => { if (glyph) onReady?.("glyph"); }, [glyph, onReady]);
+  if (glyph) return <FileGlyph attachment={a} />;
   if (!url) return <span ref={box} className="size-full"><Skeleton className="size-full rounded-none" /></span>;
-  if (a.kind === "pdf") return <PdfThumbnail cacheKey={a.id} url={url} name={a.name} onError={onError} />; // pdf.js loads here, once on screen
+  if (a.kind === "pdf") return <PdfThumbnail cacheKey={a.id} url={url} name={a.name} onError={onError} onReady={() => onReady?.("picture")} />; // pdf.js loads here, once on screen
   // Images some browsers cannot draw (HEIC outside Safari) fall back to the icon.
   return (
     // eslint-disable-next-line @next/next/no-img-element
@@ -133,6 +139,7 @@ function Thumb({ attachment: a }: { attachment: Attachment }) {
       alt=""
       decoding="async"
       onLoad={() => {
+        onReady?.("picture");
         if (small) reportThumb("loaded");
         else if (fellBack.current) { fellBack.current = false; reportThumb("fell-back"); }
       }}
@@ -154,35 +161,41 @@ export function isSticker(a: Attachment) {
 export function StickerImage({ attachment: a, onOpen }: { attachment: Attachment; onOpen: () => void }) {
   const box = useRef<HTMLButtonElement>(null);
   const seen = useSeen(box);
-  const url = useSignedUrl(BUCKET, seen ? a.path : undefined);
+  const url = useSignedUrl(BUCKET, seen ? a.path : undefined, false, a.sealed ? mimeFor(a) : undefined);
   return (
-    <button ref={box} type="button" onClick={onOpen} aria-label="Open Sticker" className="size-30 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+    <button ref={box} type="button" onClick={onOpen} aria-label="Open Sticker" className="size-30 overflow-hidden rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      {url ? <img src={url} alt="Sticker" decoding="async" className="size-full object-contain" /> : <Skeleton className="size-full rounded-lg" />}
+      {url ? <img src={url} alt="Sticker" decoding="async" className="size-full rounded-lg object-contain" /> : <Skeleton className="size-full rounded-lg" />}
     </button>
   );
 }
 
-export function AttachmentTile({ attachment: a, onOpen, className, showName = true, source }: { attachment: Attachment; onOpen: () => void; className?: string; showName?: boolean; source?: Source }) {
-  const SourceIcon = source ? SOURCE_ICON[source] : null;
+export function AttachmentTile({ attachment: a, onOpen, className, showName = true, source, overlay }: { attachment: Attachment; onOpen: () => void; className?: string; showName?: boolean; source?: Source; overlay?: ReactNode }) {
+  // What the tile shows once it has loaded: a picture, or the file type's icon. The caption waits for either, so it never
+  // sits alone over an empty box.
+  const [shown, setShown] = useState<"picture" | "glyph" | null>(null);
   return (
     <button
       type="button"
       onClick={onOpen}
       aria-label={`Open ${a.name}`}
       title={a.name}
-      className={cn("relative flex size-24 overflow-hidden rounded-lg bg-muted text-left outline-none ring-1 ring-foreground/5 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50", className)}
+      className={cn("group/tile relative flex size-24 overflow-hidden rounded-lg bg-muted text-left outline-none ring-1 ring-foreground/5 focus-visible:ring-2 focus-visible:ring-ring/50", className)}
     >
       {/* Only the picture dims for a hidden file; its badge stays readable. */}
-      <span className={cn("flex size-full", a.hiddenReason && "opacity-60")}><Thumb attachment={a} /></span>
-      {a.hiddenReason && (
+      <span className={cn("flex size-full", a.hiddenReason && "opacity-60")}><Thumb attachment={a} onReady={setShown} /></span>
+      {a.hiddenReason ? (
         <Badge variant="secondary" className="absolute top-1.5 left-1.5">{HIDDEN_LABEL[a.hiddenReason]}</Badge>
+      ) : a.notKept && !a.path ? (
+        <Badge variant="secondary" className="absolute top-1.5 left-1.5">Not Kept Here</Badge>
+      ) : null}
+      {source && <span className="sr-only">{SOURCE_LABEL[source]}</span>}
+      {/* The sender and date show on hover; on a touch screen there is no hover, so they stay. */}
+      {overlay && shown === "picture" && (
+        <span className="absolute inset-x-0 bottom-0 flex flex-col bg-gradient-to-t from-black/60 to-transparent px-2 pt-4 pb-1.5 text-xs text-white transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover/tile:opacity-100 pointer-fine:group-focus-visible/tile:opacity-100">{overlay}</span>
       )}
-      {source && SourceIcon && (
-        <span className="absolute top-1.5 right-1.5 flex size-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground backdrop-blur-sm" title={SOURCE_LABEL[source]}>
-          <SourceIcon className="size-3" aria-hidden />
-          <span className="sr-only">{SOURCE_LABEL[source]}</span>
-        </span>
+      {overlay && shown === "glyph" && (
+        <span className="absolute inset-x-0 bottom-0 flex flex-col px-2 pb-1.5 text-xs text-muted-foreground transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover/tile:opacity-100 pointer-fine:group-focus-visible/tile:opacity-100">{overlay}</span>
       )}
       {showName && (
         <span className="absolute inset-x-0 bottom-0 truncate bg-background/80 px-2 py-1 text-[11px] backdrop-blur-sm">{a.name}</span>
@@ -210,7 +223,7 @@ function downloadLink(view: string, name: string) {
 function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
   const [file, setFile] = useState<StoredFile | null>(null);
   // Keyed on the fields used, so a store refresh that rebuilds the attachment object does not reload it.
-  const { id, path: knownPath, name } = a;
+  const { id, path: knownPath, name, kind, sealed: knownSealed } = a;
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -218,13 +231,16 @@ function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
     setFile((f) => (f?.id === id && f.state === "ready" ? f : { id, state: "loading" }));
     (async (): Promise<StoredFile> => {
       let path = knownPath;
+      let sealed = !!knownSealed;
       if (!path) {
-        const { data } = await supabase.from("attachments").select("storage_path").eq("id", id).maybeSingle();
-        path = data?.storage_path ?? undefined;
+        const { data } = await supabase.from("attachments").select(await withSealedColumns("storage_path, team_path, sealed")).eq("id", id).maybeSingle();
+        path = data?.team_path ?? data?.storage_path ?? undefined;
+        sealed = !!data?.sealed;
       }
-      if (isNotePath(path)) {
-        // A note file is opened here: sealed ones are unsealed in the browser and held until the viewer closes.
-        const handle = acquireNoteFile(path);
+      if (isNotePath(path) || (path && sealed)) {
+        // A note file or a sealed attachment is opened here: it is unsealed in the browser and held until the viewer closes.
+        rememberNoteMime(path!, mimeFor({ name, kind }));
+        const handle = acquireNoteFile(path!);
         release = handle.release;
         if (cancelled) release();
         const opened = await handle.promise;
@@ -237,9 +253,33 @@ function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
       .then((next) => { if (!cancelled) setFile(next); })
       .catch(() => { if (!cancelled) setFile({ id, state: "missing" }); });
     return () => { cancelled = true; release?.(); };
-  }, [id, knownPath, name, open]);
+  }, [id, knownPath, name, kind, knownSealed, open]);
   return file?.id === id ? file : null;
 }
+
+const CLOCK = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
+
+/** "14 October 2026, 14:05": the viewer's line under the sender. */
+function viewerStamp(iso: string) {
+  return `${fullDate(iso)}, ${CLOCK.format(new Date(iso))}`;
+}
+
+/** Your own photo, from the account you signed in with, beside files you sent. */
+function MeAvatar({ className }: { className?: string }) {
+  const { session } = useAuth();
+  const meta = (session?.user.user_metadata ?? {}) as { avatar_url?: string; picture?: string };
+  const src = meta.avatar_url ?? meta.picture;
+  return (
+    <Avatar className={className}>
+      {src && <AvatarImage src={src} alt="" referrerPolicy="no-referrer" className="object-cover" />}
+      <AvatarFallback><User className="size-1/2" /></AvatarFallback>
+    </Avatar>
+  );
+}
+
+// The tallest a picture is shown, and the widest it can be inside the dialog (its max width less its padding and margins).
+const STAGE = "min(65dvh, 100dvh - 14rem)";
+const STAGE_WIDTH = "min(46rem, 100vw - 4rem)";
 
 const IMAGE_MAX_ZOOM = 8;
 const SWIPE_MIN = 60;
@@ -254,8 +294,11 @@ function swipeOf(dx: number, dy: number): -1 | 0 | 1 {
  * An image that zooms (buttons, wheel, double click, pinch, plus and minus keys) and pans by dragging.
  * A swipe while it is not zoomed goes to the neighbouring file.
  */
-function ImageViewer({ url, name, onBroken, onSwipe }: { url: string; name: string; onBroken: () => void; onSwipe?: (direction: -1 | 1) => void }) {
+function ImageViewer({ url, name, preview, onRatio, onBroken, onSwipe }: { url: string; name: string; /** A small copy to show until the full picture has arrived. */ preview?: string | null; /** The picture's width over its height, once known, so the dialog can hug it. */ onRatio?: (ratio: number) => void; onBroken: () => void; onSwipe?: (direction: -1 | 1) => void }) {
+  const [loaded, setLoaded] = useState(false);
+  const [ratio, setRatio] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [turns, setTurns] = useState(0); // quarter turns clockwise
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -325,11 +368,18 @@ function ImageViewer({ url, name, onBroken, onSwipe }: { url: string; name: stri
     if (pointers.current.size === 0) multi.current = false;
   };
 
+  // Turned on its side, the picture's frame swaps its shape, and the picture is laid out in the swapped box so it fills it once turned.
+  const sideways = turns % 2 === 1;
+  const shownRatio = ratio ? (sideways ? 1 / ratio : ratio) : null;
+  const motion = { transform: `translate(${offset.x}px, ${offset.y}px) ${sideways ? "translate(-50%, -50%) " : ""}rotate(${turns * 90}deg) scale(${zoom})`, transition: drag.current || pinch.current ? "none" : "transform 80ms" };
+  const sidewaysBox = sideways && ratio ? { position: "absolute" as const, top: "50%", left: "50%", width: `${ratio * 100}%`, height: `${100 / ratio}%`, maxWidth: "none" } : null;
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div
         ref={frame}
-        className={cn("relative h-[min(70vh,calc(100dvh-15rem))] min-h-64 touch-none overflow-hidden rounded-lg bg-muted select-none", zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in")}
+        className={cn("relative mx-auto flex max-w-full touch-none items-center justify-center overflow-hidden rounded-lg select-none", !shownRatio && STAGE_HEIGHT, zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in")}
+        // Hugs the picture: as tall as it needs to be, up to the stage height, and no wider than the dialog.
+        style={shownRatio ? { aspectRatio: shownRatio, height: `min(${STAGE}, calc(${STAGE_WIDTH} / ${shownRatio}))` } : { width: "100%" }}
         onDoubleClick={() => zoomTo(current.current > 1 ? 1 : 2.5)}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -360,24 +410,43 @@ function ImageViewer({ url, name, onBroken, onSwipe }: { url: string; name: stri
         onPointerUp={release}
         onPointerCancel={release}
       >
+        {/* The small copy, already in the browser from the tile, fills the frame until the full picture has loaded over it. */}
+        {preview && !loaded && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={preview} alt="" draggable={false} onLoad={(e) => { const r = e.currentTarget.naturalWidth / e.currentTarget.naturalHeight; setRatio((x) => x ?? r); onRatio?.(r); }} className="absolute inset-0 size-full object-contain" />
+        )}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={url}
           alt={name}
           draggable={false}
+          decoding="async"
+          fetchPriority="high"
+          onLoad={(e) => { const r = e.currentTarget.naturalWidth / e.currentTarget.naturalHeight; setLoaded(true); setRatio(r); onRatio?.(r); }}
           onError={onBroken}
-          className="size-full object-contain"
-          style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`, transition: drag.current || pinch.current ? "none" : "transform 80ms" }}
+          className={cn(!sidewaysBox && "size-full", "object-contain", !loaded && preview && "opacity-0")}
+          style={{ ...sidewaysBox, ...motion }}
         />
       </div>
-      <div className="flex items-center justify-center gap-1">
-        <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Zoom Out" title="Zoom Out" disabled={zoom <= 1} onClick={() => zoomBy(1 / 1.5)}><ZoomOut /></Button>
-        <span className="w-11 text-center text-xs text-muted-foreground tabular-nums">{Math.round(zoom * 100)}%</span>
-        <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Zoom In" title="Zoom In" disabled={zoom >= IMAGE_MAX_ZOOM} onClick={() => zoomBy(1.5)}><ZoomIn /></Button>
-        <Button variant="ghost" size="icon-sm" className="max-sm:size-10" aria-label="Fit" title="Fit" disabled={zoom === 1} onClick={() => zoomTo(1)}><RotateCcw /></Button>
+      {/* Fit on the left, zoom in the middle and Rotate on the right. */}
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+        <Button variant="ghost" size="icon" className="justify-self-start" aria-label="Fit" title="Fit" disabled={zoom === 1} onClick={() => zoomTo(1)}><Maximize /></Button>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" aria-label="Zoom Out" title="Zoom Out" disabled={zoom <= 1} onClick={() => zoomBy(1 / 1.5)}><ZoomOut /></Button>
+          <span className="w-11 text-center text-xs text-muted-foreground tabular-nums">{Math.round(zoom * 100)}%</span>
+          <Button variant="ghost" size="icon" aria-label="Zoom In" title="Zoom In" disabled={zoom >= IMAGE_MAX_ZOOM} onClick={() => zoomBy(1.5)}><ZoomIn /></Button>
+        </div>
+        <Button variant="ghost" size="icon" className="justify-self-end" aria-label="Rotate" title="Rotate" onClick={() => { setTurns((t) => (t + 1) % 4); zoomTo(1); }}><RotateCw /></Button>
       </div>
     </div>
   );
+}
+
+/** What the viewer says when there is no stored copy. A big video and a full seat each say why. */
+function notKeptMessage(a: Attachment, notStored: boolean): string {
+  if (a.notKept === "video_link") return "Not Kept Here. Large Videos Stay at the Original. Open It in Your Mailbox or Chat.";
+  if (a.notKept === "over_cap") return "Not Kept Here. Your Storage Is Full. The Original Is in Your Mailbox or Chat.";
+  return notStored ? "Not Kept Here. The Original Is in Your Mailbox or Chat." : "Not Downloaded Yet. If It Stays Empty, the Original Is in Your Mailbox or Chat.";
 }
 
 function NoPreview({ attachment: a, message }: { attachment: Attachment; message?: string }) {
@@ -392,6 +461,9 @@ function NoPreview({ attachment: a, message }: { attachment: Attachment; message
 type ViewerProps = {
   attachment: Attachment | null;
   detail?: string;
+  /** Who sent the file and when. Pictures, videos and voice notes are headed with them: the person, then the date and time. */
+  sender?: { name: string; contact?: Contact; /** Sent by you, so it shows your own photo. */ me?: boolean };
+  sentAt?: string;
   href?: string;
   onClose: () => void;
   /** The files being browsed and the open one's place in them, for Previous and Next. */
@@ -411,12 +483,17 @@ export function AttachmentViewer({ attachment, ...rest }: ViewerProps) {
   return last ? <ViewerDialog attachment={last} open={!!attachment} {...rest} /> : null;
 }
 
-function ViewerDialog({ attachment: a, open, detail, href, onClose, items, index, onNavigate }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
+function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClose, items, index, onNavigate }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
   const file = useStoredFile(a, open);
   const [broken, setBroken] = useState<string | null>(null); // id of an image the browser could not draw
   const [saving, setSaving] = useState(false);
-  const notStored = a.hiddenReason === "tiny" || a.hiddenReason === "junk";
-  const wide = file?.state === "ready" && (a.kind === "pdf" || a.kind === "image");
+  const [hugging, setHugging] = useState<{ id: string; ratio: number } | null>(null);
+  const notStored = a.hiddenReason === "tiny" || a.hiddenReason === "junk" || !!a.notKept;
+  const wide = file?.state === "ready" && a.kind === "pdf";
+  // The tile's small copy is usually cached already, so a picture has something to show while the full one loads.
+  const preview = useSignedUrl(BUCKET, open && a.kind === "image" && !a.sealed && !isNotePath(a.path) && thumbsEnabled() ? a.path : undefined, true);
+  // Pictures, videos and voice notes have no name worth showing; PDFs and other files keep theirs.
+  const titled = a.kind === "pdf" || a.kind === "file";
   const count = items?.length ?? 0;
   const place = index !== undefined && index >= 0 && count > 1 ? index : -1;
   const canStep = place >= 0 && !!onNavigate;
@@ -463,21 +540,30 @@ function ViewerDialog({ attachment: a, open, detail, href, onClose, items, index
   };
 
   let body: ReactNode;
-  if (!file || file.state === "loading") body = <Skeleton className="aspect-video w-full rounded-lg" />;
+  if (!file || file.state === "loading") body = <Skeleton className={cn("w-full rounded-lg", STAGE_HEIGHT)} />;
   else if (file.state === "missing")
-    body = <NoPreview attachment={a} message={notStored ? "Not Kept Here. The Original Is in Your Mailbox." : "This File Is Still Downloading"} />;
+    body = <NoPreview attachment={a} message={notKeptMessage(a, notStored)} />;
   else if (a.kind === "pdf") body = <PdfViewer key={a.id} url={file.view} name={a.name} />;
-  else if (a.kind === "image" && broken !== a.id) body = <ImageViewer key={a.id} url={file.view} name={a.name} onBroken={() => setBroken(a.id)} onSwipe={canStep ? step : undefined} />;
+  else if (a.kind === "image" && broken !== a.id) body = <ImageViewer key={a.id} url={file.view} name={a.name} preview={preview} onRatio={(ratio) => setHugging({ id: a.id, ratio })} onBroken={() => setBroken(a.id)} onSwipe={canStep ? step : undefined} />;
   else if (a.kind === "video") body = <VideoPlayer key={a.id} src={file.view} name={a.name} />;
   else if (a.kind === "audio") body = <div className="flex justify-center rounded-lg bg-muted/40 p-6"><VoiceNote attachment={{ ...a, path: file.path }} me={false} /></div>;
   else body = <NoPreview attachment={a} message="No Preview Available" />;
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent track="attachment_viewer" showCloseButton={false} className={cn("max-h-[calc(100dvh-2rem)] grid-cols-1 overflow-y-auto sm:max-w-3xl", wide && "sm:max-w-5xl")}>
-        <div className="min-w-0">
-          <DialogTitle className="truncate">{a.name}</DialogTitle>
-          <DialogDescription>{[KIND_LABEL[a.kind], a.size, detail, place >= 0 ? `${place + 1} of ${count}` : ""].filter(Boolean).join(" · ")}</DialogDescription>
+      <DialogContent track="attachment_viewer" showCloseButton={false} className={cn("max-h-[calc(100dvh-2rem)] grid-cols-1 gap-3 overflow-y-auto sm:max-w-3xl", wide && "sm:max-w-5xl", a.kind === "image" && hugging?.id === a.id && "w-fit min-w-[min(24rem,calc(100%-2rem))] sm:max-w-3xl")}>
+        {/* Who sent it, with their photo, and when. Show in Conversation, Download and Close are on the right. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+          {sender && (sender.me ? <MeAvatar className="size-8" /> : <ContactAvatar contact={sender.contact} className="size-8" />)}
+          <div className="min-w-32 flex-1 basis-40">
+            <DialogTitle className="truncate text-sm font-medium">{sender?.name ?? detail ?? (titled ? a.name : KIND_LABEL[a.kind])}</DialogTitle>
+            <DialogDescription className={cn("truncate text-xs", !sentAt && "sr-only")}>{sentAt ? viewerStamp(sentAt) : KIND_LABEL[a.kind]}</DialogDescription>
+            <span className="sr-only">{[a.name, KIND_LABEL[a.kind], place >= 0 ? `${place + 1} of ${count}` : ""].filter(Boolean).join(" · ")}</span>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {href && <Button variant="ghost" size="icon" asChild aria-label="Show in Conversation" title="Show in Conversation"><Link href={href}><ExternalLink /></Link></Button>}
+            <DialogClose asChild><Button variant="secondary" size="icon" aria-label="Close" title="Close"><X /></Button></DialogClose>
+          </div>
         </div>
         <div
           className="min-w-0"
@@ -495,23 +581,19 @@ function ViewerDialog({ attachment: a, open, detail, href, onClose, items, index
         >
           {body}
         </div>
-        <DialogFooter>
-          <DialogClose asChild><Button variant="outline">Close</Button></DialogClose>
-          {href && (
-            <Button variant="outline" asChild><Link href={href}>Show in Conversation</Link></Button>
-          )}
-          {file?.state === "ready" ? (
-            <Button disabled={saving} onClick={() => void download()}>Download</Button>
-          ) : (
-            <Button disabled>Download</Button>
-          )}
-          {canStep && (
-            <div className="flex gap-2 sm:order-first sm:mr-auto">
-              <Button variant="outline" className="flex-1 sm:flex-none" disabled={!hasPrev} onClick={() => step(-1)}><ChevronLeft data-icon="inline-start" />Previous</Button>
-              <Button variant="outline" className="flex-1 sm:flex-none" disabled={!hasNext} onClick={() => step(1)}>Next<ChevronRight data-icon="inline-end" /></Button>
-            </div>
-          )}
-        </DialogFooter>
+        {/* The place in the files on the left, with the arrows that step through them; Download on the right. */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {canStep && (
+              <>
+                <Button variant="secondary" size="icon" aria-label="Previous" title="Previous" disabled={!hasPrev} onClick={() => step(-1)}><ArrowLeft /></Button>
+                <Button variant="secondary" size="icon" aria-label="Next" title="Next" disabled={!hasNext} onClick={() => step(1)}><ArrowRight /></Button>
+                <span className="text-xs text-muted-foreground tabular-nums">{place + 1} of {count}</span>
+              </>
+            )}
+          </div>
+          <Button variant="secondary" disabled={file?.state !== "ready" || saving} onClick={() => void download()}>Download</Button>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -555,7 +637,7 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
   let month = "";
   return (
     <>
-      <div className={cn("grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-x-3 gap-y-4 lg:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]", className)}>
+      <div className={cn("grid grid-cols-3 gap-x-3 gap-y-4 md:grid-cols-6", className)}>
         {items.slice(0, limit).map((a) => {
           const key = monthKey(a.sentAt);
           const header = byMonth && key !== month;
@@ -569,9 +651,14 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
                 </h2>
               )}
               <div className="flex min-w-0 flex-col gap-1">
-                <AttachmentTile attachment={a} onOpen={() => setViewing(a)} showName={false} source={sourceOf(threadById(a.threadId)?.provider)} className="aspect-square size-auto w-full" />
-                <span className="truncate px-0.5 text-xs font-medium" title={a.name}>{a.name}</span>
-                <span className="truncate px-0.5 text-xs text-muted-foreground">{who(a.from)} · {relTime(a.sentAt)} · {a.size}</span>
+                <AttachmentTile
+                  attachment={a}
+                  onOpen={() => setViewing(a)}
+                  showName={false}
+                  source={sourceOf(threadById(a.threadId)?.provider)}
+                  overlay={<><span className="truncate">{who(a.from)}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
+                  className="aspect-square size-auto w-full"
+                />
               </div>
             </Fragment>
           );
@@ -581,6 +668,8 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
       <AttachmentViewer
         attachment={viewing}
         detail={viewing ? `${who(viewing.from)}, ${stampOf(viewing.sentAt)}` : undefined}
+        sender={viewing ? { name: who(viewing.from), contact: viewing.from === "me" ? undefined : contactById(viewing.from), me: viewing.from === "me" } : undefined}
+        sentAt={viewing?.sentAt}
         href={viewing ? hrefFor(viewing) : undefined}
         items={items}
         index={at}

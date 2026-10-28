@@ -26,15 +26,16 @@ import { finishAction } from "../send/actions";
 import { allRows, db, getSyncState, must, recordEvent, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
-import { MAX_FILE_BYTES } from "../ingest/attachment-files";
+import { MAX_FILE_BYTES } from "../file-store";
 import { isFailure } from "../ingest/batch-rpc";
-import { claimReady, linkThread, markFailed, settleSent, type OutboxRow } from "../send/outbox";
+import { claimReady, linkThread, markFailed, onInboxList, settleSent, type OutboxRow } from "../send/outbox";
+import { replyFor } from "../send/inbox";
 import { loadAttachmentFiles } from "../send/outbox-attachments";
 import { newChatNumber, outgoingMessages } from "../whatsapp/outgoing";
 import { prepareVoiceNotes } from "../whatsapp/voice-note";
 import { isLinked, useDbAuthState, type DbAuthState } from "../whatsapp/auth-state";
 import { silentLogger } from "../whatsapp/logger";
-import { messageFromRef, mediaRef, saveMedia, type StoredMedia } from "../whatsapp/media";
+import { messageFromRef, mediaRef, saveMedia, type MediaRow, type StoredMedia } from "../whatsapp/media";
 import { describe, e164, formatPairingCode, nameMentions, oneLine, pairingDigits, unreadInHistory } from "../whatsapp/normalize";
 import { quietSignalLogs } from "../whatsapp/quiet-signal";
 import { HISTORY_PER_CALL, ingestWhatsApp, ingestWhatsAppHistory, type WhatsAppStored } from "../whatsapp/ingest";
@@ -664,7 +665,7 @@ export class WhatsAppConnector {
       body_text: await seal(this.account.user_id, FIELD.body, body || null),
       provider_meta: meta as Json,
       attachments: d.media
-        ? [{ filename: d.media.filename, mime_type: d.media.mimeType, kind: d.media.kind, size_bytes: d.media.sizeBytes }]
+        ? [{ filename: (await seal(this.account.user_id, FIELD.filename, d.media.filename))!, mime_type: d.media.mimeType, kind: d.media.kind, size_bytes: d.media.sizeBytes }]
         : [],
     } satisfies Record<string, Json>;
 
@@ -679,7 +680,7 @@ export class WhatsAppConnector {
       if (d.media && attachmentId && wanted && (d.media.sizeBytes ?? 0) <= MAX_FILE_BYTES) {
         // The queued download keeps a small copy of what it needs, not the whole message.
         const file = meta.media ? messageFromRef({ remoteJid: remote, fromMe, id, participant: key.participant ?? undefined }, meta.media) : msg;
-        const row = { messageId: stored.message_id, attachmentId, mimeType: d.media.mimeType };
+        const row = { messageId: stored.message_id, attachmentId, mimeType: d.media.mimeType, kind: d.media.kind, filename: d.media.filename, sizeBytes: d.media.sizeBytes };
         this.fileTries.set(attachmentId, 1);
         this.downloadLater(() => this.fetchFile(file, row));
       }
@@ -756,7 +757,7 @@ export class WhatsAppConnector {
     }
   }
 
-  /** Edits and deletions made in WhatsApp. Delivery and read ticks also arrive here and are ignored. */
+  /** Edits and deletions made in WhatsApp, and the delivery and read ticks of messages you sent. */
   private async onUpdates(updates: BaileysEventMap["messages.update"]) {
     for (const { key, update } of updates) {
       if (!key.id) continue;
@@ -769,6 +770,11 @@ export class WhatsAppConnector {
             "save deletion",
           );
           continue;
+        }
+        if (key.fromMe && typeof update.status === "number") {
+          // Baileys' statuses: 2 reached WhatsApp's server, 3 delivered, 4 read, 5 played (a voice note heard).
+          const receipt = update.status >= 4 ? "read" : update.status === 3 ? "delivered" : update.status === 2 ? "sent" : null;
+          if (receipt) must(await db.rpc("whatsapp_message_status", { p_account_id: this.id, p_provider_message_id: key.id, p_status: receipt }), "save receipt");
         }
         const edited = update.message?.editedMessage?.message;
         if (!edited) continue;
@@ -803,10 +809,10 @@ export class WhatsAppConnector {
     });
   }
 
-  private async fetchFile(msg: WAMessage, row: { messageId: string; attachmentId: string; mimeType: string }) {
+  private async fetchFile(msg: WAMessage, row: Omit<MediaRow, "userId" | "accountId">) {
     const sock = this.sock;
     if (!sock || !this.open) return;
-    const saved = await saveMedia(sock, msg, { userId: this.account.user_id, ...row });
+    const saved = await saveMedia(sock, msg, { userId: this.account.user_id, accountId: this.id, ...row });
     if (saved) log.info("whatsapp file saved", { account: this.id, attachment: row.attachmentId });
   }
 
@@ -816,14 +822,16 @@ export class WhatsAppConnector {
     const missing = () =>
       db
         .from("attachments")
-        .select("id, mime_type, message_id, messages!inner(account_id, provider_message_id, provider_meta, sent_at)")
+        .select("id, mime_type, kind, filename, size_bytes, message_id, messages!inner(account_id, provider_message_id, provider_meta, sent_at)")
         .is("storage_path", null)
+        // A video kept as a link is not fetched; a file refused for a full seat is tried again once there is room.
+        .or("not_kept.is.null,not_kept.eq.over_cap")
         .eq("messages.account_id", this.id)
         .lte("size_bytes", MAX_FILE_BYTES)
         .limit(100);
     const [recent, stickers] = await Promise.all([
       missing().gte("messages.sent_at", since).then((r) => must(r, "load missing whatsapp files")),
-      missing().like("filename", "Sticker.%").then((r) => must(r, "load missing whatsapp stickers")),
+      missing().eq("is_sticker", true).then((r) => must(r, "load missing whatsapp stickers")),
     ]);
     const rows = await openAddresses(this.account.user_id, [...new Map([...recent, ...stickers].map((r) => [r.id, r])).values()]);
     for (const r of rows) {
@@ -834,7 +842,7 @@ export class WhatsAppConnector {
       if (!meta?.media) continue;
       const key = { remoteJid: meta.chat, fromMe: meta.from_me, id: r.messages.provider_message_id, participant: meta.participant ?? undefined };
       const msg = messageFromRef(key, meta.media);
-      this.downloadLater(() => this.fetchFile(msg, { messageId: r.message_id, attachmentId: r.id, mimeType: r.mime_type ?? "application/octet-stream" }));
+      this.downloadLater(() => this.fetchFile(msg, { messageId: r.message_id, attachmentId: r.id, mimeType: r.mime_type ?? "application/octet-stream", kind: r.kind, filename: r.filename, sizeBytes: r.size_bytes }));
     }
   }
 
@@ -938,7 +946,9 @@ export class WhatsAppConnector {
       "load whatsapp thread",
     );
     await openAddresses(this.account.user_id, thread);
-    if (!thread || thread.account_id !== this.id || thread.user_id !== row.user_id || thread.channel !== "whatsapp") {
+    // The chat's own person's reply, or a member of the shared inbox it is in (this account's, which they cannot replace).
+    const via = thread ? replyFor(thread.user_id, row.user_id, thread.user_id !== row.user_id && (await onInboxList(row.thread_id!, row.user_id))) : "nobody";
+    if (!thread || thread.account_id !== this.id || via === "nobody" || thread.channel !== "whatsapp") {
       return { error: "This message belongs to another account." };
     }
     return { jid: thread.provider_thread_id };

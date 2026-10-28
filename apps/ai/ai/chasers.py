@@ -79,6 +79,16 @@ def latest_per_thread(messages: list[dict[str, Any]]) -> dict[str, tuple[dict[st
     return out
 
 
+def _changed(thread: dict[str, Any], check: dict[str, Any] | None) -> bool:
+    """True when the thread has not been checked, or its last message came after the check."""
+    if not check or not check.get("checked_at"):
+        return True
+    try:
+        return datetime.fromisoformat(str(thread["last_message_at"])) > datetime.fromisoformat(str(check["checked_at"]))
+    except ValueError:
+        return True
+
+
 class Chasers:
     def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
         self.db = db
@@ -103,11 +113,18 @@ class Chasers:
         )
         # A day old at least, and few enough that the newest messages read below reach every one of them.
         cutoff = now - MIN_AGE
-        threads = [t for t in threads if datetime.fromisoformat(t["last_message_at"]) <= cutoff][:THREADS]
+        threads = [t for t in threads if datetime.fromisoformat(t["last_message_at"]) <= cutoff]
+        if not threads:
+            return 0
+        checked = {
+            r["thread_id"]: r for r in self.db.select("follow_ups", {"select": "thread_id,message_id,checked_at", "thread_id": in_list([t["id"] for t in threads])})
+        }
+        # Only threads with no check yet, or with a message since the last one: bodies are read for those alone.
+        threads = [t for t in threads if _changed(t, checked.get(t["id"]))][:THREADS]
         if not threads:
             return 0
         ids = [t["id"] for t in threads]
-        seen = {r["thread_id"]: r["message_id"] for r in self.db.select("follow_ups", {"select": "thread_id,message_id", "thread_id": in_list(ids)})}
+        seen = {k: r["message_id"] for k, r in checked.items()}
         messages = self.db.select(
             "messages",
             {"select": "id,user_id,thread_id,direction,body_text,body_html,sent_at", "thread_id": in_list(ids), "order": "sent_at.desc", "limit": "1000"},
@@ -140,7 +157,7 @@ class Chasers:
         if not cases:
             return self._save(user, items, {k: False for k in quiet})
         try:
-            result = self.gemini.json(self.model, SYSTEM, build_prompt(cases), SCHEMA, UsageContext(user, "triage"), temperature=0, thinking="low", attempts=2)
+            result = self.gemini.json(self.model, SYSTEM, build_prompt(cases), SCHEMA, UsageContext(user, "triage"), temperature=0, thinking="low", attempts=2, max_output=CHASER_MAX_OUTPUT)
         except GeminiError as err:
             log.warn("follow-ups not checked", status=err.status)
             return 0

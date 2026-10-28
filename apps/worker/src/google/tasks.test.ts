@@ -15,6 +15,7 @@ import {
   sortChanges,
   taskFields,
   taskUpdateFailure,
+  writeBody,
   type GoogleTask,
 } from "./tasks";
 
@@ -154,4 +155,14 @@ test("a failed tick says why in plain words", () => {
   assert.match(taskUpdateFailure(new GoogleAuthError("invalid_grant")), /Reconnect Google/);
   assert.equal(taskUpdateFailure(new GoogleApiError(500, null)), "Google Tasks did not change this task. Try again.");
   for (const text of [TASK_GONE, TASKS_API_OFF, taskUpdateFailure(new Error("x"))]) assert.doesNotMatch(text, /[\u2013\u2014]/);
+});
+
+test("a task made in the app keeps only its date for Google Tasks, and a change clears what is empty", () => {
+  const write = { title: "Send the offer", notes: "Signed copy", dueAt: "2026-11-03T00:00:00.000Z", dueAllDay: true, priority: 1 as const };
+  assert.deepEqual(writeBody(write, true), { title: "Send the offer", notes: "Signed copy", due: "2026-11-03T00:00:00.000Z" });
+  // A time is dropped: Google keeps the day.
+  assert.equal(writeBody({ ...write, dueAt: "2026-11-03T13:30:00.000Z", dueAllDay: false }, true).due, "2026-11-03T00:00:00.000Z");
+  const bare = { ...write, notes: null, dueAt: null };
+  assert.deepEqual(writeBody(bare, true), { title: "Send the offer" });
+  assert.deepEqual(writeBody(bare, false), { title: "Send the offer", notes: null, due: null });
 });

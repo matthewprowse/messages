@@ -175,10 +175,10 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="compose" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="compose" showCloseButton className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Email</DialogTitle>
-          <DialogDescription>Sent from your own account, then filed in Conversations.</DialogDescription>
+          <DialogDescription>Sent from your own account, then filed in the Inbox.</DialogDescription>
         </DialogHeader>
         {options.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -268,8 +268,8 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The email could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <AttachButton files={files} className="self-start sm:mr-auto" />
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
-              <Button type="submit" disabled={!ready}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
+              <Button type="submit" variant="secondary" disabled={!ready}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
             </div>
           </form>
         )}

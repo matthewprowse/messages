@@ -4,13 +4,14 @@ import { createContext, Fragment, Suspense, useCallback, useContext, useEffect, 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { CalendarDays, ChevronLeft, ChevronRight, Circle, CircleCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Circle, CircleCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { buildResponse, canChangeEvents, dayKey, daysOf, eventDetail, followUpdate, googleEventUrl, loadEventDetail, loadEvents, withPatch, type CalendarEvent, type EventPatch, type EventResponse, type UpdateScope } from "@/lib/calendar";
+import { describeRule } from "@/lib/recurrence";
 import { supabase } from "@/lib/supabase";
 import { timeOf } from "@/lib/format";
-import { isOverdue, taskDetail, tasksByDay, taskWhen, type DayTask } from "@/lib/tasks";
+import { isOverdue, isTempTask, taskDetail, tasksByDay, taskWhen, type DayTask } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -20,10 +21,12 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PaneControls, PaneHeader, SearchBand, ViewButtons } from "@/components/pane";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EmptyState, providerLabel } from "@/components/primitives";
 import { NewEventDialog } from "@/components/new-event-dialog";
+import { NewTaskDialog } from "@/components/new-task-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DeleteEventDialog, type DeleteScope } from "@/components/delete-event-dialog";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { EventMeetings } from "@/components/meeting-card";
@@ -187,6 +190,16 @@ function Attendees({ event }: { event: CalendarEvent }) {
 
 const RESPONSES: Record<string, string> = { accepted: "Accepted", tentative: "Maybe", declined: "Declined", needsAction: "Not Answered" };
 
+/**
+ * How an event repeats, in words, from its series' rule. An event the calendar gives no rule for (Outlook, or one
+ * the worker has not read the rule of yet) just says that it does.
+ */
+function repeatsText(e: CalendarEvent) {
+  if (!e.recurrence) return "Yes";
+  const words = describeRule(e.recurrence, new Date(e.startsAt));
+  return words === "Repeats" ? "On a Custom Schedule" : words;
+}
+
 /** A label and what it says, in the details' two columns. */
 function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -239,7 +252,7 @@ function EventDetails({ event }: { event: CalendarEvent }) {
       <dl className="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-x-3 gap-y-3 text-sm">
         {full.location && <Detail label="Location">{full.location}</Detail>}
         {full.calendarName && <Detail label="Calendar">{full.calendarName}</Detail>}
-        {full.seriesId && <Detail label="Repeats">Part of a repeating event</Detail>}
+        {(full.seriesId || full.recurrence) && <Detail label="Repeats">{repeatsText(full)}</Detail>}
         {full.organizer && <Detail label="Organizer">{full.organizer.name}</Detail>}
         {full.response && (
           <Detail label="Reply">
@@ -295,7 +308,7 @@ function EventDialog({ event, onClose }: { event: CalendarEvent | null; onClose:
   const shown = event ?? last.current;
   return (
     <Dialog open={!!event} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent track="event_details" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="event_details" showCloseButton closeVariant="secondary" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         {shown && <EventDialogBody event={shown} onClose={onClose} />}
       </DialogContent>
     </Dialog>
@@ -307,20 +320,19 @@ function EventDialogBody({ event, onClose }: { event: CalendarEvent; onClose: ()
   const { full, loading, canDelete, canEdit, link } = useEventState(event);
   return (
     <>
-      <DialogHeader>
+      <DialogHeader className="pr-10">
         <DialogTitle className="break-words">{full.title}</DialogTitle>
         <DialogDescription className="tabular-nums">{eventWhen(full)}</DialogDescription>
       </DialogHeader>
       <EventDetails event={event} />
       <div className={DIALOG_BUTTONS}>
-        <Button variant="outline" onClick={onClose} className="sm:mr-auto">Close</Button>
         {link && (
-          <Button variant="outline" asChild>
+          <Button variant="ghost" asChild>
             <a href={link} target="_blank" rel="noopener noreferrer">Open in Google Calendar</a>
           </Button>
         )}
-        {canDelete && <Button variant="outline" disabled={loading} onClick={() => { onClose(); askToDelete(full); }}>Delete</Button>}
-        {canEdit && <Button disabled={loading || !full.detailed} onClick={() => { onClose(); askToEdit(full); }}>Edit</Button>}
+        {canDelete && <Button variant="ghost" disabled={loading} onClick={() => { onClose(); askToDelete(full); }}>Delete</Button>}
+        {canEdit && <Button variant="secondary" disabled={loading || !full.detailed} onClick={() => { onClose(); askToEdit(full); }}>Edit</Button>}
       </div>
     </>
   );
@@ -370,7 +382,7 @@ function taskDue(task: Task) {
 
 function TaskCheckbox({ task, via }: { task: Task; via: "calendar" | "details" }) {
   const { tickTask } = useApp();
-  return <Checkbox checked={task.completed} onCheckedChange={(checked) => tickTask(task, checked === true, via)} aria-label={task.title} />;
+  return <Checkbox checked={task.completed} onCheckedChange={(checked) => tickTask(task, checked === true, via)} disabled={isTempTask(task)} aria-label={task.title} />;
 }
 
 /** A task in the week grid: in the all-day row, or as a short item at its time. Clicking the title shows its details. */
@@ -418,23 +430,25 @@ function TaskRow({ item }: { item: DayTask }) {
 }
 
 /** Everything the app has about a task, with Mark as Done (or Not Done) in its button row. */
-function TaskDialog({ task, onClose }: { task: Task | null; onClose: () => void }) {
+function TaskDialog({ task, onClose, onEdit }: { task: Task | null; onClose: () => void; onEdit: (task: Task) => void }) {
   // The last task stays drawn while the dialog animates closed.
   const last = useRef<Task | null>(null);
   if (task) last.current = task;
   const shown = task ?? last.current;
   return (
     <Dialog open={!!task} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent track="task_details" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
-        {shown && <TaskDialogBody task={shown} onClose={onClose} />}
+      <DialogContent track="task_details" showCloseButton className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+        {shown && <TaskDialogBody task={shown} onClose={onClose} onEdit={onEdit} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function TaskDialogBody({ task, onClose }: { task: Task; onClose: () => void }) {
+function TaskDialogBody({ task, onClose, onEdit }: { task: Task; onClose: () => void; onEdit: (task: Task) => void }) {
   const { now, sourceOf } = useContext(Page);
-  const { contactById, tickTask } = useApp();
+  const { contactById, tickTask, deleteTask } = useApp();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const saved = !isTempTask(task);
   const contact = task.contactId ? contactById(task.contactId) : undefined;
   const source = sourceOf(task);
   return (
@@ -463,9 +477,22 @@ function TaskDialogBody({ task, onClose }: { task: Task; onClose: () => void }) 
         </dl>
       </div>
       <div className={DIALOG_BUTTONS}>
-        <Button variant="outline" onClick={onClose} className="sm:mr-auto">Close</Button>
-        <Button onClick={() => tickTask(task, !task.completed, "details")}>{task.completed ? "Mark as Not Done" : "Mark as Done"}</Button>
+        {saved && <Button variant="ghost" onClick={() => setConfirmDelete(true)}>Delete</Button>}
+        {saved && <Button variant="secondary" onClick={() => onEdit(task)}>Edit</Button>}
+        <Button variant="secondary" disabled={!saved} onClick={() => tickTask(task, !task.completed, "details")}>{task.completed ? "Mark as Not Done" : "Mark as Done"}</Button>
       </div>
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent track="delete_task">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Task?</AlertDialogTitle>
+            <AlertDialogDescription>This deletes the task in {source ?? "your task list"} as well.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className={DIALOG_BUTTONS}>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="secondary" onClick={() => { deleteTask(task); onClose(); }}>Delete</AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -762,6 +789,7 @@ function MonthView({
   tasksByDay: dayTasks,
   today,
   selected,
+  monthOf,
   onSelect,
   onCreate,
 }: {
@@ -770,13 +798,15 @@ function MonthView({
   tasksByDay: Map<string, DayTask[]>;
   today: Date;
   selected: Date;
+  /** Whose month the grid shows, which follows the agenda list as it scrolls. */
+  monthOf: Date;
   onSelect: (d: Date) => void;
   /** A new event on that day, from a double-click or right-click on it. */
   onCreate: (key: string) => void;
 }) {
   const todayKey = dayKey(today);
   const selectedKey = dayKey(selected);
-  const month = selected.getMonth();
+  const month = monthOf.getMonth();
   const weekdays = days.slice(0, 7).map((key) => fromKey(key).toLocaleDateString("en-GB", { weekday: "short" }));
 
   return (
@@ -919,6 +949,9 @@ function EventList({
   selectedKey,
   loading,
   empty,
+  onEnd,
+  loadingMore,
+  onVisible,
 }: {
   keys: string[];
   byDay: Map<string, CalendarEvent[]>;
@@ -927,9 +960,44 @@ function EventList({
   selectedKey?: string;
   loading: boolean;
   empty: React.ReactNode;
+  /** Called when the end of the list scrolls into view, to load the next month. */
+  onEnd?: () => void;
+  loadingMore?: boolean;
+  /** Called with the day at the top of the list as it is scrolled. */
+  onVisible?: (key: string) => void;
 }) {
   const rowsRef = useRef<HTMLDivElement>(null);
   const shownKey = useRef<string | undefined>(undefined);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  // The list scrolls inside its own pane on wide screens and with the page on phones; watching the end against
+  // the screen works for both.
+  useEffect(() => {
+    const el = endRef.current;
+    if (!el || !onEnd || loading) return;
+    const observer = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) onEnd(); }, { rootMargin: "400px" });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onEnd, loading]);
+
+  // Scrolling the list reports which day is at its top, so the month above and the grid follow it.
+  useEffect(() => {
+    const viewport = rowsRef.current?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    if (!viewport || !onVisible || loading) return;
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const top = viewport.getBoundingClientRect().top + 60;
+        const sections = rowsRef.current?.querySelectorAll<HTMLElement>("[data-day]") ?? [];
+        for (const s of sections) {
+          if (s.getBoundingClientRect().bottom > top) { onVisible(s.dataset.day!); return; }
+        }
+      });
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => { cancelAnimationFrame(frame); viewport.removeEventListener("scroll", onScroll); };
+  }, [onVisible, loading]);
 
   useEffect(() => {
     // Runs again once the events load, so the list opens on the selected day.
@@ -986,6 +1054,13 @@ function EventList({
             </DaySection>
           );
         }))}
+        {!loading && loadingMore && (
+          <div className="flex flex-col gap-2 py-3" aria-label="Loading the next month">
+            <Skeleton className="h-5 w-1/3" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        )}
+        <div ref={endRef} aria-hidden className="h-px" />
       </div>
     </ScrollArea>
   );
@@ -1013,10 +1088,15 @@ function CalendarPageContent() {
     return asked === "week" || asked === "day" ? asked : "agenda";
   });
   const [now, setNow] = useState(() => new Date());
+  const [search, setSearch] = useState("");
+  const term = search.trim().toLowerCase();
   const today = useMemo(() => startOfDay(now), [now.getFullYear(), now.getMonth(), now.getDate()]); // eslint-disable-line react-hooks/exhaustive-deps
   // The selected day: the week view shows its week, the agenda its month.
   const [anchor, setAnchor] = useState(() => parseKey(searchParams.get("date")) ?? startOfDay(new Date()));
   const anchorKey = dayKey(anchor);
+  // Scrolling the agenda list moves the month shown above and in the grid to the day at its top, without reloading it.
+  const [visibleKey, setVisibleKey] = useState<string | null>(null);
+  useEffect(() => setVisibleKey(null), [anchorKey, view]);
 
   // How many days the week view shows: seven when they fit, else as many as do, starting on the selected day.
   const paneRef = useRef<HTMLDivElement>(null);
@@ -1032,8 +1112,15 @@ function CalendarPageContent() {
   const fits = paneWidth === 0 ? 7 : Math.floor((paneWidth - LABELS) / DAY_MIN);
   const weekDays = fits >= 7 ? 7 : Math.max(1, Math.min(5, Math.floor((paneWidth - LABELS) / 100)));
 
+  // The agenda's list carries on into the months after the selected one as it is scrolled to the end. Picking
+  // another month starts it over.
+  const monthKey = `${anchor.getFullYear()}-${anchor.getMonth()}`;
+  const [more, setMore] = useState({ month: monthKey, months: 0 });
+  const extraMonths = more.month === monthKey ? more.months : 0;
+  const listEnd = new Date(anchor.getFullYear(), anchor.getMonth() + 1 + extraMonths, 1);
   const start = view === "day" ? anchor : view === "week" ? (weekDays === 7 ? startOfWeek(anchor) : anchor) : startOfWeek(startOfMonth(anchor));
-  const length = view === "day" ? 1 : view === "week" ? weekDays : 42;
+  // The month grid needs six weeks; the list may need more.
+  const length = view === "day" ? 1 : view === "week" ? weekDays : Math.max(42, Math.round((listEnd.getTime() - start.getTime()) / 86_400_000));
   const startKey = dayKey(start);
   const rangeKey = `${startKey}+${length}`;
   // undefined while loading, null if it failed.
@@ -1063,6 +1150,9 @@ function CalendarPageContent() {
   const [openKey, setOpenKey] = useState<string | null>(null);
   // ?task=<id> opens that task, such as from the Summary. The address then drops it with the rest it does not follow.
   const [openTaskId, setOpenTaskId] = useState<string | null>(() => searchParams.get("task"));
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+  // The task being changed in the New Task dialog, or null when it makes a new one.
+  const [editTarget, setEditTarget] = useState<Task | null>(null);
   const [details, setDetails] = useState<Map<string, CalendarEvent>>(() => new Map());
   const [detailsFailed, setDetailsFailed] = useState<Set<string>>(() => new Set());
   const requested = useRef(new Set<string>());
@@ -1167,7 +1257,9 @@ function CalendarPageContent() {
 
   // Guests, notes and the link are fetched for an event once it is opened.
   const openId = openKey ? openKey.split("|")[0] : null;
-  const loadedEvents = loaded?.key === rangeKey ? loaded.events : undefined;
+  // The days before stay on screen while the next ones load, so moving through time never flashes a skeleton.
+  const loadedEvents = loaded?.key === rangeKey ? loaded.events : (loaded?.events ?? undefined);
+  const loadingMore = view === "agenda" && loaded?.key !== rangeKey && !!loadedEvents;
   useEffect(() => {
     if (!openId || requested.current.has(openId)) return;
     const base = loadedEvents?.find((e) => e.id === openId) ?? queued.find((e) => e.id === openId);
@@ -1205,9 +1297,10 @@ function CalendarPageContent() {
     if (!loadedEvents) return loadedEvents;
     const waiting = queued.filter((q) => !loadedEvents.some((e) => e.title === q.title && Date.parse(e.startsAt) === Date.parse(q.startsAt))).map((q) => ({ ...q, pending: true, detailed: true }));
     const all = waiting.length ? [...loadedEvents, ...waiting] : loadedEvents;
-    const shown = hidden.length ? all.filter((e) => !hidden.some((h) => h.id === e.id || (h.scope === "series" && h.seriesId && h.seriesId === e.seriesId))) : all;
+    const found = term ? all.filter((e) => [e.title, e.location, e.description].some((s) => s?.toLowerCase().includes(term))) : all;
+    const shown = hidden.length ? found.filter((e) => !hidden.some((h) => h.id === e.id || (h.scope === "series" && h.seriesId && h.seriesId === e.seriesId))) : all;
     return edits.length ? shown.map(applyEdits) : shown;
-  }, [loadedEvents, queued, hidden, edits]);
+  }, [loadedEvents, queued, hidden, edits, term]);
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
     for (const e of events ?? []) {
@@ -1231,7 +1324,6 @@ function CalendarPageContent() {
   const openEvent = openId ? (shownDetails.get(openId) ?? events?.find((e) => e.id === openId) ?? null) : null;
   const calendarConnected = accounts.some((a) => a.provider === "google_calendar" || a.provider === "outlook_calendar" || a.provider === "icloud_calendar");
   const todayKey = dayKey(today);
-  const showingToday = view === "week" ? days.includes(todayKey) && anchorKey === todayKey : anchorKey === todayKey;
   const timeGrid = view === "week" || view === "day";
 
   // A month away lands on its first day, or on today in today's month.
@@ -1243,7 +1335,15 @@ function CalendarPageContent() {
   const label =
     view === "day" ? anchor.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", ...(anchor.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) })
     : view === "week" ? rangeLabel(start, addDays(start, length), today)
-    : anchor.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+    : (visibleKey ? fromKey(visibleKey) : anchor).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  // The month grid follows the day at the top of the agenda list as it scrolls, inside the days already loaded.
+  const gridAnchor = view === "agenda" && visibleKey ? fromKey(visibleKey) : anchor;
+  const gridDays = useMemo(() => {
+    if (view !== "agenda") return days;
+    const first = dayKey(startOfWeek(startOfMonth(gridAnchor)));
+    const at = days.indexOf(first);
+    return at >= 0 && at + 42 <= days.length ? days.slice(at, at + 42) : days.slice(0, 42);
+  }, [view, days, gridAnchor]);
   const unit = view === "day" ? "Day" : view === "week" ? (length === 7 ? "Week" : "Days") : "Month";
 
   const openNew = (day: string, time?: string, until?: string) => {
@@ -1253,10 +1353,62 @@ function CalendarPageContent() {
     setNewOpen(true);
   };
 
+  // Scrolling moves through time: down past the end of a day for the next one, sideways across a week for the next.
+  // Scrolling inside a view that still has room to scroll is left alone.
+  const moveRef = useRef(move);
+  moveRef.current = move;
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    if (view === "agenda") {
+      // Scrolling the month grid scrolls the agenda list, and the grid follows it.
+      const forward = (e: WheelEvent) => {
+        const list = document.querySelector<HTMLElement>('[data-calendar-list] [data-slot="scroll-area-viewport"]');
+        if (list && list.scrollHeight > list.clientHeight) list.scrollTop += e.deltaY;
+      };
+      el.addEventListener("wheel", forward, { passive: true });
+      return () => el.removeEventListener("wheel", forward);
+    }
+    let travelled = 0;
+    let lastAt = 0;
+    let cooldown = 0;
+    const onWheel = (e: WheelEvent) => {
+      const stamp = performance.now();
+      if (stamp < cooldown) return;
+      if (stamp - lastAt > 300) travelled = 0;
+      lastAt = stamp;
+      let delta = 0;
+      if (view === "week") {
+        // Mostly sideways: a trackpad swipe, or the wheel with Shift held.
+        delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+      } else {
+        let node = e.target as HTMLElement | null;
+        let room = false;
+        while (node && node !== el) {
+          if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) {
+            const atEdge = e.deltaY > 0 ? node.scrollTop + node.clientHeight >= node.scrollHeight - 1 : node.scrollTop <= 0;
+            if (!atEdge) room = true;
+            break;
+          }
+          node = node.parentElement;
+        }
+        delta = room || Math.abs(e.deltaX) > Math.abs(e.deltaY) ? 0 : e.deltaY;
+      }
+      if (!delta) { travelled = 0; return; }
+      travelled += delta;
+      if (Math.abs(travelled) < 160) return;
+      moveRef.current(travelled > 0 ? 1 : -1);
+      travelled = 0;
+      cooldown = stamp + 700;
+    };
+    el.addEventListener("wheel", onWheel, { passive: true });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [view]);
+
   // T is today, the arrows move a day, A, D and W switch the view.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || isTyping(e.target) || newOpen || editOpen || deleteFor || openKey || openTask) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || isTyping(e.target) || newOpen || editOpen || deleteFor || openKey || openTask || newTaskOpen) return;
       const key = e.key.toLowerCase();
       if (key === "t") setAnchor(today);
       else if (key === "a") setView("agenda");
@@ -1269,7 +1421,7 @@ function CalendarPageContent() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [today, newOpen, editOpen, deleteFor, openKey, openTask]);
+  }, [today, newOpen, editOpen, deleteFor, openKey, openTask, newTaskOpen]);
 
   // With no account connected at all, the first step is connecting one.
   const noAccounts = !accounts.some((a) => a.status !== "disconnected");
@@ -1295,7 +1447,10 @@ function CalendarPageContent() {
   // The days listed: the month view's list follows the date picked, the week view's lists the week's events.
   const listed = timeGrid
     ? days.filter((key) => byDay.has(key) || tasksOnDays.has(key))
-    : days.filter((key) => fromKey(key).getMonth() === anchor.getMonth() && (byDay.has(key) || tasksOnDays.has(key) || key === anchorKey));
+    : days.filter((key) => {
+        const day = fromKey(key);
+        return day >= startOfMonth(anchor) && day < listEnd && (byDay.has(key) || tasksOnDays.has(key) || key === anchorKey);
+      });
   const noEvents = events && listed.length === 0 && (
     <div className="py-12">
       <EmptyState icon={CalendarDays} title="No Events" description={view === "day" ? "Nothing is scheduled this day." : view === "week" ? "Nothing is scheduled in these days." : "Nothing is scheduled this month."} />
@@ -1357,73 +1512,90 @@ function CalendarPageContent() {
   return (
     <Page.Provider value={context}>
       <div className="flex h-full min-h-0 flex-col overflow-y-auto md:grid md:grid-cols-[20rem_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)] md:overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        <div className="shrink-0 space-y-2 border-b bg-background p-3 md:col-start-1 md:row-start-1 md:border-r">
-          <div className="flex h-10 items-center justify-between gap-2">
-            <h1 className="min-w-0 truncate text-lg font-medium">Calendar</h1>
-            <Button onClick={() => openNew(anchorKey)}>New Event</Button>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate text-sm text-muted-foreground tabular-nums">{label}</span>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button variant="outline" onClick={() => setAnchor(today)} disabled={showingToday}>Today</Button>
-              <Button variant="ghost" size="icon" className="size-11 md:size-9" aria-label={`Previous ${unit}`} onClick={() => move(-1)}>
-                <ChevronLeft />
-              </Button>
-              <Button variant="ghost" size="icon" className="size-11 md:size-9" aria-label={`Next ${unit}`} onClick={() => move(1)}>
-                <ChevronRight />
-              </Button>
-            </div>
-          </div>
-          <Tabs value={view} onValueChange={(v) => setView(v as View)}>
-            <TabsList aria-label="View" className="w-full">
-              <TabsTrigger value="agenda">Agenda</TabsTrigger>
-              <TabsTrigger value="day">Day</TabsTrigger>
-              <TabsTrigger value="week">Week</TabsTrigger>
-            </TabsList>
-          </Tabs>
+        {/* The same two bands as Conversations: title and views, then search. */}
+        <div className="shrink-0 bg-background md:col-start-1 md:row-start-1 md:border-r">
+          <PaneHeader
+            title="Calendar"
+            action={
+              <div className="flex shrink-0 items-center gap-2">
+                <Button variant="secondary" onClick={() => setNewTaskOpen(true)}>New Task</Button>
+                <Button variant="secondary" onClick={() => openNew(anchorKey)}>New Event</Button>
+              </div>
+            }
+          >
+            <PaneControls>
+              <ViewButtons label="View" value={view} onSelect={setView} items={[{ key: "agenda", label: "Agenda" }, { key: "day", label: "Day" }, { key: "week", label: "Week" }]} />
+            </PaneControls>
+          </PaneHeader>
+          <SearchBand value={search} onChange={setSearch} placeholder="Search Events" />
         </div>
 
-        {/* On phones the page scrolls as one column, so the grid and the list keep their full height (shrink-0):
-            allowed to shrink, the column squeezed them and the grid's weeks drew over the list. */}
-        <div ref={paneRef} className="min-w-0 shrink-0 md:col-start-2 md:row-span-2 md:row-start-1 md:min-h-0">
-          {events === undefined && (
-            <div className="flex flex-col gap-3 p-3" aria-label="Loading events">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-96 w-full rounded-lg" />
+        {/* The month or dates on show, with the arrows on the far right, like the header of every other page. */}
+        <div className="min-w-0 shrink-0 md:col-start-2 md:row-span-2 md:row-start-1 md:flex md:min-h-0 md:flex-col">
+          <header className="flex shrink-0 items-center justify-between gap-2 border-b bg-background p-3 md:px-4">
+            <span className="flex h-8 min-w-0 items-center truncate text-sm text-muted-foreground tabular-nums">{label}</span>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button variant="ghost" size="icon" aria-label={`Previous ${unit}`} onClick={() => move(-1)}><ArrowLeft /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Next ${unit}`} onClick={() => move(1)}><ArrowRight /></Button>
             </div>
-          )}
-          {events === null && (
-            <div className="py-24">
-              <EmptyState
-                icon={CalendarDays}
-                title="Events Did Not Load"
-                description="Check your connection, then try again."
-                action={<Button variant="outline" onClick={() => { setLoaded(undefined); setVersion((v) => v + 1); }}>Try Again</Button>}
+          </header>
+          {/* On phones the page scrolls as one column, so the grid and the list keep their full height (shrink-0):
+              allowed to shrink, the column squeezed them and the grid's weeks drew over the list. */}
+          <div ref={paneRef} className="min-w-0 shrink-0 md:min-h-0 md:flex-1">
+            {events === undefined && (
+              <div className="flex flex-col gap-3 p-3" aria-label="Loading events">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-96 w-full rounded-lg" />
+              </div>
+            )}
+            {events === null && (
+              <div className="py-24">
+                <EmptyState
+                  icon={CalendarDays}
+                  title="Events Did Not Load"
+                  description="Check your connection, then try again."
+                  action={<Button variant="secondary" onClick={() => { setLoaded(undefined); setVersion((v) => v + 1); }}>Try Again</Button>}
+                />
+              </div>
+            )}
+            {events && view === "agenda" && <MonthView days={gridDays} byDay={byDay} tasksByDay={tasksOnDays} today={today} selected={gridAnchor} monthOf={gridAnchor} onSelect={setAnchor} onCreate={(key) => openNew(key)} />}
+            {events && timeGrid && (
+              <WeekView
+                days={days}
+                byDay={byDay}
+                tasksByDay={tasksOnDays}
+                today={today}
+                now={now}
+                selectedKey={anchorKey}
+                inline={!wide}
+                onSelectDay={(key) => setAnchor(fromKey(key))}
+                onCreateAt={openNew}
               />
-            </div>
-          )}
-          {events && view === "agenda" && <MonthView days={days} byDay={byDay} tasksByDay={tasksOnDays} today={today} selected={anchor} onSelect={setAnchor} onCreate={(key) => openNew(key)} />}
-          {events && timeGrid && (
-            <WeekView
-              days={days}
+            )}
+          </div>
+        </div>
+
+        <div data-calendar-list className="shrink-0 border-t md:col-start-1 md:row-start-2 md:min-h-0 md:border-t-0 md:border-r">
+          {events !== null && (
+            <EventList
+              keys={listed}
               byDay={byDay}
               tasksByDay={tasksOnDays}
               today={today}
-              now={now}
-              selectedKey={anchorKey}
-              inline={!wide}
-              onSelectDay={(key) => setAnchor(fromKey(key))}
-              onCreateAt={openNew}
+              selectedKey={view === "agenda" ? anchorKey : undefined}
+              loading={events === undefined}
+              empty={notConnected || noEvents || null}
+              // A year ahead at most.
+              onEnd={view === "agenda" && !loadingMore && extraMonths < 12 ? () => setMore({ month: monthKey, months: extraMonths + 1 }) : undefined}
+              loadingMore={loadingMore}
+              onVisible={view === "agenda" ? setVisibleKey : undefined}
             />
           )}
         </div>
 
-        <div className="shrink-0 border-t md:col-start-1 md:row-start-2 md:min-h-0 md:border-t-0 md:border-r">
-          {events !== null && <EventList keys={listed} byDay={byDay} tasksByDay={tasksOnDays} today={today} selectedKey={view === "agenda" ? anchorKey : undefined} loading={events === undefined} empty={notConnected || noEvents || null} />}
-        </div>
-
         <EventDialog event={openEvent} onClose={() => setOpenKey(null)} />
-        <TaskDialog task={openTask} onClose={() => setOpenTaskId(null)} />
+        <TaskDialog task={openTask} onClose={() => setOpenTaskId(null)} onEdit={(t) => { setOpenTaskId(null); setEditTarget(t); setNewTaskOpen(true); }} />
+        <NewTaskDialog open={newTaskOpen} onOpenChange={(o) => { setNewTaskOpen(o); if (!o) setEditTarget(null); }} editing={editTarget ?? undefined} />
         <NewEventDialog
           open={newOpen}
           onOpenChange={setNewOpen}

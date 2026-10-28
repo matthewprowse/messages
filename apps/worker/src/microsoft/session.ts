@@ -1,6 +1,6 @@
 import { db, must } from "../db";
-import { decryptJson, encryptJson } from "../crypto";
 import { env } from "../env";
+import { credentialSealer } from "../vault";
 import { errorCode, log } from "../log";
 import { GraphClient, signInRevoked } from "./client";
 import { optionalGranted, type MicrosoftCredentials } from "./oauth";
@@ -26,14 +26,15 @@ export async function openGraphClient(accountId: string, scopes: string[]): Prom
     "load credentials",
   );
   if (!row) throw Object.assign(new Error("No credentials stored"), { code: "NO_CREDENTIALS" });
-  const signedIn = decryptJson<MicrosoftCredentials>(row.ciphertext, env.encryptionKey);
-  const creds = row.refreshed ? decryptJson<MicrosoftCredentials>(row.refreshed, env.encryptionKey) : signedIn;
+  const sealer = await credentialSealer(accountId);
+  const signedIn = await sealer.openJson<MicrosoftCredentials>(row.ciphertext);
+  const creds = row.refreshed ? await sealer.openJson<MicrosoftCredentials>(row.refreshed) : signedIn;
   if (scopes.some((s) => !creds.scopes.includes(s))) throw Object.assign(new Error("scope not granted"), { code: "NOT_GRANTED" });
 
   const keep = async (refreshToken: string) => {
     const { error } = await db
       .from("account_credentials")
-      .update({ refreshed: encryptJson({ ...creds, refreshToken }, env.encryptionKey) })
+      .update({ refreshed: await sealer.sealJson({ ...creds, refreshToken }) })
       .eq("account_id", accountId)
       .eq("updated_at", row.updated_at);
     if (error) log.warn("microsoft token not kept", { account: accountId, code: errorCode(error) });

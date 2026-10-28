@@ -4,6 +4,7 @@ import { db, loadCredentials, setAccountStatus, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { mapLimit } from "../util";
 import { normAddresses } from "../send/from-address";
+import { sealEvent } from "../calendar/sealed";
 import { storeWindow } from "../calendar/store-window";
 import { basicAuth, calendarHome, deleteEventFile, eventUrl, eventsIn, getEvent, listCalendars, putEvent, replaceEvent, signInRejected, userAddresses, type DavCalendar } from "../caldav/client";
 import { excludeOccurrence } from "../caldav/delete-event";
@@ -14,6 +15,7 @@ import type { CalendarOutboxRow } from "../calendar/create-event";
 import { claimUpdate, failUpdate, settleUpdated, storeChange, storedEventOfUpdate } from "../calendar/update-queue";
 import { readChange, seriesShift, GONE as EVENT_GONE, type CalendarUpdateRow, type SeriesShift } from "../calendar/update-event";
 import { icloudUpdateFailure, occurrenceOf, updateIcs } from "../caldav/update-event";
+import { SERIES_RULE } from "../calendar/recurrence";
 import { claimEvent, failEvent, settleCreated } from "./google-calendar";
 import type { ICloudCredentials } from "./icloud";
 
@@ -27,6 +29,7 @@ const POLL_MS = 5 * 60_000;
 const PAST_DAYS = 7;
 const FUTURE_DAYS = 60;
 const CALENDARS_AT_ONCE = 2; // calendars read together
+const SERIES_AT_ONCE = 3; // series files read together for their rules
 const FULL_EVERY_MS = 60 * 60_000; // full fetch at least hourly, even when nothing changed
 
 export class ICloudCalendarConnector {
@@ -36,6 +39,8 @@ export class ICloudCalendarConnector {
   private selfAddresses = new Set<string>();
   /** The calendars and their change markers at the last full fetch. */
   private lastFetch: { at: number; ctags: string } | null = null;
+  /** How each series repeats, by its file, read from the file at most once per full fetch interval. */
+  private readonly rules = new Map<string, { rule: string | null; at: number }>();
   /** The signed-in header and calendars while a session is running; queued events wait until there are some. */
   private live: { auth: string; calendars: DavCalendar[]; addresses: string[] | null } | null = null;
   /** Changes to events run one at a time, so two to the same event cannot cross. */
@@ -120,10 +125,35 @@ export class ICloudCalendarConnector {
       }
     }
 
+    await this.addRules(auth, rows, now);
+
     // Anything stored for this window that iCloud no longer has was cancelled, moved out or deleted.
     const { written, removed } = await storeWindow(this.id, rows, { timeMin, timeMax });
     this.lastFetch = { at: now, ctags };
     log.info("icloud calendar synced", { account: this.id, calendars: calendars.length, events: rows.size, written, removed });
+  }
+
+  /**
+   * Gives each occurrence of a repeating event its series' rule. iCloud sends occurrences already expanded, without
+   * the rule, so the series' file is read for it, once per full fetch interval; one that cannot be read keeps what it
+   * had.
+   */
+  private async addRules(auth: string, rows: Map<string, TablesInsert<"calendar_events">>, now: number) {
+    const due = new Set<string>();
+    for (const row of rows.values()) {
+      const seen = row.resource_url ? this.rules.get(row.resource_url) : undefined;
+      if (row.series_id && row.resource_url && (!seen || now - seen.at > FULL_EVERY_MS)) due.add(row.resource_url);
+    }
+    await mapLimit([...due], SERIES_AT_ONCE, async (url) => {
+      try {
+        const file = await getEvent(auth, url);
+        const series = parseEvents(file.ics).find((e) => !e.recurrenceId);
+        this.rules.set(url, { rule: series?.rrule ?? null, at: now });
+      } catch (err) {
+        log.warn("icloud calendar series rule not read", { account: this.id, code: errorCode(err) });
+      }
+    });
+    for (const row of rows.values()) if (row.series_id && row.resource_url) row.recurrence = this.rules.get(row.resource_url)?.rule ?? null;
   }
 
   /**
@@ -172,10 +202,12 @@ export class ICloudCalendarConnector {
       .find((r) => r);
     if (stored) {
       // Shown in the app at once. If this write fails, the next sync stores it.
-      const saved = await db.from("calendar_events").upsert(stored, { onConflict: "account_id,provider_event_id" });
+      const saved = await db.from("calendar_events").upsert(await sealEvent(stored.user_id, stored), { onConflict: "account_id,provider_event_id" });
       if (saved.error) log.warn("created event not stored", { account: this.id, event: row.id, code: saved.error.code });
     }
     await settleCreated(row.id, request.uid, null);
+    // A repeating event is stored as its series until the next pass fetches its occurrences, which is now.
+    if (row.recurrence) this.lastFetch = null;
     log.info("icloud calendar event created", { account: this.id, event: row.id, attendees: row.attendees.length });
   }
 
@@ -270,6 +302,10 @@ export class ICloudCalendarConnector {
       return;
     }
     const series = change.scope === "series" && !!event.series_id;
+    if (change.recurrence !== undefined && event.series_id && !series) {
+      await failUpdate(row.id, SERIES_RULE);
+      return;
+    }
     let shift: SeriesShift | null = null;
     if (series && change.time) {
       const found = seriesShift(change.time, event);
@@ -313,6 +349,11 @@ export class ICloudCalendarConnector {
     }
     await storeChange(event, change, series, shift);
     await settleUpdated(row.id);
+    if (change.recurrence !== undefined) {
+      // The occurrences change with the rule: the next pass fetches them all again, and the rule with them.
+      this.rules.delete(event.resource_url);
+      this.lastFetch = null;
+    }
     log.info("icloud calendar event changed", { account: this.id, event: row.id, kind: change.kind, scope: series ? "series" : "occurrence" });
   }
 }

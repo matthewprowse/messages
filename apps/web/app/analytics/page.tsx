@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { useAuth, useIsOwner } from "@/lib/auth";
@@ -12,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AiTab } from "@/components/analytics/ai-tab";
 import { UsageTab } from "@/components/analytics/usage-tab";
+import { StorageFlags } from "@/components/analytics/storage-flags";
 import { build } from "@/components/analytics/derive";
 import { EmptyState, Loading } from "@/components/analytics/parts";
 
@@ -113,6 +115,7 @@ function Analytics() {
               <SelectTrigger className="w-36" aria-label="Period"><SelectValue /></SelectTrigger>
               <SelectContent>{RANGES.map((d) => <SelectItem key={d} value={String(d)}>Last {d} Days</SelectItem>)}</SelectContent>
             </Select>
+            <Button variant="outline" asChild><Link href="/analytics/logos">Company Logos</Link></Button>
             {data && <span className="text-xs whitespace-nowrap text-muted-foreground">Updated {clock(data.at)}</span>}
             <Button variant="outline" size="icon" aria-label="Refresh" disabled={busy} onClick={() => void refresh(days)}><RefreshCw className={busy ? "animate-spin" : undefined} /></Button>
           </div>
@@ -126,7 +129,10 @@ function Analytics() {
               <TabsTrigger value="ai">AI</TabsTrigger>
             </TabsList>
             {problem}
-            <TabsContent value="usage"><UsageTab report={reports.usage} empty={reports.empty} /></TabsContent>
+            <TabsContent value="usage">
+              <UsageTab report={reports.usage} empty={reports.empty} />
+              <div className="mt-8"><StorageFlags /></div>
+            </TabsContent>
             <TabsContent value="ai"><AiTab report={reports.ai} empty={reports.empty} /></TabsContent>
           </Tabs>
         )}

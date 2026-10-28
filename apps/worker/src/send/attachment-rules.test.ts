@@ -24,6 +24,11 @@ test("the WhatsApp limit is per file", () => {
   assert.equal(limitError("whatsapp", [50 * MB + 1]), "Each attachment can be up to 50 MB on WhatsApp.");
 });
 
+test("the LinkedIn limit is per file", () => {
+  assert.equal(limitError("linkedin", [20 * MB, 20 * MB]), null);
+  assert.equal(limitError("linkedin", [20 * MB + 1]), "Each attachment can be up to 20 MB on LinkedIn.");
+});
+
 test("no more than ten files", () => {
   assert.equal(limitError("gmail", Array(MAX_ATTACHMENTS).fill(1)), null);
   assert.equal(limitError("gmail", Array(MAX_ATTACHMENTS + 1).fill(1)), TOO_MANY);

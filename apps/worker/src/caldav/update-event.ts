@@ -1,6 +1,7 @@
 import { allDayRange, validTimeZone } from "../calendar/create-event";
 import { ONLY_ORGANIZER, NOT_A_GUEST, seriesShift, wallMs, wallString, type Change, type ChangeTime, type SeriesShift } from "../calendar/update-event";
 import type { StoredCalendarEvent } from "../calendar/delete-event";
+import { SERIES_RULE } from "../calendar/recurrence";
 import { fold } from "./create-event";
 import { exceptionLine } from "./delete-event";
 import { icsTimestamp, parseLine } from "./ical";
@@ -338,6 +339,7 @@ export function updateIcs(ics: string, u: IcsUpdate): { ics: string } | { error:
   const { change } = u;
   const whole = change.scope === "series" || !repeating;
   const rsvp = change.kind === "rsvp";
+  if (change.recurrence !== undefined && !whole) return { error: SERIES_RULE };
 
   // An update of details must come from the organizer (or from an event with no guests at all).
   if (!rsvp) {
@@ -375,7 +377,8 @@ export function updateIcs(ics: string, u: IcsUpdate): { ics: string } | { error:
         }
         const done = applyDetails(block, u, times);
         if ("error" in done) return done;
-        next = done;
+        // A new rule replaces the series' own (or makes a single event repeat); skipped dates stay.
+        next = change.recurrence !== undefined ? setProp(done, "RRULE", `RRULE:${change.recurrence}`) : done;
       }
       replace.set(block, stamp(next, now, rsvp ? null : sequenceOf(block) + 1));
     }

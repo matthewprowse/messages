@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
-import { openAddresses } from "@/lib/open-rows";
+import { openAddresses, openRules } from "@/lib/open-rows";
 
 type StyleRule = Pick<Tables<"style_rules">, "id" | "rule" | "scope" | "contact_id" | "source" | "support_count" | "enabled" | "disabled_reason">;
 type PersonNote = Pick<Tables<"contacts">, "id" | "display_name" | "style_note" | "ai_summary" | "style_updated_at">;
@@ -62,7 +62,7 @@ export function DraftsUseSection() {
     if (loading) return; // wait for the session, or row-level security returns nothing
     let cancelled = false;
     supabase.from("style_rules").select("id, rule, scope, contact_id, source, support_count, enabled, disabled_reason").order("support_count", { ascending: false }).limit(200)
-      .then(({ data, error }) => { if (!cancelled) setRules(error ? [] : data); });
+      .then(async ({ data, error }) => { const opened = error ? [] : await openRules(data); if (!cancelled) setRules(opened); });
     return () => { cancelled = true; };
   }, [loading]);
 
@@ -87,7 +87,7 @@ export function DraftsUseSection() {
       supabase.rpc("embedded_message_count"),
       supabase.from("draft_outcomes").select("edit_ratio").order("created_at", { ascending: false }).limit(50),
     ]).then(async ([p, people, orgs, indexed, outcomes]) => {
-      await openAddresses(orgs.data ?? []);
+      await Promise.all([openAddresses(orgs.data ?? []), openAddresses(people.data ?? [])]);
       if (cancelled) return;
       const ratios = (outcomes.data ?? []).map((o) => o.edit_ratio).filter((r): r is number => r !== null);
       setLearning({

@@ -23,6 +23,7 @@ import {
 function row(patch: Partial<CalendarOutboxRow> = {}): CalendarOutboxRow {
   return {
     id: "3f2b6c1e-0a4d-4e8b-9c7f-1d2e3f4a5b6c",
+    recurrence: null,
     user_id: "u1",
     account_id: "a1",
     calendar_id: "primary",
@@ -218,6 +219,7 @@ test("a created event is stored like a synced one", () => {
     conference_url: null,
     resource_url: null,
     series_id: null,
+    recurrence: null,
     provider_event_id: "abc123",
     title: "Lunch with Julia",
     starts_at: "2026-11-03T10:00:00.000Z",
@@ -279,4 +281,16 @@ test("a Google event keeps its notes, Meet link and series", () => {
     { userId: "u1", accountId: "a1", calendarId: "c" },
   )!;
   assert.equal(video.conference_url, null); // only https links are kept
+});
+
+test("a repeating event is created with its rule, and a series' own event is stored with it", () => {
+  const request = buildCreateEvent(row({ recurrence: "FREQ=WEEKLY;BYDAY=TU" }));
+  assert.ok(!("error" in request));
+  assert.deepEqual(request.body.recurrence, ["RRULE:FREQ=WEEKLY;BYDAY=TU"]);
+  assert.deepEqual(buildCreateEvent(row({ recurrence: "FREQ=WEEKLY\nATTENDEE:mailto:x@example.com" })), { error: "This repeat is not one the calendar knows." });
+  const stored = storedEvent(
+    { id: "series1", summary: "Standup", start: { dateTime: "2026-11-03T09:00:00+02:00" }, end: { dateTime: "2026-11-03T09:15:00+02:00" }, recurrence: ["EXDATE:20261110T070000Z", "RRULE:FREQ=WEEKLY;BYDAY=TU"] },
+    { userId: "u1", accountId: "a1", calendarId: "primary" },
+  );
+  assert.equal(stored?.recurrence, "FREQ=WEEKLY;BYDAY=TU");
 });

@@ -5,13 +5,14 @@ import { allRows, db, must, retryWrite, saveSyncState, setAccountStatus, type Ac
 import { errorCode, log } from "../log";
 import { chunks } from "../util";
 import { seal } from "../vault";
-import { TaskUpdateError, taskOfUpdate } from "../tasks";
-import { signInRevoked, type GoogleClient } from "../google/client";
+import { NO_TITLE, TaskUpdateError, taskOfUpdate, taskWriteOfRow } from "../tasks";
+import { GoogleApiError, signInRevoked, type GoogleClient } from "../google/client";
 import { TASKS_SCOPE } from "../google/oauth";
 import { googleFatalDetail, openGoogleClient } from "../google/session";
 import {
   API,
   TASKS_API_OFF,
+  TASK_GONE,
   allTaskLists,
   apiNotEnabled,
   listTasks,
@@ -20,6 +21,7 @@ import {
   sortChanges,
   taskFields,
   taskUpdateFailure,
+  writeBody,
   type GoogleTask,
   type GoogleTaskList,
 } from "../google/tasks";
@@ -214,6 +216,102 @@ export class GoogleTasksConnector {
     const run = this.updates.then(() => this.applyUpdate(row));
     this.updates = run.catch(() => undefined);
     return run;
+  }
+
+  /** Adds a task made in the app to the default list, then stores it so the app shows it before the next sync. */
+  createTask(row: Tables<"task_updates">): Promise<void> {
+    return this.queue(() => this.applyCreate(row));
+  }
+
+  /** Changes a task's title, notes or date, as made in the app. */
+  editTask(row: Tables<"task_updates">): Promise<void> {
+    return this.queue(() => this.applyEdit(row));
+  }
+
+  /** Deletes a task, as made in the app. */
+  deleteTask(row: Tables<"task_updates">): Promise<void> {
+    return this.queue(() => this.applyDelete(row));
+  }
+
+  private queue(work: () => Promise<void>): Promise<void> {
+    const run = this.updates.then(work);
+    this.updates = run.catch(() => undefined);
+    return run;
+  }
+
+  private signedIn(): GoogleClient {
+    if (!this.client || this.stopped) throw new TaskUpdateError("Google Tasks is still connecting. Try again in a moment.");
+    return this.client;
+  }
+
+  /** The task a change is for, which must be this account's. */
+  private async ownTask(row: Tables<"task_updates">) {
+    const task = await taskOfUpdate(row);
+    if (!task) throw new TaskUpdateError(TASK_GONE);
+    if (task.account_id !== this.id || row.user_id !== this.account.user_id) throw new TaskUpdateError("This task belongs to another account.");
+    return task;
+  }
+
+  private async applyCreate(row: Tables<"task_updates">) {
+    const client = this.signedIn();
+    if (row.account_id !== this.id || row.user_id !== this.account.user_id) throw new TaskUpdateError("This task belongs to another account.");
+    const write = await taskWriteOfRow(row);
+    if (!write.title) throw new TaskUpdateError(NO_TITLE);
+    let created: GoogleTask;
+    let list: GoogleTaskList;
+    try {
+      // The default list by its real id: a stored task's list_id must be one the sync lists, or it removes the task.
+      list = await client.request<GoogleTaskList>(`${API}/users/@me/lists/@default`, { timeoutMs: 30_000 });
+      created = await client.request<GoogleTask>(`${API}/lists/${encodeURIComponent(list.id)}/tasks`, { method: "POST", body: writeBody(write, true), timeoutMs: 30_000 });
+    } catch (err) {
+      log.warn("task not created", { account: this.id, update: row.id, code: errorCode(err) });
+      throw new TaskUpdateError(taskUpdateFailure(err));
+    }
+    const listName = await seal(this.account.user_id, FIELD.taskList, list.title ?? "");
+    must(await db.from("tasks").upsert(await this.row(list.id, listName, created), { onConflict: "account_id,provider_task_id" }), "store new task");
+    log.info("task created", { account: this.id, update: row.id });
+  }
+
+  private async applyEdit(row: Tables<"task_updates">) {
+    const client = this.signedIn();
+    const task = await this.ownTask(row);
+    const write = await taskWriteOfRow(row);
+    if (!write.title) throw new TaskUpdateError(NO_TITLE);
+    let updated: GoogleTask;
+    try {
+      updated = await client.request<GoogleTask>(`${API}/lists/${encodeURIComponent(task.list_id)}/tasks/${encodeURIComponent(task.provider_task_id)}`, {
+        method: "PATCH",
+        body: writeBody(write, false),
+        timeoutMs: 30_000,
+      });
+    } catch (err) {
+      log.warn("task not changed", { account: this.id, update: row.id, code: errorCode(err) });
+      throw new TaskUpdateError(taskUpdateFailure(err));
+    }
+    const fields = taskFields(updated);
+    const meta = task.provider_meta && typeof task.provider_meta === "object" && !Array.isArray(task.provider_meta) ? task.provider_meta : {};
+    // Sealed title and notes as the app sent them; the date as Google kept it.
+    must(
+      await db.from("tasks").update({ title: row.title ?? "", notes: row.notes, due_at: fields.due_at, due_all_day: true, provider_meta: { ...meta, updated: updated.updated ?? null } }).eq("id", task.id),
+      "store task change",
+    );
+    log.info("task edited", { account: this.id, update: row.id });
+  }
+
+  private async applyDelete(row: Tables<"task_updates">) {
+    const client = this.signedIn();
+    const task = await this.ownTask(row);
+    try {
+      await client.request(`${API}/lists/${encodeURIComponent(task.list_id)}/tasks/${encodeURIComponent(task.provider_task_id)}`, { method: "DELETE", timeoutMs: 30_000 });
+    } catch (err) {
+      // Already gone in Google Tasks is what was asked for.
+      if (!(err instanceof GoogleApiError && (err.status === 404 || err.status === 410))) {
+        log.warn("task not deleted", { account: this.id, update: row.id, code: errorCode(err) });
+        throw new TaskUpdateError(taskUpdateFailure(err));
+      }
+    }
+    must(await db.from("tasks").delete().eq("id", task.id), "remove deleted task");
+    log.info("task deleted", { account: this.id, update: row.id });
   }
 
   /**

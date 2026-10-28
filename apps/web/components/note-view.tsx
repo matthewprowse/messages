@@ -1,5 +1,8 @@
 "use client";
 
+import { notePdf, pdfName } from "@/lib/note-pdf";
+import { jpegPicture } from "@/lib/note-pdf-images";
+import { acquireNoteFile } from "@/lib/signed-urls";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -156,16 +159,54 @@ function OpenNote({ note }: { note: Note }) {
   const state = saveState(id);
   const status = state === "saving" ? "Saving" : state === "failed" ? "Not Saved" : state === "saved" ? "Saved" : `Edited ${relTime(note.updatedAt)}`;
   const attach = () => pickerRef.current?.click();
+  // The note as a PDF: made here in the browser, downloaded, and kept in the note's own files so it is there to open again.
+  // Pictures in the note are shrunk to what a page can show, so a note full of photos stays quick.
+  const exportPdf = async () => {
+    const current = editorRef.current;
+    if (!current) return;
+    const toastId = toast.loading("Making PDF");
+    try {
+      const bytes = await notePdf(note.title, current.getJSON(), async (fileId) => {
+        const stored = filesRef.current.get(fileId);
+        if (!stored?.path) return null;
+        const handle = acquireNoteFile(stored.path);
+        try {
+          const opened = await handle.promise;
+          return opened ? await jpegPicture(opened.url) : null;
+        } finally {
+          handle.release();
+        }
+      });
+      const name = pdfName(note.title);
+      const file = new File([bytes as BlobPart], name, { type: "application/pdf" });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      addFiles([file], current.state.doc.content.size, false);
+      toast.success(`${name} is downloaded and saved in this note`, { id: toastId });
+      track("feature_used", { feature: "note_exported", detail: "pdf" });
+    } catch {
+      toast.error("The PDF could not be made. Try again.", { id: toastId });
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
-        <Button variant="ghost" size="icon" className="size-11 md:hidden" asChild aria-label="Back">
+        <Button variant="ghost" size="icon" className="size-6 md:hidden" asChild aria-label="Back">
           <Link href="/notes"><ArrowLeft /></Link>
         </Button>
-        <div className="flex min-w-0 flex-1 items-center gap-3 text-sm text-muted-foreground" aria-live="polite">
-          <span className={state === "failed" ? "text-destructive" : undefined}>{status}</span>
-          {state === "failed" && <Button variant="link" size="sm" className="px-0" onClick={() => void flush(id)}>Try Again</Button>}
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-live="polite">
+            <span className={state === "failed" ? "text-destructive" : undefined}>{status}</span>
+            {state === "failed" && <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => void flush(id)}>Try Again</Button>}
+          </div>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
@@ -173,6 +214,7 @@ function OpenNote({ note }: { note: Note }) {
             <DropdownMenuItem onClick={() => pin(id, !note.pinned)}>{note.pinned ? "Unpin" : "Pin"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => draftWith(id, !note.useInDrafts)}>{note.useInDrafts ? "Stop Using in Drafts" : "Use in Drafts"}</DropdownMenuItem>
             <DropdownMenuItem onClick={attach}>Attach Files</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void exportPdf()}>Export as PDF</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>Delete</DropdownMenuItem>
           </DropdownMenuContent>

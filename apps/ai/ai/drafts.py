@@ -3,7 +3,7 @@
 Your voice comes in layers: what you said about yourself and style rules learned from your sent mail,
 edits and choices (everyone); a note on how you write to this person and who they are (per person);
 and the conversation itself. Voice examples are how you answered the emails most like this one
-(found by embedding, public.similar_replies), then your own sent mail to this person and anyone.
+(found by embedding, similar.py), then your own sent mail to this person and anyone.
 Everything before the model call is read in one call to public.draft_context, one round trip.
 
 The prompt puts what is the same for all your drafts first (who you are, your rules, saved examples,
@@ -36,11 +36,17 @@ instruction (so another try or an adjustment works from text), and the recording
 A draft with no thread_id is a new message, from New Email or New WhatsApp: account_id is the account it
 goes out from, contact_id who it is to when they are a contact. Its context comes from
 public.compose_context (you, your rules, facts and voice, and this person) and an email one gets a
-subject too."""
+subject too.
+
+A new draft in a work chat (or a shared inbox chat) of a team also carries the team's company voice
+(company_voice.py): read with public.company_voice_for_draft, which returns nothing for a personal chat, so
+a personal chat's prompt is exactly what it was. Your own style wins on wording and the company's rules and
+facts win on content. Edits, adjustments and new messages do not use it."""
 
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -48,9 +54,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
-from .embed import Embeddings, vector_literal
-from .fields import BODY, CHOICES, DRAFT, HTML, INSTRUCTION, NAME, NOTE, NOTE_TITLE, QUOTE, SUBJECT, TRANSCRIPT, VOICE_INSTRUCTION
-from .gemini import Gemini, GeminiError, UsageContext
+from .company_voice import COMPANY_SYSTEM, company_lines, pick_company
+from .embed import Embeddings
+from .poll import Backoff
+from .fields import CONTACT_RELATIONSHIP, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, STYLE_RULE, WRITING_BODY, WRITING_SITUATION, BODY, CHOICES, DRAFT, HTML, INSTRUCTION, NAME, NOTE, NOTE_TITLE, QUOTE, SUBJECT, TRANSCRIPT, VOICE_INSTRUCTION
+from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
 from .retry import not_in
 from .supabase import Supabase, in_list
 from .text import UNTRUSTED, clean
@@ -71,7 +79,15 @@ STALE_AFTER = timedelta(minutes=10)  # a draft still pending this long is failed
 SWEEP_EVERY_S = 30  # how often drafts pending too long are looked for
 MAX_RUNNING = 4
 HEDGE_AFTER_S = 4.5  # past the model's p90 (about 3.3s on a draft): a second request is sent and the first answer used
+DRAFT_MAX_OUTPUT = 4096  # tokens, thinking included: a reply is a few hundred; this only stops a runaway
+COMPOSE_PER_HOUR = 10  # new-message drafts a person can ask for in an hour, as threaded ones are limited per conversation
+
+
+def hedge_on() -> bool:
+    """The hedged second request is off unless DRAFT_HEDGE is "true": about one draft in ten was billed twice for it."""
+    return os.environ.get("DRAFT_HEDGE", "").strip().lower() == "true"
 POLL_IDLE_S = 1.5
+POLL_IDLE_MAX_S = 5.0  # a quiet worker looks this often at most; a draft asked for after a quiet spell waits up to this
 POLL_ACTIVE_S = 0.5
 ACTIVE_FOR_S = 120
 
@@ -192,10 +208,12 @@ def build_prompt(
     last_from_me: bool = False,
     facts: list[tuple[str, str]] | None = None,
     compose: bool = False,
+    company: dict[str, Any] | None = None,
 ) -> str:
     """You first (the same for every draft on this channel, so Gemini can bill it at the cached rate), then
     this person, then the conversation, and what you asked for last. With edit, the end is your own text
-    to correct."""
+    to correct. company is the team's voice for a work chat (company_voice.py), placed under your own rules and
+    facts and before your examples; a personal chat has none, and its prompt is unchanged."""
     medium = "WhatsApp" if channel == "whatsapp" else "email"
     noun = "messages" if channel == "whatsapp" else "emails"
     lines = [f"You are writing as: {me or 'the user'}", f"About them: {about or 'not given'}"]
@@ -204,6 +222,7 @@ def build_prompt(
     if facts:
         lines += ["", "Facts they keep for replies (use one only when the reply needs it, and quote figures exactly):"]
         lines += [f"[{title or 'Note'}]\n{body}\n" for title, body in facts]
+    lines += company_lines(company)
     if examples:
         lines += ["", "Examples they saved:"] + [f"[{situation}]\n{body}\n" for situation, body in examples]
     if recent:
@@ -298,12 +317,20 @@ def pick_drafts(pending: list[dict[str, Any]], running: dict[str, str], room: in
 
 class Drafts:
     def __init__(
-        self, db: Supabase, gemini: Gemini, model: str, embeddings: Embeddings | None = None, vault: Vault | None = None, fast_model: str | None = None
+        self,
+        db: Supabase,
+        gemini: Gemini,
+        model: str,
+        embeddings: Embeddings | None = None,
+        vault: Vault | None = None,
+        fast_model: str | None = None,
+        predraft_model: str | None = None,
     ):
         self.db = db
         self.gemini = gemini
         self.model = model
         self.fast_model = fast_model or model  # edits and adjustments: a small change to text that is already there
+        self.predraft_model = predraft_model or model  # automatic pre-drafts, which nobody is waiting on
         self.embeddings = embeddings
         self.vault = vault or Vault(db)  # without one, plaintext passes through and nothing is encrypted
         self._runner = ThreadPoolExecutor(max_workers=MAX_RUNNING, thread_name_prefix="draft")
@@ -313,11 +340,15 @@ class Drafts:
         self._attempts: dict[str, int] = {}
         self._swept = 0.0
         self._active_until = 0.0
+        self._idle = Backoff(POLL_IDLE_S, POLL_IDLE_MAX_S, 1.5)
 
     def poll_wait(self) -> float:
         """Seconds until the next check: sooner while drafts are being asked for."""
         busy = self._running or time.monotonic() < self._active_until
-        return POLL_ACTIVE_S if busy else POLL_IDLE_S
+        if busy:
+            self._idle.reset()
+            return POLL_ACTIVE_S
+        return self._idle.next(False)  # 1.5s, then longer each look, up to POLL_IDLE_MAX_S
 
     def run_once(self) -> int:
         """Starts pending drafts in the background. Returns how many were started."""
@@ -355,6 +386,7 @@ class Drafts:
         for d in pending:
             self.vault.open_row(d["user_id"], d, [("instruction", INSTRUCTION), ("decision", INSTRUCTION), ("source", DRAFT)])
         started = pick_drafts(pending, running, MAX_RUNNING - len(running))
+        started = [d for d in started if not self._limited(d)]
         warm = getattr(self.gemini, "warm", None)
         if started and warm:  # the connection is ready by the time draft_context has been read
             threading.Thread(target=warm, args=(self.fast_model if all(revises(d) for d in started) else self.model,), daemon=True).start()
@@ -363,6 +395,63 @@ class Drafts:
                 self._running[d["id"]] = d["thread_id"] or d["id"]
             self._runner.submit(self._run, d)
         return len(started)
+
+    def _limited(self, d: dict[str, Any]) -> bool:
+        """True, and the draft failed, when this conversation has had its share of drafts: at most
+        regen_per_hour that a person asked for in the past hour, and auto_drafts_per_day pre-drafts in the past
+        day (both set in the admin panel). Drafts that failed for any reason do not count. A new message
+        has no conversation, so it is limited per person instead (COMPOSE_PER_HOUR)."""
+        thread = d.get("thread_id")
+        if not thread:
+            return self._compose_limited(d)
+        limits = self.gemini.limits() if hasattr(self.gemini, "limits") else DEFAULT_LIMITS
+        auto = bool(d.get("auto"))
+        since = datetime.now(timezone.utc) - (timedelta(days=1) if auto else timedelta(hours=1))
+        try:
+            made = self.db.count(
+                "drafts",
+                {
+                    "thread_id": f"eq.{thread}",
+                    "auto": "is.true" if auto else "is.false",
+                    "status": "not.in.(pending,failed,expired)",
+                    "created_at": f"gte.{since.isoformat()}",
+                },
+            )
+        except Exception as err:  # never hold drafts up over the count
+            log.warn("draft limit not checked", code=log.code_of(err))
+            return False
+        if made < limits["auto_drafts_per_day" if auto else "regen_per_hour"]:
+            return False
+        if auto:
+            self._expire(d)  # nobody asked for it, so there is nothing to tell them
+        else:
+            self._fail(d, "You have asked for a lot of drafts on this conversation. Try again in a little while.")
+        log.info("draft limited", draft=d["id"], auto=auto)
+        return True
+
+    def _compose_limited(self, d: dict[str, Any]) -> bool:
+        """A new message has no conversation, so its limit is per person: COMPOSE_PER_HOUR in the past hour, not
+        counting ones that failed. Fails the draft with a plain message when over."""
+        since = datetime.now(timezone.utc) - timedelta(hours=1)
+        try:
+            made = self.db.count(
+                "drafts",
+                {
+                    "user_id": f"eq.{d['user_id']}",
+                    "thread_id": "is.null",
+                    "auto": "is.false",
+                    "status": "not.in.(pending,failed,expired)",
+                    "created_at": f"gte.{since.isoformat()}",
+                },
+            )
+        except Exception as err:  # never hold drafts up over the count
+            log.warn("compose limit not checked", code=log.code_of(err))
+            return False
+        if made < COMPOSE_PER_HOUR:
+            return False
+        self._fail(d, "You have asked for a lot of drafts. Try again in a little while.")
+        log.info("compose draft limited", draft=d["id"])
+        return True
 
     def _run(self, d: dict[str, Any]) -> None:
         try:
@@ -422,7 +511,7 @@ class Drafts:
 
         contact = first.get("contact") or {}
         latest_in = next((m for m in reversed(messages) if m["direction"] == "inbound"), None)
-        similar = self._similar(user, thread, latest_in, first.get("similar"))
+        similar = self._similar(user, thread, latest_in)
         names = {cid: self.vault.open(user, NAME, name) for cid, name in (first.get("senders") or {}).items()}
         if contact:
             names.setdefault(contact.get("id"), contact.get("display_name"))
@@ -434,6 +523,8 @@ class Drafts:
                 who = names[m["sender_contact_id"]] or "Them"
             conversation.append((who, describe(m)))
 
+        # The team's voice is for a new draft in a work chat. An edit or adjustment only corrects their own text.
+        company = self._company(user, d["thread_id"]) if edit is None else None
         return {
             "thread": thread,
             "prompt": build_prompt(
@@ -448,9 +539,27 @@ class Drafts:
                 group_name=(thread.get("group_name") or "WhatsApp group") if thread.get("is_group") else "",
                 subject=thread.get("subject") or "",
                 last_from_me=messages[-1]["direction"] == "outbound",
+                company=company,
             ),
             "edit": edit is not None,
+            "company": company is not None,
         }
+
+    def _company(self, user: str, thread_id: str) -> dict[str, Any] | None:
+        """The team's voice for this chat, opened, or None. The database only returns it for a work chat (or a shared
+        inbox chat) of the person's own team, so a personal chat gets nothing; someone in no team never asks. Never
+        fails the draft: when it cannot be read the draft is written without it."""
+        try:
+            if not self.vault.workspaces_for(user):
+                return None
+            got = self.db.rpc("company_voice_for_draft", {"p_user": user, "p_thread": thread_id})
+            if not isinstance(got, dict) or not got.get("workspace_id"):
+                return None
+            workspace = got["workspace_id"]
+            return pick_company(got.get("items") or [], lambda field, value: self.vault.open(user, field, value, workspace) or "")
+        except Exception as err:
+            log.warn("company voice not read", thread=thread_id, code=log.code_of(err))
+            return None
 
     def _you(self, user: str, first: dict[str, Any], similar: list[tuple[str, str]]) -> dict[str, Any]:
         """The parts of the prompt about you and the person, from draft_context or compose_context."""
@@ -459,18 +568,20 @@ class Drafts:
         contact_id = contact.get("id")
         org = contact.get("organizations") or {}
         recent = pick_voice([], first["recent"], limit=RECENT_VOICE)
+        opened = lambda field, value: self.vault.open(user, field, value) or ""  # sealed or plain
+        rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in first["rules"]]
         return {
             "me": profile.get("display_name") or "",
             "about": profile.get("about") or "",
-            "rules": [r["rule"] for r in first["rules"] if r["scope"] == "global"][:20],
-            "examples": [(e["situation"], e["body"]) for e in first["examples"]],
+            "rules": [r["rule"] for r in rules if r["scope"] == "global" and r["rule"]][:20],
+            "examples": [(opened(WRITING_SITUATION, e.get("situation")), opened(WRITING_BODY, e.get("body"))) for e in first["examples"]],
             "recent": recent,
             "facts": pick_facts([(self.vault.open(user, NOTE_TITLE, f.get("title")) or "", self.vault.open(user, NOTE, f.get("body")) or "") for f in first.get("facts") or []]),
             "them": self.vault.open(user, NAME, contact.get("display_name")) or "",
-            "relationship": contact.get("relationship") or "",
-            "style_note": contact.get("style_note") or "",
-            "who_they_are": contact.get("ai_summary") or (f"{org['name']}: {org['summary']}" if org.get("summary") else ""),
-            "person_rules": [r["rule"] for r in first["rules"] if contact_id and r["scope"] == "contact" and r.get("contact_id") == contact_id][:10],
+            "relationship": opened(CONTACT_RELATIONSHIP, contact.get("relationship")),
+            "style_note": opened(CONTACT_STYLE_NOTE, contact.get("style_note")),
+            "who_they_are": opened(CONTACT_SUMMARY, contact.get("ai_summary")) or (f"{org['name']}: {org['summary']}" if org.get("summary") else ""),
+            "person_rules": [r["rule"] for r in rules if contact_id and r["scope"] == "contact" and r.get("contact_id") == contact_id and r["rule"]][:10],
             "more_voice": pick_more_voice(first.get("to_them") or [], first["recent"], shown=recent, similar=similar),
             "similar": similar,
         }
@@ -536,7 +647,7 @@ class Drafts:
         thread, prompt, edit, subject = gathered["thread"], gathered["prompt"], gathered["edit"], gathered.get("subject", False)
         compose = thread["id"] is None
         adjust = edit and is_adjust(d.get("tone"))
-        model = self.fast_model if edit else self.model
+        model = self.fast_model if edit else self.predraft_model if d.get("auto") else self.model
         audio = self._recording(d) if d.get("audio_path") and not edit else None
         if d.get("audio_path") and not edit and audio is None:
             self._fail(d, "The recording could not be read. Try again.")
@@ -544,7 +655,7 @@ class Drafts:
         try:
             result = self._hedged(lambda: self.gemini.json(
                 model,
-                ADJUST_SYSTEM if adjust else EDIT_SYSTEM if edit else COMPOSE_SYSTEM if compose else SYSTEM,
+                ADJUST_SYSTEM if adjust else EDIT_SYSTEM if edit else COMPOSE_SYSTEM if compose else SYSTEM + COMPANY_SYSTEM if gathered.get("company") else SYSTEM,
                 prompt,
                 schema_for(voice=audio is not None, subject=subject),
                 UsageContext(d["user_id"], "draft", thread["account_id"], thread["id"]),
@@ -554,8 +665,9 @@ class Drafts:
                 thinking="medium" if edit and not adjust else "low",
                 attempts=3,  # someone is waiting: fail and let them try again rather than wait minutes
                 timeout=60,
+                max_output=DRAFT_MAX_OUTPUT,
                 audio=audio,
-            ), hedge=audio is None)
+            ), hedge=audio is None and hedge_on())
         except GeminiError as err:
             log.warn("draft failed", draft=d["id"], status=err.status)
             self._fail(d, "The draft could not be written. Try again.")
@@ -612,29 +724,26 @@ class Drafts:
                     return f.result()
         return first.result()  # both failed: the first one's error
 
-    def _similar(self, user: str, thread: dict[str, Any], latest_in: dict[str, Any] | None, rows: list[dict[str, Any]] | None) -> list[tuple[str, str]]:
-        """How you answered the emails most like the one being answered, from other conversations. rows
-        are what draft_context found with the email's stored vector; None when it has none yet (mail is
-        embedded once answered), so it is embedded now and searched with here."""
-        if rows is None:
-            rows = self._search(user, thread, latest_in)
-        for r in rows:  # both texts are messages.body_text, so both open as BODY
-            self.vault.open_row(user, r, [("inbound_subject", SUBJECT), ("inbound_text", BODY), ("reply_text", BODY)])
-        return pick_similar(rows, thread["id"])
-
-    def _search(self, user: str, thread: dict[str, Any], latest_in: dict[str, Any] | None) -> list[dict[str, Any]]:
-        """similar_replies for an email with no stored vector. Never fails the draft: without embeddings
-        it returns nothing and the recent mail is used."""
+    def _similar(self, user: str, thread: dict[str, Any], latest_in: dict[str, Any] | None) -> list[tuple[str, str]]:
+        """How you answered the emails most like the one being answered, from other conversations. The search
+        runs here over the user's opened vectors (similar.py), never in the database: the email's own vector
+        is read back when it is stored (mail is embedded once answered), else it is embedded now. Never fails
+        the draft: without embeddings it returns nothing and the recent mail is used."""
         if not latest_in or not latest_in.get("id") or self.embeddings is None:
             return []
         try:
-            values = self.embeddings.for_message(latest_in, user, thread.get("account_id"), thread["id"])
+            values = self.embeddings.stored(user, latest_in["id"])
+            if values is None:
+                values = self.embeddings.for_message(latest_in, user, thread.get("account_id"), thread["id"])
             if values is None:
                 return []
-            return self.db.rpc("similar_replies", {"p_user": user, "p_embedding": vector_literal(values), "p_limit": SIMILAR_LIMIT * 2, "p_exclude_thread": thread["id"]}) or []
+            rows = self.embeddings.index.replies(user, values, thread["id"], SIMILAR_LIMIT * 2)
         except Exception as err:
             log.warn("similar replies unavailable", thread=thread["id"], code=log.code_of(err))
             return []
+        for r in rows:  # both texts are messages.body_text, so both open as BODY
+            self.vault.open_row(user, r, [("inbound_subject", SUBJECT), ("inbound_text", BODY), ("reply_text", BODY)])
+        return pick_similar(rows, thread["id"])
 
 
 def pick_facts(notes: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -714,7 +823,7 @@ def pick_more_voice(to_them: list[dict[str, Any]], recent: list[dict[str, Any]],
 
 
 def pick_similar(rows: list[dict[str, Any]], current_thread: str) -> list[tuple[str, str]]:
-    """(what they received, how they replied) from similar_replies, closest first: other conversations
+    """(what they received, how they replied) from the similar-reply search, closest first: other conversations
     only, close enough to count, with a reply that says something, one per conversation."""
     out: list[tuple[str, str]] = []
     threads: set[str] = set()

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from ...fields import BODY, PREVIEW, QUOTE
+from ...fields import BODY, FILENAME, PREVIEW, QUOTE
 
 SITE = "https://www.instagram.com"
 UNSUPPORTED = "This message type is not shown here. Open Instagram to see it."
@@ -25,6 +25,7 @@ class Person:
     pk: str
     username: str | None = None
     full_name: str | None = None
+    picture: str | None = None  # profile_pic_url: signed and personal, fetched soon after and never logged
 
     @property
     def name(self) -> str:
@@ -104,7 +105,7 @@ def person(raw: dict[str, Any]) -> Person | None:
     pk = _str(raw.get("pk") or raw.get("pk_id") or raw.get("id") or raw.get("strong_id__"))
     if not pk:
         return None
-    return Person(pk=pk, username=raw.get("username") or None, full_name=(raw.get("full_name") or "").strip() or None)
+    return Person(pk=pk, username=raw.get("username") or None, full_name=(raw.get("full_name") or "").strip() or None, picture=_str(raw.get("profile_pic_url")) or None)
 
 
 def _best(candidates: list[dict[str, Any]] | None) -> str | None:
@@ -388,7 +389,7 @@ def payload(s: Sealer, t: Thread, item: Item, viewer_pk: str, *, live: bool, unr
         "preview": s.seal(PREVIEW, one_line(preview)),
         "body_text": s.seal(BODY, item.text or None),
         "provider_meta": meta,
-        "attachments": [{"filename": item.media.filename, "mime_type": item.media.mime_type, "kind": item.media.kind, "size_bytes": None}] if item.media else [],
+        "attachments": [{"filename": s.seal(FILENAME, item.media.filename), "mime_type": item.media.mime_type, "kind": item.media.kind, "size_bytes": None}] if item.media else [],
     }
 
 

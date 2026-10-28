@@ -119,3 +119,113 @@ export function taskWhen(item: DayTask, timeOf: (iso: string) => string): string
 export function taskDetail(task: Pick<Task, "listName">, source: string | undefined): string {
   return [task.listName, source].filter(Boolean).join(" · ") || "Task";
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Making, changing and deleting tasks (20261107130000_task_writes.sql). Each is a task_updates row the worker
+// hands to the task's provider, like a tick; title and notes are sealed in the browser before the row is stored.
+// ---------------------------------------------------------------------------------------------------------
+
+/** The accounts a task can be made in. */
+export const TASK_PROVIDERS = ["microsoft_todo", "google_tasks", "icloud_reminders"] as const;
+export const TASK_PROVIDER_NAMES: Record<string, string> = { microsoft_todo: "Microsoft To Do", google_tasks: "Google Tasks", icloud_reminders: "iCloud Reminders" };
+/** Google Tasks keeps only a task's date, so there is no time to set and no priority. */
+export const dateOnly = (provider: string | undefined) => provider === "google_tasks";
+
+export const MAX_TITLE = 500;
+export const MAX_NOTES = 8000;
+
+/** A task being made or changed, as the form holds it. date is "YYYY-MM-DD" and time "HH:MM", both "" when not set. */
+export interface TaskForm {
+  title: string;
+  notes: string;
+  accountId: string;
+  date: string;
+  time: string;
+  /** 0 for none, else 1 high, 2 medium, 3 low. */
+  priority: 0 | 1 | 2 | 3;
+}
+
+/** What a task_updates row holds for a form, before title and notes are sealed. */
+export interface TaskWriteFields {
+  title: string;
+  notes: string | null;
+  due_at: string | null;
+  due_all_day: boolean;
+  priority: 1 | 2 | 3 | null;
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** The form as the day the task is due on and its time, read from a task as the screens hold it (see dueDay). */
+export function formOfTask(task: Task): TaskForm {
+  const day = dueDay(task) ?? "";
+  const at = task.dueAt && !task.dueAllDay ? new Date(task.dueAt) : null;
+  return {
+    title: task.title === "Untitled Task" ? "" : task.title,
+    notes: task.notes ?? "",
+    accountId: task.accountId,
+    date: day,
+    time: at ? `${pad(at.getHours())}:${pad(at.getMinutes())}` : "",
+    priority: task.priority ?? 0,
+  };
+}
+
+/** Why a form cannot be saved, or null. The calendar draws tasks on their due day, so every task needs a date. */
+export function taskProblem(form: TaskForm): { field: "title" | "notes" | "date"; text: string } | null {
+  if (!form.title.trim()) return { field: "title", text: "Enter a title." };
+  if (form.title.trim().length > MAX_TITLE) return { field: "title", text: `Keep the title under ${MAX_TITLE} characters.` };
+  if (form.notes.length > MAX_NOTES) return { field: "notes", text: `Keep the notes under ${MAX_NOTES} characters.` };
+  if (!form.date) return { field: "date", text: "Pick a due date so the task shows in the calendar." };
+  return null;
+}
+
+/**
+ * The fields to store for a form. A date alone is an all-day task, at midnight UTC of the date; with a time it is
+ * that local time. Google Tasks keeps neither a time nor a priority, so they are left out for it.
+ */
+export function taskWriteFields(form: TaskForm, provider: string | undefined): TaskWriteFields {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(form.date);
+  const t = /^(\d{2}):(\d{2})$/.exec(form.time);
+  const timed = !!m && !!t && !dateOnly(provider);
+  const dueAt = !m ? null : timed ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(t![1]), Number(t![2])).toISOString() : `${form.date}T00:00:00Z`;
+  return {
+    title: form.title.trim(),
+    notes: form.notes.trim() || null,
+    due_at: dueAt,
+    due_all_day: !timed,
+    priority: dateOnly(provider) || form.priority === 0 ? null : form.priority,
+  };
+}
+
+/** The task a form stands for, to show at once while the worker makes it. */
+export function taskOfWrite(id: string, accountId: string, write: TaskWriteFields, base?: Task): Task {
+  return {
+    ...base,
+    id,
+    accountId,
+    title: write.title,
+    notes: write.notes ?? undefined,
+    dueAt: write.due_at,
+    dueAllDay: write.due_all_day,
+    completed: base?.completed ?? false,
+    priority: write.priority ?? undefined,
+    pending: true,
+  };
+}
+
+/** A task made here and not yet stored has a temporary id: it cannot be ticked, changed or deleted until it is. */
+const TEMP = "new-task-";
+export const tempTaskId = () => `${TEMP}${crypto.randomUUID()}`;
+export const isTempTask = (task: Pick<Task, "id">) => task.id.startsWith(TEMP);
+
+/** True when the form differs from the task it was opened from, so Save has something to save. */
+export function taskChanged(form: TaskForm, task: Task): boolean {
+  const before = formOfTask(task);
+  return (["title", "notes", "date", "time", "priority"] as const).some((k) => (k === "title" || k === "notes" ? form[k].trim() !== before[k].trim() : form[k] !== before[k]));
+}
+
+/** The time choices offered: every quarter hour, plus one already set that falls between them. */
+export function timeChoices(current: string, step = 15): string[] {
+  const times = Array.from({ length: 1440 / step }, (_, i) => `${pad(Math.floor((i * step) / 60))}:${pad((i * step) % 60)}`);
+  return current && !times.includes(current) ? [...times, current].sort() : times;
+}

@@ -5,7 +5,7 @@ import { markSubmitted } from "@/lib/analytics";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
-import { deleteContact, type ContactDetail, type ContactSummary } from "@/lib/contacts";
+import { deleteContact, setContactHidden, type ContactDetail, type ContactSummary } from "@/lib/contacts";
 import { listAutomaticMerges, mergeSide, type MergeRecord } from "@/lib/contact-merging";
 import { identityGroups, mergeReasonText, planMerge } from "@/lib/merging";
 import { relTime } from "@/lib/format";
@@ -140,7 +140,7 @@ function SplitForm({ contact, onDone }: { contact: ContactDetail; onDone: () => 
         <Input id="split-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} disabled={saving} />
       </div>
       <div className={DIALOG_BUTTONS}>
-        <Button type="button" variant="outline" onClick={onDone}>Cancel</Button>
+        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
         <Button type="submit" disabled={!ready}>{saving ? "Splitting" : "Split"}</Button>
       </div>
     </form>
@@ -151,7 +151,7 @@ function SplitForm({ contact, onDone }: { contact: ContactDetail; onDone: () => 
 function SplitDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="split_contact" className="sm:max-w-md" showCloseButton={false}>
+      <DialogContent track="split_contact" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Split Contact</DialogTitle>
           <DialogDescription>Choose what belongs to someone else. Their messages and conversations move with them.</DialogDescription>
@@ -217,6 +217,11 @@ export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDet
   const [open, setOpen] = useState<"merge" | "split" | "delete" | null>(null);
   const set = (item: "merge" | "split" | "delete") => (value: boolean) => setOpen(value ? item : null);
   const canSplit = useMemo(() => identityGroups(contact.identityRows).length > 1, [contact.identityRows]);
+  const { refreshContacts, notify } = useApp();
+  const toggleHidden = async () => {
+    if (await setContactHidden(contact.id, !contact.hidden)) void refreshContacts([contact.id]);
+    else notify("Could not save that. Try again.");
+  };
   return (
     <>
       <DropdownMenu modal={false}>
@@ -227,6 +232,7 @@ export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDet
           {onEdit && <DropdownMenuItem className="sm:hidden" onSelect={onEdit}>Edit</DropdownMenuItem>}
           <DropdownMenuItem onSelect={() => setOpen("merge")}>Merge With...</DropdownMenuItem>
           <DropdownMenuItem disabled={!canSplit} onSelect={() => setOpen("split")}>Split</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void toggleHidden()}>{contact.hidden ? "Show Contact" : "Hide Contact"}</DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onSelect={() => setOpen("delete")}>Delete Contact</DropdownMenuItem>
         </DropdownMenuContent>

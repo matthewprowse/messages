@@ -1,5 +1,6 @@
 "use client";
 
+import { PaneHeader, SearchBand } from "@/components/pane";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -15,7 +16,6 @@ import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Kbd } from "@/components/ui/kbd";
@@ -226,32 +226,19 @@ export function NoteList() {
   return (
     // The header sits above the scroll area, so the rows and their scrollbar both start below it.
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 space-y-3 border-b p-3">
-        <h1 className="flex h-8 items-center text-lg font-medium">Notes</h1>
-        <div className="flex items-center gap-3">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Input
-                ref={searchRef}
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Escape" && search) { e.stopPropagation(); setSearch(""); } }}
-                placeholder="Search Notes"
-                aria-label="Search Notes"
-                aria-keyshortcuts="/"
-                className="h-8 min-w-0 flex-1"
-              />
-            </TooltipTrigger>
-            <TooltipContent>Search Notes <Kbd>/</Kbd></TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="secondary" className="shrink-0" disabled={creating} aria-keyshortcuts="N" onClick={() => void newNote()}>New Note</Button>
-            </TooltipTrigger>
-            <TooltipContent>New Note <Kbd>N</Kbd></TooltipContent>
-          </Tooltip>
-        </div>
+      <div className="shrink-0">
+        <PaneHeader
+          title="Notes"
+          action={
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="secondary" className="shrink-0" disabled={creating} aria-keyshortcuts="N" onClick={() => void newNote()}>New Note</Button>
+              </TooltipTrigger>
+              <TooltipContent>New Note <Kbd>N</Kbd></TooltipContent>
+            </Tooltip>
+          }
+        />
+        <SearchBand inputRef={searchRef} value={search} onChange={setSearch} placeholder="Search Notes" keyShortcut="/" hint={<>Search Notes <Kbd>/</Kbd></>} />
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div ref={rowsRef} className="p-3">

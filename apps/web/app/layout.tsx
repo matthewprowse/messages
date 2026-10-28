@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { headers } from "next/headers";
 import { ThemeProvider } from "next-themes";
 import "./globals.css";
 import { AppProvider } from "@/lib/store";
@@ -36,13 +37,15 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // The per-request nonce from middleware.ts: next-themes' inline script needs it, and reading it renders pages per request.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>
       <body className="font-sans">
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+        <ThemeProvider nonce={nonce} attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AuthProvider>
-            <TooltipProvider delayDuration={300}>
+            <TooltipProvider delayDuration={100}>
               <AppProvider>
                 <AnalyticsTracker />
                 <AppShell>{children}</AppShell>

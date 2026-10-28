@@ -9,7 +9,7 @@ export const BUCKET = "attachments";
 export const MAX_FILES = 10;
 const MB = 1024 * 1024;
 
-export type AttachProvider = "icloud" | "gmail" | "outlook" | "whatsapp" | "imap";
+export type AttachProvider = "icloud" | "gmail" | "outlook" | "whatsapp" | "imap" | "linkedin" | "instagram";
 
 /** What each service accepts. Email limits cover every file together; WhatsApp limits each file. */
 export const OUTBOX_LIMITS: Record<AttachProvider, { totalBytes?: number; perFileBytes?: number; message: string }> = {
@@ -18,6 +18,9 @@ export const OUTBOX_LIMITS: Record<AttachProvider, { totalBytes?: number; perFil
   outlook: { totalBytes: 20 * MB, message: "Outlook allows up to 20 MB per email. Attachments grow by about a third when sent." },
   // WhatsApp itself takes 100 MB, but uploads go through Supabase Storage, whose Free plan stops at 50 MB.
   whatsapp: { perFileBytes: 50 * MB, message: "WhatsApp files can be up to 50 MB each here." },
+  linkedin: { perFileBytes: 20 * MB, message: "LinkedIn files can be up to 20 MB each here." },
+  // Instagram direct messages take photos and videos only; the worker says so for any other file.
+  instagram: { perFileBytes: 25 * MB, message: "Instagram photos and videos can be up to 25 MB each here." },
   // Any other mailbox: each host sets its own limit, and 20 MB of files fits the common ones.
   imap: { totalBytes: 20 * MB, message: "Your mail server allows up to 20 MB per email. Attachments grow by about a third when sent." },
 };
@@ -26,7 +29,7 @@ export const OUTBOX_LIMITS: Record<AttachProvider, { totalBytes?: number; perFil
  * The service files are sent through, or null when this kind of conversation cannot carry files.
  */
 export function attachProvider(p: Provider | undefined): AttachProvider | null {
-  return p === "icloud" || p === "gmail" || p === "outlook" || p === "whatsapp" || p === "imap" ? p : null;
+  return p === "icloud" || p === "gmail" || p === "outlook" || p === "whatsapp" || p === "imap" || p === "linkedin" || p === "instagram" ? p : null;
 }
 
 /** Why these files cannot be sent through this service, or null when they can. */

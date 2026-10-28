@@ -17,6 +17,7 @@ export type StoredEvent = {
   conference_url?: string | null;
   resource_url?: string | null;
   series_id?: string | null;
+  recurrence?: string | null;
 };
 
 /** The same moment written two ways ("...+00:00" from the database, "...Z" from toISOString) is equal. */
@@ -39,6 +40,7 @@ export function eventChanged(stored: StoredEvent | undefined, next: TablesInsert
     (stored.conference_url ?? null) !== (next.conference_url ?? null) ||
     (stored.resource_url ?? null) !== (next.resource_url ?? null) ||
     (stored.series_id ?? null) !== (next.series_id ?? null) ||
+    (stored.recurrence ?? null) !== (next.recurrence ?? null) ||
     JSON.stringify(stored.attendees ?? []) !== JSON.stringify(next.attendees ?? [])
   );
 }

@@ -145,6 +145,8 @@ export interface EventForm {
   guests: string[];
   sendInvites: boolean;
   addMeet: boolean;
+  /** How it repeats, as an iCalendar rule (lib/recurrence.ts); empty or left out when it does not. */
+  repeat?: string;
 }
 
 export interface CalendarOutboxInsert {
@@ -159,6 +161,7 @@ export interface CalendarOutboxInsert {
   attendees: string[];
   send_invites: boolean;
   add_meet: boolean;
+  recurrence: string | null;
 }
 
 function pad(n: number) {
@@ -288,6 +291,7 @@ export function buildEventRow(
       attendees: guests,
       send_invites: form.sendInvites,
       add_meet: form.addMeet,
+      recurrence: form.repeat || null,
     },
   };
 }

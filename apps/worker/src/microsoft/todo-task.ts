@@ -2,6 +2,7 @@ import type { TablesInsert } from "@messages/db";
 import { htmlToText } from "@messages/email-text";
 import { localDate } from "../calendar/create-event";
 import { zonedToUtc } from "../caldav/ical";
+import type { TaskWrite } from "../tasks/rows";
 import { ianaZone } from "./windows-zones";
 
 // Turns a Microsoft To Do task from Graph into a tasks row. Pure, so it can be unit tested; the connector
@@ -40,6 +41,13 @@ export interface GraphTodoTask {
 export interface GraphTodoList {
   id: string;
   displayName?: string | null;
+  /** "defaultList" for the list To Do puts new tasks in, "flaggedEmails" for the flagged emails list, else "none". */
+  wellknownListName?: string | null;
+}
+
+/** The list a new task goes in: To Do's default list, else the first. Null when there are no lists. */
+export function defaultTodoList<T extends GraphTodoList>(lists: T[]): T | null {
+  return lists.find((l) => l.wellknownListName === "defaultList") ?? lists[0] ?? null;
 }
 
 /** To Do's importance as tasks.priority: high is 1, low is 3. Normal is every task's default, so it is no priority. */
@@ -134,6 +142,7 @@ export function statusPatch(action: string): { status: "completed" | "notStarted
 /** What to tell you when To Do turned a change away, by HTTP status (null when it was not reached). */
 export function todoUpdateFailure(status: number | null): string {
   if (status === 404) return "This task is no longer in Microsoft To Do.";
+  if (status === 400) return "Microsoft To Do did not accept this task. Check its title and date, then try again.";
   if (status === 403) return "Microsoft To Do did not allow this change. Run pnpm connect:microsoft and accept every permission.";
   return "Microsoft To Do could not be reached. Try again.";
 }
@@ -153,4 +162,56 @@ export function throttleWait(retryAfter: string | null | undefined, backoffMs: n
     if (!Number.isFinite(ms)) ms = 0;
   }
   return Math.min(MAX_THROTTLE_MS, Math.max(backoffMs, ms));
+}
+
+/** Graph's importance for a priority: 1 is high, 3 is low, and 2 or none is normal (To Do has no medium). */
+export function importanceOf(priority: TaskWrite["priority"]): "high" | "normal" | "low" {
+  return priority === 1 ? "high" : priority === 3 ? "low" : "normal";
+}
+
+/** A date and time as the wall clock of a zone shows it, "2026-11-03T09:30:00.0000000". */
+export function wallClock(instant: Date, zone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(instant);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}.0000000`;
+}
+
+export interface TodoWriteBody {
+  title: string;
+  importance: "high" | "normal" | "low";
+  body: { content: string; contentType: "text" };
+  dueDateTime?: GraphDateTimeZone | null;
+  reminderDateTime?: GraphDateTimeZone | null;
+  isReminderOn?: boolean;
+}
+
+/**
+ * The body that makes or changes a To Do task from what the app asked for. A due day is midnight of that day in
+ * your zone, which the reader above takes as the day. A task with a time also gets a reminder at that time on
+ * the day, which is how the time is kept. A create leaves out what is empty; a change clears it (null), so the
+ * task does not keep a date or notes it was given before.
+ */
+export function todoWriteBody(write: TaskWrite, userZone: string, create: boolean): TodoWriteBody {
+  const body: TodoWriteBody = {
+    title: write.title,
+    importance: importanceOf(write.priority),
+    body: { content: write.notes ?? "", contentType: "text" },
+  };
+  if (!write.dueAt) {
+    if (!create) Object.assign(body, { dueDateTime: null, reminderDateTime: null, isReminderOn: false });
+    return body;
+  }
+  if (write.dueAllDay) {
+    body.dueDateTime = { dateTime: `${write.dueAt.slice(0, 10)}T00:00:00.0000000`, timeZone: userZone };
+    if (!create) Object.assign(body, { reminderDateTime: null, isReminderOn: false });
+    return body;
+  }
+  const at = new Date(write.dueAt);
+  const wall = wallClock(at, userZone);
+  body.dueDateTime = { dateTime: `${wall.slice(0, 10)}T00:00:00.0000000`, timeZone: userZone };
+  body.reminderDateTime = { dateTime: wall, timeZone: userZone };
+  body.isReminderOn = true;
+  return body;
 }

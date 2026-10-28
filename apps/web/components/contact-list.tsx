@@ -4,28 +4,28 @@ import { Children, Fragment, isValidElement, useDeferredValue, useEffect, useMem
 import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowUpDown, Building2, Combine, Mail, MessageCircle, Plus, Users, X } from "lucide-react";
+import { ArrowLeft, Building2, Combine, Plus, Users, X } from "lucide-react";
 import { checkContactFields, createContact, type ContactConversation, type ContactSummary } from "@/lib/contacts";
 import type { CompanySummary } from "@/lib/organizations";
 import { isCompanySender } from "@/lib/people";
 import { defaultCountryCode } from "@/lib/new-items";
 import { useApp } from "@/lib/store";
-import { formatPhone, relTime } from "@/lib/format";
+import { formatPhone, relTime, niceName } from "@/lib/format";
 import { cn, withQuery } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { PaneControls, PaneHeader, PaneSelect, SearchBand, ViewButtons } from "@/components/pane";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ContactAvatar, EmptyState } from "@/components/primitives";
+import { CompanyAvatar, ContactAvatar, EmptyState } from "@/components/primitives";
 import { ProviderLogo } from "@/components/provider-logo";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useContactsData } from "@/components/contacts-data";
+import { TeamClientsRow } from "@/components/team-clients";
 
 // ---------------------------------------------------------------------------
 // Pieces shared by the Contacts pages: the list, a contact, a company and Suggested Merges.
@@ -91,7 +91,7 @@ export function ListRow({
       className={cn("flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", selected ? "bg-muted" : "hover:bg-muted/50", className)}
     >
       {avatar && <div className={cn("shrink-0", selected && "[&_[data-slot=avatar-fallback]]:bg-background")}>{avatar}</div>}
-      {/* 20px name line + 4px gap + 16px detail line = 40px, the avatar's height. */}
+      {/* 20px name line + 4px gap + 16px detail line = 40px, the row's height. */}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex h-5 items-center justify-between gap-3">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -142,28 +142,27 @@ export function DetailList({ items }: { items: { label: string; value: string; h
   );
 }
 
-/** A conversation's channel, as the round icon in front of its row. */
-function ChannelIcon({ channel }: { channel: "email" | "whatsapp" }) {
-  const Icon = channel === "whatsapp" ? MessageCircle : Mail;
+/** Conversations on a contact's or a company's page: one row style, with their photo and the service as a badge. */
+export function ConversationRows({ items, avatar }: { items: Pick<ContactConversation, "id" | "provider" | "title" | "preview" | "lastAt">[]; avatar: React.ReactNode }) {
+  const [shown, setShown] = useState(CONVERSATION_PAGE);
   return (
-    <div className="flex size-10 items-center justify-center rounded-full bg-muted" title={channel === "whatsapp" ? "WhatsApp" : "Email"}>
-      <Icon className="size-4" />
+    <div className="-mx-3 flex flex-col gap-2">
+      <Divided className="pr-3 pl-14">
+        {items.slice(0, shown).map((t) => (
+          <ListRow key={t.id} href={`/inbox/${t.id}`} avatar={avatar} title={t.title} badge={<ProviderLogo provider={t.provider} />} at={t.lastAt} detail={t.preview ?? ""} />
+        ))}
+      </Divided>
+      {items.length > shown && (
+        <div className="px-3">
+          <Button variant="secondary" onClick={() => setShown((n) => n + CONVERSATION_PAGE)}>Show More ({items.length - shown})</Button>
+        </div>
+      )}
     </div>
   );
 }
 
-/** Conversations on a contact's or a company's page: one row style, with the channel as its icon. */
-export function ConversationRows({ items }: { items: Pick<ContactConversation, "id" | "channel" | "provider" | "title" | "preview" | "lastAt">[] }) {
-  return (
-    <div className="-mx-3 flex flex-col gap-2">
-      <Divided className="pr-3 pl-16">
-        {items.map((t) => (
-          <ListRow key={t.id} href={`/inbox/${t.id}`} avatar={<ChannelIcon channel={t.channel} />} title={t.title} badge={<ProviderLogo provider={t.provider} />} at={t.lastAt} detail={t.preview ?? ""} />
-        ))}
-      </Divided>
-    </div>
-  );
-}
+/** How many conversations a contact's or company's page lists at first, and each Show More adds. */
+const CONVERSATION_PAGE = 10;
 
 /** What a contact or company page shows while it loads: the header and a few rows, in the same places. */
 export function DetailSkeleton({ backHref }: { backHref: string }) {
@@ -172,7 +171,7 @@ export function DetailSkeleton({ backHref }: { backHref: string }) {
       backHref={backHref}
       header={
         <div className="flex min-w-0 flex-1 items-center gap-3" aria-label="Loading">
-          <Skeleton className="size-10 shrink-0 rounded-full" />
+          <Skeleton className="size-8 shrink-0 rounded-full" />
           <Skeleton className="h-5 w-40" />
         </div>
       }
@@ -182,7 +181,7 @@ export function DetailSkeleton({ backHref }: { backHref: string }) {
       <div className="flex flex-col gap-2">
         {Array.from({ length: 4 }, (_, i) => (
           <div key={i} className="flex items-center gap-3 py-3">
-            <Skeleton className="size-10 shrink-0 rounded-full" />
+            <Skeleton className="size-8 shrink-0 rounded-full" />
             <div className="flex flex-1 flex-col gap-1">
               <Skeleton className="h-5 w-2/3" />
               <Skeleton className="h-4 w-5/6" />
@@ -217,7 +216,7 @@ export function DetailPage({ backHref, header, children, className = "space-y-8"
     // Solid, with a line under it, like the Summary and Conversations headers; the scrollbar starts below it.
     <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[65px]! data-vertical:h-auto!">
       <header className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background p-3 md:px-4">
-        <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
+        <Button variant="ghost" size="icon" className="size-6 md:hidden" asChild aria-label="Back">
           <Link href={backHref}><ArrowLeft /></Link>
         </Button>
         {header}
@@ -264,14 +263,16 @@ export function MultiInput({ id, label, addLabel, values, errors, onChange, disa
                 <X />
               </Button>
             )}
+            {/* A plus at the end of the last one adds another line. */}
+            {i === values.length - 1 && (
+              <Button type="button" variant="secondary" size="icon" aria-label={addLabel} title={addLabel} disabled={disabled || !v.trim()} onClick={() => onChange([...values, ""])}>
+                <Plus />
+              </Button>
+            )}
           </div>
           {errors[i] && <p className="text-xs text-destructive">{errors[i]}</p>}
         </div>
       ))}
-      <Button type="button" variant="ghost" size="sm" className="justify-self-start" disabled={disabled} onClick={() => onChange([...values, ""])}>
-        <Plus />
-        {addLabel}
-      </Button>
     </div>
   );
 }
@@ -330,8 +331,8 @@ export function ContactFields({ idPrefix, fields, tried, disabled, editing = fal
       {existing}
       <MultiInput
         id={`${idPrefix}-email`}
-        label={editing ? "Add Email Addresses" : "Email Addresses"}
-        addLabel={editing ? "Add Another" : "Add Email Address"}
+        label={editing ? "Add Email Address" : "Email Addresses"}
+        addLabel={editing ? "Add Another Email" : "Add Email Address"}
         type="email"
         values={fields.emails}
         errors={tried ? fields.emailErrors : []}
@@ -340,8 +341,8 @@ export function ContactFields({ idPrefix, fields, tried, disabled, editing = fal
       />
       <MultiInput
         id={`${idPrefix}-phone`}
-        label={editing ? "Add Phone Numbers" : "Phone Numbers"}
-        addLabel={editing ? "Add Another" : "Add Phone Number"}
+        label={editing ? "Add Phone Number" : "Phone Numbers"}
+        addLabel={editing ? "Add Another Number" : "Add Phone Number"}
         type="tel"
         values={fields.phones}
         errors={tried ? fields.phoneErrors : []}
@@ -408,11 +409,11 @@ function NewContactForm({ onDone }: { onDone: () => void }) {
       <ContactFields idPrefix="new-contact" fields={fields} tried={tried} disabled={saving} />
       {failure && <p role="alert" className="text-sm text-destructive">{failure.text}</p>}
       <div className={DIALOG_BUTTONS}>
-        <Button type="button" variant="outline" onClick={onDone}>Cancel</Button>
+        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
         {failure?.existingId && (
           <Button type="button" variant="secondary" onClick={() => open(failure.existingId!)}>Open Contact</Button>
         )}
-        <Button type="submit" disabled={saving}>{saving ? "Saving" : "Save"}</Button>
+        <Button type="submit" variant="secondary" disabled={saving}>{saving ? "Saving" : "Save"}</Button>
       </div>
     </form>
   );
@@ -421,7 +422,7 @@ function NewContactForm({ onDone }: { onDone: () => void }) {
 function NewContactDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="new_contact" className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md" showCloseButton={false}>
+      <DialogContent track="new_contact" className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New Contact</DialogTitle>
           <DialogDescription>Add someone with any of their email addresses and phone numbers.</DialogDescription>
@@ -437,16 +438,16 @@ function NewContactDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 // ---------------------------------------------------------------------------
 
 type Sort = "recent" | "name";
-type View = "people" | "companies";
+type View = "people" | "companies" | "hidden";
 
 function queryOf(sort: Sort, view: View) {
-  return [view === "companies" ? "view=companies" : "", sort === "name" ? "sort=name" : ""].filter(Boolean).join("&");
+  return [view === "companies" ? "view=companies" : view === "hidden" ? "view=hidden" : "", sort === "name" ? "sort=name" : ""].filter(Boolean).join("&");
 }
 
 function useSort(): { sort: Sort; view: View; query: string } {
   const params = useSearchParams();
   const sort: Sort = params.get("sort") === "name" ? "name" : "recent";
-  const view: View = params.get("view") === "companies" ? "companies" : "people";
+  const view: View = params.get("view") === "companies" ? "companies" : params.get("view") === "hidden" ? "hidden" : "people";
   return { sort, view, query: queryOf(sort, view) };
 }
 
@@ -464,7 +465,7 @@ function LoadingRows({ label }: { label: string }) {
     <div className="flex flex-col gap-2" aria-label={label}>
       {Array.from({ length: 8 }, (_, i) => (
         <div key={i} className="flex items-center gap-3 p-3">
-          <Skeleton className="size-10 shrink-0 rounded-full" />
+          <Skeleton className="size-8 shrink-0 rounded-full" />
           <div className="flex flex-1 flex-col gap-1">
             <Skeleton className="h-5 w-2/3" />
             <Skeleton className="h-4 w-5/6" />
@@ -520,7 +521,7 @@ function ListBody({ items, label, icon, failed, empty, onRetry, children }: {
   }
   return (
     <div className="flex flex-col gap-2">
-      <Divided className="pl-16">{rows.slice(0, count)}</Divided>
+      <Divided className="pl-14">{rows.slice(0, count)}</Divided>
       {more && <div ref={end} className="h-px" aria-hidden />}
     </div>
   );
@@ -539,24 +540,9 @@ function matchesQuery(q: string, hay: string, phoneDigits: string) {
   return digits.length >= 3 && /^[\d\s+().-]+$/.test(q) && phoneDigits.includes(digits);
 }
 
-/** Sort choices as a small menu, so the header keeps its room on narrow lists. */
+/** Sort choices, in the same small select as the Inbox's filter. */
 function SortMenu({ sort, onChange }: { sort: Sort; onChange: (sort: Sort) => void }) {
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" aria-label="Sort">
-          <ArrowUpDown />
-          {sort === "name" ? "Name" : "Recent"}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-max">
-        <DropdownMenuRadioGroup value={sort} onValueChange={(v) => onChange(v as Sort)}>
-          <DropdownMenuRadioItem value="recent">Recent</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="name">Name</DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+  return <PaneSelect label="Sort" value={sort} onChange={(v) => onChange(v as Sort)} options={[{ value: "recent", label: "Recent" }, { value: "name", label: "Name" }]} />;
 }
 
 /** "/" jumps to the search box, unless you are already typing somewhere. */
@@ -590,13 +576,14 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
   const q = useDeferredValue(search).trim().toLowerCase();
   // Brands and role senders (noreply@, info@) are listed under Companies, not People.
   const people = useMemo(
-    () => (contacts ?? []).filter((c) => !isCompanySender(c)).map((c) => ({
+    () => (contacts ?? []).filter((c) => !isCompanySender(c) && c.hidden === (view === "hidden")).map((c) => ({
       c,
       hay: haystack([c.name, c.company, c.organizationName, c.role, ...c.emails], c.phones),
       digits: c.phones.map((p) => p.replace(/\D/g, "")).join(" "),
     })),
-    [contacts],
+    [contacts, view],
   );
+  const hiddenCount = useMemo(() => (contacts ?? []).filter((c) => c.hidden).length, [contacts]);
   const shownPeople = useMemo(
     () => people.filter((p) => matchesQuery(q, p.hay, p.digits)).map((p) => p.c).sort(bySort(sort)),
     [people, q, sort],
@@ -610,42 +597,41 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
   const noMatches = { title: "No Matches", description: `Nothing matches "${search.trim()}".` };
 
   return (
-    // The scrollbar starts below the 145px header (with its line) instead of running behind it.
-    <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[145px]! data-vertical:h-auto!">
+    // The scrollbar starts below the 158px header (with its line) instead of running behind it.
+    <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[158px]! data-vertical:h-auto!">
       {/* Solid, with a line under it, like the Summary and Conversations headers. */}
-      <div className="sticky top-0 z-10 space-y-2 border-b bg-background p-3">
-        <div className="flex h-10 items-center justify-between gap-2">
-          <h1 className="text-lg font-medium">Contacts</h1>
-          <Button variant="secondary" onClick={() => setAdding(true)}>New Contact</Button>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <Tabs value={view} onValueChange={(v) => go(sort, v as View)}>
-            <TabsList aria-label="Show">
-              <TabsTrigger value="people" className="px-3">People</TabsTrigger>
-              <TabsTrigger value="companies" className="px-3">Companies</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <SortMenu sort={sort} onChange={(next) => go(next, view)} />
-        </div>
-        <Input
-          ref={searchRef}
-          type="search"
+      <div className="sticky top-0 z-10 bg-background">
+        <PaneHeader title="Contacts" action={<Button variant="secondary" onClick={() => setAdding(true)}>New Contact</Button>}>
+          <PaneControls>
+            <ViewButtons
+              label="Show"
+              value={view}
+              onSelect={(v) => go(sort, v)}
+              items={[
+                { key: "people", label: "People" },
+                { key: "companies", label: "Companies" },
+                ...((hiddenCount > 0 || view === "hidden") ? [{ key: "hidden" as const, label: "Hidden" }] : []),
+              ]}
+            />
+            <SortMenu sort={sort} onChange={(next) => go(next, view)} />
+          </PaneControls>
+        </PaneHeader>
+        <SearchBand
+          inputRef={searchRef}
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={setSearch}
+          placeholder="Search Contacts"
+          maxLength={120}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
               setSearch("");
               e.currentTarget.blur();
             }
           }}
-          placeholder="Search Contacts"
-          aria-label="Search Contacts"
-          maxLength={120}
-          autoComplete="off"
         />
       </div>
       <NewContactDialog open={adding} onOpenChange={setAdding} />
-      <div className="px-3 pb-3">
+      <div className="p-3">
         {view === "companies" ? (
           <ListBody
             key={`companies|${sort}|${q}`}
@@ -660,24 +646,25 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
               <ListRow
                 key={c.id}
                 href={withQuery(`/contacts/companies/${c.id}`, query)}
-                avatar={<ContactAvatar contact={{ avatarPath: c.avatarPath }} className="size-10" />}
-                title={c.name}
+                avatar={<CompanyAvatar logoPath={c.logoPath} className="size-8" />}
+                title={niceName(c.name)}
                 at={c.lastAt}
                 detail={[c.domain, plural(c.addresses, "address", "addresses"), plural(c.conversations, "conversation")].join(" · ")}
                 selected={params.id === c.id}
-                className="scroll-mt-[144px]"
+                className="scroll-mt-[157px]"
               />
             ))}
           </ListBody>
         ) : (
           <>
+            {!q && <TeamClientsRow selected={pathname === "/contacts/team"} query={query} />}
             {/* Shown above People while there are likely duplicates to review. */}
             {!q && !!suggestions?.length && (
               <>
                 <ListRow
                   href={withQuery("/contacts/merges", query)}
                   avatar={
-                    <div className={cn("flex size-10 items-center justify-center rounded-full", pathname === "/contacts/merges" ? "bg-background" : "bg-muted")}>
+                    <div className={cn("flex size-8 items-center justify-center rounded-full", pathname === "/contacts/merges" ? "bg-background" : "bg-muted")}>
                       <Combine className="size-4" />
                     </div>
                   }
@@ -686,7 +673,7 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
                   detail={`${plural(suggestions.length, "pair")} that may be the same person`}
                   selected={pathname === "/contacts/merges"}
                 />
-                <div className="my-2 pl-16"><Separator /></div>
+                <div className="my-2 pl-14"><Separator /></div>
               </>
             )}
             <ListBody
@@ -695,19 +682,19 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
               label="Loading contacts"
               icon={Users}
               failed="Contacts Did Not Load"
-              empty={q ? noMatches : { title: "No Contacts Yet", description: "People appear here as your accounts sync." }}
+              empty={q ? noMatches : view === "hidden" ? { title: "No Hidden Contacts", description: "Contacts you hide appear here." } : { title: "No Contacts Yet", description: "People appear here as your accounts sync." }}
               onRetry={reload}
             >
               {shownPeople.map((c) => (
                 <ListRow
                   key={c.id}
                   href={withQuery(`/contacts/${c.id}`, query)}
-                  avatar={<ContactAvatar contact={c} className="size-10" />}
-                  title={c.name}
+                  avatar={<ContactAvatar contact={c} className="size-8" />}
+                  title={niceName(c.name)}
                   at={c.lastAt}
                   detail={detailOf(c)}
                   selected={params.id === c.id}
-                  className="scroll-mt-[144px]"
+                  className="scroll-mt-[157px]"
                 />
               ))}
             </ListBody>

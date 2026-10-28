@@ -9,7 +9,7 @@ import { finishAction } from "../send/actions";
 import { claimReady, markFailed, settleSent, type OutboxRow } from "../send/outbox";
 import { ATTACHMENTS_BUCKET, uploadObject } from "../storage";
 import { chunks } from "../util";
-import { keysFor, open, openAddresses, seal, sealAddress } from "../vault";
+import { keysFor, open, openAddresses, seal, sealAddress, sealBytes } from "../vault";
 import { rateLimited, signInRevoked, ZoomApiError, type ZoomClient } from "../zoom/client";
 import { ChatSync, chatPayload, sendBody, type ChatRef, type ChatSealer, type ZoomChatStored } from "../zoom/chat";
 import { CHAT_NEEDS, CHAT_SEND_SCOPE, MEETING_SCOPE, MEETINGS_NEEDS, PARTICIPANTS_SCOPE, USER_SCOPE } from "../zoom/oauth";
@@ -105,7 +105,7 @@ export class ZoomConnector {
 
     const userId = this.account.user_id;
     const recordings = meetings
-      ? new RecordingSync(client, meetingStore(this.id), { seal: (f, v) => seal(userId, f, v), sealAddress: (v) => sealAddress(userId, v) }, {
+      ? new RecordingSync(client, meetingStore(this.id), { seal: (f, v) => seal(userId, f, v), sealAddress: (v) => sealAddress(userId, v), sealBytes: (f, b) => sealBytes(userId, f, b) }, {
           userId,
           accountId: this.id,
           selfId,

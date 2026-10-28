@@ -9,7 +9,7 @@ function msg(p: Partial<Message>): Message {
   return { id: Math.random().toString(), threadId: "t", from: "c1", sentAt: "2026-10-22T10:00:00Z", body: "", ...p };
 }
 
-const jane: Contact = { id: "c1", name: "Jane", initials: "J", hue: 0, emails: ["jane@x.com", "me@example.com"], phones: ["+447700900000"] };
+const jane: Contact = { id: "c1", name: "Jane", initials: "J", hue: 0, emails: ["jane@x.com", "me@example.com"], phones: ["+447700900000"], isCompany: false };
 
 test("sendAddressesOf puts the account address first, lowercased and deduped", () => {
   assert.deepEqual(sendAddressesOf(account), ["me@example.com", "hello@shop.co", "sales@shop.co"]);

@@ -39,11 +39,12 @@ test("new and changed events are written", () => {
   assert.equal(eventChanged(stored, { ...fetched, calendar_id: "work" }), true);
 });
 
-test("notes, calendar name, link, file and series count as changes, so stored events are filled in once", () => {
+test("notes, calendar name, link, file, series and its rule count as changes, so stored events are filled in once", () => {
   assert.equal(eventChanged(stored, { ...fetched, description: "Agenda" }), true);
   assert.equal(eventChanged(stored, { ...fetched, calendar_name: "Work" }), true);
   assert.equal(eventChanged(stored, { ...fetched, conference_url: "https://meet.google.com/a" }), true);
   assert.equal(eventChanged(stored, { ...fetched, resource_url: "https://p1-caldav.icloud.com/1/e.ics" }), true);
   assert.equal(eventChanged(stored, { ...fetched, series_id: "S1" }), true);
-  assert.equal(eventChanged({ ...stored, description: "Agenda", series_id: "S1" }, { ...fetched, description: "Agenda", series_id: "S1" }), false);
+  assert.equal(eventChanged(stored, { ...fetched, recurrence: "FREQ=WEEKLY;BYDAY=TU" }), true);
+  assert.equal(eventChanged({ ...stored, description: "Agenda", series_id: "S1", recurrence: "FREQ=DAILY" }, { ...fetched, description: "Agenda", series_id: "S1", recurrence: "FREQ=DAILY" }), false);
 });

@@ -3,10 +3,10 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowDown, ArrowLeft, Check, ChevronDown, Loader2, MoreHorizontal, SquarePen, X, Inbox, Paperclip } from "lucide-react";
+import { ArrowDown, ArrowLeft, Check, CheckCheck, ChevronDown, Loader2, MoreHorizontal, X, Inbox, Paperclip } from "lucide-react";
 import { useApp, type DraftPhase } from "@/lib/store";
 import type { Attachment, Contact, Decision, Draft, FiledAttachment, Message, Thread } from "@/lib/types";
-import { dayLabel, formatPhone, fullStamp, relTime } from "@/lib/format";
+import { dayLabel, formatPhone, fullStamp, niceName, relTime, timeOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,34 +14,38 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { ThreadAvatar, EmptyState, providerLabel } from "@/components/primitives";
+import { ContactAvatar, ThreadAvatar, EmptyState, providerLabel } from "@/components/primitives";
 import { ProviderLogo } from "@/components/provider-logo";
 import { AttachmentGrid, AttachmentTile, AttachmentViewer, StickerImage, isSticker } from "@/components/attachments";
-import { MessageBody } from "@/components/message-body";
+import { MessageBody, hasFullText } from "@/components/message-body";
 import { VoiceNote } from "@/components/media-player";
 import { GuidedChoices } from "@/components/guided-choices";
 import { BubbleActions, QuoteBlock, ReactionChips, useReactorName, useTouchReveal, type NameOf, type OnReact } from "@/components/message-extras";
 import { ReplyHeader, useReplyAll, useReplyFrom } from "@/components/reply-header";
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
-import { RecordButton, RecordingActions, RecordingStatus, SpeakButton, useVoiceRecorder } from "@/components/voice-recorder";
+import { RecordButton, RecordingActions, RecordingStatus, useVoiceRecorder } from "@/components/voice-recorder";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TemplatePicker } from "@/components/template-picker";
 import { isTypingKey } from "@/components/new-menu";
 import { ComposeDialog } from "@/components/compose-dialog";
 import { takeVia, track } from "@/lib/analytics";
 import { attachProvider, type OutboxUpload } from "@/lib/outbox-files";
-import { shortcutAction } from "@/lib/selection";
 import { MESSAGE_PAGE } from "@/lib/data";
 import { meetingsAmong, type Meeting } from "@/lib/meetings";
 import { useMeetings } from "@/components/meetings-data";
 import { MeetingCard } from "@/components/meeting-card";
+import { ThreadShare } from "@/components/work-badge";
+import { ShareNotice } from "@/components/share-notice";
+import { InstagramReplyNotice, useInstagramReplyClosed } from "@/components/instagram-window";
 
 /** A conversation is marked read after it has been open this long in a visible tab. */
 const READ_AFTER_MS = 2000;
 /** Within this many pixels of the end of the list counts as being at the bottom. */
 const NEAR_BOTTOM_PX = 120;
 
-/** basePath is where Back, Escape and archiving return: /inbox, or /briefing when opened from the Summary page. */
+/** basePath is where Back, Escape and archiving return: /inbox, or /summary when opened from the Summary page. */
 export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string; basePath?: string }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -75,9 +79,21 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     [msgs],
   );
   const nameOf = useReactorName(contacts);
+  // Who sent the open file, and when, for the top of the viewer; and its place among the conversation's files.
+  // Next and Previous stay among the pictures while one is open, rather than running on into stickers, voice notes and documents.
+  const isPicture = (f: Attachment) => f.kind === "image" && !isSticker(f);
+  const viewerItems = useMemo(() => (viewing && isPicture(viewing) ? files.filter(isPicture) : files), [files, viewing]);
+  const viewerAt = viewing ? viewerItems.findIndex((f) => f.id === viewing.id) : -1;
+  const viewerFile = viewerAt >= 0 ? viewerItems[viewerAt] : undefined;
+  const viewerDetail = viewerFile ? `${viewerFile.from === "me" ? "You" : contactById(viewerFile.from)?.name ?? "Unknown"} · ${fullStamp(viewerFile.sentAt)}` : undefined;
   const senderNames = useMemo(() => {
     const out = new Map<string, string>();
     for (const m of msgs) if (m.from !== "me" && !out.has(m.from)) out.set(m.from, contactById(m.from)?.name ?? "Unknown");
+    return out;
+  }, [msgs, contactById]);
+  const senderContacts = useMemo(() => {
+    const out = new Map<string, Contact | undefined>();
+    for (const m of msgs) if (m.from !== "me" && !out.has(m.from)) out.set(m.from, contactById(m.from));
     return out;
   }, [msgs, contactById]);
   const header = useMemo(() => (thread ? headerOf(thread, msgs, contactById) : null), [thread, msgs, contactById]);
@@ -92,7 +108,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   useEffect(() => {
     if (!thread || openedRef.current === threadId) return;
     openedRef.current = threadId;
-    track("thread_opened", { via: takeVia(basePath === "/briefing" ? "summary" : "list"), channel: thread.channel, had_summary: thread.summary.length > 0, unread: thread.unread });
+    track("thread_opened", { via: takeVia(basePath === "/summary" ? "summary" : "list"), channel: thread.channel, had_summary: thread.summary.length > 0, unread: thread.unread });
     void requestAutoDraft(threadId); // a pre-draft, when it qualifies and has none: ready while you read
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, threadExists]);
@@ -232,27 +248,19 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     function onKey(e: KeyboardEvent) {
       // Keys typed in a field, menu, dialog or select (which jumps by letter) belong to that control.
       if (e.metaKey || e.ctrlKey || !thread || isTypingKey(e)) return;
-      // The same E, # or Delete and ! shortcuts as the list, plus U for unread and Escape to go back.
-      const action = shortcutAction(e);
-      if (action === "archive") archive(thread.id);
-      else if (action === "trash") trash(thread.id);
-      else if (action === "junk") setJunk(thread.id, !thread.junk);
-      else if (e.key === "u" && !e.altKey) markRead(thread.id, false);
-      else if (e.key === "r" && !e.altKey && !e.shiftKey) {
+      if (e.key === "r" && !e.altKey && !e.shiftKey) {
         // R starts a reply: the cursor goes to the message box.
         e.preventDefault();
         rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-        return;
-      } else if (e.key !== "Escape") return;
-      router.push(backHref);
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [thread, archive, trash, setJunk, markRead, router, backHref]);
+  }, [thread]);
 
   if (!thread || !header) {
     if (loading) return <ConversationSkeleton />;
-    return <EmptyState icon={Inbox} title="Conversation Not Found" description="It may have been archived or deleted." action={<Button variant="outline" asChild><Link href={basePath}>{basePath === "/inbox" ? "Back to Conversations" : "Go Back"}</Link></Button>} />;
+    return <EmptyState icon={Inbox} title="Conversation Not Found" description="It may have been archived or deleted." action={<Button variant="outline" asChild><Link href={basePath}>{basePath === "/inbox" ? "Back to Inbox" : "Go Back"}</Link></Button>} />;
   }
   const { primary, title, subtitle } = header;
   // Forward opens a new email with the latest stored message quoted. Files are not carried over.
@@ -264,7 +272,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     // like the Conversations list.
     <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
-        <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
+        <Button variant="ghost" size="icon" className="size-6 md:hidden" asChild aria-label="Back">
           <Link href={backHref}><ArrowLeft /></Link>
         </Button>
         <div className="min-w-0 flex-1">
@@ -289,6 +297,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
           })()}
         </div>
         <ChannelTabs thread={thread} person={primary} hrefFor={(id) => withQuery(`${basePath}/${id}`)} />
+        <ThreadShare thread={thread} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-max">
@@ -308,6 +317,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+      <ShareNotice thread={thread} />
 
       {/* Padding sits outside the 672px column, as in the composer, so bubbles line up with the message box. */}
       <div className="relative min-h-0 flex-1">
@@ -324,6 +334,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
                 whatsapp={thread.channel === "whatsapp"}
                 flashId={flashId}
                 senderNames={senderNames}
+                senderContacts={senderContacts}
                 nameOf={nameOf}
                 onJump={onJump}
                 onReply={onReply}
@@ -361,17 +372,26 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
         onSend={(body, from, files, copies) => send(thread.id, body, from, files, false, copies)}
       />
 
-      <AttachmentViewer attachment={viewing} onClose={() => setViewing(null)} />
+      <AttachmentViewer
+        attachment={viewing}
+        detail={viewerDetail}
+        sender={viewerFile ? { name: viewerFile.from === "me" ? "You" : contactById(viewerFile.from)?.name ?? "Unknown", contact: viewerFile.from === "me" ? undefined : contactById(viewerFile.from), me: viewerFile.from === "me" } : undefined}
+        sentAt={viewerFile?.sentAt}
+        items={viewerItems}
+        index={viewerAt}
+        onNavigate={(i) => { if (viewerItems[i]) setViewing(viewerItems[i]); }}
+        onClose={() => setViewing(null)}
+      />
 
       {forwardOf && <ComposeDialog open={forwarding} onOpenChange={setForwarding} subject={forwardOf.subject} body={forwardOf.body} />}
 
-      <Sheet open={filesOpen} onOpenChange={setFilesOpen}>
-        <SheetContent className="w-full gap-0 sm:max-w-md">
-          <SheetHeader>
-            <SheetTitle>Attachments</SheetTitle>
-            <SheetDescription>{files.length === 1 ? "1 file" : `${files.length} files`} in this conversation</SheetDescription>
-          </SheetHeader>
-          <ScrollArea className="min-h-0 flex-1">
+      <Dialog open={filesOpen} onOpenChange={setFilesOpen}>
+        <DialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Attachments</DialogTitle>
+            <DialogDescription>{files.length === 1 ? "1 file" : `${files.length} files`} in this conversation</DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="min-h-0">
             {files.length === 0 ? (
               <EmptyState icon={Paperclip} title="No Attachments" description="Files sent in this conversation appear here." />
             ) : (
@@ -382,12 +402,12 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
                   q.set("message", a.messageId);
                   return `${basePath}/${a.threadId}?${q.toString()}`;
                 }}
-                className="p-4 pt-0"
               />
             )}
           </ScrollArea>
-        </SheetContent>
-      </Sheet>
+          <DialogFooter showCloseButton />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -418,21 +438,20 @@ function ChannelTabs({ thread, person, hrefFor }: { thread: Thread; person?: Con
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant={onEmail ? "secondary" : "ghost"} className={cn("px-2", !onEmail && "text-muted-foreground")}>
-              Email<ChevronDown data-icon="inline-end" />
+              Email
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-72">
             {emails.slice(0, 8).map((t) => (
-              <DropdownMenuItem key={t.id} asChild>
+              <DropdownMenuItem key={t.id} asChild className={t.id === thread.id ? "bg-secondary" : undefined}>
                 <Link href={hrefFor(t.id)} aria-current={t.id === thread.id ? "page" : undefined}>
-                  <Check className={t.id === thread.id ? undefined : "invisible"} />
                   <span className="min-w-0 flex-1 truncate">{t.subject?.trim() || "No Subject"}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">{relTime(t.lastMessageAt)}</span>
                 </Link>
               </DropdownMenuItem>
             ))}
             {emails.length > 0 && address && <DropdownMenuSeparator />}
-            {address && <DropdownMenuItem onSelect={() => setComposing(true)}><SquarePen />New Email</DropdownMenuItem>}
+            {address && <DropdownMenuItem onSelect={() => setComposing(true)}>New Email</DropdownMenuItem>}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
@@ -473,7 +492,7 @@ const phoneOf = (n: string | undefined) => (n ? formatPhone(n) : undefined);
 /** The name, subtitle and contact shown at the top of a conversation. */
 function headerOf(thread: Thread, msgs: Message[], contactById: (id: string) => Contact | undefined) {
   const primary = thread.isGroup ? undefined : contactById(thread.participantIds[0]);
-  const title = thread.isGroup ? thread.groupName : primary?.name ?? thread.fallbackName ?? "Unknown";
+  const title = niceName((thread.isGroup ? thread.groupName : primary?.name ?? thread.fallbackName) ?? "Unknown");
   // Who you are really talking to: the address their latest message came from, or their number.
   let lastAddress: string | undefined;
   for (let i = msgs.length - 1; i >= 0 && !lastAddress; i--) if (msgs[i].from !== "me") lastAddress = msgs[i].address;
@@ -481,7 +500,9 @@ function headerOf(thread: Thread, msgs: Message[], contactById: (id: string) => 
     ? groupMembers(thread.participantIds, msgs, contactById)
     : thread.channel === "email"
       ? lastAddress ?? primary?.emails[0]
-      : phoneOf(primary?.phones[0] ?? (lastAddress?.includes("@") ? undefined : lastAddress));
+      : thread.channel === "instagram"
+        ? primary?.handles?.[0] && `@${primary.handles[0]}`
+        : phoneOf(primary?.phones[0] ?? (lastAddress?.includes("@") ? undefined : lastAddress));
   return { primary, title, subtitle };
 }
 
@@ -493,6 +514,7 @@ interface ListProps {
   whatsapp: boolean;
   flashId: string | null;
   senderNames: Map<string, string>;
+  senderContacts: Map<string, Contact | undefined>;
   nameOf: NameOf;
   onJump: (id: string) => void;
   onReply: (m: Message) => void;
@@ -524,7 +546,7 @@ function withAlbums(run: Message[]): Message[][] {
 }
 
 /* Every conversation renders as a chat, email included. */
-const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, flashId, senderNames, ...handlers }: ListProps) {
+const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, flashId, senderNames, senderContacts, ...handlers }: ListProps) {
   // A WhatsApp quote names the quoted message by WhatsApp's own ID.
   const byProviderId = useMemo(() => new Map(msgs.flatMap((m) => (m.providerId ? [[m.providerId, m.id] as const] : []))), [msgs]);
   // Split each day into runs of consecutive messages from the same sender, with a meeting between the messages
@@ -574,6 +596,7 @@ const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, fla
                   const shared = {
                     showMeta: i === items.length - 1,
                     sender: isGroup && m.from !== "me" ? senderNames.get(m.from) : undefined,
+                    senderContact: isGroup && m.from !== "me" ? senderContacts.get(m.from) : undefined,
                     whatsapp,
                     ...handlers,
                   };
@@ -593,21 +616,24 @@ const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, fla
 interface BubbleProps extends Pick<ListProps, "whatsapp" | "nameOf" | "onJump" | "onReply" | "onReact" | "onOpen" | "onRetry" | "onDismiss"> {
   m: Message;
   showMeta: boolean;
-  /** The sender's name, shown in groups. */
+  /** The sender's name and photo, shown in groups. */
   sender?: string;
+  senderContact?: Contact;
   flash: boolean;
   quotedId?: string;
 }
 
 // Memoised with stable props, so a new message or a reaction redraws only the bubbles it changes.
-const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quotedId, nameOf, onJump, onReply, onReact, onOpen, onRetry, onDismiss }: BubbleProps) {
+const Bubble = memo(function Bubble({ m, showMeta, sender, senderContact, whatsapp, flash, quotedId, nameOf, onJump, onReply, onReact, onOpen, onRetry, onDismiss }: BubbleProps) {
   const touch = useTouchReveal();
   const me = m.from === "me";
   const bulk = !!m.bulk;
+  const [showFull, setShowFull] = useState(false);
+  const expandable = hasFullText(m, whatsapp, bulk);
   // A sticker, photo or file sent with no words shows on its own, without an empty bubble.
   const showBubble = !!(m.body.trim() || m.quoted || m.quote || !m.attachments?.length);
   // Replies and reactions need a stored message: not one still sending, and not one its sender deleted.
-  const actions = !m.sendState && !m.deleted ? <BubbleActions m={m} canReact={whatsapp} revealed={touch.revealed} onReply={onReply} onReact={onReact} /> : null;
+  const actions = !m.sendState && !m.deleted ? <BubbleActions m={m} canReact={whatsapp} revealed={touch.revealed} onReply={onReply} onReact={onReact} expand={expandable ? { open: showFull, toggle: () => setShowFull((v) => !v) } : undefined} /> : null;
   return (
     <div ref={touch.ref} {...touch.props} data-message-id={m.id} className={cn("group/bubble flex flex-col gap-2", me ? "items-end" : "items-start")}>
       {m.attachments && m.attachments.length > 0 && (
@@ -629,12 +655,13 @@ const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quot
           <div className={cn("min-w-0 rounded-lg p-3 text-sm leading-6 ring-ring/50 transition-shadow duration-500", me ? "rounded-br-[2px] bg-primary text-primary-foreground" : "rounded-bl-[2px] bg-muted", flash && "ring-2")}>
             {m.quote && <QuoteBlock quote={m.quote} me={me} nameOf={nameOf} onJump={quotedId ? () => onJump(quotedId) : undefined} />}
             {/* Email text is always shown as plain text. Sender-supplied HTML never reaches the page. */}
-            {m.deleted ? <p className="italic opacity-70">{m.body}</p> : <MessageBody m={m} whatsapp={whatsapp} bulk={bulk} />}
+            {m.deleted ? <p className="opacity-70">{m.body}</p> : <MessageBody m={m} whatsapp={whatsapp} bulk={bulk} showFull={showFull} />}
           </div>
           {actions}
         </div>
       )}
-      <ReactionChips m={m} me={me} nameOf={nameOf} onReact={onReact} />
+      {/* Received messages show their reactions on the line below, after the name, date and time. */}
+      {(me || !showMeta) && <ReactionChips m={m} me={me} nameOf={nameOf} onReact={onReact} />}
       {m.sendState === "failed" ? (
         <div className="flex flex-wrap items-center gap-1 px-3 text-xs text-destructive">
           <span>{m.sendError ?? "Not Sent"}</span>
@@ -645,10 +672,17 @@ const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quot
       ) : m.sendState === "sending" ? (
         <div className="px-3 text-xs text-muted-foreground">Sending</div>
       ) : (
-        (showMeta || m.edited) && (
-          <div className="px-3 text-xs text-muted-foreground">
-            {showMeta ? (sender ? `${sender} · ${fullStamp(m.sentAt)}` : fullStamp(m.sentAt)) : ""}
-            {m.edited ? (showMeta ? " · Edited" : "Edited") : ""}
+        (showMeta || m.edited || (me && m.receipt)) && (
+          <div className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-1.5">
+              {sender && showMeta && <ContactAvatar contact={senderContact} className="size-6" />}
+              <span className="truncate">
+                {showMeta ? (sender ? `${sender} · ${timeOf(m.sentAt)}` : timeOf(m.sentAt)) : ""}
+                {m.edited ? (showMeta ? " · Edited" : "Edited") : ""}
+              </span>
+              {me && m.receipt && <Ticks receipt={m.receipt} />}
+            </span>
+            {!me && showMeta && <ReactionChips m={m} me={false} nameOf={nameOf} onReact={onReact} inline />}
           </div>
         )
       )}
@@ -656,11 +690,18 @@ const Bubble = memo(function Bubble({ m, showMeta, sender, whatsapp, flash, quot
   );
 });
 
+/** WhatsApp's ticks under a message you sent: one for sent, two for delivered, two in blue once read. */
+function Ticks({ receipt }: { receipt: NonNullable<Message["receipt"]> }) {
+  const Icon = receipt === "sent" ? Check : CheckCheck;
+  const label = receipt === "read" ? "Read" : receipt === "delivered" ? "Delivered" : "Sent";
+  return <Icon className={cn("size-3.5 shrink-0", receipt === "read" && "text-blue-500")} aria-label={label} />;
+}
+
 /**
  * Photos sent together, as WhatsApp shows them: one grid, two to a row. Each photo keeps its own reactions;
  * Reply and React act on the last one, and the time is the last one's.
  */
-const ImageAlbum = memo(function ImageAlbum({ ms, showMeta, sender, whatsapp, flash, nameOf, onReply, onReact, onOpen }: Omit<BubbleProps, "m" | "quotedId" | "onJump" | "onRetry" | "onDismiss"> & { ms: Message[] }) {
+const ImageAlbum = memo(function ImageAlbum({ ms, showMeta, sender, senderContact, whatsapp, flash, nameOf, onReply, onReact, onOpen }: Omit<BubbleProps, "m" | "quotedId" | "onJump" | "onRetry" | "onDismiss"> & { ms: Message[] }) {
   const touch = useTouchReveal();
   const last = ms[ms.length - 1];
   const me = last.from === "me";
@@ -676,22 +717,22 @@ const ImageAlbum = memo(function ImageAlbum({ ms, showMeta, sender, whatsapp, fl
       </div>
       {ms.map((m) => <ReactionChips key={m.id} m={m} me={me} nameOf={nameOf} onReact={onReact} />)}
       {showMeta && (
-        <div className="px-3 text-xs text-muted-foreground">{sender ? `${sender} · ${fullStamp(last.sentAt)}` : fullStamp(last.sentAt)}</div>
+        <div className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground">
+          {sender && <ContactAvatar contact={senderContact} className="size-6" />}
+          {sender ? `${sender} · ${timeOf(last.sentAt)}` : timeOf(last.sentAt)}
+        </div>
       )}
     </div>
   );
 });
 
-/** "Sarah, Tom and 4 others": the people in a group, from its members and everyone who has written in it. */
+/** "Sarah, Tom and Lee": every person in a group, from its members and everyone who has written in it. */
 function groupMembers(participantIds: string[], msgs: Message[], contactById: (id: string) => { name: string } | undefined) {
   const ids = new Set(participantIds);
   for (const m of msgs) if (m.from !== "me" && m.from !== "unknown") ids.add(m.from);
   const names = [...ids].map((id) => contactById(id)?.name?.trim()).filter((n): n is string => !!n);
   if (names.length === 0) return undefined;
-  const shown = names.slice(0, 3);
-  const others = names.length - shown.length;
-  if (others > 0) return `${shown.join(", ")} and ${others} ${others === 1 ? "other" : "others"}`;
-  return shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}` : shown[0];
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
 }
 
 /** Placeholder bubbles while a conversation's messages load. */
@@ -815,6 +856,20 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
     onDiscardDraft();
   };
   const said = instruction.trim();
+  // Draft and Edit Text each ask what you want first, in a dialog, so it is clear what they will do.
+  const [asking, setAsking] = useState<"draft" | "edit" | null>(null);
+  const [change, setChange] = useState("");
+  const draftLabel = draft ? "Redraft" : thread.lastFromMe ? "Draft Follow-Up" : "Draft";
+  const startDraft = () => {
+    setAsking(null);
+    ask(said ? "custom" : "default", said || undefined, draft?.decision);
+  };
+  const startEdit = () => {
+    const note = change.trim();
+    setAsking(null);
+    setChange("");
+    ask("edit", note || undefined, undefined, text);
+  };
   useEffect(() => {
     const el = ref.current; if (!el) return;
     el.style.height = "0px"; el.style.height = Math.min(el.scrollHeight, 240) + "px";
@@ -831,7 +886,8 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
   askRef.current = ask;
   const speech = useVoiceRecorder(files, thread.id, (clip) => askRef.current("custom", undefined, thread.draft?.decision, undefined, clip));
   const recorder = voice.recording ? voice : speech.recording ? speech : undefined;
-  const canSend = (text.trim().length > 0 || files.items.length > 0) && !busy && !sending && !files.blocked && !replyAll.error && !recorder;
+  const closed = useInstagramReplyClosed(thread, msgs);
+  const canSend = (text.trim().length > 0 || files.items.length > 0) && !busy && !sending && !files.blocked && !replyAll.error && !recorder && !closed;
   const submit = async () => {
     if (!canSend) return;
     setSending(true);
@@ -850,27 +906,34 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
   return (
     <div className="shrink-0 border-t bg-background p-3 md:px-4">
       <div className="mx-auto w-full max-w-2xl">
+        {closed && <InstagramReplyNotice />}
         {!draft && !busy && <GuidedChoices thread={thread} msgs={msgs} disabled={busy} onPick={(decision) => ask("default", undefined, decision)} />}
         {!recorder && (
-          // Say what the reply should say, then Draft. Empty, it drafts (or tries again) on its own.
-          <form className="mb-3 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (!busy) ask(said ? "custom" : "default", said || undefined, draft?.decision); }}>
-            <Input value={instruction} onChange={(e) => setInstruction(e.target.value)} disabled={busy} placeholder={draft ? "What To Change" : "What To Say"} aria-label="What To Say" className="h-8 min-w-48 flex-1" />
-            <SpeakButton voice={speech} disabled={busy} />
-            {/* When you wrote last, a draft is a follow-up to your own message (drafts.py). */}
-            <Button type="submit" variant="secondary" disabled={busy}>{draft ? "Redraft" : thread.lastFromMe ? "Draft Follow-Up" : "Draft"}</Button>
+          // Each button says what it will do in a tooltip, and Draft and Edit Text ask what you want in a dialog first.
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Hint text={draft ? "Writes a new version of this draft that replaces it. Undo brings the old one back." : thread.lastFromMe ? "Writes a follow-up to the message you sent last, in your voice. Nothing is sent." : "Writes a reply in your voice from this conversation. You choose what it should say first. Nothing is sent."}>
+              <Button type="button" variant="secondary" disabled={busy} onClick={() => setAsking("draft")}>{draftLabel}</Button>
+            </Hint>
+            {editable && (
+              <Hint text="Fixes spelling and wording in what you wrote, or changes it the way you ask, keeping your meaning. Nothing is sent.">
+                <Button type="button" variant="outline" disabled={busy} onClick={() => setAsking("edit")}>Edit Text</Button>
+              </Hint>
+            )}
             {text.trim() && (
               <DropdownMenu>
-                <DropdownMenuTrigger asChild><Button type="button" variant="outline" disabled={busy}>Adjust <ChevronDown /></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
+                <Hint text="Rewrites your text to be shorter, more formal or more casual.">
+                  <DropdownMenuTrigger asChild><Button type="button" variant="outline" disabled={busy}>Adjust <ChevronDown /></Button></DropdownMenuTrigger>
+                </Hint>
+                <DropdownMenuContent align="start">
                   {TONES.map((t) => (
                     <DropdownMenuItem key={t.key} onSelect={() => ask(t.key, said || undefined, draft?.decision, text)}>{t.label}</DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {undoable && <Button type="button" variant="outline" onClick={undo}>Undo</Button>}
-            {draft && <Button type="button" variant="ghost" size="icon" className="size-8" aria-label="Discard Draft" disabled={busy} onClick={() => { beforeAsk.delete(thread.id); typedText.delete(thread.id); onDiscardDraft(); setText(""); }}><X /></Button>}
-          </form>
+            {undoable && <Hint text="Puts back what was in the box before the last draft."><Button type="button" variant="outline" onClick={undo}>Undo</Button></Hint>}
+            {draft && <Hint text="Removes this draft and empties the box."><Button type="button" variant="ghost" size="icon" className="size-8" aria-label="Discard Draft" disabled={busy} onClick={() => { beforeAsk.delete(thread.id); typedText.delete(thread.id); onDiscardDraft(); setText(""); }}><X /></Button></Hint>}
+          </div>
         )}
         {/* While a draft is written the text box becomes a placeholder line. */}
         <div {...files.dropProps} className={cn("rounded-lg border bg-background/50 p-3 focus-within:ring-3 focus-within:ring-ring/30", files.dragging && "border-ring ring-3 ring-ring/30")}>
@@ -890,7 +953,7 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
               onChange={(e) => type(e.target.value)}
               onPaste={files.onPaste}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
-              placeholder="Message (⌘↵ to Send)"
+              placeholder="Message"
               rows={1}
               className="min-h-5 resize-none rounded-none border-0 bg-transparent p-0 text-base leading-5 md:text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
@@ -901,9 +964,7 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
               <div className="flex items-center gap-2">
                 <AttachButton files={files} />
                 <RecordButton files={files} voice={voice} />
-                {editable && (
-                  <Button variant="secondary" onClick={() => ask("edit", undefined, undefined, text)}>Edit Text</Button>
-                )}
+                <TemplatePicker workspaceId={thread.workspaceId} disabled={busy} onInsert={(t) => type(text.trim() ? `${text.trimEnd()}\n\n${t}` : t)} />
               </div>
             )}
             {recorder
@@ -912,6 +973,67 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
           </div>
         </div>
       </div>
+      <Dialog open={asking === "draft"} onOpenChange={(open) => !open && setAsking(null)}>
+        <DialogContent showCloseButton={false} track="draft_reply" className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{draftLabel}</DialogTitle>
+            <DialogDescription>
+              {draft
+                ? "Say what to change, or leave it empty to try again. The new version replaces this draft."
+                : "Say what the reply should cover, or leave it empty and Konva writes it from the conversation. Nothing is sent until you press Send."}
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            autoFocus
+            rows={3}
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); startDraft(); } }}
+            placeholder="For example: say yes and suggest Thursday"
+            aria-label="What To Say"
+            className="resize-none"
+          />
+          <DialogFooter className="sm:justify-between">
+            <Button type="button" variant="outline" onClick={() => { setAsking(null); speech.start(); }}>Record Instead</Button>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button type="button" variant="outline" onClick={() => setAsking(null)}>Cancel</Button>
+              <Button type="button" variant="secondary" disabled={busy} onClick={startDraft}>{draftLabel}</Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={asking === "edit"} onOpenChange={(open) => !open && setAsking(null)}>
+        <DialogContent showCloseButton={false} track="edit_text" className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Text</DialogTitle>
+            <DialogDescription>Say what to change in your text, or leave it empty to fix spelling and wording only. Your meaning stays the same and nothing is sent.</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            autoFocus
+            rows={3}
+            value={change}
+            onChange={(e) => setChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); startEdit(); } }}
+            placeholder="For example: make it friendlier and mention the invoice"
+            aria-label="What To Change"
+            className="resize-none"
+          />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setAsking(null)}>Cancel</Button>
+            <Button type="button" variant="secondary" disabled={busy} onClick={startEdit}>Edit Text</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+/** A tooltip for a control, saying what it does. */
+function Hint({ text, children }: { text: string; children: React.ReactElement }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent className="max-w-64 text-balance">{text}</TooltipContent>
+    </Tooltip>
   );
 }

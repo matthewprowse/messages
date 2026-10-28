@@ -23,7 +23,7 @@ function row(patch: Partial<CalendarUpdateRow> = {}): CalendarUpdateRow {
   return {
     id: "1", user_id: "u", account_id: "a", event_id: "e", kind: "update", scope: "occurrence", title: null, description: null, location: null,
     starts_at: null, ends_at: null, all_day: null, time_zone: null, attendees: null, send_invites: true, response: null, status: "queued", error: null,
-    created_at: "2026-10-26T08:00:00Z", done_at: null, ...patch,
+    created_at: "2026-10-26T08:00:00Z", done_at: null, recurrence: null, ...patch,
   };
 }
 
@@ -196,4 +196,16 @@ test("Outlook: details become a patch and the guest list keeps who stays", () =>
   const guests = r.body.attendees as { emailAddress: { address: string }; type: string }[];
   assert.deepEqual(guests.map((g) => g.emailAddress.address), ["Ann@x.com", "cy@x.com"]);
   assert.equal(guests[0].type, "optional");
+});
+
+test("a new rule is read, stored and sent to Google with the series' skipped dates kept", () => {
+  const change = readChange(row({ scope: "series", recurrence: "FREQ=DAILY" }));
+  assert.ok(!("error" in change));
+  assert.equal(change.recurrence, "FREQ=DAILY");
+  assert.equal(googleNeedsRead(change, true), true);
+  const built = googleBody(change, { recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=TU", "EXDATE:20261110T070000Z"] }, null);
+  assert.ok(!("error" in built));
+  assert.deepEqual(built.body.recurrence, ["RRULE:FREQ=DAILY", "EXDATE:20261110T070000Z"]);
+  assert.equal(storedPatch({ attendees: [] }, change, null).recurrence, "FREQ=DAILY");
+  assert.deepEqual(readChange(row({ recurrence: "FREQ=SECONDLY" })), { error: "This repeat is not one the calendar knows." });
 });

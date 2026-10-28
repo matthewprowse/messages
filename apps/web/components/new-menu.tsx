@@ -2,20 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { CalendarPlus, Mail, MessageCircle, SquarePen } from "lucide-react";
+import { SquarePen } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { whatsappLinked } from "@/lib/new-items";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
-type Item = "email" | "whatsapp" | "event";
+type Item = "email" | "whatsapp" | "linkedin" | "instagram" | "event" | "task";
 
 // Each dialog's code (the event one pulls in the date picker) loads the first time it is opened.
 const ComposeDialog = dynamic(() => import("@/components/compose-dialog").then((m) => m.ComposeDialog), { ssr: false });
 const NewWhatsAppDialog = dynamic(() => import("@/components/new-whatsapp-dialog").then((m) => m.NewWhatsAppDialog), { ssr: false });
+const NewLinkedInDialog = dynamic(() => import("@/components/new-linkedin-dialog").then((m) => m.NewLinkedInDialog), { ssr: false });
+const NewInstagramDialog = dynamic(() => import("@/components/new-instagram-dialog").then((m) => m.NewInstagramDialog), { ssr: false });
 const NewEventDialog = dynamic(() => import("@/components/new-event-dialog").then((m) => m.NewEventDialog), { ssr: false });
+const NewTaskDialog = dynamic(() => import("@/components/new-task-dialog").then((m) => m.NewTaskDialog), { ssr: false });
 
 /**
  * True when a key press belongs to a field, menu or dialog rather than to the page, including while an
@@ -60,7 +62,7 @@ export function NewMenu() {
   useEffect(() => {
     function onNew(e: Event) {
       const item = (e as CustomEvent<Item>).detail;
-      if (item === "email" || item === "whatsapp" || item === "event") setOpen(item);
+      if (item === "email" || item === "whatsapp" || item === "linkedin" || item === "instagram" || item === "event" || item === "task") setOpen(item);
     }
     window.addEventListener(NEW_ITEM_EVENT, onNew);
     return () => window.removeEventListener(NEW_ITEM_EVENT, onNew);
@@ -81,13 +83,12 @@ export function NewMenu() {
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="right">New <Kbd>C</Kbd></TooltipContent>
+          <TooltipContent side="right">New</TooltipContent>
         </Tooltip>
         {/* When an item opens a dialog, focus must go to the dialog, not back to this button, or Esc and Tab miss it. */}
         <DropdownMenuContent side="right" align="start" className="w-max min-w-48" onCloseAutoFocus={(e) => { if (open) e.preventDefault(); }}>
-          <DropdownMenuItem onSelect={() => setOpen("email")}><Mail />New Email</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setOpen("whatsapp")} className={linked ? undefined : "items-start"}>
-            <MessageCircle className={linked ? undefined : "mt-0.5"} />
+          <DropdownMenuItem onSelect={() => setOpen("email")}>New Email</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setOpen("whatsapp")}>
             {linked ? "New WhatsApp Message" : (
               <span className="flex flex-col">
                 <span>New WhatsApp Message</span>
@@ -95,12 +96,18 @@ export function NewMenu() {
               </span>
             )}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setOpen("event")}><CalendarPlus />New Event</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setOpen("linkedin")}>New LinkedIn Message</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setOpen("instagram")}>New Instagram Message</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setOpen("event")}>New Event</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setOpen("task")}>New Task</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       {used.has("email") && <ComposeDialog open={open === "email"} onOpenChange={set("email")} />}
       {used.has("whatsapp") && <NewWhatsAppDialog open={open === "whatsapp"} onOpenChange={set("whatsapp")} />}
+      {used.has("linkedin") && <NewLinkedInDialog open={open === "linkedin"} onOpenChange={set("linkedin")} />}
+      {used.has("instagram") && <NewInstagramDialog open={open === "instagram"} onOpenChange={set("instagram")} />}
       {used.has("event") && <NewEventDialog open={open === "event"} onOpenChange={set("event")} />}
+      {used.has("task") && <NewTaskDialog open={open === "task"} onOpenChange={set("task")} />}
     </>
   );
 }

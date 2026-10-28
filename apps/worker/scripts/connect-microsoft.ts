@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { db, must } from "../src/db";
-import { encryptJson } from "../src/crypto";
+import { credentialSealer } from "../src/vault";
 import { env } from "../src/env";
 import { pkce } from "../src/google/oauth";
 import { GRAPH } from "../src/microsoft/client";
@@ -99,7 +99,7 @@ async function saveAccount(userId: string, provider: "outlook" | "outlook_calend
       .from("account_credentials")
       .upsert(
         // A new sign-in replaces any token the connectors kept from the last one.
-        { account_id: account.id, ciphertext: encryptJson(credentials, env.encryptionKey), refreshed: null, updated_at: new Date().toISOString() },
+        { account_id: account.id, ciphertext: await (await credentialSealer(account.id, userId)).sealJson(credentials), refreshed: null, updated_at: new Date().toISOString() },
         { onConflict: "account_id" },
       ),
     `save ${provider} credentials`,

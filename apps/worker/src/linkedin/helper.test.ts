@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Helper, HelperError, type HelperEvent, type Transport } from "./helper";
+import { Helper, HelperError, helperEnv, vettedProxy, type HelperEvent, type Transport } from "./helper";
 
 // A stand-in for the helper process: it records what the worker writes and answers as the Go program would.
 class FakeHelper implements Transport {
@@ -104,4 +104,52 @@ test("stop asks the helper to stop, then closes it", async () => {
   await helper.stop();
   assert.equal(fake.written[0].cmd, "stop");
   assert.equal(fake.closed, true);
+});
+
+test("a sign-in goes out as commands and comes back as a state, or as an error with its stage", async () => {
+  const headers = { "User-Agent": ["Mozilla/5.0 Test"] };
+  const fake = new FakeHelper((req) => {
+    if (req.cmd === "signin") return { id: req.id, ok: true, result: { state: "code", method: "email" } };
+    if (req.cmd === "code") return { id: req.id, ok: true, result: { state: "done", cookies: "li_at=a; JSESSIONID=ajax:1", headers } };
+    return { id: req.id, ok: false, error: { kind: "rejected", status: 200, stage: "authenticate" } };
+  });
+  const helper = new Helper(fake, () => undefined);
+  assert.deepEqual(await helper.call("signin", { email: "a@example.com", password: "x", proxy: "http://127.0.0.1:8080" }), { state: "code", method: "email" });
+  assert.deepEqual(await helper.call("code", { code: "123456" }), { state: "done", cookies: "li_at=a; JSESSIONID=ajax:1", headers });
+  assert.deepEqual(fake.written[0], { id: 1, cmd: "signin", args: { email: "a@example.com", password: "x", proxy: "http://127.0.0.1:8080" } });
+  await assert.rejects(helper.call("another_way", {}), (err: unknown) => err instanceof HelperError && err.kind === "rejected" && err.status === 200 && err.stage === "authenticate");
+});
+
+test("login carries the browser headers the session was created with", async () => {
+  const fake = new FakeHelper((req) => ({ id: req.id, ok: true, result: { me } }));
+  const helper = new Helper(fake, () => undefined);
+  await helper.call("login", { cookies: "li_at=a; JSESSIONID=\"ajax:1\"", headers: { "User-Agent": ["Mozilla/5.0 Test"] } });
+  assert.deepEqual(fake.written[0].args, { cookies: "li_at=a; JSESSIONID=\"ajax:1\"", headers: { "User-Agent": ["Mozilla/5.0 Test"] } });
+});
+
+test("a proxy reaches the helper as the standard proxy variables, and an old one does not", () => {
+  const base = { PATH: "/bin", HTTPS_proxy: "ignored", https_proxy: "http://elsewhere:1", HTTP_PROXY: "http://elsewhere:1" };
+  const withProxy = helperEnv(" socks5://user:pass@proxy.example:1080 ", base);
+  assert.equal(withProxy.HTTPS_PROXY, "socks5://user:pass@proxy.example:1080");
+  assert.equal(withProxy.HTTP_PROXY, "socks5://user:pass@proxy.example:1080");
+  assert.equal(withProxy.https_proxy, undefined);
+  assert.equal(withProxy.PATH, "/bin");
+  const without = helperEnv(undefined, base);
+  assert.equal(without.HTTPS_PROXY, undefined);
+  assert.equal(without.HTTP_PROXY, undefined);
+  assert.equal(without.https_proxy, undefined);
+  assert.equal(without.PATH, "/bin");
+  assert.equal(base.HTTP_PROXY, "http://elsewhere:1", "the environment given is not changed");
+});
+
+test("a proxy is vetted at connect time: public hosts pass, names that resolve privately do not", async () => {
+  const dns: Record<string, string | null> = { "proxy.example": "93.184.216.34", "127.0.0.1.nip.io": null, "meta.example": null };
+  const resolve = async (host: string) => dns[host] ?? null;
+  assert.equal(await vettedProxy("http://u:p@proxy.example:8080", resolve), "http://u:p@93.184.216.34:8080");
+  assert.equal(await vettedProxy("socks5://proxy.example:1080", resolve), "socks5://93.184.216.34:1080");
+  assert.equal(await vettedProxy("https://proxy.example:443", resolve), "https://proxy.example");
+  assert.equal(await vettedProxy("http://8.8.8.8:3128", resolve), "http://8.8.8.8:3128");
+  for (const bad of ["http://127.0.0.1.nip.io:8080", "http://meta.example", "http://169.254.169.254", "http://[::ffff:7f00:1]:80", "http://[64:ff9b::7f00:1]", "nonsense"]) {
+    assert.equal(await vettedProxy(bad, resolve), null, bad);
+  }
 });

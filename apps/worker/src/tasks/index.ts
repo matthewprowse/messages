@@ -1,8 +1,8 @@
 import type { AccountRow } from "../db";
 import { db, must, recordEvent, retryWrite } from "../db";
 import { log } from "../log";
-import { seal } from "../vault";
-import { INTERRUPTED, taskFailureCode, taskRow, taskStatusPatch, type TaskInput, type TaskRow, type TaskUpdateRow } from "./rows";
+import { open, seal } from "../vault";
+import { INTERRUPTED, taskFailureCode, taskRow, taskStatusPatch, taskWriteOf, type TaskInput, type TaskRow, type TaskUpdateRow, type TaskWrite } from "./rows";
 
 export * from "./rows";
 
@@ -45,6 +45,19 @@ export * from "./rows";
 //   - Does not claim or settle the row: the worker does both. A connector may still call
 //     finishTaskUpdate itself (to settle with a note, say); the worker's own finish then does nothing.
 //   - Completing a task that is already completed (or reopening an open one) must succeed, not fail.
+//
+// Creating, editing and deleting tasks in the app (20261107130000_task_writes.sql) use the same queue and the
+// same rules, with a handler per action instead of updateTask: connector.createTask(row), editTask(row) and
+// deleteTask(row). The row's title and notes are sealed (FIELD.taskTitle, taskNotes): read the wanted state
+// with taskWriteOf(row) below.
+//   - create has no task yet (task_id is null, account_id says where). Once the provider has the task, the
+//     connector stores it in public.tasks as a synced one (upsertTasks, or its own sealed rows), so the app
+//     shows it before the next sync.
+//   - update carries the whole wanted state; the connector writes it to the provider, clearing what is null,
+//     and to the tasks row. delete removes the provider's task (already gone is success) and the tasks row.
+//   - Unlike ticks, these are never superseded: each is made, oldest first, one at a time per task.
+//   - A connector without the handler fails the row as not supported. The iCloud Reminders connector, for an
+//     account signed in on the web, leaves them to the AI worker as it does ticks, and waits for it to settle.
 // ---------------------------------------------------------------------------------------------------------
 
 /** Rows stored in one request. */
@@ -68,7 +81,13 @@ export async function upsertTasks(account: Pick<AccountRow, "id" | "user_id">, r
 
 /** The task a tick is for, as stored (title, notes and list name still sealed), or null once it is gone. */
 export async function taskOfUpdate(row: TaskUpdateRow): Promise<TaskRow | null> {
+  if (!row.task_id) return null;
   return must(await db.from("tasks").select("*").eq("id", row.task_id).eq("user_id", row.user_id).maybeSingle(), "load task to tick");
+}
+
+/** The wanted state of a create or update row, its sealed text opened. */
+export function taskWriteOfRow(row: TaskUpdateRow): Promise<TaskWrite> {
+  return taskWriteOf(row, open);
 }
 
 export async function queuedTaskUpdates(): Promise<TaskUpdateRow[]> {
@@ -78,6 +97,11 @@ export async function queuedTaskUpdates(): Promise<TaskUpdateRow[]> {
 /** The queued ticks for one task, oldest first. */
 export async function queuedTaskUpdatesFor(taskId: string): Promise<TaskUpdateRow[]> {
   return must(await db.from("task_updates").select("*").eq("task_id", taskId).eq("status", "queued").order("created_at"), "load task's updates");
+}
+
+/** One queued row (a create has no task to look its queue up by), as a list: empty once it is no longer queued. */
+export async function queuedTaskUpdateById(id: string): Promise<TaskUpdateRow[]> {
+  return must(await db.from("task_updates").select("*").eq("id", id).eq("status", "queued"), "load task update");
 }
 
 /** Marks a queued tick as under way. Returns false if another run already took it. */
@@ -112,7 +136,7 @@ export async function finishTaskUpdate(row: TaskUpdateRow, outcome: { error?: st
   }
   if (row.action === "complete" || row.action === "reopen") {
     // The task first, so the app has the new status by the time it hears the row settle.
-    const written = await retryWrite(() => db.from("tasks").update(taskStatusPatch(row.action as "complete" | "reopen")).eq("id", row.task_id).eq("user_id", row.user_id));
+    const written = await retryWrite(() => db.from("tasks").update(taskStatusPatch(row.action as "complete" | "reopen")).eq("id", row.task_id!).eq("user_id", row.user_id));
     if (!written) log.warn("ticked task not stored", { task: row.task_id });
   }
   const saved = await retryWrite(() => db.from("task_updates").update({ status: "done", error: null }).eq("id", row.id).eq("status", "updating"));
@@ -123,6 +147,22 @@ export async function finishTaskUpdate(row: TaskUpdateRow, outcome: { error?: st
 /** A tick left "updating" by a worker that stopped mid-request may or may not have happened, so it is failed rather than made again. */
 export async function failInterruptedTaskUpdates() {
   must(await db.from("task_updates").update({ status: "failed", error: INTERRUPTED }).eq("status", "updating"), "fail interrupted task updates");
+}
+
+/** The accounts named, in one read, by id. */
+export async function accountsById(ids: string[]): Promise<Map<string, { id: string; provider: string; status: string }>> {
+  const out = new Map<string, { id: string; provider: string; status: string }>();
+  if (ids.length === 0) return out;
+  const rows = must(await db.from("accounts").select("id, provider, status").in("id", ids), "load task accounts");
+  for (const r of rows) out.set(r.id, r);
+  return out;
+}
+
+/** Which of these users have an iCloud Reminders account, whose changes the AI worker's connector may settle itself. */
+export async function usersWithReminders(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const rows = must(await db.from("accounts").select("user_id").eq("provider", "icloud_reminders").in("user_id", userIds), "load reminders accounts");
+  return new Set(rows.map((r) => r.user_id));
 }
 
 /** Each task's account, for the tasks named, in one read. Tasks that are gone are missing from the map. */

@@ -2,6 +2,7 @@ import type { Json, Tables, TablesUpdate } from "@messages/db";
 import { zonedToUtc } from "../caldav/ical";
 import { BAD_TIME_ZONE, BAD_TIMES, addDays, allDayRange, cleanAttendees, localDate, validTimeZone, type GoogleEvent } from "./create-event";
 import type { StoredCalendarEvent } from "./delete-event";
+import { BAD_RULE, validRule, withRule } from "./recurrence";
 
 // Changing an event from the app: calendar_updates rows are queued by the app, claimed here, carried out by
 // the account's connector, and settled once the stored copy has the change too. A row is either new details
@@ -39,6 +40,8 @@ export interface Change {
   time?: ChangeTime;
   /** The whole new guest list (lowercase), without you. */
   attendees?: string[];
+  /** A new rule for the whole series, or one that makes a single event repeat. */
+  recurrence?: string;
   sendInvites: boolean;
   response?: UpdateResponse;
 }
@@ -69,6 +72,10 @@ export function readChange(row: CalendarUpdateRow): Change | { error: string } {
     const attendees = cleanAttendees(row.attendees);
     if (!Array.isArray(attendees)) return attendees;
     change.attendees = attendees;
+  }
+  if (row.recurrence !== null) {
+    if (!validRule(row.recurrence)) return { error: BAD_RULE };
+    change.recurrence = row.recurrence;
   }
   return change;
 }
@@ -185,6 +192,7 @@ export function storedPatch(stored: Pick<StoredCalendarEvent, "attendees">, chan
   if (change.location !== undefined) patch.location = change.location || null;
   if (times) Object.assign(patch, times);
   if (change.attendees !== undefined || change.response) patch.attendees = guestsAfter(stored.attendees, change.attendees, change.response);
+  if (change.recurrence !== undefined) patch.recurrence = change.recurrence;
   return patch;
 }
 
@@ -194,7 +202,7 @@ export function storedPatch(stored: Pick<StoredCalendarEvent, "attendees">, chan
 
 /** Whether the event must be read before it is changed: guests and series times are merged into what it has. */
 export function googleNeedsRead(change: Change, series: boolean): boolean {
-  return change.kind === "rsvp" || change.attendees !== undefined || (series && change.time !== undefined);
+  return change.kind === "rsvp" || change.attendees !== undefined || change.recurrence !== undefined || (series && change.time !== undefined);
 }
 
 /** Your entry and the organizer's are always kept, with resources (rooms); everyone else is the new list, keeping their answers. */
@@ -246,6 +254,8 @@ export function googleBody(change: Change, current: GoogleEvent | null, shift: S
     }
   }
   if (change.attendees !== undefined) body.attendees = mergeGoogleGuests(current?.attendees ?? [], change.attendees);
+  // Skipped dates and the rest of the series' lines stay as they are.
+  if (change.recurrence !== undefined) body.recurrence = withRule(current?.recurrence, change.recurrence);
   return { body };
 }
 

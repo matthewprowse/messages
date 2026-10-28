@@ -7,12 +7,14 @@ up on ('failed') after a few tries. Only counts are logged, never what was said.
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
-from .fields import TRANSCRIPT
+from .crypto import is_ciphertext
+from .fields import ATTACHMENT_DATA, FILENAME, TRANSCRIPT
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, SupabaseError
 from .text import UNTRUSTED
@@ -24,6 +26,40 @@ BATCH = 5
 MAX_BYTES = 15 * 1024 * 1024  # Gemini takes up to 20MB inline; a voice note is far smaller
 MAX_TRIES = 3
 RETRY_S = 300
+DEFAULT_MAX_SECONDS = 300  # a voice note longer than this is not transcribed (VOICE_NOTE_MAX_SECONDS)
+BYTES_PER_SECOND = 16_000  # 128 kbit/s, above voice notes' usual bitrate: a file this size per second cannot be shorter than it looks
+
+
+def max_seconds() -> int:
+    try:
+        value = int(os.environ.get("VOICE_NOTE_MAX_SECONDS", "") or DEFAULT_MAX_SECONDS)
+    except ValueError:
+        return DEFAULT_MAX_SECONDS
+    return value if value > 0 else DEFAULT_MAX_SECONDS
+
+
+def ogg_seconds(audio: bytes) -> float | None:
+    """The length of an Ogg Opus file (WhatsApp voice notes), from the last page's granule position at 48 kHz."""
+    at = audio.rfind(b"OggS")
+    if at < 0 or len(audio) < at + 14:
+        return None
+    granule = int.from_bytes(audio[at + 6 : at + 14], "little", signed=True)
+    return granule / 48000 if granule > 0 else None
+
+
+def note_seconds(audio: bytes | None, known: Any = None, size: Any = None) -> float | None:
+    """How long a voice note is: as stored when the row says (duration_s), else read from the file, else a floor
+    from its size (what its length would be at the highest usual bitrate). None when nothing is known."""
+    if isinstance(known, (int, float)) and not isinstance(known, bool) and known > 0:
+        return float(known)
+    if audio:
+        got = ogg_seconds(audio)
+        if got:
+            return got
+        size = len(audio)
+    if isinstance(size, (int, float)) and not isinstance(size, bool) and size > 0:
+        return size / BYTES_PER_SECOND
+    return None
 
 SYSTEM = """You transcribe WhatsApp voice notes.
 
@@ -47,18 +83,24 @@ SCHEMA: dict[str, Any] = {
 }
 
 
-def pending_query(skip: list[str]) -> dict[str, str]:
-    """Saved voice notes whose message has no transcript yet, newest first."""
+FETCH = 20  # audio rows read per pass: the name is sealed, so voice notes are told from other audio here, not in SQL
+
+
+def pending_query(skip: list[str], skip_files: list[str] | None = None) -> dict[str, str]:
+    """Saved audio whose message has no transcript yet, newest first. Which of it is a voice note is decided
+    after the name is opened (attachments.filename is sealed); skip_files leaves out audio already seen not to be."""
     params = {
-        "select": "id,storage_path,mime_type,size_bytes,messages!inner(id,user_id,account_id,thread_id,sent_at,transcript_status)",
-        "filename": "like.Voice Note.*",
+        "select": "id,filename,storage_path,mime_type,size_bytes,messages!inner(id,user_id,account_id,thread_id,sent_at,transcript_status)",
+        "kind": "eq.audio",
         "storage_path": "not.is.null",
         "messages.transcript_status": "is.null",
         "order": "created_at.desc",
-        "limit": str(BATCH),
+        "limit": str(FETCH),
     }
     if skip:
         params["messages.id"] = "not.in.(" + ",".join(skip) + ")"
+    if skip_files:
+        params["id"] = "not.in.(" + ",".join(skip_files) + ")"
     return params
 
 
@@ -82,6 +124,7 @@ class Transcribe:
         self.gemini = gemini
         self.model = model
         self.vault = vault or Vault(db)
+        self._other_audio: set[str] = set()  # attachment ids of audio that is not a voice note
         self._tries: dict[str, tuple[int, float]] = {}  # message id -> (failed tries, monotonic time to try again)
 
     def waiting(self) -> list[str]:
@@ -90,10 +133,18 @@ class Transcribe:
         return [mid for mid, (_, at) in self._tries.items() if at > now]
 
     def run_once(self) -> int:
-        rows = self.db.select("attachments", pending_query(self.waiting()))
+        rows = self.db.select("attachments", pending_query(self.waiting(), sorted(self._other_audio)[-500:]))
         done = 0
+        taken = 0
         for a in rows:
             m = a["messages"]
+            if not self.is_voice_note(m["user_id"], a.get("filename")):
+                if not is_ciphertext(a.get("filename")):  # a name that could not be opened (no key yet) is looked at again
+                    self._other_audio.add(a["id"])
+                continue
+            if taken >= BATCH:
+                break
+            taken += 1
             try:
                 done += self._one(a, m)
             except (GeminiError, SupabaseError, OSError) as err:
@@ -102,12 +153,23 @@ class Transcribe:
             log.info("voice notes transcribed", count=done)
         return done
 
+    def is_voice_note(self, user_id: str, filename: Any) -> bool:
+        return str(self.vault.open(user_id, FILENAME, filename) or "").startswith("Voice Note.")
+
     def _one(self, a: dict[str, Any], m: dict[str, Any]) -> int:
-        if (a.get("size_bytes") or 0) > MAX_BYTES:
+        limit = max_seconds()
+        # Checked before the download, from the stored length or size; again once the file is read.
+        if (a.get("size_bytes") or 0) > MAX_BYTES or (note_seconds(None, a.get("duration_s"), a.get("size_bytes")) or 0) > limit:
             self._save(m["id"], None, "failed")
             return 0
         audio = self.db.download(BUCKET, a["storage_path"])
-        if len(audio) > MAX_BYTES:
+        # Sealed by the sync worker ("e1b:" header), opened here in memory; a plain legacy file passes through.
+        opened = self.vault.open_bytes(m["user_id"], ATTACHMENT_DATA, audio)
+        if opened is None:
+            raise OSError("voice note could not be opened")
+        audio = opened
+        seconds = note_seconds(audio, a.get("duration_s"))
+        if len(audio) > MAX_BYTES or (seconds or 0) > limit:
             self._save(m["id"], None, "failed")
             return 0
         result = self.gemini.json(
@@ -119,6 +181,8 @@ class Transcribe:
             temperature=0.0,
             thinking="low",
             audio=(audio, audio_type(a.get("mime_type"))),
+            audio_seconds=seconds,
+            max_output=8192,
             timeout=120,
         )
         text = str(result.get("transcript") or "").strip()

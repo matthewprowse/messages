@@ -60,7 +60,11 @@ async function loadLinkerData(user: string) {
     ownIdentities(user),
     allRows((f, t) => db.from("contacts").select("id, display_name, organization_id, created_at").eq("user_id", user).order("id").range(f, t), "load contacts"),
     allRows((f, t) => db.from("contact_identities").select("id, contact_id, kind, value").eq("user_id", user).order("id").range(f, t), "load identities").then((r) => openAddresses(user, r)),
-    allRows((f, t) => db.from("address_book_cards").select("id, name, emails, phones").eq("user_id", user).order("id").range(f, t), "load cards").then((r) => openAddresses(user, r)),
+    allRows((f, t) => db.from("address_book_cards").select("id, name, emails, phones").eq("user_id", user).order("id").range(f, t), "load cards").then(async (r) => {
+      await openAddresses(user, r);
+      // A card's name is encrypted; a card saved before that has it plain.
+      return Promise.all(r.map(async (c) => ({ ...c, name: await open(user, FIELD.cardName, c.name) })));
+    }),
     allRows(
       (f, t) => db.from("contact_suggestions").select("id, contact_a, contact_b, status").eq("user_id", user).neq("status", "merged").order("id").range(f, t),
       "load suggestions",

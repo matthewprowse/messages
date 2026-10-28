@@ -2,8 +2,7 @@ import { discover, domainOf, fromSettings, isEmail, readSettings, type Candidate
 import { nodeLookups } from "@messages/mail-servers/net";
 import { failureText, findWorking } from "@messages/mail-servers/probe";
 import { db, must } from "../src/db";
-import { encryptJson } from "../src/crypto";
-import { env } from "../src/env";
+import { credentialSealer } from "../src/vault";
 import type { ImapCredentials } from "../src/connectors/mail-service";
 import { ask, ownerUserId, saveAccountRow } from "./owner";
 
@@ -89,7 +88,7 @@ async function main() {
   must(
     await db
       .from("account_credentials")
-      .upsert({ account_id: account.id, ciphertext: encryptJson(credentials, env.encryptionKey), updated_at: new Date().toISOString() }, { onConflict: "account_id" }),
+      .upsert({ account_id: account.id, ciphertext: await (await credentialSealer(account.id, userId)).sealJson(credentials), updated_at: new Date().toISOString() }, { onConflict: "account_id" }),
     "save credentials",
   );
 

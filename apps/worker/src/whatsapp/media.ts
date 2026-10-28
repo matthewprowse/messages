@@ -1,12 +1,14 @@
 import { downloadMediaMessage, type proto, type WAMessage, type WASocket } from "baileys";
 import { db, must } from "../db";
-import { ATTACHMENTS_BUCKET, attachmentPath, storedType, uploadObject } from "../storage";
-import { MAX_FILE_BYTES } from "../ingest/attachment-files";
+import { keepFile, MAX_FILE_BYTES } from "../file-store";
+import { fileHints } from "../ingest/file-hints";
+import { isVideoLink, refusing, stateFor } from "../storage-rules";
 import type { MediaType } from "./normalize";
 import { silentLogger } from "./logger";
 
 // WhatsApp photos, voice notes, videos and documents, saved to the private "attachments" bucket at
-// <user id>/<message id>/<attachment id>, the same layout as email attachments.
+// <user id>/<message id>/<attachment id>, the same layout as email attachments, sealed and subject to the same
+// video and storage rules (file-store.ts).
 
 /**
  * What is needed to fetch a file again later: WhatsApp's encrypted copy, its key, and the message key so
@@ -70,12 +72,36 @@ async function download(sock: WASocket, msg: WAMessage): Promise<Buffer> {
   }
 }
 
-/** Downloads one file and records where it went. Returns false when it is too large to keep. */
-export async function saveMedia(sock: WASocket, msg: WAMessage, row: { userId: string; messageId: string; attachmentId: string; mimeType: string }): Promise<boolean> {
+/** What saveMedia needs to know about the row it is saving for. */
+export interface MediaRow {
+  userId: string;
+  accountId: string;
+  messageId: string;
+  attachmentId: string;
+  mimeType: string;
+  kind: string;
+  filename: string;
+  sizeBytes?: number | null;
+}
+
+/**
+ * Downloads one file and records where it went. Returns false when it was not kept: too large, a video kept as a
+ * link to the original, or a full seat. Nothing is downloaded for a video that will not be copied or for someone
+ * whose storage is full (it is tried again once there is room).
+ */
+export async function saveMedia(sock: WASocket, msg: WAMessage, row: MediaRow): Promise<boolean> {
+  const hints = fileHints(row.filename);
+  must(
+    await db.from("attachments").update({ file_ext: hints.ext, keep_hint: hints.keep, is_sticker: hints.sticker }).eq("id", row.attachmentId),
+    "save attachment hints",
+  );
+  if (isVideoLink(row.kind, row.sizeBytes)) {
+    must(await db.from("attachments").update({ not_kept: "video_link" }).eq("id", row.attachmentId).is("storage_path", null), "mark attachment not kept");
+    return false;
+  }
+  if (refusing(await stateFor(row.userId))) return false;
   const content = await download(sock, msg);
   if (content.length > MAX_FILE_BYTES) return false;
-  const path = attachmentPath(row.userId, row.messageId, row.attachmentId);
-  await uploadObject(ATTACHMENTS_BUCKET, path, content, storedType(row.mimeType));
-  must(await db.from("attachments").update({ storage_path: path, size_bytes: content.length }).eq("id", row.attachmentId), "save attachment path");
-  return true;
+  const kept = await keepFile({ ...row, bytes: content });
+  return kept.saved;
 }

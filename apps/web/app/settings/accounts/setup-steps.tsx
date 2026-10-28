@@ -36,7 +36,7 @@ export function Command({ children }: { children: string }) {
   );
 }
 
-/** Waiting until the worker has the account, then Connected with a way on to Conversations. */
+/** Waiting until the worker has the account, then Connected with a way on to the Inbox. */
 function ConnectionStatus({ label, providers }: { label: string; providers: Provider[] }) {
   const { accounts } = useApp();
   const found = accounts.filter((a) => providers.includes(a.provider));
@@ -48,9 +48,9 @@ function ConnectionStatus({ label, providers }: { label: string; providers: Prov
       <SettingsRows>
         <SettingsRow
           title={<>{label} {live ? <Badge variant="secondary">Connected</Badge> : <Badge variant="outline" className="gap-1"><RefreshCw className="size-3 animate-spin" /> {connecting ? "Connecting" : "Waiting"}</Badge>}</>}
-          description={live ? "New messages appear in Conversations within seconds." : "This updates by itself once the worker has connected the account."}
+          description={live ? "New messages appear in the Inbox within seconds." : "This updates by itself once the worker has connected the account."}
         >
-          {live && <Button size="sm" asChild><Link href="/inbox">Go to Conversations</Link></Button>}
+          {live && <Button size="sm" asChild><Link href="/inbox">Go to Inbox</Link></Button>}
         </SettingsRow>
       </SettingsRows>
     </section>

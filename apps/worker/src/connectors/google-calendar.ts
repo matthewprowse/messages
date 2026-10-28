@@ -6,9 +6,11 @@ import { mapLimit } from "../util";
 import { GoogleApiError, signInRevoked, type GoogleClient } from "../google/client";
 import { CALENDAR_EVENTS_SCOPE, CALENDAR_SCOPE, GoogleAuthError } from "../google/oauth";
 import { googleFatalDetail, openGoogleClient } from "../google/session";
+import { sealEvent } from "../calendar/sealed";
 import { storeWindow } from "../calendar/store-window";
 import { DELETE_NOT_GRANTED, GONE, claimDelete, failDelete, settleDeleted, storedEventOf, type CalendarDeleteRow } from "../calendar/delete-event";
 import { claimUpdate, failUpdate, settleUpdated, storeChange, storedEventOfUpdate } from "../calendar/update-queue";
+import { SERIES_RULE, ruleOf } from "../calendar/recurrence";
 import { UPDATE_NOT_GRANTED, googleBody, googleNeedsRead, googleUpdateFailure, readChange, seriesShift, type CalendarUpdateRow, type SeriesShift } from "../calendar/update-event";
 import {
   API,
@@ -31,6 +33,7 @@ const POLL_MS = 5 * 60_000;
 const PAST_DAYS = 7;
 const FUTURE_DAYS = 60;
 const CALENDARS_AT_ONCE = 3; // calendars read together
+const SERIES_AT_ONCE = 4; // series read together for their rules
 const FULL_EVERY_MS = 60 * 60_000; // full fetch at least hourly, even when nothing changed
 
 interface CalendarListEntry {
@@ -107,6 +110,8 @@ export async function failInterruptedEvents() {
 export class GoogleCalendarConnector {
   /** When the last full fetch started and which calendars it covered, for the cheap "anything changed?" check. */
   private lastFetch: { startedAt: string; at: number; calendars: string } | null = null;
+  /** How each series repeats, by its id, read from the series' own event at most once per full fetch interval. */
+  private readonly rules = new Map<string, { rule: string | null; at: number }>();
   private stopped = false;
   private readonly sleeper = new Sleeper();
   private readonly backoff = new Backoff();
@@ -219,11 +224,33 @@ export class GoogleCalendarConnector {
     });
     // Merged in calendar order, so a shared event stays filed under the first calendar that has it (the primary).
     for (const found of perCalendar) for (const row of found) if (!rows.has(row.provider_event_id)) rows.set(row.provider_event_id, row);
+    await this.addRules(client, rows, now);
 
     // Anything stored for this window that Google no longer has was cancelled, moved out or hidden.
     const { written, removed } = await storeWindow(this.id, rows, { timeMin, timeMax });
     this.lastFetch = { startedAt, at: now, calendars: calendarKey };
     log.info("calendar synced", { account: this.id, calendars: shown.length, events: rows.size, written, removed });
+  }
+
+  /**
+   * Gives each occurrence of a repeating event its series' rule. Occurrences do not carry it, so each series' own
+   * event is read for it, once per full fetch interval; one that cannot be read keeps what it had.
+   */
+  private async addRules(client: GoogleClient, rows: Map<string, TablesInsert<"calendar_events">>, now: number) {
+    const due = new Map<string, string>(); // series id to the calendar it is on
+    for (const row of rows.values()) {
+      const seen = row.series_id ? this.rules.get(row.series_id) : undefined;
+      if (row.series_id && (!seen || now - seen.at > FULL_EVERY_MS)) due.set(row.series_id, row.calendar_id);
+    }
+    await mapLimit([...due], SERIES_AT_ONCE, async ([seriesId, calendarId]) => {
+      try {
+        const series = await client.request<GoogleEvent>(`${API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(seriesId)}`, { query: { fields: "recurrence" } });
+        this.rules.set(seriesId, { rule: ruleOf(series.recurrence), at: now });
+      } catch (err) {
+        log.warn("calendar series rule not read", { account: this.id, code: errorCode(err) });
+      }
+    });
+    for (const row of rows.values()) if (row.series_id) row.recurrence = this.rules.get(row.series_id)?.rule ?? null;
   }
 
   /**
@@ -267,10 +294,12 @@ export class GoogleCalendarConnector {
     const stored = storedEvent({ ...event, id: providerEventId }, { userId: row.user_id, accountId: this.id, calendarId: createdCalendarId(row, event) });
     if (stored) {
       // Shown in the app at once. If this write fails, the next sync stores it.
-      const saved = await db.from("calendar_events").upsert(stored, { onConflict: "account_id,provider_event_id" });
+      const saved = await db.from("calendar_events").upsert(await sealEvent(stored.user_id, stored), { onConflict: "account_id,provider_event_id" });
       if (saved.error) log.warn("created event not stored", { account: this.id, event: row.id, code: saved.error.code });
     }
     await settleCreated(row.id, providerEventId, event.htmlLink ?? null);
+    // A repeating event is stored as its series until the next pass fetches its occurrences, which is now.
+    if (row.recurrence) this.lastFetch = null;
     log.info("calendar event created", { account: this.id, event: row.id, attendees: request.body.attendees?.length ?? 0, meet: row.add_meet });
   }
 
@@ -349,6 +378,10 @@ export class GoogleCalendarConnector {
       return;
     }
     const series = change.scope === "series" && !!event.series_id;
+    if (change.recurrence !== undefined && event.series_id && !series) {
+      await failUpdate(row.id, SERIES_RULE);
+      return;
+    }
     let shift: SeriesShift | null = null;
     if (series && change.time) {
       const found = seriesShift(change.time, event);
@@ -362,7 +395,7 @@ export class GoogleCalendarConnector {
 
     const url = `${API}/calendars/${encodeURIComponent(event.calendar_id)}/events/${encodeURIComponent(series ? event.series_id! : event.provider_event_id)}`;
     try {
-      const current = googleNeedsRead(change, series) ? await client.request<GoogleEvent>(url, { query: { fields: "attendees,start,end" }, timeoutMs: 30_000 }) : null;
+      const current = googleNeedsRead(change, series) ? await client.request<GoogleEvent>(url, { query: { fields: "attendees,start,end,recurrence" }, timeoutMs: 30_000 }) : null;
       const built = googleBody(change, current, shift);
       if ("error" in built) {
         await failUpdate(row.id, built.error);
@@ -377,6 +410,11 @@ export class GoogleCalendarConnector {
     }
     await storeChange(event, change, series, shift);
     await settleUpdated(row.id);
+    if (change.recurrence !== undefined) {
+      // The occurrences change with the rule: the next pass fetches them all again, and the rule with them.
+      this.rules.delete(event.series_id ?? event.provider_event_id);
+      this.lastFetch = null;
+    }
     log.info("calendar event changed", { account: this.id, event: row.id, kind: change.kind, scope: series ? "series" : "occurrence" });
   }
 }

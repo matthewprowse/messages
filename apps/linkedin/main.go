@@ -15,7 +15,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -50,6 +52,15 @@ type Helper struct {
 	out    *Writer
 	client *linkedingo.Client
 	live   bool
+	// What the login was given, for the requests the library does not offer (start).
+	session *session
+
+	// A password sign-in in progress: where it is waiting, and the wait for approval in the app that runs
+	// beside the command loop (it can take minutes, and another command may have to end it).
+	mu         sync.Mutex
+	checkpoint *linkedingo.PasswordCheckpoint
+	cancelWait context.CancelFunc
+	waitDone   chan struct{}
 }
 
 type loginArgs struct {
@@ -57,6 +68,19 @@ type loginArgs struct {
 	XLiTrack     string `json:"xLiTrack"`
 	PageInstance string `json:"pageInstance"`
 	SyncToken    string `json:"syncToken"`
+	// Headers are the browser headers (User-Agent and its companions) the cookies were created with. A
+	// session signed in with a password has them; pasted cookies do not, and use the library's defaults.
+	Headers http.Header `json:"headers"`
+}
+
+type signinArgs struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Proxy    string `json:"proxy"`
+}
+
+type codeArgs struct {
+	Code string `json:"code"`
 }
 
 type conversationsArgs struct {
@@ -73,6 +97,8 @@ type sendArgs struct {
 	Conversation string `json:"conversation"`
 	Text         string `json:"text"`
 	Token        string `json:"token"`
+	// Attachments are files the worker wrote under the temp folder. With them the text is optional.
+	Attachments []attachmentArg `json:"attachments,omitempty"`
 }
 
 type readArgs struct {
@@ -120,10 +146,46 @@ func EventFrom(e *linkedingo.DecoratedEvent) *Event {
 
 // Handle runs one command and returns its response. stop reports whether the helper should exit.
 func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop bool) {
-	if req.Cmd != "login" && req.Cmd != "stop" && h.client == nil {
-		return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+	switch req.Cmd {
+	case "login", "signin", "code", "app", "another_way", "stop":
+	default:
+		if h.client == nil {
+			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
 	}
 	switch req.Cmd {
+	case "signin":
+		var args signinArgs
+		if json.Unmarshal(req.Args, &args) != nil || strings.TrimSpace(args.Email) == "" || args.Password == "" {
+			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
+		httpClient, err := ProxyClient(args.Proxy)
+		if err != nil {
+			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
+		h.endWait()
+		session, err := linkedingo.NewPasswordLoginClient(httpClient).Login(ctx, args.Email, args.Password)
+		return h.signInResponse(req.ID, session, err), false
+
+	case "code":
+		var args codeArgs
+		cp := h.current()
+		if json.Unmarshal(req.Args, &args) != nil || cp == nil {
+			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
+		h.endWait()
+		session, err := cp.SubmitCode(ctx, strings.TrimSpace(args.Code))
+		return h.signInResponse(req.ID, session, err), false
+
+	case "another_way":
+		cp := h.current()
+		if cp == nil {
+			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
+		h.endWait()
+		session, err := cp.TryAnotherWay(ctx)
+		return h.signInResponse(req.ID, session, err), false
+
 	case "login":
 		var args loginArgs
 		if json.Unmarshal(req.Args, &args) != nil || strings.TrimSpace(args.Cookies) == "" {
@@ -134,6 +196,8 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 			return Fail(req.ID, &Error{Kind: KindBadCredentials}), false
 		}
 		probe := linkedingo.NewClient(ctx, linkedingo.NewURN(""), jar, args.PageInstance, args.XLiTrack, "", linkedingo.Handlers{})
+		// The session must look like the browser it was created in, so LinkedIn does not end it.
+		probe.SetBrowserHeaders(args.Headers)
 		profile, err := probe.GetCurrentUserProfile(ctx)
 		if err != nil {
 			return Fail(req.ID, Classify(err)), false
@@ -143,6 +207,7 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 			return Fail(req.ID, &Error{Kind: KindBadCredentials}), false
 		}
 		h.client = linkedingo.NewClient(ctx, linkedingo.NewURN(me.ID), jar, args.PageInstance, args.XLiTrack, args.SyncToken, h.handlers())
+		h.client.SetBrowserHeaders(args.Headers)
 		return Done(req.ID, map[string]any{"me": me}), false
 
 	case "conversations":
@@ -206,8 +271,19 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 
 	case "send":
 		var args sendArgs
-		if json.Unmarshal(req.Args, &args) != nil || args.Conversation == "" || strings.TrimSpace(args.Text) == "" || args.Token == "" {
+		if json.Unmarshal(req.Args, &args) != nil || args.Conversation == "" || args.Token == "" || (strings.TrimSpace(args.Text) == "" && len(args.Attachments) == 0) {
 			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
+		if len(args.Attachments) > 0 {
+			files, bad := checkAttachments(args.Attachments, os.TempDir())
+			if bad != nil {
+				return Fail(req.ID, bad), false
+			}
+			sent, err := sendFiles(ctx, h.client, linkedingo.NewURN(args.Conversation), args.Text, args.Token, files, 0)
+			if err != nil {
+				return sendFailure(req.ID, sent, err), false
+			}
+			return sendDone(req.ID, sent), false
 		}
 		sent, err := h.client.SendMessage(ctx, linkedingo.NewURN(args.Conversation), linkedingo.SendMessageBody{Text: args.Text}, nil, args.Token)
 		if err != nil {
@@ -215,6 +291,20 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 		}
 		m := MessageFrom(sent.Data)
 		return Done(req.ID, map[string]any{"message": m}), false
+
+	case "picture":
+		var args pictureArgs
+		if json.Unmarshal(req.Args, &args) != nil {
+			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
+		return h.picture(ctx, req.ID, args), false
+
+	case "start":
+		var args startArgs
+		if json.Unmarshal(req.Args, &args) != nil {
+			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+		}
+		return h.start(ctx, req.ID, args), false
 
 	case "read":
 		var args readArgs
@@ -236,6 +326,7 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 		return Done(req.ID, map[string]any{}), false
 
 	case "stop":
+		h.endWait()
 		if h.client != nil && h.live {
 			h.client.RealtimeDisconnect()
 			h.live = false
@@ -243,6 +334,88 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 		return Done(req.ID, map[string]any{}), true
 	}
 	return Fail(req.ID, &Error{Kind: KindBadRequest}), false
+}
+
+// Dispatch runs one command like Handle does, except that waiting for approval in the app answers later, from
+// its own goroutine, so the commands that can end the wait (another way, stop) still get through. resp is nil
+// when the answer comes later.
+func (h *Helper) Dispatch(ctx context.Context, req Request) (resp *Response, stop bool) {
+	if req.Cmd == "app" {
+		return h.waitForApp(ctx, req), false
+	}
+	r, stop := h.Handle(ctx, req)
+	return &r, stop
+}
+
+// current is where the sign-in is waiting, or nil.
+func (h *Helper) current() *linkedingo.PasswordCheckpoint {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.checkpoint
+}
+
+// endWait ends a wait for approval in the app, if one is running, and returns once it has answered.
+func (h *Helper) endWait() {
+	h.mu.Lock()
+	cancel, done := h.cancelWait, h.waitDone
+	h.cancelWait, h.waitDone = nil, nil
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+}
+
+// waitForApp starts the wait for the sign-in to be approved in the LinkedIn app. Its answer is written when
+// the wait ends: approved (done, or on to the next check), turned down, timed out or ended by another command.
+func (h *Helper) waitForApp(ctx context.Context, req Request) *Response {
+	cp := h.current()
+	if cp == nil || cp.Kind() != linkedingo.PasswordCheckpointApp {
+		r := Fail(req.ID, &Error{Kind: KindBadRequest})
+		return &r
+	}
+	h.endWait()
+	waitCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	h.mu.Lock()
+	h.cancelWait, h.waitDone = cancel, done
+	h.mu.Unlock()
+	go func() {
+		defer close(done)
+		defer cancel()
+		session, err := cp.WaitForApp(waitCtx)
+		h.out.Write(h.signInResponse(req.ID, session, err))
+	}()
+	return nil
+}
+
+// signInResponse answers a sign-in command from what linkedingo returned: signed in, waiting at a check that
+// asks for a code or an approval (a wrong code lands here too, marked rejected), or failed.
+func (h *Helper) signInResponse(id int64, session *linkedingo.PasswordLoginSession, err error) Response {
+	if err == nil && session != nil {
+		h.mu.Lock()
+		h.checkpoint = nil
+		h.mu.Unlock()
+		return Done(id, SessionResult(session))
+	}
+	var le *linkedingo.PasswordLoginError
+	if errors.As(err, &le) {
+		if cp := le.Checkpoint(); cp != nil {
+			if state := CheckpointState(cp); state != nil {
+				h.mu.Lock()
+				h.checkpoint = cp
+				h.mu.Unlock()
+				if le.Kind == linkedingo.PasswordLoginRejected {
+					state["rejected"] = true
+				}
+				return Done(id, state)
+			}
+		}
+	}
+	if err == nil {
+		err = &linkedingo.PasswordLoginError{Kind: linkedingo.PasswordLoginBadResponse, Stage: "session"}
+	}
+	return Fail(id, ClassifySignIn(err))
 }
 
 func main() {
@@ -260,13 +433,16 @@ func main() {
 			out.Write(Fail(0, &Error{Kind: KindBadRequest}))
 			continue
 		}
-		resp, stop := h.Handle(ctx, req)
-		out.Write(resp)
+		resp, stop := h.Dispatch(ctx, req)
+		if resp != nil {
+			out.Write(resp)
+		}
 		if stop {
 			return
 		}
 	}
 	// stdin closed: the worker went away, so the session ends with it.
+	h.endWait()
 	if h.client != nil && h.live {
 		h.client.RealtimeDisconnect()
 	}

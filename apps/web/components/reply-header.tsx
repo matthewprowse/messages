@@ -111,6 +111,7 @@ function useRecipients(thread: Thread, msgs: Message[], reply: ReplyFrom): Recip
     if (thread.channel !== "email") {
       // A chat goes to the number; the stored sender can be a device id rather than a phone number.
       const c = participants[0];
+      if (thread.channel === "instagram") return [named(c?.name, c?.handles?.[0] && `@${c.handles[0]}`)];
       const stored = replyRecipients(thread.channel, msgs, participants, [])[0]?.address;
       // A WhatsApp privacy ID ("...@lid") hides the number, so it is never shown as one.
       const number = c?.phones[0] ?? (stored?.includes("@") ? undefined : stored);

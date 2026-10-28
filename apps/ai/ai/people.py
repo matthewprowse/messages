@@ -17,8 +17,8 @@ from typing import Any
 
 from . import log
 from .crypto import address_index
-from .fields import ADDRESS, BODY, DOMAIN, HTML, SUBJECT
-from .gemini import Gemini, GeminiError, UsageContext
+from .fields import ADDRESS, BODY, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, DOMAIN, HTML, SUBJECT
+from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
 from .text import UNTRUSTED, clean
 from .vault import Vault
@@ -199,6 +199,7 @@ class People:
         self._skip: dict[str, float] = {}  # id -> monotonic time to retry a contact or organization that failed, so it never blocks the queue
         self._scanned: dict[str, tuple[str | None, float, bool]] = {}  # user_id -> what scan_due needs
         self._backlog = False  # set during a user's run when more were due than it did
+        self._summaries: dict[str, list[Any]] = {}  # user_id -> [day, summaries written that day]
 
     def run_once(self) -> int:
         accounts = self.db.select("accounts", {"select": "id,user_id,address,send_addresses,provider", "status": "neq.disconnected"})
@@ -231,6 +232,29 @@ class People:
                 log.error("organization summaries failed", user=user_id, code=log.code_of(err))
             self._scanned[user_id] = (latest, time.monotonic(), self._backlog or failed)
         return done
+
+    def _summaries_left(self, user_id: str) -> bool:
+        """False once this person has had summaries_per_day contact and company summaries written today (UTC),
+        set in the admin panel. It counts what was written today, once for the day, then adds as it goes."""
+        today = datetime.now(timezone.utc).date()
+        made = self._summaries.get(user_id)
+        if made is None or made[0] != today:
+            start = f"gte.{today.isoformat()}T00:00:00+00:00"
+            try:
+                count = self.db.count("contacts", {"user_id": f"eq.{user_id}", "style_updated_at": start}) + self.db.count(
+                    "organizations", {"user_id": f"eq.{user_id}", "summary_updated_at": start}
+                )
+            except Exception as err:  # never hold learning up over the count
+                log.warn("summary count not read", code=log.code_of(err))
+                return True
+            made = self._summaries[user_id] = [today, count]
+        cap = self.gemini.limits()["summaries_per_day"] if hasattr(self.gemini, "limits") else DEFAULT_LIMITS["summaries_per_day"]
+        return made[1] < cap
+
+    def _summarised(self, user_id: str) -> None:
+        made = self._summaries.get(user_id)
+        if made:
+            made[1] += 1
 
     def _address(self, user_id: str, value: str | None) -> str:
         """A stored address as lowercase text, whether it is encrypted or not."""
@@ -364,19 +388,37 @@ class People:
         texts = [t for t in texts if t[2]]
         if not texts:
             return False
-        prompt = person_prompt(name, {"style_note": contact.get("style_note") or "", "summary": contact.get("ai_summary") or ""}, texts)
+        if not self._summaries_left(user_id):
+            return False
+        prompt = person_prompt(
+            name,
+            {
+                "style_note": self.vault.open(user_id, CONTACT_STYLE_NOTE, contact.get("style_note")) or "",
+                "summary": self.vault.open(user_id, CONTACT_SUMMARY, contact.get("ai_summary")) or "",
+            },
+            texts,
+        )
         try:
-            result = self.gemini.json(self.model, PERSON_SYSTEM, prompt, PERSON_SCHEMA, UsageContext(user_id, "learn"))
+            result = self.gemini.json(
+                self.fast_model,
+                PERSON_SYSTEM,
+                prompt,
+                PERSON_SCHEMA,
+                UsageContext(user_id, "learn"),
+                thinking="minimal",
+                max_output=2048,
+            )
         except GeminiError as err:
             log.warn("person notes failed", contact=contact["id"], status=err.status)
             return False
         style_note, summary = tidy_note(result.get("style_note"), 400), tidy_note(result.get("summary"), 600)
         patch: dict[str, Any] = {"style_updated_at": _now()}
         if style_note:
-            patch["style_note"] = style_note
+            patch["style_note"] = self.vault.seal(user_id, CONTACT_STYLE_NOTE, style_note)
         if summary:
-            patch["ai_summary"] = summary
+            patch["ai_summary"] = self.vault.seal(user_id, CONTACT_SUMMARY, summary)
         self.db.update("contacts", {"id": f"eq.{contact['id']}", "user_id": f"eq.{user_id}"}, patch, minimal=True)
+        self._summarised(user_id)
         log.info("person notes written", contact=contact["id"], emails=len(texts))
         return True
 
@@ -436,6 +478,8 @@ class People:
         )
         if not rows:
             return False
+        if not self._summaries_left(user_id):
+            return False
         rows = [self.vault.open_row(user_id, m, ENCRYPTED) for m in rows]
         emails = [(m.get("subject") or "", clean(m.get("body_text"), m.get("body_html"), limit=500)) for m in rows]
         try:
@@ -455,5 +499,6 @@ class People:
         if not summary:
             return False
         self.db.update("organizations", {"id": f"eq.{org['id']}", "user_id": f"eq.{user_id}"}, {"summary": summary, "summary_updated_at": _now()}, minimal=True)
+        self._summarised(user_id)
         log.info("organization summarised", organization=org["id"], emails=len(rows))
         return True

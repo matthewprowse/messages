@@ -58,13 +58,22 @@ Settings live in `apps/ai/.env` (see `.env.example`). It never logs message cont
   not looked at again for 6 hours.
 - **Similar emails.** Incoming messages you have replied to are embedded with `gemini-embedding-2` at
   768 dimensions, newest first and then older mail 48 at a time, into `message_embeddings` (not
-  `messages`, which Realtime sends to the app on every change). `similar_replies` only returns an
-  incoming message with its reply, so mail nobody answered is not embedded. A trigger queues a message
-  when its reply is stored (`20261027100100_embed_replied_mail_only`); the mail being drafted for is
-  embedded on the spot.
-  Until migration `20261024110000_ai_message_embeddings` is applied, the old `messages.embedding`
-  column is used. Drafts use `similar_replies` to show how you answered the emails most like the one
+  `messages`, which Realtime sends to the app on every change). Each vector is stored sealed with the
+  user's data key (`embedding_data`), so the database never holds one readable. The search runs in this
+  worker (`ai/similar.py`): the user's newest 3000 vectors are opened in memory, cached for 5 minutes,
+  and compared by cosine; `public.reply_pairs` then returns each nearest incoming message with its reply,
+  so mail nobody answered is not embedded. A trigger queues a message when its reply is stored
+  (`20261027100100_embed_replied_mail_only`); the mail being drafted for is embedded on the spot.
+  A user with no key yet is not embedded. To seal vectors made before this, apply
+  `20261102800000_sealed_message_embeddings`, then run `python3 -m ai.seal_embeddings` (dry run) and
+  `--apply`, then apply `20261102800100_drop_plaintext_embeddings`. Drafts use this search to show how you answered the emails most like the one
   being answered, then fill the rest with your recent sent mail.
+- **Company logos.** Only when `COMPANY_LOGOS=true`. The sync worker finds and frames each company's
+  logo candidates into one numbered sheet (`company_logos`, shared by every user); this judges the sheet
+  with the fast model in one call, and when nothing passes asks the fast model with Google Search
+  grounding for the official logo, which goes back to the sync worker to frame and judge again. Only
+  company names and domains are sent. Costs are filed against the owner's account as `logos`.
+  `python3 -m ai logos` works through the waiting steps once and stops, for a backfill.
 - **Usage.** Every model call is recorded in `ai_usage` with its tokens, cached tokens and cost, filed
   against the connected account it served (a triage call covering several conversations has no
   `thread_id`). Rows are written in the background. Prices are in `ai/pricing.py`, from Google's paid
@@ -78,24 +87,43 @@ message waits out its own back-off.
 
 ## Instagram
 
-`pnpm instagram` runs the Instagram connector (`ai/connectors/instagram`), a process of its own that
-syncs Instagram direct messages through [instagrapi](https://github.com/subzeroid/instagrapi), Instagram's
-private mobile API. Install it once with `pip3 install -r apps/ai/requirements-instagram.txt` (pinned).
-It needs `ENCRYPTION_KEY` (the sync worker's) besides the Supabase and key settings, and takes an
-optional `INSTAGRAM_PROXY`.
+`pnpm instagram` runs the Instagram connector (`ai/connectors/instagram`), a process of its own that syncs
+Instagram direct messages for two kinds of account into the same tables. Which kind an account is, is the
+`kind` in its stored credentials: `"official"` (Business or Creator) or `"private"` (Personal; also what
+credentials saved before there was a kind count as). It needs `ENCRYPTION_KEY` (the sync worker's) besides
+the Supabase and key settings.
 
-- **Connecting.** Settings > Connected Accounts > Instagram saves the username and password encrypted.
-  The connector signs in once, asks for any code Instagram sends (email, SMS or two-factor) through
-  `instagram_sign_ins`, keeps instagrapi's settings (session and a fixed device) encrypted in
-  `account_credentials.refreshed`, and drops the password. Later runs reuse the session and never sign in
-  again on their own.
-- **Syncing.** The inbox is read every 3 minutes with jitter, every 6 after half an hour with nothing new
-  and every 12 after two hours. Threads, messages, contacts and files are stored like WhatsApp chats
-  (`ingest_instagram`). Shared posts and reels are links; disappearing media is never opened.
+- **Business or Creator (official).** Settings > Connected Accounts > Instagram sends the person to
+  instagram.com to sign in and approve (Instagram API with Instagram Login, scopes
+  `instagram_business_basic` and `instagram_business_manage_messages`); `apps/web` trades the code for a
+  60 day token and stores it encrypted. The connector (`official.py`, plain HTTPS, no instagrapi) reads
+  `/me/conversations` and each changed conversation's messages through `graph.instagram.com` about every
+  minute (every 3 after half an hour of quiet, 10 after two hours) and sends replies with `POST /me/messages`.
+  A reply is refused before sending, with "send this one in Instagram", when the person's last message is over
+  24 hours old, and Instagram's own refusal for the window gets the same message. The token is renewed with
+  `ig_refresh_token` once it has under 20 days left (checked every 6 hours) and saved in
+  `account_credentials.refreshed`; if it cannot be renewed the account shows a reason while there is time to
+  connect again. Instagram only returns the 20 newest messages of a conversation. Polling is the seam for
+  webhooks later: a receiver would verify Meta's `X-Hub-Signature-256` and call `store_conversation` for the
+  conversations it names. The Meta app's ID and secret live in `apps/web/.env.example` only (the connector
+  needs no new settings); with them unset the Business or Creator choice says "Not available yet".
+- **Personal (private).** The person types their username and password in the app. The connector signs in
+  once through [instagrapi](https://github.com/subzeroid/instagrapi), Instagram's private mobile API (install
+  it with `pip3 install -r apps/ai/requirements-instagram.txt`, pinned; only this kind needs it), asks for any
+  code Instagram sends (email, SMS or two-factor) through `instagram_sign_ins`, keeps instagrapi's settings
+  (session and a fixed device) encrypted in `account_credentials.refreshed`, and drops the password. Later
+  runs reuse the session and never sign in again on their own.
+- **Proxy.** `INSTAGRAM_PROXY` (optional, e.g. `http://user:pass@host:port`) is the default for personal
+  accounts. A personal account's own `proxy` in its stored credentials overrides it, and survives
+  reconnecting, so a different home or mobile address can be set per account. None is needed to start.
+- **Syncing (personal).** The inbox is read every 3 minutes with jitter, every 6 after half an hour with
+  nothing new and every 12 after two hours. Threads, messages, contacts and files are stored like WhatsApp
+  chats (`ingest_instagram`). Shared posts and reels are links; disappearing media is never opened.
 - **Safety.** Rate limits back off from 15 minutes to 4 hours, `feedback_required` from 6 to 24 hours. A
-  challenge, a sign-out or a ban sets the account to Needs Attention with the reason and stops it until
-  you connect again. Nothing is sent on its own: only replies you queue (text only for now), and a thread
-  is marked seen only when you open it in the app.
+  challenge, a sign-out, a withdrawn permission or a ban sets the account to Needs Attention with the reason
+  and stops it until you connect again. Nothing is sent on its own: only replies you queue (text only for
+  now), and a personal thread is marked seen only when you open it in the app (the official API has no read
+  receipt for this, so a Business thread is not).
 
 ## Models
 

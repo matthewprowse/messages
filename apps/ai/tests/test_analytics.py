@@ -51,6 +51,8 @@ class FakeDb:
         return []
 
     def rpc(self, function, args):
+        if function in ("ai_allowance_for", "ai_setup_state"):  # the budget checks, not analytics writes
+            return {"features": {}}
         self.calls.append((function, args))
 
 

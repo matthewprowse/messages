@@ -12,6 +12,8 @@ interface Property {
 export interface IcsEvent {
   uid: string | null;
   recurrenceId: string | null;
+  /** How the series repeats, on the series' own VEVENT (not on the occurrences iCloud expands). */
+  rrule: string | null;
   cancelled: boolean;
   summary: string | null;
   location: string | null;
@@ -69,7 +71,7 @@ export function parseEvents(text: string): IcsEvent[] {
   for (const line of text.replace(/\r?\n[ \t]/g, "").split(/\r?\n/)) {
     const upper = line.toUpperCase();
     if (upper === "BEGIN:VEVENT") {
-      current = { uid: null, recurrenceId: null, cancelled: false, summary: null, location: null, description: null, url: null, conference: null, start: null, end: null, duration: null, organizer: null, attendees: [] };
+      current = { uid: null, recurrenceId: null, rrule: null, cancelled: false, summary: null, location: null, description: null, url: null, conference: null, start: null, end: null, duration: null, organizer: null, attendees: [] };
       depth = 0;
       continue;
     }
@@ -93,6 +95,7 @@ export function parseEvents(text: string): IcsEvent[] {
     switch (prop.name) {
       case "UID": current.uid = prop.value.trim() || null; break;
       case "RECURRENCE-ID": current.recurrenceId = prop.value.trim() || null; break;
+      case "RRULE": current.rrule = prop.value.trim() || null; break;
       case "STATUS": current.cancelled = prop.value.trim().toUpperCase() === "CANCELLED"; break;
       case "SUMMARY": current.summary = unescapeText(prop.value).trim() || null; break;
       case "LOCATION": current.location = unescapeText(prop.value).replace(/\s*\n\s*/g, ", ").trim() || null; break;
@@ -227,5 +230,7 @@ export function storedIcsEvent(
     resource_url: owner.resourceUrl ?? null,
     // Every occurrence of a repeating event shares the UID, so that is what finds the whole series.
     series_id: event.recurrenceId ? event.uid : null,
+    // On the series' own VEVENT only; the sync gives its occurrences the series' rule.
+    recurrence: event.rrule,
   };
 }

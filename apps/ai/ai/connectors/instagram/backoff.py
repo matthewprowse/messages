@@ -41,7 +41,11 @@ STOPS = {
     "bad_password": Trouble("bad_password", True, 0, 0, "Instagram did not accept that username and password. Check them and connect again."),
     "blocked_ip": Trouble(
         "blocked_ip", True, 0, 0,
-        "Instagram blocked this server's internet address. Set INSTAGRAM_PROXY to a home or mobile proxy, then connect again.",
+        "Instagram blocked this server's internet address. This needs a fix on Konva's side. Try connecting again later.",
+    ),
+    "permission": Trouble(
+        "permission", True, 0, 0,
+        "Instagram did not give Konva permission to read your messages. Connect again in Settings and approve both permissions.",
     ),
 }
 WAITS = {
@@ -67,6 +71,9 @@ NAMES: list[tuple[str, set[str]]] = [
 
 def kind_of(err: BaseException) -> str:
     """What kind of trouble an error is: one of the NAMES kinds, else "network" for OS errors and "other"."""
+    named = getattr(err, "kind", None)  # the official API's errors say which kind they are (graph.GraphError)
+    if isinstance(named, str) and (named in STOPS or named in WAITS):
+        return named
     names = {c.__name__ for c in type(err).__mro__}
     for kind, classes in NAMES:
         if names & classes:
@@ -100,6 +107,13 @@ class Backoff:
 
     def reset(self) -> None:
         self.failures = 0
+
+
+def official_poll_wait(quiet_s: float, rand: Callable[[], float] = random.random) -> float:
+    """The same, for a Business or Creator account on the official API: a plain read of its own inbox, so
+    sooner than a person's private account is read."""
+    base = MINUTE if quiet_s < 30 * MINUTE else 3 * MINUTE if quiet_s < 2 * HOUR else 10 * MINUTE
+    return base * (1 + JITTER * (2 * rand() - 1))
 
 
 def poll_wait(quiet_s: float, rand: Callable[[], float] = random.random) -> float:

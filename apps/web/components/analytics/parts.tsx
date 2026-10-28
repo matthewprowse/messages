@@ -10,8 +10,9 @@ import type { Stat } from "@messages/analytics/stats";
 export { SettingsSection as Section };
 
 const NAMES: Record<string, string> = {
-  briefing: "Summary",
-  inbox: "Conversations",
+  summary: "Summary",
+  briefing: "Summary", // the Summary page's address before 27 October 2026
+  inbox: "Inbox",
   calendar: "Calendar",
   contacts: "Contacts",
   attachments: "Attachments",

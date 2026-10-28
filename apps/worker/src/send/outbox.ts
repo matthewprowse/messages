@@ -7,6 +7,7 @@ import { chooseFrom, fromCandidates, outgoingRecipients, type OutgoingRecipients
 import { identitiesMergedFromElsewhere } from "../contacts/merged-identities";
 import { FIELD } from "@messages/crypto/fields";
 import { open, openAddresses } from "../vault";
+import { mayUseAccount, replyFor, type ReplyFor } from "./inbox";
 
 // The outbox table: the app adds queued replies, the worker claims, sends and settles them.
 
@@ -89,12 +90,29 @@ export async function failInterrupted() {
   );
 }
 
+/**
+ * Whether this person is on the access list of the shared inbox the conversation is in, and may reply there. Asked only
+ * when the reply is not the conversation's own person's. Before the Teams migrations are applied there is no such list.
+ */
+export async function onInboxList(threadId: string, userId: string): Promise<boolean> {
+  const { data, error } = await db.rpc("user_can_reply_in_inbox", { p_thread: threadId, p_user: userId });
+  if (error) {
+    if (error.code === "PGRST202") return false;
+    throw Object.assign(new Error("check shared inbox failed"), { code: error.code });
+  }
+  return data === true;
+}
+
 interface ReplyContext {
   accountId: string;
   threadId: string;
   input: Omit<ReplyInput, "from" | "body">;
   /** To and Cc of the latest inbound message, so the reply goes from the address it was sent to. */
   inboundTo: string[];
+  /** Whose reply this is: the conversation's own person's, or a member of the shared inbox it is in. */
+  via: ReplyFor;
+  /** The person the conversation belongs to, whose key opens its subject. */
+  ownerId: string;
 }
 
 /**
@@ -106,7 +124,7 @@ interface ReplyContext {
 async function replyContext(row: OutboxRow, selfAddresses: Set<string>, explicit: boolean): Promise<ReplyContext | null> {
   if (!row.thread_id) return null; // a new email, not a reply
   // Read together; nothing from the messages is used until the thread is known to be yours.
-  const [thread, messages, chosen] = await Promise.all([
+  const [thread, rawMessages, rawChosen] = await Promise.all([
     db
       .from("threads")
       .select("id, account_id, subject, user_id")
@@ -119,24 +137,30 @@ async function replyContext(row: OutboxRow, selfAddresses: Set<string>, explicit
       .eq("thread_id", row.thread_id)
       .order("sent_at", { ascending: false })
       .limit(50)
-      .then((r) => openAddresses(row.user_id, must(r, "load thread messages"))),
+      .then((r) => must(r, "load thread messages")),
     row.reply_to_message_id
       ? db
           .from("messages")
           .select("thread_id, user_id, provider_message_id, reference_ids, subject, sender_address, direction, to_addresses")
           .eq("id", row.reply_to_message_id)
           .maybeSingle()
-          .then((r) => openAddresses(row.user_id, must(r, "load chosen message")))
+          .then((r) => must(r, "load chosen message"))
       : null,
   ]);
-  if (!thread || thread.user_id !== row.user_id) return null;
+  if (!thread) return null;
+  // A reply is its conversation's own person's, or a member of the shared inbox it is in (checked again here).
+  const via = replyFor(thread.user_id, row.user_id, thread.user_id !== row.user_id && (await onInboxList(thread.id, row.user_id)));
+  if (via === "nobody") return null;
+  // The conversation's own key opens its messages, whoever replies: a member of a shared inbox has no key for them.
+  const messages = await openAddresses(thread.user_id, rawMessages);
+  const chosen = rawChosen ? await openAddresses(thread.user_id, rawChosen) : null;
   const latest = messages[0];
   const latestInbound = messages.find((m) => m.direction === "inbound" && m.sender_address && !selfAddresses.has(m.sender_address));
 
   // Reply on a message in the app answers that message instead of the latest one. It must be in this
   // conversation and yours.
   if (row.reply_to_message_id) {
-    if (!chosen || chosen.thread_id !== thread.id || chosen.user_id !== row.user_id) return null;
+    if (!chosen || chosen.thread_id !== thread.id || chosen.user_id !== thread.user_id) return null;
     const { to, inboundTo } = replyToChosen(chosen, selfAddresses);
     if (to.length === 0 && !explicit) return null;
     return {
@@ -144,6 +168,8 @@ async function replyContext(row: OutboxRow, selfAddresses: Set<string>, explicit
       threadId: thread.id,
       input: { to, subject: chosen.subject ?? thread.subject, inReplyTo: chosen.provider_message_id, references: chosen.reference_ids ?? [] },
       inboundTo,
+      via,
+      ownerId: thread.user_id,
     };
   }
 
@@ -176,6 +202,8 @@ async function replyContext(row: OutboxRow, selfAddresses: Set<string>, explicit
       references: answering?.reference_ids ?? [],
     },
     inboundTo: fromCandidates(messages),
+    via,
+    ownerId: thread.user_id,
   };
 }
 
@@ -191,8 +219,8 @@ export type SendAccount = Awaited<ReturnType<typeof freshAccount>>;
  * The From address for a queued email: the one chosen in the app if this account can send from it,
  * else the default. Returns the reason to fail the row with when the chosen one is not allowed.
  */
-function resolveFrom(row: OutboxRow, account: SendAccount, inboundTo: string[]): { address: string } | { error: string } {
-  if (account.user_id !== row.user_id) return { error: OTHER_ACCOUNT };
+function resolveFrom(row: OutboxRow, account: SendAccount, inboundTo: string[], via: ReplyFor): { address: string } | { error: string } {
+  if (!mayUseAccount(account.user_id, row.user_id, via)) return { error: OTHER_ACCOUNT };
   return chooseFrom({ requested: row.from_address, accountAddress: account.address, sendAddresses: account.send_addresses, inboundTo });
 }
 
@@ -335,9 +363,9 @@ export async function composeOutgoing(
     loadAttachmentFiles(row, provider),
   ]);
   if (!fresh && (!reply || reply.accountId !== accountId)) return { error: "There is no one to reply to in this conversation." };
-  if (reply) reply.input.subject = await open(row.user_id, FIELD.subject, reply.input.subject);
+  if (reply) reply.input.subject = await open(reply.ownerId, FIELD.subject, reply.input.subject);
 
-  const chosen = resolveFrom(row, sendAccount, reply?.inboundTo ?? []);
+  const chosen = resolveFrom(row, sendAccount, reply?.inboundTo ?? [], reply?.via ?? "owner");
   if ("error" in chosen) return chosen;
   if ("error" in attachments) return attachments;
   const from = { name, address: chosen.address };

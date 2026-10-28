@@ -1,6 +1,9 @@
 """Runs the Instagram connector: one thread per connected Instagram account, started and stopped as accounts
 are connected, paused and connected again in the app. Stop with Ctrl+C.
 
+A Business or Creator account (credentials kind "official") is synced by official.py on Instagram's
+official API; a personal one (kind "private", or none) by sync.py through instagrapi.
+
 An account runs while its status is connecting, syncing or connected and a sign-in is saved for it. When
 the app saves a new sign-in (Connect in Settings), its account_credentials.updated_at moves and the
 account starts again with it. An account in error stays stopped until then."""
@@ -17,9 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from ... import log
-from ...config import _load_env_file
+from ...config import _load_env_file, check_encryption, flag_on
 from ...supabase import Supabase, missing_relation
 from ...vault import Vault
+from .credentials import OFFICIAL, kind_of
+from .official import OfficialSync
 from .store import Store
 from .sync import AccountSync, Settings
 
@@ -50,13 +55,18 @@ def load() -> Config:
             sys.exit(1)
         return value
 
+    wrapping_key = os.environ.get("KEY_WRAPPING_KEY", "").strip()
+    if not wrapping_key and not os.environ.get("KMS_KEY_NAME", "").strip():
+        print("Missing KMS_KEY_NAME or KEY_WRAPPING_KEY in apps/ai/.env", file=sys.stderr)
+        sys.exit(1)
+    check_encryption(flag_on("ENCRYPT_CONTENT"), flag_on("ENCRYPT_ADDRESSES"))
     return Config(
         supabase_url=required("SUPABASE_URL"),
         service_role_key=required("SUPABASE_SERVICE_ROLE_KEY"),
         encryption_key=required("ENCRYPTION_KEY"),
-        key_wrapping_key=required("KEY_WRAPPING_KEY"),
-        encrypt_content=os.environ.get("ENCRYPT_CONTENT", "").strip().lower() == "true",
-        encrypt_addresses=os.environ.get("ENCRYPT_ADDRESSES", "").strip().lower() == "true",
+        key_wrapping_key=wrapping_key,
+        encrypt_content=flag_on("ENCRYPT_CONTENT"),
+        encrypt_addresses=flag_on("ENCRYPT_ADDRESSES"),
         proxy=os.environ.get("INSTAGRAM_PROXY", "").strip() or None,
         initial_sync_days=int(os.environ.get("INITIAL_SYNC_DAYS", "30") or 30),
     )
@@ -114,7 +124,13 @@ class Accounts:
                 if entry and updated:
                     entry.credentials_at = updated
 
-        sync = AccountSync(self.store, account, self.settings, stop, on_credentials=moved)
+        try:
+            creds, _ = self.store.credentials(account["id"])
+        except Exception:
+            creds = None  # unreadable credentials are the private sync's to report
+        # One provider, two kinds: a Business or Creator account on the official API, or a personal one through instagrapi.
+        kind = OfficialSync if kind_of(creds) == OFFICIAL else AccountSync
+        sync = kind(self.store, account, self.settings, stop, on_credentials=moved)
         thread = threading.Thread(target=sync.run, name=f"instagram-{account['id'][:8]}", daemon=True)
         with self.lock:
             self.running[account["id"]] = Running(thread, stop, credentials_at)

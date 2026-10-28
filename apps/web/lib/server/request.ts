@@ -42,22 +42,59 @@ export async function signedInUser(request: Request): Promise<User | null> {
   return error ? null : data.user;
 }
 
-/**
- * A simple per-user limit, kept in this server's memory. Each server instance counts for itself, which is
- * enough to stop a script. The returned function counts one request and gives the seconds to wait when over
- * the limit, otherwise 0.
- */
-export function limiter(limit: number, windowMs: number) {
+/** The caller's address. On Vercel the platform sets x-vercel-forwarded-for (and overwrites x-forwarded-for), so a client cannot choose it; elsewhere the last x-forwarded-for entry is the one the nearest proxy added. */
+export function clientAddress(request: Request): string {
+  const vercel = request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim();
+  if (vercel) return vercel;
+  const real = request.headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  const chain = request.headers.get("x-forwarded-for")?.split(",");
+  return chain?.[chain.length - 1]?.trim() || "unknown";
+}
+
+/** The in-memory fixed window: one counter per key for this server instance only. */
+function memoryLimiter(limit: number, windowMs: number) {
   const hits = new Map<string, { count: number; resetAt: number }>();
-  return (userId: string, now = Date.now()): number => {
+  return (key: string, now = Date.now()): number => {
     if (hits.size > 1000) for (const [id, h] of hits) if (h.resetAt <= now) hits.delete(id);
-    const hit = hits.get(userId);
+    const hit = hits.get(key);
     if (!hit || hit.resetAt <= now) {
-      hits.set(userId, { count: 1, resetAt: now + windowMs });
+      hits.set(key, { count: 1, resetAt: now + windowMs });
       return 0;
     }
     hit.count += 1;
     return hit.count > limit ? Math.ceil((hit.resetAt - now) / 1000) : 0;
+  };
+}
+
+interface LimiterOptions {
+  /** Names the counter in the database. Limiters with the same name, limit and window share counts. Defaults to the limit and window. */
+  name?: string;
+  /** When the database call fails, count in this instance's memory instead of refusing. Off by default: a failed check refuses the request. Only for public, low-risk routes. */
+  fallbackToMemory?: boolean;
+}
+
+/**
+ * A fixed-window limit shared by every server instance, kept in Postgres (rate_limit_hit, migration
+ * 20261102200000). The returned function counts one request and resolves to the seconds to wait when over the
+ * limit, otherwise 0. If the database cannot be reached it fails closed (a wait of 60 seconds) unless
+ * fallbackToMemory is set, which counts in this instance's memory.
+ */
+export function limiter(limit: number, windowMs: number, options: LimiterOptions = {}) {
+  const memory = memoryLimiter(limit, windowMs);
+  const seconds = Math.max(1, Math.round(windowMs / 1000));
+  const name = options.name ?? `${limit}/${seconds}`;
+  return async (id: string): Promise<number> => {
+    const key = `${name}:${id}`.slice(0, 200);
+    try {
+      if (!admin) throw new Error("no database client");
+      const rpc = admin.rpc as unknown as (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+      const { data, error } = await rpc.call(admin, "rate_limit_hit", { p_key: key, p_limit: limit, p_window_seconds: seconds });
+      if (error || typeof data !== "number") throw new Error("rate limit call failed");
+      return data;
+    } catch {
+      return options.fallbackToMemory ? memory(key) : 60;
+    }
   };
 }
 

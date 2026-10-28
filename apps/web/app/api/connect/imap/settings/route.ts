@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as { email?: string };
   const email = (body.email ?? "").trim().toLowerCase();
   if (!isEmail(email)) return fail(400, "Enter your email address.");
-  const wait = overLimit(user.id);
+  const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many look-ups. Wait a few minutes, or type the settings in.", { "Retry-After": String(wait) });
 
   const found = await discover(email, nodeLookups());

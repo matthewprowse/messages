@@ -6,7 +6,8 @@
     ".": "./src/index.ts",
     "./fields": "./src/fields.ts",
     "./addresses": "./src/addresses.ts",
-    "./wrap": "./src/wrap.ts"
+    "./wrap": "./src/wrap.ts",
+    "./flags": "./src/flags.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

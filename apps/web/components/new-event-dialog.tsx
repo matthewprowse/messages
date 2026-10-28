@@ -11,6 +11,7 @@ import { followRow } from "@/lib/follow-row";
 import { supabase } from "@/lib/supabase";
 import type { Account } from "@/lib/types";
 import { buildUpdate, followUpdate, formOf, type CalendarEvent, type EventPatch, type UpdateScope } from "@/lib/calendar";
+import { describeRule, repeatChoices, sameRepeat } from "@/lib/recurrence";
 import {
   buildEventRow,
   dateKey,
@@ -33,6 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -52,6 +54,10 @@ function fromDateKey(key: string) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
   return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
 }
+
+// The Repeat list's values for no repeat, and for a series whose rule is not known yet: a Select item needs a value.
+const NO_REPEAT = "none";
+const UNKNOWN_REPEAT = "unknown";
 
 function TimeSelect({ id, value, onChange, invalid, disabled }: { id: string; value: string; onChange: (v: string) => void; invalid: boolean; disabled: boolean }) {
   const times = useMemo(() => timesWith(value), [value]);
@@ -157,6 +163,8 @@ export function NewEventDialog({
   const [endTime, setEndTime] = useState("");
   const [location, setLocation] = useState("");
   const [description, setDescription] = useState("");
+  /** The rule it repeats by, or "" for none (lib/recurrence.ts). */
+  const [repeat, setRepeat] = useState("");
   const [guests, setGuests] = useState<string[]>([]);
   const [guestQuery, setGuestQuery] = useState("");
   const [guestsOpen, setGuestsOpen] = useState(false);
@@ -189,6 +197,7 @@ export function NewEventDialog({
       setEndTime(current.endTime);
       setLocation(current.location);
       setDescription(current.description);
+      setRepeat(current.repeat ?? "");
       setGuests(current.guests);
       setGuestQuery("");
       setSendInvites(true);
@@ -209,6 +218,7 @@ export function NewEventDialog({
     setEndTime(times.endTime);
     setLocation("");
     setDescription("");
+    setRepeat("");
     setGuests(parseGuests(initialGuests.join(" ")).valid);
     setGuestQuery("");
     setSendInvites(true);
@@ -220,7 +230,9 @@ export function NewEventDialog({
   }, [open, day, time, until, guestKey, editing?.id]);
 
   const pending = parseGuests(guestQuery);
-  const form = { title, date, allDay, startTime, endTime, location, description, guests, sendInvites, addMeet: addMeet && google };
+  // Google and iCloud repeat events; Outlook's are shown, not changed, from here.
+  const repeats = account?.provider === "google_calendar" || account?.provider === "icloud_calendar";
+  const form = { title, date, allDay, startTime, endTime, location, description, guests, sendInvites, addMeet: addMeet && google, repeat: repeats ? repeat : "" };
   const timeZone = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ""; }
   }, []);
@@ -230,6 +242,20 @@ export function NewEventDialog({
   const unchanged = !!update?.ok && !update.row;
   const editableTime = editing ? formOf(editing).editableTime : true;
   const repeating = !!editing?.seriesId;
+  // The repeat choices for the chosen date, with the event's own rule when it is none of them. A series whose rule
+  // has not been read yet shows that it repeats until one is picked.
+  const repeatOptions = useMemo(() => {
+    const options: { value: string; label: string }[] = repeatChoices(fromDateKey(date) ?? new Date()).map((c) => ({ value: c.value || NO_REPEAT, label: c.label }));
+    if (repeat && !options.some((o) => sameRepeat(o.value, repeat, fromDateKey(date)))) {
+      const words = describeRule(repeat, fromDateKey(date));
+      options.push({ value: repeat, label: words === "Repeats" ? "Custom Schedule" : `Custom: ${words}` });
+    }
+    if (repeating && !repeat) options.push({ value: UNKNOWN_REPEAT, label: "Repeats" });
+    return options;
+  }, [date, repeat, repeating]);
+  const repeatValue = repeat ? (repeatOptions.find((o) => sameRepeat(o.value, repeat, fromDateKey(date)))?.value ?? repeat) : repeating ? UNKNOWN_REPEAT : NO_REPEAT;
+  // A new rule is for the whole series.
+  const repeatChanged = !!repeat && !sameRepeat(repeat, editing?.recurrence ?? "", editing ? new Date(editing.startsAt) : undefined);
   const problem: { field: EventField; error: string } | null = update ? (update.ok ? null : update) : built.ok ? null : built;
   const errorFor = (field: EventField) => (checked && problem?.field === field ? problem.error : null);
 
@@ -299,6 +325,19 @@ export function NewEventDialog({
     onOpenChange(true);
   };
 
+  // A repeating event is saved with one Save, which then asks whether this event or every one in the series changes.
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const askScope = () => {
+    setChecked(true);
+    if (!editing || !account || locked || !update?.ok || !update.row) return;
+    setScopeOpen(true);
+  };
+  const saveOn = (scope: UpdateScope) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    setScopeOpen(false);
+    void submitEdit(scope);
+  };
+
   const submitEdit = async (scope: UpdateScope) => {
     setChecked(true);
     if (!editing || !account || locked || !update?.ok || !update.row) return;
@@ -334,15 +373,15 @@ export function NewEventDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track={edit ? "edit_event" : "new_event"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
-        <DialogHeader>
+      <DialogContent track={edit ? "edit_event" : "new_event"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton closeVariant="secondary">
+        <DialogHeader className="pr-10">
           <DialogTitle>{edit ? "Edit Event" : "New Event"}</DialogTitle>
           <DialogDescription>{edit ? "Changed" : "Created"} in your {google ? "Google" : "iCloud"} Calendar, then shown on the Calendar page.</DialogDescription>
         </DialogHeader>
         {!account ? (
           <Reconnect change={edit} />
         ) : (
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? submitEdit("occurrence") : submit()); }}>
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? (repeating && !repeatChanged ? askScope() : submitEdit(repeating ? "series" : "occurrence")) : submit()); }}>
             {!edit && choices.length > 1 && (
               <div className="grid gap-2">
                 <Label htmlFor="event-calendar">Calendar</Label>
@@ -407,6 +446,21 @@ export function NewEventDialog({
                 ) : null}
               </div>
             )}
+            {repeats && (
+              <div className="grid gap-2">
+                <Label htmlFor="event-repeat">Repeat</Label>
+                <Select value={repeatValue} onValueChange={(v) => setRepeat(v === NO_REPEAT || v === UNKNOWN_REPEAT ? "" : v)} disabled={locked}>
+                  <SelectTrigger id="event-repeat" className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {repeatOptions.map((o) => (
+                      // A series cannot be turned back into one event from here: delete it, or change it in your calendar.
+                      <SelectItem key={o.value} value={o.value} disabled={(repeating && o.value === NO_REPEAT) || o.value === UNKNOWN_REPEAT}>{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {repeating && repeatChanged && <p className="text-xs text-muted-foreground">A new repeat is saved to every event in the series.</p>}
+              </div>
+            )}
             <div className="grid gap-2">
               <Label htmlFor="event-location">Location</Label>
               <Input id="event-location" value={location} onChange={(e) => setLocation(e.target.value)} aria-invalid={!!errorFor("location")} disabled={locked} />
@@ -422,7 +476,7 @@ export function NewEventDialog({
               <Popover open={guestsOpen} onOpenChange={onGuestsOpen}>
                 <PopoverTrigger asChild>
                   <Button id="event-guests" type="button" variant="outline" className="w-full justify-between font-normal" aria-invalid={!!errorFor("guests")} disabled={locked}>
-                    <span className={guestLabel ? "truncate" : "truncate text-muted-foreground"}>{guestLabel ?? "Add Guests"}</span>
+                    <span className={guestLabel ? "truncate" : "truncate text-muted-foreground"}>{guestLabel ?? "Name or Email Address"}</span>
                     <ChevronDownIcon className="text-muted-foreground" />
                   </Button>
                 </PopoverTrigger>
@@ -435,11 +489,11 @@ export function NewEventDialog({
                         // A comma or semicolon ends an address, so several can be typed or pasted at once.
                         if ((e.key === "," || e.key === ";") && guestQuery.trim()) { e.preventDefault(); addGuests(guestQuery); }
                       }}
-                      placeholder="Name or email address"
+                      placeholder="Name or Email Address"
                       groupClassName="h-8!"
                     />
                     <CommandList className="max-h-80">
-                      <CommandEmpty className="py-4 text-muted-foreground">{guestQuery.trim() ? "No contacts found." : "Type a name or email address."}</CommandEmpty>
+                      <CommandEmpty className="py-4 text-muted-foreground">{guestQuery.trim() ? "No contacts found." : "Type a Name or Email Address."}</CommandEmpty>
                       {typed.length > 0 && (
                         <CommandGroup>
                           <CommandItem value={`add ${typed.join(" ")}`} className={ITEM} onSelect={() => addGuests(typed.join(" "))}>
@@ -483,20 +537,28 @@ export function NewEventDialog({
             {!edit && google && <SwitchRow id="event-meet" label="Add Google Meet" checked={addMeet} onChange={setAddMeet} disabled={locked} />}
             {failed && (reconnect ? <Reconnect provider={account.provider} change={edit} /> : <p className="text-xs text-destructive">{row?.error ?? (edit ? "The event could not be changed." : "The event could not be created.")}</p>)}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
               {!edit ? (
-                <Button type="submit" disabled={locked || (checked && !!problem)}>{queueing ? "Creating" : "Create"}</Button>
-              ) : repeating ? (
-                <>
-                  <Button type="submit" variant="outline" disabled={locked || unchanged || (checked && !!problem)}>{queueing ? "Saving" : "Save This Event"}</Button>
-                  <Button type="button" disabled={locked || unchanged || (checked && !!problem)} onClick={() => void submitEdit("series")}>Save All Events</Button>
-                </>
+                <Button type="submit" variant="secondary" disabled={locked || (checked && !!problem)}>{queueing ? "Creating" : "Create"}</Button>
               ) : (
-                <Button type="submit" disabled={locked || unchanged || (checked && !!problem)}>{queueing ? "Saving" : "Save"}</Button>
+                <Button type="submit" variant="secondary" disabled={locked || unchanged || (checked && !!problem)}>{queueing ? "Saving" : "Save"}</Button>
               )}
             </div>
           </form>
         )}
+        <AlertDialog open={scopeOpen} onOpenChange={setScopeOpen}>
+          <AlertDialogContent track="save_event_scope">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Save Changes?</AlertDialogTitle>
+              <AlertDialogDescription>This event repeats. Save the changes to only this one, or to every event in the series.</AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction variant="outline" onClick={saveOn("occurrence")}>Save This Event</AlertDialogAction>
+              <AlertDialogAction variant="secondary" onClick={saveOn("series")}>Save All Events</AlertDialogAction>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

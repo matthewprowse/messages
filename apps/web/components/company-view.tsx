@@ -11,10 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ContactAvatar, EmptyState } from "@/components/primitives";
+import { CompanyAvatar, ContactAvatar, EmptyState } from "@/components/primitives";
+import { formatPhone, niceName } from "@/lib/format";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { CompaniesContext } from "@/components/contacts-shell";
-import { ConversationRows, DetailList, DetailPage, Divided, Section } from "@/components/contact-list";
+import { ConversationRows, DetailList, DetailPage, Divided, ListRow, Section } from "@/components/contact-list";
 import { withQuery } from "@/lib/utils";
 
 // Mounted only while the dialog is open, so it starts from the current name every time.
@@ -47,8 +48,8 @@ function RenameForm({ company, onDone, onRenamed }: { company: CompanyDetail; on
         <Input id="company-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} disabled={saving} autoFocus />
       </div>
       <div className={DIALOG_BUTTONS}>
-        <Button type="button" variant="outline" onClick={onDone}>Cancel</Button>
-        <Button type="submit" disabled={!ready}>{saving ? "Saving" : "Save"}</Button>
+        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
+        <Button type="submit" variant="secondary" disabled={!ready}>{saving ? "Saving" : "Save"}</Button>
       </div>
     </form>
   );
@@ -75,15 +76,15 @@ export function CompanyView({ company: loaded }: { company: CompanyDetail | null
       header={
         <>
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            <ContactAvatar contact={{ avatarPath: company.avatarPath }} className="size-10" />
+            <CompanyAvatar logoPath={company.logoPath} className="size-8" />
             <div className="flex min-w-0 flex-col">
-              <h1 className="truncate text-base font-medium">{company.name}</h1>
+              <h1 className="truncate text-sm font-medium">{company.name}</h1>
               <span className="truncate text-xs text-muted-foreground">{company.domain}</span>
             </div>
           </div>
-          <Button variant="outline" onClick={() => setRenaming(true)}>Rename</Button>
+          <Button variant="secondary" onClick={() => setRenaming(true)}>Rename</Button>
           <Dialog open={renaming} onOpenChange={setRenaming}>
-            <DialogContent track="rename_company" className="sm:max-w-sm" showCloseButton={false}>
+            <DialogContent track="rename_company" className="sm:max-w-sm">
               <DialogHeader>
                 <DialogTitle>Rename Company</DialogTitle>
                 <DialogDescription>Everyone at {company.domain} stays filed under it.</DialogDescription>
@@ -118,18 +119,16 @@ export function CompanyView({ company: loaded }: { company: CompanyDetail | null
       </Section>
 
       <Section title="People">
-        <div className="rounded-lg border px-4">
-          <Divided>
+        <div className="-mx-3 flex flex-col gap-2">
+          <Divided className="pr-3 pl-14">
             {company.people.map((p) => (
-              <Link key={p.id} href={withQuery(`/contacts/${p.id}`, query)} className="group flex flex-col gap-1 py-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate text-sm font-medium underline-offset-2 group-hover:underline">{p.name}</span>
-                  {p.role && <span className="min-w-0 shrink truncate text-xs text-muted-foreground">{p.role}</span>}
-                </div>
-                {p.emails.map((e) => (
-                  <span key={e} className="min-w-0 truncate text-xs text-muted-foreground">{e}</span>
-                ))}
-              </Link>
+              <ListRow
+                key={p.id}
+                href={withQuery(`/contacts/${p.id}`, query)}
+                avatar={<ContactAvatar contact={{ avatarPath: p.avatarPath, isCompany: false }} className="size-8" />}
+                title={niceName(p.name)}
+                detail={[p.role, ...p.emails, ...p.phones.map(formatPhone)].filter(Boolean).join(" · ")}
+              />
             ))}
           </Divided>
         </div>
@@ -139,7 +138,7 @@ export function CompanyView({ company: loaded }: { company: CompanyDetail | null
         {company.conversations.length === 0 ? (
           <p className="text-sm text-muted-foreground">No conversations yet.</p>
         ) : (
-          <ConversationRows items={company.conversations} />
+          <ConversationRows items={company.conversations} avatar={<CompanyAvatar logoPath={company.logoPath} className="size-8" />} />
         )}
       </Section>
     </DetailPage>

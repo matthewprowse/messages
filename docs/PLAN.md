@@ -26,8 +26,8 @@ Positioning lines to test:
 
 ## Business Model
 
-- Individual: R349 a month. Team seat: R499 a month. Prices exclude VAT (register once turnover
-  passes R1M in 12 months).
+- Individual: R349 a month. Team seat: R499 a month, with a minimum of 5 seats. Prices exclude VAT
+  (register once turnover passes R1M in 12 months).
 - Sell whole agencies, practices and brokerages, not only single seats. The owner keeps the client
   history when an agent leaves.
 - Ideal customer (26 October 2026): a business in any industry where speed of response wins work,
@@ -49,7 +49,7 @@ any salary.
 | Trials that pay (no card asked) | 6% | 12% | 20% | First Page Sage 18% for no-card trials, ChartMogul median 8% |
 | So, cost per paying user from ads | about R690 | about R1,190 | about R2,170 | Worked out from the three rows above |
 | Average income per user | R330 | R390 | R430 | R349 and R499 plans, some annual discounts |
-| Cost to run a user | R45 | R70 | R120 | Gemini, hosting, card fees, support |
+| Cost to run a user | R45 | R70 | R120 | Gemini, hosting, card fees, support; a bottom-up check from the code gives R54, R94 and R129 on the Individual plan, see Cost, Revenue and Profit by User Count below |
 | Paying users cancelling each month | 3% | 5% | 8% | SMB SaaS benchmarks 3% to 7% |
 | Users from your own selling each month | 5 | 15 | 30 | Assumption |
 | Referrals each month, share of users | 1% | 3% | 5% | Assumption |
@@ -121,6 +121,76 @@ users for free, so those two numbers matter more than the ad budget. The ceiling
 African market, not cash; a raise roughly doubles the outcome, and a bigger raise adds little unless
 it pays for selling outside South Africa. The model assumes the product sells and WhatsApp keeps
 working; it does not price in a Baileys ban wave or a Google verification delay.
+
+### Cost, Revenue and Profit by User Count (27 October 2026)
+
+A bottom-up check of the plan's cost-to-run row, using the audit of the code. Estimates, not measured: prices of Google Cloud,
+Supabase, Vercel and Resend are from memory and need confirming, and the AI split by model is an assumption. R16.50 to the dollar,
+excluding VAT, income tax, salaries, marketing and acquisition cost, and hires.
+
+**Per-user inputs.**
+- Mix of plans: 73% Individual at R349 and 27% Team seat at R499, which gives R389.50 average income, matching the plan's middle R390.
+- Mix of usage: 25% low, 55% medium, 20% high.
+- AI cost per user is capped by the AI Budget ($5, R83). Before the Google price change a low, medium and high user costs about R30, R63 and R83. After 1 January 2027, when Gemini 3.8 Flash and the speech models double, low is about R43 and medium and high sit at the R83 cap (medium would be R94 without it).
+- Storage R0.40, R2 and R7, card fees R11 (Individual) and R15.50 (Team), support time R5, R10 and R20.
+- Blended variable cost per user, before hosting: **R84 now, R99 after the price change**.
+
+**Per user, by plan and usage (cost, then margin).**
+
+| Plan and usage | Cost now | Margin now | Cost after | Margin after |
+| --- | --- | --- | --- | --- |
+| Individual, low | R54 | R295 (85%) | R67 | R282 (81%) |
+| Individual, medium | R94 | R255 (73%) | R114 | R235 (67%) |
+| Individual, high | R129 | R220 (63%) | R129 | R220 (63%) |
+| Team seat, low | R59 | R440 (88%) | R72 | R427 (86%) |
+| Team seat, medium | R99 | R400 (80%) | R119 | R380 (76%) |
+| Team seat, high | R134 | R365 (73%) | R134 | R365 (73%) |
+
+Per-user costs here include R8 of hosting, assuming about 300 users. In the totals below hosting is a fixed cost.
+
+**Fixed monthly costs by size.** Built from: one worker VM in Johannesburg (about R500 to R580), disk, the KMS key, network, Supabase
+Pro (R410) from 50 users, Vercel Pro (R330) from the first paying user, point-in-time database backups (about R1,650) from 100 users,
+Resend Pro (R330) from 250 users, Confidential Space VMs (about R1,400 each) from 300 users, larger Supabase compute from 500 users,
+and one extra VM per 500 to 1,000 users after that. It also includes **R2,500 a month as a placeholder** for the yearly Google
+CASA security assessment, which has no quote yet and gates launch.
+
+| Users | Fixed cost a month |
+| --- | --- |
+| 10 | R3,570 |
+| 50 | R3,980 |
+| 100 | R5,680 |
+| 250 | R6,050 |
+| 500 | R8,470 |
+| 1,000 | R11,730 |
+| 2,500 | R18,670 |
+| 5,000 | R32,120 |
+
+**Totals a month, before and after the Google price change (27 October 2026 assumptions).**
+
+| Users | Revenue | Variable cost now | Fixed | Profit now | Margin now | Profit after | Margin after |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10 | R3,895 | R843 | R3,570 | -R518 | loss | -R661 | loss |
+| 50 | R19,475 | R4,215 | R3,980 | R11,280 | 58% | R10,565 | 54% |
+| 100 | R38,950 | R8,430 | R5,680 | R24,840 | 64% | R23,410 | 60% |
+| 250 | R97,375 | R21,075 | R6,050 | R70,250 | 72% | R66,675 | 69% |
+| 500 | R194,750 | R42,150 | R8,470 | R144,130 | 74% | R136,980 | 70% |
+| 1,000 | R389,500 | R84,300 | R11,730 | R293,470 | 75% | R279,170 | 72% |
+| 2,500 | R973,750 | R210,750 | R18,670 | R744,330 | 76% | R708,580 | 73% |
+| 5,000 | R1,947,500 | R421,500 | R32,120 | R1,493,880 | 77% | R1,422,380 | 73% |
+
+"After" variable cost is R98,600 for 1,000 users and scales the same way (R99 a user).
+
+**What this shows.**
+- Break-even is about 12 to 13 paying users, at the start-up fixed cost of R3,570 to R3,980.
+- The R1M a month profit goal needs about 3,400 users at today's prices and about 3,600 after the price change, a little under the
+  plan's 3,800 because fixed costs are lower here than the plan assumed. The plan's marketing, hires and salary are still to come off.
+- The Google price change takes 3 to 4 points off the margin at scale, and about R70,000 a month at 5,000 users.
+- The cap is what protects margin. If you raise the AI cap to $7.50 to keep medium and high users' service unchanged after the
+  price change, the blended variable cost rises by about R20 a user.
+- Not in these numbers: the plan's support or sales hire for each 700 users after the first 400 (R25k to R30k each; support time per
+  user is already counted), marketing, cost to acquire a user (R1,190 in the middle), and VAT once turnover passes R1M in 12 months.
+- Weak points: the CASA placeholder, how many users one VM and one database really carry, and the AI split by model. Replace
+  these with measured figures after the first month of real usage.
 
 ### UK and US (October 2026)
 
@@ -200,31 +270,233 @@ assumes and cannot check: that you can fill 8 qualified demos a month (finding p
 not costed), that a new product closes like established ones, and that businesses accept WhatsApp
 through Baileys. Your first 10 to 20 demos give a real close rate and seats per business.
 
+## Fair Usage and Storage
+
+Storage: 20 GB per seat approved 27 October 2026. Built so far: the Storage section in Settings, Usage,
+and the Storage Flags table in owner analytics (migration `20261031130000_storage_usage.sql`, needs applying).
+Not built yet: the cap itself (stopping new files at 100%) and the 80% email. The other open questions
+below are still to decide. AI fair usage is proposed at the end of this section and not approved.
+
+**The problem.** Konva stores every attachment it syncs in the private attachments bucket. Today the only
+limit is 50 MB a file. Someone could WhatsApp themselves video and archives all day and use Konva as free
+file hosting. Each file has its size recorded (`attachments.size_bytes`), so usage per person is
+measurable already; only the rules and the meter are missing.
+
+**What counts.** Pictures, video, PDFs and other documents kept in the bucket, plus files attached to
+notes and sent from Konva. Voice notes and stickers are not part of Attachments (decided 27 October
+2026): they stay in their chats, are not listed on the Attachments page and do not count toward the cap.
+Nor does text, inline images, tiny images, files from Junk (those are not kept) or anything a person deleted.
+
+**Proposed cap.** 20 GB included per paid seat. Team plans pool it across seats (5 seats share 100 GB),
+so one heavy user does not trip a limit while the agency has room. Storage costs about R0.35 per GB a
+month, so 20 GB is under R7 against R349 income and does not eat into the R70 to R120 cost to run a user.
+The cap is for abuse and runaway cases, not for normal use; most people should never see it.
+
+**What happens as it fills.**
+
+| Used | What the person sees | What happens |
+| --- | --- | --- |
+| Under 80% | Nothing | Everything is kept |
+| 80% | A notice in Settings and one email | Everything is kept |
+| 100% | A banner on Attachments, with what is using the space | New files stop being saved. Messages still sync and show; the file shows "Not Kept Here" with the original left in Gmail, WhatsApp or the mailbox |
+| Over 100% for 30 days | A second email | Same as above. Nothing is ever deleted by us |
+
+Files already stored are never removed because of the cap. Deleting files frees space, and saving
+resumes on its own.
+
+**Limits that stay on.**
+- 50 MB a file stays (Supabase's default upload limit).
+- Same file, same account: store once, by content hash, so forwarding the same PDF costs one copy. (Not built: uploads are by message and attachment path, with no hash.)
+- Not built yet: Videos over a size to be set (suggest 25 MB) are kept as a link to the original, not copied, since
+  video is where almost all the bytes go.
+
+**Spotting abuse.** A clear sign is a WhatsApp chat with your own number, or a chat with one other person,
+that is mostly large files. Flag an account when over half its stored bytes come from its own chat, or it
+adds more than 5 GB in a week. A flag only shows the account to the owner in the analytics page; nothing
+is blocked automatically.
+
+**The meter (Settings, Storage).** Total used and the cap, then a split by Images, PDFs, Voice Notes,
+Video and Files, each with a count and size, then the ten biggest files with a Delete button. The
+Attachments page gets no counts in the grid; the numbers live in Settings.
+
+**Fair usage wording, for the terms of use.** "Konva keeps your attachments so you can search and find
+them. It is not file storage. Each seat includes 20 GB of attachments; we may stop saving new files above
+that, or ask you to remove files, if use is far beyond normal. We will tell you first and never delete
+your files without asking."
+
+**Build size (Claude-built).** About one day: a per-user size total (a view or a function), the check in
+the sync worker and the AI worker before saving a file, the Settings page, and the two emails.
+
+**To decide before building.**
+1. Is 20 GB per seat right, or higher or lower?
+2. Should videos over 25 MB be kept as links, or stored up to 50 MB like everything else?
+3. Hard stop at 100%, or a grace allowance (say 10%) so a sync never fails midway through a thread?
+4. Do the Individual and Team plans share the same per-seat amount?
+5. Should a paid add-on (extra 100 GB) exist later, or is the cap simply a ceiling?
+
+### AI Fair Usage
+
+**Decided 27 October 2026** (this replaces the allowance table and the 300% rule further down):
+- One maximum per seat per month, starting at $5, set and changed in the Admin page (AI Budget), not in code.
+- That maximum is divided into a share for each feature, also set in Admin. Starting split: Sorting and
+  Junk 30%, Drafts 35%, Learning From Edits 10%, Daily Brief 10%, Transcripts 15%. Shares add up to 100%, so the
+  total can never pass the maximum.
+- When a person has spent their share of a feature, that feature pauses for them until the 1st (UTC).
+  For Drafts that means automatic drafting stops. Other features carry on.
+- People see a percentage, like Claude's usage: how much of the month's allowance is left, and how much of
+  each feature is used. Never dollars. Dollars stay in owner analytics.
+- Company logos are shared by everyone and are not counted against a person.
+- **Weekly limit (added 27 October 2026):** features switched on in Admin (starting with Drafts and
+  Transcripts) also have a weekly limit, 40% of their monthly share, so a month is not spent in a few days.
+  Weeks start on Monday (UTC). Sorting new mail and the Daily Brief have none. Usage shows a bar for the
+  week and one for the month, as percentages.
+- **Setup allowance (added 27 October 2026):** each newly connected account gets $2 for 7 days for its first
+  sort, search index and learning. That work is marked and counted toward neither the week nor the month. Past
+  $2 it counts normally. Measured on the owner's mailbox (3,500 messages), a first import costs about $1.20 and
+  takes 30 to 45 minutes. The dollar amount, the 7 days, the weekly percent and the weekly features are all set
+  in Admin.
+
+- **Per-conversation and per-day limits (added 27 October 2026):** at most 10 drafts a person can ask for in
+  one conversation in an hour, 3 automatic drafts per conversation per day, and 50 contact and company summaries
+  per person per day (so a large import catches up over a few days). A draft over the limit fails with a plain
+  message; an automatic one is dropped quietly.
+- **Abuse flag (added 27 October 2026):** an account is flagged in Admin when it uses over $2 in a day (setup
+  included) or its month is more than 5 times the middle person's and over $1. A flag blocks nothing.
+- **Admin:** AI Usage by Person shows each person's month, week, today and setup spend, calls, split by feature
+  and any flag. AI Budget holds every number above and all can be edited there.
+- **Fixes (27 October 2026):** the setup allowance counts only accounts that bring in messages (not calendars,
+  task lists or reminders). Sorting and learning from before the allowance existed were marked as setup, so the
+  owner's first import no longer counts against the month. Contact notes now run on the cheaper model (company
+  summaries already did). The Daily Brief is spoken only when someone presses Listen; a refresh or voice change
+  re-speaks it, at most 3 times a day.
+- Shares now: Sorting and Junk 30%, Drafts 25%, Learning From Edits 20%, Daily Brief 10%, Transcripts 15%.
+
+Built: the `ai_budget` table and the allowance functions (`20261031140000_ai_budget.sql`,
+`20261031150000_ai_limits_flags.sql`), the checks in the AI worker, and the Admin and Usage pages.
+
+**Code check (27 October 2026).** The limits exist, but they are weaker than the text above says:
+- The allowance check fails open: if the lookup errors, the call goes ahead. The result is cached for 60 seconds
+  and usage is written afterwards by a background queue, so parallel calls (triage runs 4 at a time, plus drafts,
+  brief and meetings) can overshoot. A meeting is checked per window, so one long recording can spend several
+  times its share.
+- **The setup allowance can be farmed.** It is $2 for every row in `accounts` created in the last 7 days, and
+  `accounts` has an insert-anywhere policy for signed-in users. Anyone can insert rows in a loop and get
+  unlimited AI that counts toward no cap. Reconnecting an account also re-grants it. Fix: remove INSERT and
+  DELETE on `accounts` from the app role (the web app creates accounts with the service role) and grant the allowance
+  once per person per provider address.
+- Draft limits (10 an hour, 3 automatic a day) are per conversation only. Compose and new-message drafts are not
+  limited. A separate cap of 30 automatic drafts a person a day exists in the database and was not written here.
+- The Daily Brief limit of 3 a day is in the database and counts requests. The automatic daily script is not counted.
+- Company logos are uncapped, with no maximum number of tries; failures retry forever.
+- Timed-out calls are retried up to 4 times and never recorded, so they are billed and not counted.
+- The recording and voice note limits are in bytes (500 MB, 15 MB), not minutes.
+- Audio is billed as text tokens in `pricing.py`, so voice note and meeting cost is probably understated.
+- Prices of Gemini 3.8 Flash and the speech models double on 1 January 2027 (already in `pricing.py`).
+- Not built: the first-import cap (the code imports 30 days, no conversation cap), the 20 GB storage cap and its
+  80% and 100% behaviour and emails, hash dedupe and the 25 MB video link. Only the meter exists.
+
+The rest of this section is the original proposal.
+
+**The aim.** A normal person never notices a limit. The limit exists for the account that, say, uploads
+hours of meeting recordings or regenerates drafts in a loop, and costs more than it pays. It must
+not slow the things everyone depends on.
+
+**What is already known.** Every model call is recorded in `ai_usage` with its tokens and its cost in
+dollars, per person and per feature (triage, draft, learn, brief, transcribe). Settings, Usage already
+shows it. So the limit can be set on cost, which is what actually hurts, not on counts of calls.
+
+**What a limit applies to.** Split the AI work by who starts it:
+
+| Work | Started by | Limited? |
+| --- | --- | --- |
+| Sorting and Junk (triage) of new mail | Incoming mail | Never. It is bounded by how much mail arrives |
+| Daily Brief | A schedule | Never. One a day |
+| First draft for a conversation that needs a reply | Incoming mail | Never, within the per-thread rule below |
+| Regenerating or re-prompting a draft, voice-instructed drafts | The person | Yes |
+| Learning from edits | The person's edits | Never. Small |
+| Voice note transcripts | Incoming voice notes | Yes, by length |
+| Meeting recordings and transcripts (up to 500 MB each) | Meetings that end | Yes. This is the biggest cost per item |
+| Reading aloud (speech), Google Search grounding | The person | Yes |
+
+**The allowance.** A monthly AI allowance per seat, worked out from `cost_usd` already recorded, reset on the
+first of the month (UTC, as the Usage page groups months). Start at $5 a seat (about R83, under a quarter of
+the R349 price) and then set it at five times the middle paying user's real AI cost once a month of real
+data exists. Teams pool it across seats, as storage does.
+
+**What happens as it fills.**
+
+| Used | What the person sees | What happens |
+| --- | --- | --- |
+| Under 80% | Nothing | Everything works |
+| 80% | A line on Settings, Usage ("AI allowance: 80% used, resets on the 1st") | Everything works |
+| 100% | The same line, and a note where a paused feature would have run | Limited work above pauses (meeting transcripts and recordings, speech, search grounding, extra regenerations). Sorting, Junk, the brief, first drafts and learning carry on |
+| 300% | An email to the person | Automatic drafting pauses until the 1st, so a runaway bill is capped. Sorting and Junk still run, since those protect the inbox |
+
+Nothing is deleted and nothing is lost: paused work is skipped, not queued forever, and the person can ask
+for a transcript again after the month turns.
+
+**Guards that never reach a normal person.**
+- Per conversation: at most 10 regenerations an hour and 3 automatic drafts a day.
+- Per item: input limits (a recording over 500 MB or a voice note over 15 MB is not sent to the model; both limits exist today).
+- New accounts (not as built: the code imports 30 days, `INITIAL_SYNC_DAYS`, with no conversation cap; the 90 days and 2,000 conversations below is the original proposal): the first import of old mail triages only the last 90 days and the 2,000 newest conversations,
+  and does not count against the allowance. This is the one-off that would otherwise blow a new person's month.
+- The check is made by the AI worker before each limited call, from the month's `ai_usage` total (the
+  `user_id, created_at` index exists), cached for a minute so it adds no real delay.
+
+**Spotting abuse.** In owner analytics, flag an account whose AI cost this month passes five times the
+middle paying user's, or $2 in one day. Like storage, a flag is a number to look at; nothing is blocked
+automatically except the 300% rule above.
+
+**Fair usage wording, for the terms of use.** "AI features are included at a generous monthly allowance for
+normal use. If use is far beyond normal, we may pause the heaviest features until the next month. Sorting
+your mail and your daily brief are never paused."
+
+**Build size (Claude-built).** About one day: a month-to-date cost lookup in the AI worker, the checks before
+meeting, speech and regenerate calls, the allowance line in Usage, the abuse flag, and the first-import cap.
+
+**To decide before building.**
+1. Is $5 a seat the right starting allowance, or should it wait for real data and start with no limit but the flag?
+2. Is pausing automatic drafting at 300% acceptable, or should it only warn?
+3. Should meeting recordings count against the same allowance, or have their own (say 10 hours a month)?
+4. Should the allowance show in dollars, or only as a percentage?
+
 ## Marketing Page
 
-The marketing page lives at `/` in the web app (`apps/web/app/page.tsx`) and is public. A first
-build was cleared on 24 October 2026, so the page is blank for now and is to be rebuilt.
+The marketing page lives at `/` in the web app (`apps/web/app/page.tsx`) and is public. Decided 26
+October 2026: start with a basic page whose only goal is waitlist sign-ups, and refine it over the
+coming months. Konva is invite only until then.
 
-Recommended sections, in order, each modelled on a Mobbin reference:
+The page has five sections, each modelled on a Mobbin reference:
 
-1. Nav: Features, Privacy, Pricing, FAQ, Sign In, Start Free Trial.
-2. Hero (Notion Mail): "Every client conversation, in one place." with the inbox mock-up.
-3. Works With (Lattice): WhatsApp, Gmail, iCloud Mail, Google Calendar, plus a Coming Soon row.
-4. Client timeline (OpenPhone): one client's email, WhatsApp, voice note and viewing together.
-5. Features (Front): Needs Reply, drafts in your voice, voice notes, the spoken brief.
-6. Privacy (Campsite): only claims that are true today.
-7. Pricing (Cursor): Individual R349, Team R499 a seat marked Coming Soon. Prices exclude VAT.
-8. FAQ (Zendesk): includes plainly that WhatsApp is an unofficial connection.
-9. Final call to action, then a small footer.
+1. Hero (ISO Meet): "Every Client Conversation, in One Place" with the request form.
+2. Works With (Slack): WhatsApp, Gmail, Outlook, iCloud Mail, Google Calendar.
+3. Three feature cards with a small picture of the product (Extra): sorted by client, Needs Reply,
+   drafts in your voice.
+4. Privacy (Campsite and Grain): three claims that are true today, from Where It Stands below.
+5. Final call to action with the request form again (Base), then a small footer.
 
-Still to do before it goes live:
+The request form asks either for a team (company, team size and work email) or for an individual
+(email only). Requests go to `/api/waitlist`, which saves them in the `waitlist` table with the service
+role. Joining twice with one email keeps the first request.
 
-- Sign up is built (see Onboarding): `/login` now creates an account too, with Google or an emailed code.
-  Start Free Trial can keep pointing there.
-- Privacy Policy and Terms pages, linked from the footer. Google verification for Gmail needs both.
-- The trial length, and real brand logos in Works With.
-- Check the copy against what is built on launch day: the client timeline is still To Do, and the
-  privacy claims must stay within Where It Stands below.
+`/admin` is owner only, like Analytics, and sits above Settings in the navigation. It lists requests
+by status (Pending, Approved, Rejected), filters teams and individuals, and approves or rejects with
+Undo. The database lets only the owner read or change requests. Approving a team request also makes its
+team (see Teams) and shows an invite link for its owner, and Teams lists each team with its seats.
+
+Next:
+
+- Resend: a confirmation email on joining and an approval email with a link to `/login`. Needs the
+  sending domain verified.
+- Only approved emails can create an account: a Supabase "before user created" auth hook, so it covers
+  Google and the emailed code alike. Existing accounts are unaffected.
+- Rejecting sends nothing.
+- Privacy Policy and Terms pages, linked from the form and footer. POPIA needs the first before the
+  form collects real details, and Google verification for Gmail needs both.
+- Later, as the page is refined: pricing, FAQ (including plainly that WhatsApp is an unofficial
+  connection), real product screenshots.
+- Copy against what is built: the client timeline is still To Do, so "sorted by client" and the first
+  feature card describe where Konva is going, and the privacy claims must stay within Where It Stands.
 
 ## MVP
 
@@ -239,11 +511,11 @@ Still to do before it goes live:
 | WhatsApp | Personal and WhatsApp Business app numbers through Baileys | Built |
 | WhatsApp | Voice notes transcribed and summarised by Gemini (see below) | Built |
 | Mail | Any other IMAP and SMTP mailbox (Afrihost, Xneelo, Domains.co.za, cPanel hosts, Yahoo and others), with server settings found automatically. iCloud becomes one preset of the same connector | Building (agreed 26 October 2026) |
-| Meetings | Google Meet, Teams and Zoom transcripts, shown as a card in the attendee's conversation, on their contact page and on the calendar event (see Meeting Transcripts below) | Building |
-| Meetings | Teams, Zoom and Google Chat conversations, read and reply, including the chat inside a meeting (see below) | Building |
-| Social | LinkedIn messages through the open-source linkedin-api Python library (see Social Messaging below) | Building (agreed 26 October 2026) |
-| Social | Instagram DMs through the open-source instagrapi Python library, personal and business accounts | Building (agreed 26 October 2026) |
-| Tasks | Microsoft To Do, Google Tasks and iCloud Reminders, shown in Calendar on the day they are due and in the daily brief, ticked off from the app | Building (agreed 26 October 2026) |
+| Meetings | Google Meet, Teams and Zoom transcripts, shown as a card in the attendee's conversation, on their contact page and on the calendar event (see Meeting Transcripts below) | Building. Zoom hidden from users (decided 27 October 2026) |
+| Meetings | Teams, Zoom and Google Chat conversations, read and reply, including the chat inside a meeting (see below) | Building. Zoom hidden from users |
+| Social | LinkedIn messages, signed in on the Konva page through mautrix-linkedin's password sign-in (see Social Messaging below) | Building (changed 27 October 2026) |
+| Social | Instagram DMs: Business and Creator accounts through the official Instagram Login, personal accounts through instagrapi. The user picks their account type first | Building (changed 27 October 2026) |
+| Tasks | Microsoft To Do, Google Tasks and iCloud Reminders, shown in Calendar on the day they are due and in the daily brief, ticked off from the app. iCloud Reminders through an iCloud.com sign-in on the Konva page, no Mac | Building (changed 27 October 2026) |
 | Privacy | Per-user encryption of stored data | In progress |
 | Email display | Bold, italics and the like in email and WhatsApp bubbles (see below) | Built, not yet checked on real mail |
 | Drafts | Guided drafting, What To Say (typed or spoken), Adjust, Edit Text, saved facts, follow-ups, drafting new emails and WhatsApp messages (see below) | Built; checked offline against 35 real replies and end to end on real conversations, not yet in the browser |
@@ -548,6 +820,10 @@ How it fits together:
 - Sending follows the same rules as email and WhatsApp: the user always sees and taps Send.
 - Message text is encrypted per user like every other message (see Privacy and Encryption).
 
+Decided 27 October 2026: Zoom is hidden from Settings and onboarding, with its code kept. Every other
+Zoom account needs Zoom Marketplace review (4 to 12 weeks), free Zoom has no cloud recordings, and
+Team Chat is little used for client work. Google Meet and Teams cover meetings until then.
+
 Teams, Zoom and Google Meet with Google Chat are being built in parallel from 26 October 2026, each
 by its own agent, then merged. Testing on real accounts comes after, and needs a Microsoft 365 tenant,
 a paid Zoom plan with cloud recording and a Google Workspace account with transcription.
@@ -574,15 +850,53 @@ WhatsApp connects through Baileys, rather than a paid service. Unipile was price
 euro per linked account each month (about R160 to R200 for a user with both), too much against a
 South African subscription.
 
-| App | Library | Signs in as | Notes |
-| --- | --- | --- | --- |
-| LinkedIn | linkedin-api (LinkedIn's internal Voyager API) | The LinkedIn website | No official API exists for direct messages. A CAPTCHA at sign-in cannot be solved for the user, so the fallback is pasting the browser's session cookies |
-| Instagram | instagrapi (Instagram's private mobile API) | The Instagram app | Works for personal accounts, which the official API does not. The session and device are kept, so later runs never sign in again |
+Changed 27 October 2026, after testing how much friction each connection had. The rule: every
+account connects on the Konva page alone (a sign-in button, a form, or a QR code). No terminal step,
+no Mac app, no browser extension, and no copying cookies.
 
-How they run: as their own Python processes beside the AI worker, storing conversations in the same
-tables as WhatsApp. They poll every few minutes with jitter, never mark chats as read unless the user
-reads them in Konva, never send without the user tapping Send, and stop at the first sign of a
-restriction until the user reconnects. Both can route through a proxy, since server IPs are flagged.
+| App | How it connects | Notes |
+| --- | --- | --- |
+| LinkedIn | The user types their email and password in Konva. The worker signs in with mautrix-linkedin's password sign-in (the Go helper in apps/linkedin, built on its linkedingo package; not linkedin-api), and the form asks for the email, SMS or authenticator code, or for approval in the LinkedIn app | The password is dropped once signed in. The cookies and the browser's User-Agent are kept together, since LinkedIn ends sessions whose User-Agent changes. A CAPTCHA cannot be solved for the user, so the form asks them to approve in the LinkedIn app and try again |
+| Instagram, Business or Creator | The official Instagram API with Instagram Login: Continue With Instagram, approve, done | No password and no ban risk. Replies only within 24 hours of the client's last message; after that the conversation says to reply in Instagram. Needs Meta Business Verification and App Review before other accounts can connect; the owner's own account works straight away |
+| Instagram, personal | instagrapi (Instagram's private mobile API), with the username, password and code form | The most ban-prone connection. The page says so plainly |
+
+The Instagram page asks for the account type first and routes to the right sign-in. Not Sure explains
+where to check in the Instagram app and that switching to a professional account is free.
+
+How they run: as their own processes beside the AI worker (LinkedIn as a Go helper the sync worker
+starts per account, Instagram in Python), storing conversations in the same tables as WhatsApp. They
+never mark chats as read unless the user reads them in Konva, never send without the user tapping
+Send, and stop at the first sign of a restriction until the user reconnects. Reconnect reopens the
+same sign-in form.
+
+LinkedIn helper, decided 27 October 2026: the Go helper (apps/linkedin) is used for now. It was first built
+and tested that day with Go 1.27.3 (`go vet`, `go build`, `go test` all clean). Before launch it moves to
+Python, beside the Instagram connector in apps/ai, speaking the same stdin and stdout protocol so the sync
+worker only changes the command it starts. Two reasons: hosting needs only Python, and the Python helper is
+written from scratch rather than translated from linkedingo, so it is not under the AGPL (a translation would
+still be), which matters to anyone who later buys or invests in Konva. It still needs live testing against
+LinkedIn either way, with the same sign-in checks (email, SMS or authenticator code, app approval).
+
+Proxies, decided 27 October 2026: none at launch. A user's own code or app approval gets the sign-in
+through from any IP; the risk is later, when a session used from a data centre is checked again or
+the account is restricted. Each connection can take a per-account proxy, and sign-in checks and
+restrictions are counted per connector. If LinkedIn or personal Instagram show trouble, add a
+home-internet (residential) proxy for those two only, estimated at $0.50 to $4 a user each month.
+
+### Repeating Events
+
+Built 27 October 2026. Each occurrence of a repeating event stores its series' rule (`calendar_events.recurrence`,
+iCalendar's RRULE such as `FREQ=WEEKLY;BYDAY=TU`; migration `20261031120000_calendar_recurrence.sql`).
+
+- **Synced:** Google occurrences do not carry the rule, so the sync worker reads each series' own event for it,
+  once an hour. iCloud sends occurrences already expanded, so it reads each series' file the same way. Outlook is
+  shown, not changed, and has no rule stored.
+- **Shown:** the event details say it in words ("Every Week on Tuesday", "Every Month on the Last Friday, 6 Times";
+  `apps/web/lib/recurrence.ts`), or "On a Custom Schedule" for a rule they cannot put in words.
+- **Changed:** the event dialog has a Repeat choice (Does Not Repeat, Every Day, Every Weekday, Every Week, Every
+  Month, Every Year, or the event's own custom rule) for Google and iCloud. A new event can repeat. A new repeat for
+  a series is saved to the whole series (Save All Events), keeping its skipped dates; a single event can be made to
+  repeat. A series cannot be turned back into one event from Konva: delete it, or change it in the calendar.
 
 ### Tasks and Reminders
 
@@ -592,9 +906,16 @@ tasks scope, same Google sign-in) and iCloud Reminders sync into one tasks table
 - Calendar shows each task on its due day: all-day ones in the all-day row, timed ones at their time,
   overdue ones on today. A tick completes it at the source.
 - The daily brief reads out what is due today and what is overdue.
-- iCloud Reminders is the hard one: Reminders lists upgraded since iOS 13 are no longer served over
-  CalDAV. The agent building it chooses between CalDAV, iCloud's web endpoints and a small Mac relay,
-  and records why.
+- iCloud Reminders, changed 27 October 2026: Reminders lists upgraded since iOS 13 are not served
+  over CalDAV, and the owner ruled out a Mac app. So it signs in the way iCloud.com does: the user
+  types their Apple ID and password in Konva, then the code from their Apple device. Sync runs in
+  the Python worker through pyicloud's Reminders service (iCloud's CloudKit Reminders database),
+  which reads, completes and creates reminders, subtasks included. The costs, said plainly on the
+  page: app-specific passwords do not work here, the user signs in again about once a month, and the
+  session reaches the whole iCloud account, so Konva only ever calls Reminders and keeps the session
+  encrypted. With Advanced Data Protection on, the user first turns on Access iCloud Data on the Web
+  and approves a prompt on their device. The Mac relay (apps/mac-relay) leaves the user's path; the
+  code stays until the owner decides.
 
 ### Notes
 
@@ -628,6 +949,93 @@ Agreed 25 October 2026.
 - Not yet: notes in Cmd-K search, note files on the Attachments page, linking a note to a client.
 
 Build time, Claude-built: about 3 to 4 hours.
+
+### Company Logos and Sender Names (October 2026)
+
+- **Logo system (agreed 26 October 2026, replaces the first version below it):** one logo per company
+  domain, shared by every user, so each company is found once. Target: fewer than 1% of companies end on
+  the fallback.
+  1. **Candidates, all free:** the App Store (iTunes Search API, only apps whose publisher matches the
+     company), BIMI, the company's own site (apple-touch-icon, manifest, SVG icons, favicons), Google's
+     favicon service at 256px, Wikipedia and Wikidata logo files, and Simple Icons last (one colour only,
+     so it gets brand colours wrong for multi-colour logos).
+  2. **Framing standard:** every candidate becomes a 256px PNG. Logos that already fill their square
+     (app icons) fill the circle while the mark stays inside a safe zone. Loose marks are trimmed,
+     centred on the visible shape and scaled to fit a fixed safe circle however wide they are, on their
+     brand colour or white.
+  3. **Gemini Flash-Lite judge:** one call per company with the framed candidates numbered on one image,
+     plus the company name and domain. It picks the current main logo and rejects promo badges,
+     sub-brands, text-only versions, outdated logos and anything clipped or off-centre.
+  4. **Search fallback:** if nothing passes, Gemini with Google Search finds the official logo, which goes
+     through the same framing and judge.
+  5. **Fallback:** the first letter on `bg-secondary`. The fallback rate is tracked.
+  6. **Review page:** owner only. It shows new logos, a reject re-runs the search without that one, and
+     fixes apply to every user. Logos are rechecked every few months for rebrands.
+  - Only company names and domains leave Konva, never addresses or mail. Tested on 72 sample companies
+    (36 South African, 36 international) and the owner's own before rolling out.
+  - **Rolled out 26 October 2026** at 4 of 180 companies on the first letter (2.2%), about $0.0012 a
+    company in Gemini calls. `COMPANY_LOGOS=true` in both workers' `.env`.
+  - **How the app finds a logo:** domains are sealed per user, so the sync worker points each company at
+    its logo (`organizations.logo_path`, `20261031110000_organization_logo_path.sql`) after a logo
+    changes and every six hours. The Companies list and page show it, or the first letter on
+    `bg-secondary`; a company sender shows it in place of a photo. The old per-user icons
+    (`organizations.avatar_path`) are no longer shown.
+- **How it is built (26 October 2026):**
+  - **One shared queue** in `company_logos` (`20261031100000_company_logos.sql`). The sync worker does all
+    fetching, framing and storage (`apps/worker/src/logos`); the AI worker only calls Gemini
+    (`apps/ai/ai/logos.py`), as every other AI call does. A company goes queued, judging, judged, then
+    searching and round two only when nothing passed. Both sides are off until `COMPANY_LOGOS=true`.
+  - **Storage:** the chosen logo is `<sha256 of the domain>.png` in a `logos` bucket every signed-in user
+    can read, so file names do not list the companies people hear from. Candidates and the judge's
+    sheets sit under `review/`, owner only.
+  - **Sources:** up to 2 App Store apps (searched in ZA, then US; kept only when the publisher's site,
+    bundle ID or name matches the company; one search every 3.1 seconds), BIMI, up to 4 site images (its
+    icons, plus header images marked as a logo and its preview image, often a small company's only
+    sharp logo), Wikidata (P8972, then P154, files without an end date; when it has none, the logo its
+    English Wikipedia infobox names), Google's favicon service, and Simple Icons drawn in its brand
+    colour. Wikimedia allows about 10 requests a minute without a contact address, so Wikidata waits 6.5
+    seconds between requests. Duplicates are dropped; at most 10 candidates. Sites that turn the
+    worker away are left alone; it never pretends to be a browser.
+  - **Framing:** the safe circle is 76% of the avatar's width, measured by the mark's farthest visible
+    pixel from the centre of its box, so wide and tall marks fit; round marks may be 15% larger. A white
+    mark goes on the brand's colour (taken from another candidate) or near-black. A gradient app icon
+    fills the circle unless sharp detail reaches the outer 16% of the radius in a few places, when it is
+    drawn smaller inside a circle of its edge colour.
+  - **Judge:** the fast model (`gemini-3.5-flash-lite`), low thinking, one sheet of numbered 160px circles
+    plus where each came from. About 1,800 input tokens, about $0.001 a company.
+  - **Search:** the fast model with Google Search grounding and no structured output (with it the model
+    answered without searching). It works out the real company from a name made from a domain
+    ("Workablemail") and answers with up to 6 addresses: images, or pages whose icons, logo images and
+    Google favicon are tried. The second judging also sees the first round's candidates and is told it
+    is the last look, so it settles for the best real logo (even a wordmark) rather than none. Grounding
+    is free for 5,000 queries a month across Gemini 3 models, then $14 per 1,000.
+  - **Cost** is Konva's, filed in `ai_usage` against the owner's account as `logos`.
+  - **Review page:** `/analytics/logos`, linked from Analytics. Reject re-queues without that candidate
+    (it is never offered again); Use This saves a candidate by hand and rechecks leave it alone. Logos are
+    rechecked after 90 days.
+  - **Fallback:** `CompanyAvatar` in `components/primitives.tsx`, the first letter on `bg-secondary`.
+  - **Rollout, not done yet:** `pnpm --filter worker company-logos --from-orgs`, then the app reads company
+    avatars from the `logos` bucket through `CompanyAvatar`, then `COMPANY_LOGOS=true` in both workers'
+    `.env` and a restart. Until then the per-user logos below stay as they are.
+- **Where logos came from (first version):** the company's own site first: every icon its home page and web app
+  manifest name (apple-touch-icon, manifest icons, SVG icons, favicons), then `/apple-touch-icon.png`
+  and `/favicon.ico`. When none is sharp enough, Google's public favicon service
+  (`t1.gstatic.com/faviconV2`) is asked for the same domain. Only the company's domain is sent, never an
+  address or any mail. No paid logo API.
+- **Framing (first version):** every logo is made into one 256px PNG by the worker (`sharp`, the one new dependency): the
+  mark is found inside its padding or tile, then set at the same size (about 62% of the circle) on its
+  own brand colour, or on white (black for a white mark). Pictures with no plain background fill the
+  circle. Icons too small to look sharp (under 48px, so 16px and 32px favicons) are never used: the
+  plain circle shows instead.
+- **Where they show:** the Companies list and page, and in place of a photo for a sender that writes as
+  the company itself ("LinkedIn", "Dan from Relume"), so in the conversation list, the conversation and
+  the contact page too. A sender whose name does not mention the company (mail sent through a hiring or
+  mailing service) gets no logo.
+- **Names:** an automated sender with no real name ("noreply", "No Reply", "Info") is named for its
+  company, and a company named from its domain ("Linkedin") takes the spelling its own senders use
+  ("LinkedIn"). Renamed companies are left alone.
+- Existing data was refreshed once with `pnpm --filter worker refresh-company-logos`; after that the
+  daily photo job keeps logos current (each company rechecked monthly).
 
 ### Onboarding
 
@@ -686,35 +1094,439 @@ To set up before it works for someone new: a Web application client in Google Cl
 in Supabase's allowed redirect URLs, `{{ .Token }}` in Supabase's magic link email template so the code
 shows, and custom SMTP in Supabase (its own mailer sends only a few emails an hour).
 
+## Teams
+
+Decided 27 October 2026. The Team seat (R499 against R349) is paid for by the owner, not the agent, so
+everything it adds is for the owner: keeping client history, seeing that clients are answered, and
+running the team in one place. How It Is Built marks each step as it lands.
+
+### What Teams Get
+
+At launch:
+
+1. The business keeps client history. When an agent leaves, their work chats stay, and the owner
+   reassigns those clients to someone else.
+2. Shared inboxes: info@ and sales@, a shared WhatsApp Business number and the business Instagram, with
+   each conversation assigned to a person, internal notes, and a warning when someone else is replying.
+3. Response tracking for the owner: unanswered client messages across the team and reply times per
+   person. Counts and timings only, never message text.
+4. One bill and seat management: invite and remove people, onboard 5 to 25 at once, pooled storage and
+   AI allowance (see Fair Usage and Storage).
+
+Soon after (built as step 6, see How It Is Built):
+
+5. One company voice: a shared AI profile, templates and company facts (prices, listings, FAQs) used in
+   every agent's drafts.
+6. Cover: while someone is on leave, a colleague answers their work chats.
+7. Compliance export: a per-client archive of WhatsApp and email for FAIS, legal and POPIA records.
+8. Shared contacts and companies, so the team keeps one client list.
+
+### Work and Personal Chats
+
+Most agents run clients and family on one WhatsApp number, so sharing is decided per chat, not per
+account.
+
+- Everything starts private. Connecting a personal account shares nothing.
+- A chat becomes a work chat in three ways: automatically, when the contact is in the team's shared
+  contacts or belongs to a client company; by suggestion, when the AI thinks a chat is about work (only
+  the agent sees it, and nothing is shared until they accept); or by hand, with Mark as Work on any chat
+  or group.
+- Only work chats are shared, and they are encrypted with the team's key. Personal chats stay under the
+  agent's own key, and the owner never sees them, not even as counts.
+- A work chat is read only by the agent whose chat it is and anyone it is assigned to. The Owner and
+  Admins see that it exists (the client, the agent, reply times) and can assign it, but read the
+  messages only once it is assigned to them. The agent always sees who else a chat is assigned to.
+- The client shows up for the whole team on the Contacts page, with their company and the agent who
+  looks after them. The messages stay with the chat.
+- The agent always sees what is shared: a Work or Personal badge on every chat and a list of everything
+  shared in Settings, Team.
+- An agent can move a chat back to personal at any time. The owner sees only that it happened, as a
+  count ("Sipho moved 12 chats to personal this week"), never which chats or what was in them. A
+  stricter setting for regulated firms keeps a work chat shared until the owner releases it. It is off
+  by default and switched on for FAIS and legal firms during onboarding.
+- The strict setting also turns on a Compliance role, for the person who supervises client
+  communication in a FAIS or legal firm. Compliance reads every work chat in the workspace, never a
+  personal one. Agents are told about it, in plain words, before they join, and every chat Compliance
+  opens shows in the agent's list of what is shared.
+- Share From: when an agent marks a chat as work, they choose how much is shared: the whole history (the
+  default), from today, or from a date. They see how far back it goes before confirming. Older messages
+  stay under the agent's own key and nobody else sees them. With the strict setting on, the choice
+  cannot be undone, and the dialog says so.
+- A whole account the team owns (a shared inbox, the business WhatsApp number) is shared in full.
+- The limit, said plainly: a client who has an agent's personal number can keep messaging them after
+  they leave. Konva keeps the history and reassigns the client; only a number the business owns fully
+  solves it, so Konva makes moving clients onto a shared business number easy, without forcing it.
+
+### How It Is Built
+
+**1. Workspaces and members.** Built 1 November 2026 (`20261101100000_workspaces.sql`, needs applying).
+`organizations` already means client companies, so the team is a `workspace`.
+
+- `workspaces` (the business name, which is account detail and not message content, the owner, seat
+  count and the strict-sharing setting), `workspace_members`
+  (role Owner, Admin, Compliance or Member; status Invited, Active or Removed; joined and left dates) and
+  `workspace_invites` (an emailed link, stored as a hash, expiring in 7 days). One workspace per person.
+- Approving a team request in `/admin` creates the workspace and invites its owner.
+- Settings, Team: members, invite, remove and roles. Pooled storage and the AI allowance read the
+  workspace's seat total.
+- Billing stays manual (seats set in Admin) until Paystack billing is built, a separate piece of work.
+- Built a little differently, and why:
+  - No email is sent (nothing here sends email yet), so an invite gives the owner or admin a link to send by
+    hand. It works once, only for the address it was made for, and the page it opens shows the plain-words
+    consent before Join Team.
+  - Members are not rows with status Invited: a pending invite is a row in `workspace_invites`, and the
+    status stays in the list for later.
+  - Only the owner makes, changes or removes an admin, nobody changes the owner, and anyone but the owner can
+    leave. A pending invite holds a seat.
+  - Approving a team request in `/admin` makes the workspace with the owner's invite, and shows the link once.
+    `workspaces.waitlist_id` stops approving twice from making two teams, and New Invite Link in Admin, Teams
+    makes another link for an owner who has not joined.
+  - Pooling: `ai_allowance_for` counts every active member's spend against seats times the per-seat budget, and
+    `my_team_storage` gives the team's bytes against seats times 20 GB for the meter in Settings, Usage. The
+    storage cap itself is still not built, so the team's total only feeds that meter for now.
+
+**2. The team key.** The same design as a user's data key, one level up. Built 1 November 2026; nothing
+writes `t1:` until step 3.
+
+- `team_keys` holds each workspace's 32-byte data key wrapped by the same wrappers as `user_keys`
+  (`local:v1` now, Cloud KMS at privacy stage 3), with `team_keys:<id>` as additional data so a wrapped
+  key cannot be moved to another workspace. The key is made on first use, insert-if-absent, so racing
+  processes keep the first. User wrapping is unchanged, bytes and additional data (`user_keys:<id>`).
+- Its field and blind-index keys are derived with the same HKDF-SHA256, under their own info strings,
+  `messages/team-field-encryption/v1` and `messages/team-blind-index/v1` (a user's are
+  `messages/field-encryption/v1` and `messages/blind-index/v1`), so a team key can never be mistaken for
+  a user key and a team's index of a value never equals a user's. A new prefix, `t1:`, marks a value
+  sealed with the team key, with the same layout and the same field-kind additional data as `e1:`;
+  `e1:` stays the user's key. `isCiphertext` is true for either prefix. Readers choose the key by the
+  prefix (`decryptAny`, `decrypt_any`), and the row's `workspace_id` says which team; a `t1:` value read
+  without team keys is an error, and shows as empty in the apps. Team blind indexes use the same address,
+  chat and domain normalisation as a user's. The TS and Python helpers and `vectors.json` have the `t1:`,
+  team index and team wrap cases.
+- The key service gives a member the team key only while they are Active (`team` in the `/api/keys`
+  reply, none otherwise). A removed member's browser drops its cached team data on the next load. The
+  sync worker and the AI worker get a workspace's keys from `team_keys` and cache them like user keys.
+- Until Confidential Space (stage 4) this has the same footing as user keys: whoever holds the wrapping
+  key and the database could read it. The privacy copy must say so.
+
+**3. Sharing a chat.** Built 1 November 2026 (`20261101120000_shared_chats.sql`, needs applying).
+
+- `threads` gains `workspace_id` (null for personal), `shared_at`, `shared_by` (rule, suggestion,
+  agent or account) and `share_from` (null for the whole history). Messages, message AI, attachments, transcripts and summaries of a shared thread
+  carry the same `workspace_id`.
+- Marking a chat as work queues a job: the sync worker re-encrypts the chat from its Share From date
+  (the whole history by default) from `e1:` to `t1:`, adds team blind indexes beside the agent's own, and copies its people into the
+  shared contacts. Moving it back runs the same job the other way. Drafts and the agent's own notes stay
+  under their key.
+- Row level security adds, beside "Own rows", a read policy for shared rows: the agent whose chat it is
+  and anyone it is assigned to. Owners and Admins get a list of the workspace's work chats (client,
+  agent, timings, no content) through a function, and can assign any of them, themselves included.
+  Compliance reads every work chat while the strict setting is on. Messages older than a chat's Share
+  From date keep no `workspace_id`, so the policy never reaches them.
+  Writing stays with the agent, except an assignee replying.
+- `workspace_activity` records content-free counts per member per week (chats shared, chats moved back).
+- Thread header and list: a Work or Personal badge, Mark as Work and Move to Personal, all under the
+  strict setting where it is on.
+- Built a little differently, and why:
+  - The chat is work at once (`threads.workspace_id`, so access starts and stops with the click) and its rows
+    follow: the worker seals a row and stamps its `workspace_id` in one write, so a row is never in a workspace
+    without being `t1:`. Moving back cuts every policy at once (`can_read_thread` checks the chat is still shared)
+    and ends its assignments, then the worker seals the rows with the agent's key again.
+  - New content in a shared chat is written `e1:` by every writer, as before, and triggers queue a follow-up job
+    for the chat (one waiting at a time): a message, a late transcript, triage's summary, a rewritten preview, a
+    new file. Writers did not change. Nothing is queued once the agent has left the team, so what they write after
+    that stays `e1:` with no `workspace_id`, and what was shared stays shared. Their chats cannot be moved back.
+  - Jobs are claimed with `claim_share_job`, one per chat at a time, a crashed worker's after 10 minutes, a failed
+    one up to five times. The worker writes through `share_write`, which only changes a row that still holds what it
+    read and only while the chat is in the state the job is for, and goes round until a pass finds nothing.
+  - Attachment files are not re-sealed: received files are stored as the provider sent them today, so there is no
+    team form of them yet (no team sealed-file helpers). Their rows get the `workspace_id`, and a storage policy lets
+    an assignee read them. Meetings and their transcripts do not hang off a chat and are left alone.
+  - The chat and participant IDs in `provider_meta`, and `provider_thread_id`, stay `e1:`: the worker needs them to
+    send. Readable addresses stay readable until `ENCRYPT_ADDRESSES` is on. A chat shared from today or a date keeps
+    its older preview and summary under the agent's key until a shared message replaces them; its subject is
+    sealed, because it names the chat.
+  - Strict sharing: only an owner or admin releases a chat, and counts it as moved back for the agent. A readable
+    `workspace_activity` is there for the owner (counts only), with no screen yet.
+  - Readers that do not select a row's `workspace_id` try the user's own workspaces for a `t1:` value (the sync worker
+    and the AI worker both do), so no reader needed changing. The app's lists ask for their own rows with
+    `user_id`, so an assignee's or Compliance's inbox never fills with colleagues' chats.
+  - Built in step 5 below: the assignee's own view of a chat, replying, the owner's list and counts on screen, and the chats
+    Compliance opens showing in the agent's list. An assignee writes nothing in the agent's rows, so there are no write
+    policies for them.
+
+**4. Automatic sharing and suggestions.** Built 1 November 2026 (`20261101130000_team_contacts.sql`, needs applying).
+
+- `workspace_contacts` is the shared client list, matched by team blind indexes, and shown to every
+  member on Contacts with the client's company and their agent. Contacts in any shared
+  chat join it.
+- On ingest the worker also works out each sender's team index. A match with a shared contact or a client
+  company's domain shares the chat, and the agent is told, with a way to move it back.
+- Suggestions use triage's existing `category` (work or personal), shown to the agent only.
+- On joining a team, a one-time review dialog lists the chats Konva suggests as work, for the agent to
+  accept or skip in one go. Classifying reads only what is already synced, so nothing opens a chat on the
+  phone or sends a read receipt.
+- Built a little differently, and why:
+  - One sweep does both jobs, in the sync worker, every 3 minutes (`apps/worker/src/share/rules.ts`), instead of
+    working out indexes on ingest: it touches no connector and one place decides. For each active member it reads
+    their personal chats active in the last 30 days that nothing has decided, works out the team index of each
+    person in them and matches the client list and the client companies; then it suggests chats triage marked
+    `work` from the last 90 days (`suggest_work_chats`). The AI worker is not involved. A workspace with no
+    clients yet is not read for the rule at all.
+  - Strict sharing on: a match only sets `share_suggestion = 'suggested'`, because accepting is irreversible
+    under strict and the agent must choose. Off: `apply_team_rule` shares the whole history at once
+    (`shared_by` rule) and the thread header says "Shared because Acme is a team client" with Move to Personal.
+    `threads.share_match` holds that name, sealed with the team key.
+  - A chat moved back to personal sets `share_opt_out`, so a rule never shares it again, and a suggestion
+    answered Not Work is `dismissed`, which the rule respects too. Groups are never shared by the rule, and can be
+    suggested by the category. A suggestion stays until the agent answers it (it is not withdrawn if triage later
+    changes its mind). A chat the agent accepts from a suggestion is recorded as `shared_by` suggestion.
+  - The client list is filled in the worker when a `to_work` share job finishes (`clients.ts`), best effort: a
+    failure is logged and the chat stays shared. It skips the agent's own addresses and every colleague's, the
+    team's own domains, personal mail domains (no company), placeholder names and role addresses (noreply@,
+    info@: they are left out of the client's addresses so they never match unrelated senders). A group of more than
+    10 people is not added, because its members are a community and not all clients. The first name a client
+    was added under stays; a client is the oldest one holding any of the addresses, so two agents' contacts for
+    one person become one client with both as agents. `workspace_contact_agents.left_team` follows the member's status.
+  - Every client company is a client company: anyone at that domain matches, so one shared chat with someone at
+    a firm shares the others at that firm. An owner or admin can remove a client or company from the list (step 6).
+  - Contacts shows a Team Clients row above People for members, opening `/contacts/team`: names, companies and who
+    looks after each client, no messages. The page has no link to a chat. Assigned chats are in the assignee's Inbox (step 5).
+  - The review dialog (`team-review.tsx`) opens for someone who joined in the last 14 days and has suggestions, after
+    setup and the tour, and is remembered in the sign-in's metadata (`teamReview`, the team it was answered for).
+    Chats start unticked: nothing is shared until the agent chooses, with Select All and one Share From for all.
+  - The notice is its own component under the thread header (`share-notice.tsx`), because the header's flex row is
+    where the Work badge lives; the badge still opens the same Mark as Work and Move to Personal dialogs.
+
+**5. Owner features at launch.** Built 3 November 2026 (`20261103100000_team_owner_features.sql`, needs applying).
+
+- Reassigning a client: `thread_assignments` gives another member a departed agent's work chats. The
+  chat cannot move to their number, so the client's timeline joins the old history with the new agent's
+  own conversations under the one contact.
+- Shared inboxes: accounts get `workspace_id`, connected by an Owner or Admin and shared in full.
+  Assignment, internal notes (team key) and "Thandi is replying" through Realtime presence.
+- Response tracking, Team, Activity: unanswered work chats and median first reply time per member, from
+  timestamps on work chats only.
+- Built a little differently, and why:
+  - An assignee never writes in the agent's chat. They answer from their own connected account, as a new email or
+    WhatsApp conversation through the usual outbox path, with `outbox.for_thread_id` naming the chat (only an
+    assignee may set it, never Compliance). The worker links the sent conversation as it always does, so the
+    assignee's page shows both in one timeline, and an answer sent this way counts as the chat being answered. When the
+    client writes back to the assignee, the step 4 rule shares that chat as the assignee's own work chat, so one
+    client has two agents. Email and one-to-one WhatsApp only; a group is not answered this way.
+  - Assigned chats are a group above the person's own conversations in the Inbox, "Assigned To You" with the agent's
+    name, not rows in their own list, so nothing of a colleague's reaches their own store. They open read-only at
+    `/inbox/shared/<id>` with notes and the reply box. Compliance is never assigned.
+  - Work Chats is Settings, Team, Work Chats, for an owner or admin and for Compliance under strict sharing: the step 3
+    `work_chats()` with filters (all, agent has left, awaiting reply, not assigned), who looks after each, Assign To and
+    Take Back From, and Reassign All for someone who has left. An owner or admin opens a chat only once it is
+    assigned to them. A chat counts as awaiting reply until the client's last message has an answer, including one an
+    assignee sent from their own account.
+  - The Compliance log gates reading: a Compliance member reads a work chat only for 4 hours after
+    `log_compliance_open` wrote their row, so skipping the screen cannot skip the log. Only the agent reads a chat's log,
+    and What You Share says "Opened by Compliance on <date>" (the last five days). Assignees, admins and the owner are
+    not logged.
+  - A shared inbox is made from an account an Owner or Admin has already connected (Settings, Team, Shared Inboxes), not
+    by a choice inside each connect flow, which stay as they are. The whole history is shared at once and new chats are
+    shared as they are created. Its chats cannot go back to personal, and whoever connected it cannot be removed or made
+    Compliance while it is shared. Email and WhatsApp accounts only.
+  - Who uses an inbox is an access list the owner or admin sets: those on it read every chat, assign one person at a
+    time, add notes and reply from the shared account (their name on the sender line, text only, no Cc or attachments
+    yet). An owner or admin not on the list reads nothing. Presence is a private Realtime channel per chat, joined only by
+    people who can open it. People who write to a shared inbox are not added to the team's client list.
+  - Notes are `thread_notes`, sealed `t1:` (the table insists), read by whoever can read the chat, never sent. Compliance
+    reads them and does not write them.
+  - Activity (Settings, Team, Activity): per person, unanswered work chats and the median time from a client's message to
+    the first answer, over 7 and 30 days, from message times alone, plus the weekly counts of chats shared and moved back.
+    A shared inbox chat counts for whoever it is assigned to, and for "Not Assigned" otherwise. Personal chats are not in
+    any query.
+  - Not built: taking a shared inbox back out of the team, files and Cc on a shared inbox reply, and a shared inbox for
+    Instagram, LinkedIn, Teams, Zoom and Google Chat.
+
+**6. Soon after.** Built 4 November 2026 (`20261104100000_team_after_launch.sql`, needs applying). Company voice, cover,
+the compliance export and the shared contacts page.
+
+- Company voice (Settings, Team, Company Voice): a profile (tone, sign-off, things to always say and never say), templates
+  (a name and a body) and company facts (a title and a body), all sealed `t1:` in the browser. Every active member reads
+  them, only an owner or admin writes them. The AI worker reads them with `company_voice_for_draft` for a draft in a work chat
+  or a shared inbox chat, under the agent's own style, and never for a personal chat. Templates are inserted from the reply
+  box. No new model call: the text is part of the draft's prompt, so it is billed and counted against the allowance as any
+  draft is.
+- Cover: an owner or admin sets a period for any member, and a member for themselves: who is away, who covers, the first and
+  last date. While it runs the covering member reads the absent member's work chats as if assigned and answers from their own
+  account (the step 5 path). It ends by itself on the last date, or early, or when either person leaves the team.
+- Compliance export: with strict sharing on, only Compliance exports one team client's work history (decided 27 October 2026,
+  so an export is never a way for an owner or admin to read a chat not assigned to them): every work
+  chat with them across agents and shared inboxes, email and WhatsApp, with dates, senders and text, and the team's notes. The
+  browser opens the `t1:` values and builds the file (a readable HTML document that prints or saves as a PDF, and a JSON copy).
+  Each export is a content-free log row.
+- Shared contacts page: an owner or admin renames a client, sets or clears their company, changes who looks after them, merges
+  two clients, and removes a client or a client company from the list. Members keep the read-only list.
+- Built a little differently, and why:
+  - The voice is one table (`workspace_voice_items`, kind profile, template or fact) and reuses the field names that already
+    exist (`style_rule` for the profile, `writing_situation` and `writing_body` for templates, `note_title` and `note` for facts),
+    so the crypto package needed no new field kind. The app and the AI worker open each part with the same name.
+  - What stops the voice reaching a personal chat is the database: `company_voice_for_draft` returns nothing unless the chat
+    has a workspace and the person is an active member who is its agent, assigned to it or covering for the agent. The AI worker
+    only asks when the person is in a team (no extra round trip for anyone else), and uses an answer with no workspace as none.
+    Edits, adjustments and new messages do not use it. The voice sits after the agent's own rules and facts and before their
+    examples, and the system text says the agent's style wins on wording and the company's rules and facts win on content.
+    It is capped (profile parts 600 characters, 12 always or never lines of 200, templates 600 each and 3,000 together, facts
+    500 each and 4,000 together), so it adds a bounded cost to every work-chat draft. The shared chat page has no draft button,
+    so for now only a chat's agent drafts there (the agent of a shared inbox chat is whoever connected the account).
+  - Cover is a dated table (`workspace_cover`) and not rows in `thread_assignments`: `can_read_thread` and `is_assignee` ask
+    `i_cover`, which compares the dates with the clock. A new chat of the absent member is covered at once, and the end needs no
+    job. A chat of a shared inbox is not covered this way, because the inbox's access list decides who reads those. Covered chats
+    are in "Assigned To You" marked "(covering)". The absent member sees who covered and when in What You Share, and not
+    what was read. "Allow cover to reply from my number" is stored (`workspace_members.allow_cover_reply`, off, set only by the
+    member) and used by nothing: sending as another person's account needs the worker's send path and its own checks, so cover
+    always answers from the covering member's own account and the app has no switch for it yet.
+  - The export reads through its own functions and not the step 3 policies, so it is held to its own log. `begin_client_export` writes the log row first and each read needs that row open (six
+    hours, one client, the chats it listed), so an export cannot skip the log. Compliance does not need a Compliance open row
+    for each chat. Nothing before a chat's Share From date and no personal chat is ever returned, and a message the worker has
+    not sealed yet is left out and the file says how many. Attachments are listed by name, not copied.
+  - Which chats are with which client is `workspace_contact_threads`, filled by the sync worker when a chat is shared (the same
+    team blind indexes that match the client list; no content, no policies). A shared inbox chat is linked to the clients the
+    list already has but never adds one. A chat shared before this migration is linked the next time something arrives in it.
+    A chat with someone who is not on the client list is not part of any export.
+  - Each agent is told which of their chats an export included, by day, in What You Share. The log itself is read by owners and
+    admins (Compliance reads its own). The invite's consent text says covering and exports.
+  - Removing a client or company records its indexes in `workspace_client_exclusions` and `upsert_workspace_contact` skips them,
+    so the worker does not add them back; no chat is unshared. A company typed by hand is a label on that client and makes no
+    rule: only a company already on the list can be joined. Change Agent changes the name on the list and moves no chat (Work
+    Chats does that). A merge keeps the first client's name.
+  - The team key rotation re-seals these too (`rotate-voice.ts`): the voice, the export log's client names and the team's notes
+    on a chat. The notes were missing from it, and a retired key version would have taken them with it.
+
+**POPIA.** The business is the responsible party for work chats. Joining a team shows the agent, in plain
+words, what is shared and what stays private, and they accept before anything is shared. Personal chats
+are never processed for the business. The Privacy Policy gains a Teams section.
+
+**Checks.** Crypto vectors for `t1:`; row level security tests that a Member can never read a colleague's
+personal or unassigned chat and an Owner never a personal one; a round trip of work to personal and back
+that leaves every field readable; two test users in one workspace. Nothing is sent while testing.
+
+### Build Order and Time
+
+Claude-built time, before the owner's review and testing:
+
+| Step | What | Time |
+| --- | --- | --- |
+| 1 | Workspaces, members, invites, Settings, Team | 1 to 2 days |
+| 2 | Team key, `t1:` in TS and Python, key service | 1 to 2 days |
+| 3 | Sharing a chat, re-encryption job, row level security, badges | 2 to 3 days |
+| 4 | Shared contacts, automatic sharing, suggestions, the review dialog | 2 days |
+| 5 | Reassigning, shared inboxes, response tracking | 3 to 4 days |
+| 6 | Company voice, cover, compliance export, shared contacts page | 3 to 5 days |
+
+About 2 to 3 weeks in all; steps 1 to 5 are the launch set. Steps 1 and 2 can be built side by side.
+Paystack billing is separate.
+
+Code check (4 November 2026): all six steps are written (`20261101100000_workspaces.sql` to `20261104100000_team_after_launch.sql`).
+None of the Teams migrations is applied to the live database yet, and nothing has run against real mail. Steps 3 to 6 need the
+sync worker running to seal shared chats and fill the client list. The team key is rotated when a member is removed (Security
+and Cost Review, item 6).
+
+### Decided (27 October 2026)
+
+1. A work chat is read only by its agent and whoever it is assigned to. Owners and Admins see that it
+   exists and assign it, and the client is on everyone's Contacts page.
+2. The strict setting is off by default and on for FAIS and legal firms.
+3. When a chat becomes work, its whole history is shared by default (see 6).
+4. The Team plan has a minimum of 5 seats.
+5. The strict setting adds a Compliance role that reads every work chat, never a personal one.
+6. Share From: the whole history by default, or from today or a date, chosen when a chat becomes work.
+7. Only Compliance exports a client's work history; owners and admins see only the export log.
+8. Only the owner gives or takes the Compliance role and changes strict sharing.
+
+### Review Fixes (27 October 2026)
+
+A review of the Teams permissions found these, fixed in `20261105100000_team_review_fixes.sql` (checked in a scratch
+database, with steps 5 and 6 rechecked on top of it):
+
+- Share From: a message older than its chat's Share From is never read through a team policy, even if it still holds
+  the team key from an earlier share, and a chat cannot be shared again while it is still moving back to personal.
+- Admins could make someone Compliance and so read every work chat. Now only the owner can, as decided above.
+- A match on a client company's domain only suggests a chat. Only a client's own address or number shares one by
+  itself, because anyone at a client company (a bank, a medical aid) may be a personal contact.
+- A departed agent's chats are shown to the team as they stood when the agent left: colleagues no longer read the raw
+  chat row (or get it over Realtime), and the lists use the last shared message for the time and whether the client is
+  waiting, never what the agent's own account keeps writing to it.
+- Turning an account into a shared inbox also takes its chats already shared as work chats.
+- The team read policies look up the reader's workspace once per query and skip the reader's own rows before the
+  per-row checks.
+
+Noted, not changed: every active member's browser holds the team key, which opens every `t1:` value in the workspace.
+So "only the agent and whoever it is assigned to read a work chat" rests on row level security, not on encryption: a
+future policy or function mistake that returns a colleague's rows would expose them in plain text. The privacy copy
+must say team chats are protected by access rules within the team. If that is not enough later, a key per chat,
+wrapped for each person allowed to read it, would make the key itself follow assignments.
+
 ## Privacy and Encryption
 
 The aim: nobody running Messages, including us, can read what users send and receive. The only data
 we look at is usage: which features are used, how often and how long tasks take.
 
+### Code Check (27 October 2026)
+
+This section was checked line by line against the code. The aim above is **not met yet**. Where the
+rest of this section says "done", read it with these corrections. Fixes were written the same day: see
+Build Status in the Security and Cost Review section below. Nothing is live until the migrations are applied and the scripts run.
+
+- **Encryption is off unless switched on.** Every flag reads `=== "true"`, and the `.env.example` files
+  ship `ENCRYPT_CONTENT=false`. The worker example has no `ENCRYPT_ADDRESSES` line, the web example has no
+  `NEXT_PUBLIC_ENCRYPT_ADDRESSES` line, and the AI example leaves `ENCRYPT_ADDRESSES` empty (off). It is on only
+  in the owner's local env files. A deploy built from the examples would store plaintext. Fix: make the
+  flags default on, and refuse to start in production with them off.
+- **Still stored as readable text:** `writing_examples` (situation, body), `style_rules` (rule,
+  relationship), the contact fields company, role, relationship, style note and AI summary,
+  `attachments.filename`, `calendar_events.title` and `location`, `address_book_cards.name`,
+  `meeting_participants` names and addresses, `push_subscriptions`, and the `error` columns on
+  `email_originals` and `briefs`.
+- **Search vectors are plaintext.** `message_embeddings.embedding` is a plain `vector(768)`, because
+  `similar_replies` compares vectors inside SQL. A vector leaks the meaning of the message. It is
+  service role only, but anyone who can read the database can read it. Options: search in the
+  Confidential Space worker instead of SQL, or stop using vectors and rely on the encrypted browser cache.
+- **Files are not encrypted.** Email attachments are uploaded as raw bytes (`attachment-files.ts` calls
+  `uploadObject` on `file.content`). Instagram media and Zoom recordings are also raw. Only brief audio,
+  note files and draft voice instructions are sealed. Storage RLS keeps users apart, but the operator can read them.
+- **Connector sign-ins use one static key.** WhatsApp, iCloud, IMAP, Instagram and LinkedIn credentials are
+  sealed with `ENCRYPTION_KEY` directly: no per-user key, no extra context binding, and the same value in the web
+  app, sync worker and AI worker. One leaked variable opens every user's connected accounts. This is
+  weaker than the message encryption and the plan did not say so.
+- **KMS does not exist in code.** `packages/crypto/src/wrap.ts` defines only `local:v1`. There is no
+  `kms:v1`, no Google Cloud SDK and no Confidential Space image. Stages 3 and 4 are not started.
+- **Team keys are not rotated.** A removed member stops getting the key from `/api/keys`, but the key
+  itself is never replaced, and the "re-encryption job" in Teams step 3 does not exist. Anyone who kept a copy can
+  still open shared `t1:` data.
+- **Stored HTML.** `messages.body_html` was never dropped. A one-off script
+  (`drop-stored-html.ts --apply`) empties it, and existing rows keep their HTML until it is run.
+
 ### Where It Stands
 
 - Message text, subjects, previews, summaries, drafts, quotes and the outbox are encrypted field by
-  field with AES-256-GCM, under a data key per user (stage 1, done).
+  field with AES-256-GCM, under a data key per user (stage 1, partly done: see the Code Check above
+  for what is missing and for the flags that default to off).
 - Each data key is stored wrapped in `user_keys`. For now the wrapping key is `KEY_WRAPPING_KEY` in
   the workers' and web app's environment (`local:v1`), so whoever holds that key and the database can
   still read everything. Cloud KMS and Confidential Space close that gap.
-- Email HTML is no longer stored. View Original fetches it from Gmail or iCloud when opened.
+- New email HTML is kept encrypted for about an hour and then deleted, and View Original fetches it from Gmail or iCloud when opened. Older rows keep `messages.body_html` until `drop-stored-html.ts --apply` is run.
 - Accounts connected in the app send their sign-in through the web app's server once, where it is encrypted
   with `ENCRYPTION_KEY` before it is stored (see Onboarding), the same footing as the key service.
 - Email addresses, phone numbers, WhatsApp chat IDs, company domains, reaction keys and outbox
-  recipients are encrypted, and the database matches on their blind indexes (stage 2, done).
-  `ENCRYPT_ADDRESSES` is on in the sync worker and `NEXT_PUBLIC_ENCRYPT_ADDRESSES` in the web app.
+  recipients are encrypted when the flags are on, and the database matches on their blind indexes (stage 2, code written;
+  readable columns not dropped). `ENCRYPT_ADDRESSES` and `NEXT_PUBLIC_ENCRYPT_ADDRESSES` are on only in the owner's local env, and
+  default to off everywhere else.
 - Still readable, for a later stage: contact and company names (some are a number or an address,
   because that was all that was known), the author names on WhatsApp quotes, calendar attendees,
   email Message-IDs and References, and your own number while WhatsApp is linking.
 
 ### Stages
 
-1. Message text encrypted (done).
-2. Blind indexes (done, apart from names): email addresses, phone numbers and WhatsApp IDs stored encrypted, with a keyed
+1. Message text encrypted (code written, off by default, files and some fields not covered: see Code Check).
+2. Blind indexes (code written, readable columns not dropped, names and other fields not covered): email addresses, phone numbers and WhatsApp IDs stored encrypted, with a keyed
    HMAC beside each one so the database can still match a sender to a contact without reading it.
    Names, contact notes and domains are encrypted the same way. See Stage 2 in Detail below.
-3. Cloud KMS: data keys wrapped by a key in Google Cloud KMS instead of `KEY_WRAPPING_KEY`.
+3. Cloud KMS: data keys wrapped by a key in Google Cloud KMS instead of `KEY_WRAPPING_KEY` (code written 27 October 2026, `kms:v1`; the Google Cloud key and the rewrap script run are still to do).
 4. Confidential Space: the sync worker, the AI worker and the key service run in Google Confidential
    Space, and KMS only unwraps keys for those attested images.
 5. Encrypted browser cache and client-side search (can run alongside stage 4).
@@ -739,6 +1551,11 @@ What gets an index and is encrypted:
 - Encrypted with no index, because nothing matches on them: contact and company names,
   `calendar_events.attendees`, `calendar_outbox.attendees`, outbox recipients, and the emails and
   numbers on address book cards.
+
+Code check (27 October 2026): no readable column was dropped. The index columns were added beside the
+readable ones, and the backfill script re-encrypts values in place and only runs when someone runs it with the
+flag on. The ingest functions still accept calls without indexes and match on readable values, so a plaintext path remains.
+The index columns are nullable. The cryptography itself (HMAC-SHA256, a separate per-user index key) is correct.
 
 What moves out of SQL: the database can no longer lowercase, split or pattern-match these values, so
 the work that did is done by the sync worker (or the browser, which holds the same keys) before it
@@ -1068,11 +1885,144 @@ workers today.
 | iMessage | Needs a Mac running as a relay, such as BlueBubbles | No |
 | Slack | Slack API. Low demand in South Africa | Yes |
 | Compliance export | Per-client archive of WhatsApp and email for FAIS, legal and POPIA records | n/a |
-| Agency accounts | Shared team view, client history stays with the agency | n/a |
+| Agency accounts | Moved into the plan: see Teams | n/a |
 | AI assistants (MCP) | Remote MCP server for Claude, ChatGPT, Gemini and others, after privacy stage 4. See AI Assistant Connections | Yes (open standard) |
 | Admin systems | Property CRMs (Propdata, Entegral), legal practice tools (LEGALSUITE, GhostPractice, AJS), Astute for advisers. Build when paying customers ask | Varies |
 
 The long-term goal: every messaging app a professional uses, in one place.
+
+## Security and Cost Review (27 October 2026)
+
+Proposed, not yet approved. Each finding was read in the code. Fixes are listed in the order to do them.
+Time is Claude-built, before review and testing.
+
+### What Is Solid
+
+- Row level security is on for every table (an automatic trigger) and the access policies are scoped to the signed-in user.
+  Tables that hold keys and credentials (`user_keys`, `team_keys`, `account_credentials`, `message_embeddings`) have
+  no policies at all, so the app role cannot read them.
+- Every function meant for the workers is revoked from signed-in users. Functions callable by users check roles inside.
+- Storage buckets are private and scoped by user folder.
+- Every API route checks the Supabase token, the origin and a rate limit. OAuth uses encrypted cookies and PKCE, and the
+  return address is an allowlist.
+- Email HTML is shown in a sandboxed frame with no scripts. There is no `dangerouslySetInnerHTML` in the web app.
+- No secrets in git or its history. No path lets an incoming email send, forward or delete anything: the AI only writes
+  drafts, labels and summaries.
+
+### Build Status (27 October 2026)
+
+Code written, tested and not yet applied. Tests at the end: crypto 32, worker 619, AI worker 487 all pass, and the web and worker
+typechecks are clean. No migration has been applied, no backfill has been run, no Google Cloud resource exists, and nothing
+was run against real mail or the live database.
+
+Built:
+- SQL (`20261102100000` to `20261102100500`): no insert or delete on `accounts` for signed-in users, setup allowance once per
+  person per address (`ai_setup_grants`), ownership checks and narrowed write grants, bucket size and type limits, push endpoint check,
+  owner needs a confirmed email.
+- Network and web: the shared public-address check now covers hex-mapped, NAT64, 6to4 and Teredo addresses and is used by
+  unsubscribe, the LinkedIn proxy and site icons (unsubscribe pins the resolved IP). Enforced nonce CSP (`middleware.ts`,
+  `lib/csp.ts`). Rate limits count in Postgres (`rate_limit_hit`) and fail closed on keys and connect routes.
+- Encryption: flags default on and production refuses to start with them off. Sealed on write and opened on read: attachment
+  filenames, calendar titles and locations, card names, writing examples, style rules, contact fields, Instagram files, Zoom
+  recordings, attachment bytes (`keepFile`). Backfill scripts exist.
+- Keys: `kms:v1` (TS and Python), `v2:` per-user connector credentials, team key versions with a re-encrypt job on member removal,
+  rewrap and reseal scripts.
+- Embeddings: sealed (`embedding_data`), nearest-reply search in the AI worker, plaintext column dropped by a second migration.
+- Storage: hash dedupe, videos over 25 MB kept as a link, 20 GB per seat cap with 10% grace, Not Kept Here badge, 80% and 100% notices in Settings.
+- Shared team chats: attachment names and file copies re-sealed under the team key and rotated with it.
+- AI cost: allowance checks fail closed and reserve in-flight spend, meetings send each recording once through a cache and are held
+  against the share first, hedged drafts off, learning, brief and chasers on the fast model, daily logo cap and tries, voice notes capped
+  by length, idle backoff in the AI worker, signals and chasers read only changed rows.
+- Sync: account heartbeat at most every 15 minutes, adaptive Gmail and queue polling, bounded missing-file retries, `ai_usage` rollup.
+
+Not built, or only partly:
+- Confidential Space (stage 4): deliberately left until the first paying client.
+- Gemini Batch API: the client is in `gemini.py` and tested but not wired into triage or learning (needs a job table).
+- Cheaper transcription model: setting exists, default unchanged, because nothing shows the speaker-turn format survives.
+- Presence ping from the web app, so Gmail polling stays at 5 seconds while someone reads. Today only mail and queued work count as activity.
+- The 80% storage email, the 3-address-farming cap (many different addresses still each earn a setup allowance), and a team copy is not counted in the storage meter.
+- Deleting an attachment, thread or account does not remove the team copy of a shared file (orphans possible).
+- Zoom recording backfill, merging old duplicate files, `create_contact` and address book company values (still plain), short-lived calendar queue rows.
+- Names of contacts and companies are still the earlier stage 2 encryption only.
+- Dashboard work: Confirm Email on, no OAuth provider with unverified email, check the owner row in `analytics_config`.
+- The audio price in `pricing.py` (`AUDIO_INPUT_USD_PER_M`, 3.00) is a guess. At a $5 month a one-hour meeting is held at about $0.43 against a $0.75 transcribe share, so check it.
+- Not tested in a browser: `/summary` and `/inbox` with the new CSP (only `/login` was loaded), team file opening, sealed file previews.
+- Draft and triage quality on the cheaper models and the local similarity search needs your real mail before the plaintext vector column is dropped.
+
+Order to apply:
+1. Google Cloud: project `messages-keys`, key ring `messages` in `africa-south1`, key `user-data-keys`, a service account with
+   the encrypter and decrypter role. Set `KMS_KEY_NAME` in web, worker and AI, and `GOOGLE_APPLICATION_CREDENTIALS_JSON` where there is no metadata server.
+2. Apply the migrations in order from `20261102100000` to `20261103000000`, except `20261102800100` (it drops the plaintext vectors).
+3. Deploy the web app, sync worker and AI worker.
+4. Dry run then `--apply`, in this order: `pnpm rewrap-keys`, `pnpm credentials:reseal`, `encrypt-fields`, `encrypt-attachments`, `python3 -m ai.seal_embeddings`.
+5. Check drafts on your real mail, then apply `20261102800100`.
+6. Delete `KEY_WRAPPING_KEY` once the rewrap reports nothing left. Keep `ENCRYPTION_KEY` for short-lived handoffs.
+7. Give Konva its own Gemini key.
+
+### Security Fixes, In Order
+
+1. **Make encryption on by default and complete** (1 to 2 days). Flags default on and the services refuse to start in
+   production with them off. Encrypt the fields listed in the Code Check: writing examples, style rules, contact notes,
+   attachment names, calendar titles and locations, meeting participants. Encrypt attachment, Instagram and Zoom files
+   before upload, as notes and brief audio already are.
+2. **Close the AI budget hole** (hours). Remove INSERT and DELETE on `accounts` for signed-in users and give the setup
+   allowance once per person per address. Also check the same for `profiles`, `threads`, `messages` and `attachments`, whose policy
+   checks only the person's ID and not that the account or thread they point at is theirs.
+3. **Fix the unsubscribe address check** (hours). `isPrivateAddress` in `send/unsubscribe.ts` misses addresses like
+   `::ffff:7f00:1`, and it looks the host up and then fetches it, so DNS can change in between. A sender could make the worker
+   POST to its own network or the cloud metadata address. Use the safe check already in `photos/site-icon.ts` and pin the address.
+4. **Same check for the LinkedIn proxy** (hours). The host is checked by name only, so `127.0.0.1.nip.io` passes.
+5. **Enforce the content security policy** (1 day). It is report-only and allows inline scripts. The session is in local
+   storage and `/api/keys` hands the data key to anyone holding the token, so one script injection would give up the account. Use nonces and enforce it.
+6. **Wrapping key into Cloud KMS (stage 3)** (2 to 3 days). Nothing exists in code today. Also wrap the connector
+   sign-in key in KMS, and move connector credentials to a key per user. Rotate the team key and re-encrypt when a member leaves.
+7. **Embeddings** (decision needed). Plaintext vectors defeat the aim. Either run the similarity search inside the
+   protected worker, or drop vectors and search the encrypted browser cache.
+8. **Confidential Space (stage 4)**. Build at the first paying client (running cost in that section).
+9. **Real rate limiting** (half a day). The limiter is in memory per server instance, which on Vercel means it barely limits.
+   Use a small table in Supabase or a hosted counter. The mail server connect limit matters most.
+10. **Smaller items**: file size and type limits on storage buckets; push subscription addresses are unvalidated
+    (add a check before any sender is built); the owner is identified by a fixed email address in
+    the database, which is safe only while Supabase Confirm Email is on and no sign-in provider lets someone claim that address
+    unverified (check in the dashboard); links in the email frame may open without the sandbox; check the Python and npm
+    dependencies against a vulnerability database; give Konva its own Gemini key (it shares Mendr's); turn on database backups with point in time recovery and two-factor sign-in on Google, Vercel and Supabase.
+
+### Cost Drivers, From The Code
+
+Estimates per normal user a month at current prices (before the January price rise):
+
+| Driver | Estimate | What to change |
+| --- | --- | --- |
+| Meeting transcripts (full model) | $1.50 to $4 per 10 hours | Each window re-sends the whole recording, so 5 hours bills the audio 5 times. Send once, or cache the file, use the cheaper model, and cap minutes before the call |
+| Drafts (full model, hedge, auto) | $1.20 to $3.60 | Cheaper model for automatic and pre-drafts, set a maximum output, drop the hedged second request (about 10% of drafts bill twice), limit compose drafts |
+| Triage (cheaper model) | $0.90 to $2.50 | Already efficient. Skip more bulk senders by header, no model needed |
+| Learning: voice, edits, signals, notes | $0.50 to $2 | Move voice, edit and signal learning to the cheaper model, set a maximum output |
+| Spoken brief | $0.50 to $1.20 | Keep Listen-only, cheaper speech model, cap parts |
+| Brief script, chasers | $0.20 to $0.40 | Cheaper model |
+| Voice notes | under $0.20 | Cap by minutes, not bytes |
+| Company logos and search | one-off $50 to $100 | Daily cap, maximum tries |
+| Embeddings | under $0.01 | Nothing |
+
+Other levers:
+- Nothing uses context caching or the Batch API. Prompts are under the roughly 1,000 token minimum, so the automatic discount
+  barely applies. The Batch API (about half price) fits the first import, nightly learning and company summaries,
+  none of which anyone waits for. That roughly halves the $1.20 first import.
+- Prices double for Gemini 3.8 Flash and the speech models on 1 January 2027. Move triage-like work to the cheaper model and test quality on real mail first.
+- Gmail is polled every 5 seconds per account (`history.list`, cheap) and each account's row is updated every 60 seconds, which is a
+  database write and a realtime event per account per minute. Use Gmail push, and update the row only when something changed.
+- The AI worker makes about 90 requests a minute when idle, whatever the number of users. Poll less often when idle.
+- Hourly jobs read 1,000 drafts with bodies across all users; narrow them to changed rows.
+- The free Supabase plan breaks at about 10 heavy mailboxes (500 MB database), and 20 GB per seat needs Pro.
+- Fix first for cost: the setup allowance hole, the fail-open and stale allowance checks, the per-window meeting resend, then the cheaper model moves.
+
+### Order Of Work
+
+1. Items 2, 3 and 4 above (a day together).
+2. Encryption on by default and the missing fields (item 1), and the allowance checks (fail closed, include in-flight spend).
+3. Meeting resend, hedge and cheaper model moves (about 2 days), measured on the owner's real mail.
+4. KMS and team key rotation (item 6), the CSP (item 5), the embeddings decision (item 7).
+5. Batch API for imports, Gmail push, real rate limiting.
+6. Confidential Space at the first paying client.
 
 ## Approvals and Risks
 
@@ -1083,15 +2033,23 @@ These take calendar time no matter how fast the code is written, so start them e
   held to 100 users.
 - Microsoft publisher verification. Many firms also need their IT admin to approve the app, and
   Teams chat access makes that more likely.
-- Zoom Marketplace review before other Zoom accounts can connect.
-- Instagram through instagrapi breaks Meta's terms like Baileys does, and Instagram is stricter:
-  sign-ins from servers get security checks, and accounts can be locked or banned. Tell customers plainly.
+- Zoom Marketplace review before other Zoom accounts can connect (Zoom is hidden until then).
+- Meta Business Verification and App Review (Advanced Access for instagram_business_basic and
+  instagram_business_manage_messages) before other Instagram Business accounts can connect. Needs
+  the registered business documents, a privacy policy and a screencast per permission. About 2 to 6
+  weeks, so start it now.
+- Instagram personal accounts through instagrapi break Meta's terms like Baileys does, and Instagram
+  is stricter: sign-ins from servers get security checks, and accounts can be locked or banned. Tell
+  customers plainly.
 - Google Chat and Meet transcripts need Google Workspace, and the Chat API needs a Chat app set up in
   the Google Cloud project.
 - WhatsApp through Baileys breaks Meta's terms and numbers can be banned, business numbers included.
   The user accepts this risk. Tell customers plainly.
-- LinkedIn through linkedin-api carries the same kind of risk. LinkedIn restricts accounts quickly
+- LinkedIn through mautrix-linkedin carries the same kind of risk, and its password sign-in is new
+  (October 2026), so it may break when LinkedIn changes its sign-in pages. LinkedIn restricts accounts quickly
   when a session is used from somewhere new or acts like a bot, sometimes until ID is verified.
+- iCloud Reminders through iCloud.com's private endpoints is unofficial: Apple can change them at any
+  time, and repeated sign-ins can trigger an Apple account lock.
 
 ## Timeline
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioLines, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { clock } from "@/components/media-player";
 import type { OutboxFiles } from "@/components/outbox-attachments";
 
@@ -127,17 +128,21 @@ export function SpeakButton({ voice, disabled }: { voice: VoiceRecorder; disable
 export function RecordButton({ files, voice }: { files: OutboxFiles; voice: VoiceRecorder }) {
   if (files.provider !== "whatsapp") return null;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      aria-label="Record Voice Note"
-      title="Record Voice Note"
-      disabled={files.disabled || files.uploading || voice.recording}
-      onClick={voice.start}
-    >
-      <Mic />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Record Voice Note"
+          disabled={files.disabled || files.uploading || voice.recording}
+          onClick={voice.start}
+        >
+          <Mic />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-64 text-balance">Record a voice note to send as your reply.</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -157,7 +162,7 @@ export function RecordingActions({ voice, done = "Stop" }: { voice: VoiceRecorde
   return (
     <div className="flex items-center gap-2">
       {/* type="button": inside a dialog's form, a plain button would submit it, and send the message. */}
-      <Button type="button" variant="outline" onClick={voice.cancel} disabled={voice.state !== "recording"}>Cancel</Button>
+      <Button type="button" variant="ghost" onClick={voice.cancel} disabled={voice.state !== "recording"}>Cancel</Button>
       <Button type="button" onClick={voice.stop} disabled={voice.state !== "recording"}>{done}</Button>
     </div>
   );

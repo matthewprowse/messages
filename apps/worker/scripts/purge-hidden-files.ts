@@ -62,7 +62,15 @@ if (!dryRun) {
     );
     cleared += still.length;
     if (still.length === 0) continue;
-    const { data, error } = await db.storage.from(ATTACHMENTS_BUCKET).remove(still.map((r) => pathOf.get(r.id)!));
+    // One stored file can serve several rows (the same file forwarded twice is kept once): an object that a row
+    // outside this purge still points at is left in place.
+    const candidates = [...new Set(still.map((r) => pathOf.get(r.id)!))];
+    const inUse = new Set(
+      must(await db.from("attachments").select("storage_path").in("storage_path", candidates), "check shared files").map((r) => r.storage_path),
+    );
+    const removable = candidates.filter((p) => !inUse.has(p));
+    if (removable.length === 0) continue;
+    const { data, error } = await db.storage.from(ATTACHMENTS_BUCKET).remove(removable);
     if (error) {
       console.error("storage remove failed", (error as { statusCode?: string }).statusCode ?? "STORAGE");
       process.exit(1);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Maximize, Minimize, Pause, Play, Volume2, VolumeX } from "lucide-react";
-import { useSignedUrl } from "@/lib/signed-urls";
+import { mimeFor, useSignedUrl } from "@/lib/signed-urls";
 import type { Attachment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,9 @@ export function useMedia(ref: RefObject<HTMLMediaElement | null>) {
   return { playing, time, duration, muted, failed, toggle, seek, mute };
 }
 
+/** The height every picture and video is shown in, so the dialog is the same size before and after the file arrives. */
+export const STAGE_HEIGHT = "h-[min(65dvh,calc(100dvh-14rem))]";
+
 const RATES = [1, 1.5, 2];
 
 /**
@@ -69,7 +72,7 @@ const RATES = [1, 1.5, 2];
  * and a speed button (1x, 1.5x, 2x), drawn to match the bubble it sits in.
  */
 export function VoiceNote({ attachment: a, me, transcript }: { attachment: Attachment; me: boolean; transcript?: string }) {
-  const url = useSignedUrl("attachments", a.path);
+  const url = useSignedUrl("attachments", a.path, false, a.sealed ? mimeFor(a) : undefined);
   const ref = useRef<HTMLAudioElement>(null);
   const { playing, time, duration, failed, toggle, seek } = useMedia(ref);
   const [rate, setRate] = useState(1);
@@ -123,40 +126,27 @@ export function VideoPlayer({ src, name }: { src: string; name: string }) {
   const frame = useRef<HTMLDivElement>(null);
   const { playing, time, duration, muted, failed, toggle, seek, mute } = useMedia(ref);
   const [full, setFull] = useState(false);
-  // Touch has no hover, so a tap on the picture shows the controls and they hide again after 3 seconds.
-  const [shown, setShown] = useState(false);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const touched = useRef(false);
-  const reveal = useCallback(() => {
-    setShown(true);
-    clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => setShown(false), 3000);
-  }, []);
-  useEffect(() => () => clearTimeout(hideTimer.current), []);
-  // Playing again or pausing hands the controls back to the normal rules.
-  useEffect(() => {
-    if (!playing) {
-      clearTimeout(hideTimer.current);
-      setShown(false);
-    }
-  }, [playing]);
-
   useEffect(() => {
     const onChange = () => setFull(document.fullscreenElement === frame.current);
     document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      // Closing the dialog or stepping to another file while full screen must not leave the page in it.
+      if (document.fullscreenElement === frame.current) void document.exitFullscreen();
+    };
   }, []);
   const fullscreen = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void frame.current?.requestFullscreen?.();
+    if (document.fullscreenElement) { void document.exitFullscreen(); return; }
+    const box = frame.current;
+    if (box?.requestFullscreen) void box.requestFullscreen().catch(() => undefined);
+    else (ref.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null)?.webkitEnterFullscreen?.(); // iPhone Safari: only the video itself, with its own controls
   };
 
   return (
     <div
       ref={frame}
       data-own-arrows
-      onPointerDown={(e) => { touched.current = e.pointerType === "touch"; }}
-      className={cn("group/video relative flex w-full flex-col overflow-hidden rounded-lg bg-black", full && "justify-center rounded-none")}
+      className={cn("flex w-full flex-col gap-3", full && "h-full w-full gap-0 bg-black text-white")}
       onKeyDown={(e) => {
         if (e.key === " " || e.key === "k") { e.preventDefault(); toggle(); }
         else if (e.key === "ArrowRight") seek(Math.min(duration, time + 5));
@@ -165,39 +155,30 @@ export function VideoPlayer({ src, name }: { src: string; name: string }) {
         else if (e.key === "f") fullscreen();
       }}
     >
-      <video
-        ref={ref}
-        src={src}
-        playsInline
-        preload="metadata"
-        onClick={() => {
-          // First tap on a touch screen only shows the controls; the next one plays or pauses.
-          if (touched.current && playing && !shown) reveal();
-          else {
-            if (touched.current && playing) reveal();
-            toggle();
-          }
-        }}
-        aria-label={name}
-        className={cn("w-full cursor-pointer", full ? "max-h-full" : "max-h-[min(70vh,calc(100dvh-15rem))]")}
-      />
-      {failed && <p className="absolute inset-0 flex items-center justify-center text-sm text-white/80">This Video Can't Play Here. Download It to Watch.</p>}
-      {!playing && !failed && (
-        <button type="button" onClick={toggle} aria-label="Play Video" className="absolute inset-0 m-auto flex size-14 items-center justify-center rounded-full bg-black/60 text-white outline-none focus-visible:ring-2 focus-visible:ring-white/70">
-          <Play className="size-6 translate-x-0.5" fill="currentColor" />
-        </button>
-      )}
-      <div
-        onPointerDown={() => { if (playing) reveal(); }}
-        className={cn(
-          "absolute inset-x-0 bottom-0 flex items-center gap-2 bg-gradient-to-t from-black/70 to-transparent px-3 pt-6 pb-2 text-white transition-opacity",
-          playing && !shown && "pointer-events-none opacity-0 group-hover/video:pointer-events-auto group-hover/video:opacity-100 group-focus-within/video:pointer-events-auto group-focus-within/video:opacity-100",
+      {/* The video fills a fixed frame with no bars of its own, so the dialog does not change size once it loads. */}
+      <div className={cn("relative flex items-center justify-center overflow-hidden rounded-lg", full ? "min-h-0 flex-1 rounded-none" : STAGE_HEIGHT)}>
+        <video
+          ref={ref}
+          src={src}
+          playsInline
+          preload="auto"
+          onClick={toggle}
+          aria-label={name}
+          className="size-full cursor-pointer bg-transparent object-contain"
+        />
+        {failed && <p className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">This Video Can't Play Here. Download It to Watch.</p>}
+        {!playing && !failed && (
+          <button type="button" onClick={toggle} aria-label="Play Video" className="absolute inset-0 m-auto flex size-14 items-center justify-center rounded-full bg-black/60 text-white outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+            <Play className="size-6 translate-x-0.5" fill="currentColor" />
+          </button>
         )}
-      >
-        <Button variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/15 hover:text-white max-sm:size-10" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
+      </div>
+      {/* The controls sit under the picture, never over it. */}
+      <div className={cn("flex shrink-0 items-center gap-2", full && "px-3 py-2 text-white [&_button]:text-white [&_button:hover]:bg-white/15 [&_[data-slot=slider-track]]:bg-white/30")}>
+        <Button variant="ghost" size="icon" className="shrink-0 max-sm:size-10" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
           {playing ? <Pause /> : <Play />}
         </Button>
-        <span className="shrink-0 text-xs tabular-nums">{clock(time)} / {clock(duration)}</span>
+        <span className={cn("shrink-0 text-xs tabular-nums text-muted-foreground", full && "text-white/70")}>{clock(time)} / {clock(duration)}</span>
         <Slider
           value={[Math.min(time, duration || 0)]}
           max={duration || 1}
@@ -205,12 +186,12 @@ export function VideoPlayer({ src, name }: { src: string; name: string }) {
           disabled={!duration}
           onValueChange={([v]) => seek(v)}
           aria-label="Position"
-          className="flex-1 [&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-track]]:bg-white/30"
+          className="flex-1"
         />
-        <Button variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/15 hover:text-white max-sm:size-10" onClick={mute} aria-label={muted ? "Unmute" : "Mute"}>
+        <Button variant="ghost" size="icon" className="shrink-0 max-sm:size-10" onClick={mute} aria-label={muted ? "Unmute" : "Mute"}>
           {muted ? <VolumeX /> : <Volume2 />}
         </Button>
-        <Button variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/15 hover:text-white max-sm:size-10" onClick={fullscreen} aria-label={full ? "Exit Full Screen" : "Full Screen"}>
+        <Button variant="ghost" size="icon" className="shrink-0 max-sm:size-10" onClick={fullscreen} aria-label={full ? "Exit Full Screen" : "Full Screen"}>
           {full ? <Minimize /> : <Maximize />}
         </Button>
       </div>

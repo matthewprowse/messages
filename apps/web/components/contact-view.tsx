@@ -18,7 +18,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ContactMenu, MergedAutomatically } from "@/components/contact-merge-actions";
 import { ConversationRows, DetailList, DetailPage, Section } from "@/components/contact-list";
 import { withQuery } from "@/lib/utils";
-import { formatPhone } from "@/lib/format";
+import { formatPhone, niceName } from "@/lib/format";
 import { EditContactDialog } from "@/components/contact-edit-dialog";
 import { MeetingList } from "@/components/meeting-card";
 import { useMeetings } from "@/components/meetings-data";
@@ -106,11 +106,11 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
       header={
         <>
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            <ContactAvatar contact={contact} className="size-10" />
-            <h1 className="truncate text-base font-medium">{contact.name}</h1>
+            <ContactAvatar contact={contact} className="size-8" />
+            <h1 className="truncate text-sm font-medium">{niceName(contact.name)}</h1>
           </div>
           {/* On phones Edit moves into the More menu to leave room for the name. */}
-          <Button variant="outline" className="max-sm:hidden" onClick={() => setEditing(true)}>Edit</Button>
+          <Button variant="secondary" className="max-sm:hidden" onClick={() => setEditing(true)}>Edit</Button>
           <MessageButton contact={contact} />
           <ContactMenu contact={contact} backHref={backHref} onEdit={() => setEditing(true)} />
           <EditContactDialog contact={contact} open={editing} onOpenChange={setEditing} />
@@ -136,7 +136,7 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
         {contact.conversations.length === 0 ? (
           <p className="text-sm text-muted-foreground">No conversations yet.</p>
         ) : (
-          <ConversationRows items={contact.conversations} />
+          <ConversationRows items={contact.conversations} avatar={<ContactAvatar contact={contact} className="size-8" />} />
         )}
       </Section>
 

@@ -4,38 +4,54 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { wordOf } from "@messages/analytics";
 import { track } from "@/lib/analytics";
-import { Paperclip, type LucideIcon } from "lucide-react";
+import { Building2, Paperclip, User, Users, type LucideIcon } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
 import { useAvatarUrl } from "@/lib/avatars";
+import { useSignedUrl } from "@/lib/signed-urls";
 import type { Category, Contact, Priority, Provider, Thread } from "@/lib/types";
 
-// Every avatar in the app is a plain 32px circle with no initials or icon, showing the person's photo
-// (from your address book or WhatsApp) once there is one.
-function PhotoAvatar({ path, className }: { path?: string; className?: string }) {
+// Every avatar in the app is a 32px circle showing the photo (from your address book or WhatsApp) or logo
+// once there is one, and an icon for the kind it is until then: a person, a company or a group.
+function PhotoAvatar({ path, icon: Icon, className }: { path?: string; icon: LucideIcon; className?: string }) {
   const url = useAvatarUrl(path);
   return (
-    <Avatar className={cn("size-8 after:hidden", className)}>
+    <Avatar className={cn("size-8", className)}>
       {url && <AvatarImage src={url} alt="" className="object-cover" />}
-      <AvatarFallback />
+      <AvatarFallback><Icon className="size-1/2" /></AvatarFallback>
     </Avatar>
   );
 }
 
-export function ContactAvatar({ contact, className }: { contact?: Pick<Contact, "avatarPath">; size?: "xs" | "sm" | "md" | "lg" | "xl"; className?: string }) {
-  return <PhotoAvatar path={contact?.avatarPath} className={className} />;
+/** A person's photo, or a company's logo for a sender that writes as the company. Until there is one, a person icon or a building. */
+export function ContactAvatar({ contact, className }: { contact?: Pick<Contact, "avatarPath" | "isCompany">; size?: "xs" | "sm" | "md" | "lg" | "xl"; className?: string }) {
+  return <PhotoAvatar path={contact?.avatarPath} icon={contact?.isCompany ? Building2 : User} className={className} />;
 }
 
-export function GroupAvatar({ className }: { size?: "sm" | "md" | "lg"; className?: string }) {
-  return <PhotoAvatar className={className} />;
+/**
+ * A company's picture: its logo from the shared "logos" bucket, or a building icon while it has none.
+ */
+export function CompanyAvatar({ logoPath, className }: { logoPath?: string | null; className?: string }) {
+  const url = useSignedUrl("logos", logoPath ?? undefined) ?? undefined;
+  return (
+    <Avatar className={cn("size-8", className)}>
+      {url && <AvatarImage src={url} alt="" className="object-cover" />}
+      <AvatarFallback><Building2 className="size-1/2" /></AvatarFallback>
+    </Avatar>
+  );
+}
+
+/** A group's picture, or a people icon while it has none. */
+export function GroupAvatar({ path, className }: { path?: string; size?: "sm" | "md" | "lg"; className?: string }) {
+  return <PhotoAvatar path={path} icon={Users} className={className} />;
 }
 
 /** A group's picture, or the other person's photo in a one-to-one conversation. */
 export function ThreadAvatar({ thread, contacts, className }: { thread: Thread; contacts: (id: string) => Contact | undefined; size?: "sm" | "md" | "lg"; className?: string }) {
-  const path = thread.isGroup ? thread.avatarPath : contacts(thread.participantIds[0])?.avatarPath;
-  return <PhotoAvatar path={path} className={className} />;
+  if (thread.isGroup) return <GroupAvatar path={thread.avatarPath} className={className} />;
+  return <ContactAvatar contact={contacts(thread.participantIds[0])} className={className} />;
 }
 
 export const providerLabel: Record<Provider, string> = {

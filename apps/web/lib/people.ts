@@ -30,12 +30,34 @@ export function isCompanySender(c: { name: string; emails: string[]; phones: str
   if (!name || !org) return false;
   // "Emirates" or "Emirates Skywards" from emirates.com, but not "Andrew Stegmann | Relocation Africa".
   if (name === org || name.startsWith(org)) return true;
-  // "Adam from UX Pilot" or "Kate at Notion": a person's name used by the company's own sender.
-  const from = c.name.match(/\s(?:from|at|@)\s+(.+)$/i);
-  if (from && squash(from[1]).startsWith(org)) return true;
+  // "Adam from UX Pilot", "Kate at Notion", "Max Bishop via LinkedIn" or "Geordin on LinkedIn": a person's
+  // name used by the company's own sender. Any separator will do, as in "Don on Hill via LinkedIn".
+  for (const from of c.name.matchAll(/\s(?:from|at|@|via|on)\s+(?=(.+$))/gi)) if (squash(from[1]).startsWith(org)) return true;
   // No display name, so the name was made from a run-together address ("Customerenquiries").
   if (!/\s/.test(c.name.trim()) && name.length >= 8 && c.emails.some((e) => squash(e.split("@")[0] ?? "") === name)) return true;
   // A name that is itself a role word ("Information", "Support"), or carries an automated word.
   if (ROLE_LOCAL.test(name) || AUTOMATED_PARTS.some((w) => name.includes(w))) return true;
   return BRAND_WORDS.test(c.name);
+}
+
+/** Marks an avatar path as a shared company logo, which lives in the "logos" bucket rather than "avatars". */
+export const LOGO_AVATAR = "logos:";
+
+/** A company's shared logo (organizations.logo_path) as an avatar path, or undefined while it has none. */
+export function logoAvatar(path: string | null | undefined): string | undefined {
+  return path ? LOGO_AVATAR + path : undefined;
+}
+
+/**
+ * The company's logo, to show in place of a photo for a sender that writes as the company itself
+ * ("LinkedIn", "Dan from Relume", "Google Cloud"), or undefined. A sender whose name does not mention the
+ * company gets none: mail sent through a hiring or mailing service ("Capitec Jobnotification" from
+ * jobs2web.com) is not that service's.
+ */
+export function companyLogo(c: { name: string; emails: string[]; phones: string[]; organizationName: string | null }, logoPath: string | null | undefined): string | undefined {
+  if (!logoPath || !c.organizationName || !isCompanySender(c)) return undefined;
+  const name = squash(c.name);
+  const org = squash(c.organizationName);
+  if (!name || !org) return undefined;
+  return name.includes(org) || (name.length >= 4 && org.startsWith(name)) ? logoPath : undefined;
 }

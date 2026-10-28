@@ -23,18 +23,24 @@ import { GoogleMeetConnector } from "./connectors/google-meet";
 import { ZoomConnector } from "./connectors/zoom";
 import { LinkedInConnector } from "./connectors/linkedin";
 import { startPhotoSync } from "./photos/job";
+import { startCompanyLogos } from "./logos/job";
 import { startContactLinker } from "./contacts/linker";
 import { startAddressIndexer } from "./address-indexer";
 import { startMeetingLinker } from "./meetings/linker";
+import { startShareJobs } from "./share/job";
+import { startTeamKeyRotation } from "./share/rotate";
+import { startTeamRules } from "./share/team-store";
 import type { AccountRow } from "./db";
+import { activity, markActivity, nextPollDelay, QUEUE_POLL } from "./polling";
+import { startUsageRollup } from "./usage-rollup";
 import type { Json, Tables } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { openAddressRows, seal } from "./vault";
 import { failInterrupted, type OutboxRow } from "./send/outbox";
 import { startOutboxCleanup, withAttachmentSlot } from "./send/outbox-attachments";
 import {
-  accountsOfTasks, claimTaskUpdate, failInterruptedTaskUpdates, failTaskUpdates, finishTaskUpdate, planTaskUpdates, queuedTaskUpdates,
-  queuedTaskUpdatesFor, supersedeTaskUpdates, taskAccountProblem, taskFailure, type TaskUpdateRow,
+  NOT_SUPPORTED_TICK, NOT_SUPPORTED_WRITE, TASK_GONE, accountsById, accountsOfTasks, claimTaskUpdate, failInterruptedTaskUpdates, failTaskUpdates, finishTaskUpdate, planTaskUpdates, queuedTaskUpdates,
+  isTaskWriteAction, queuedTaskUpdateById, queuedTaskUpdatesFor, supersedeTaskUpdates, taskAccountProblem, taskFailure, taskKey, usersWithReminders, type TaskUpdateRow,
 } from "./tasks";
 
 // The always-on sync worker. Every 30 seconds it reconciles running connectors with the accounts table:
@@ -45,7 +51,8 @@ import {
 
 const RECONCILE_MS = 30_000;
 const ACCOUNT_SETTLE_MS = 1500;
-const OUTBOX_POLL_MS = 15_000; // a safety net: new replies normally arrive through Realtime at once
+const EXPIRE_ORIGINALS_MS = 5 * 60_000;
+const USAGE_ROLLUP_MS = 24 * 60 * 60_000;
 const SHUTDOWN_MS = 10_000;
 
 /** What every connector does. Mail connectors also send replies, apply app actions and unsubscribe. */
@@ -63,6 +70,10 @@ interface Connector {
   updateEvent?(row: CalendarUpdateRow): Promise<void>;
   /** Microsoft To Do, Google Tasks and iCloud Reminders: ticks a task off or on at the provider (see tasks/index.ts). */
   updateTask?(row: TaskUpdateRow): Promise<void>;
+  /** The same three, for tasks made, changed and deleted in the app. */
+  createTask?(row: TaskUpdateRow): Promise<void>;
+  editTask?(row: TaskUpdateRow): Promise<void>;
+  deleteTask?(row: TaskUpdateRow): Promise<void>;
   /** Email only: the email as sent (its HTML), fetched for View Original. "missing" when it is gone. */
   original?(meta: Json): Promise<string | null | "missing">;
 }
@@ -214,7 +225,7 @@ async function queuedOutbox(): Promise<QueuedOutbox[]> {
   return must(
     await db
       .from("outbox")
-      .select("*, threads(account_id, accounts(status)), accounts(id, status)")
+      .select("*, threads!outbox_thread_id_fkey(account_id, accounts(status)), accounts(id, status)")
       .eq("status", "queued")
       .order("created_at")
       .limit(50),
@@ -401,47 +412,66 @@ async function dispatchCalendarUpdates(rows?: CalendarUpdateRow[]) {
   await dispatchCalendar(rows ?? (await queuedUpdates()), "changed in", failUpdate, (c) => c.updateEvent?.bind(c), "calendar update");
 }
 
+/** The connector's handler for a queued task change, or undefined when it has none. */
+function taskHandler(connector: Connector, action: string): ((row: TaskUpdateRow) => Promise<void>) | undefined {
+  const handler = action === "create" ? connector.createTask : action === "update" ? connector.editTask : action === "delete" ? connector.deleteTask : connector.updateTask;
+  return handler?.bind(connector);
+}
+
 /**
- * Tasks ticked off or on in the app, one task at a time: the latest tick for each task is made and the earlier
- * ones are superseded (tasks/index.ts has the contract). The queue is read again for each task once its lock
- * is held, so a tick that arrived through Realtime cannot overtake an older one waiting in the poll.
+ * Tasks ticked, made, changed and deleted in the app, one task at a time, oldest first: of several ticks for a
+ * task the latest is made and the earlier are superseded, while creates, updates and deletes are all made
+ * (tasks/index.ts has the contract). The queue is read again for each task once its lock is held, so a change
+ * that arrived through Realtime cannot overtake an older one waiting in the poll.
  */
 async function dispatchTaskUpdates(rows?: TaskUpdateRow[]) {
-  const { apply } = planTaskUpdates(rows ?? (await queuedTaskUpdates()));
-  const accounts = await accountsOfTasks(apply.map((row) => row.task_id));
-  for (const { task_id: taskId } of apply) {
+  const list = rows ?? (await queuedTaskUpdates());
+  // A change to a task that is gone (its row removed, which clears task_id) has nothing left to change.
+  // Left alone for a user with iCloud Reminders: the AI worker's connector settles such rows for its own user.
+  const orphans = list.filter((r) => r.status === "queued" && !r.task_id && r.action !== "create");
+  const reminders = await usersWithReminders([...new Set(orphans.map((r) => r.user_id))]);
+  const gone = orphans.filter((r) => !reminders.has(r.user_id));
+  await failTaskUpdates(gone, TASK_GONE);
+  const { apply } = planTaskUpdates(list.filter((r) => !orphans.includes(r)));
+  const first = new Map<string, TaskUpdateRow>();
+  for (const row of apply) if (!first.has(taskKey(row))) first.set(taskKey(row), row);
+  const taskAccounts = await accountsOfTasks([...first.values()].flatMap((r) => (r.task_id ? [r.task_id] : [])));
+  const newAccounts = await accountsById([...first.values()].flatMap((r) => (!r.task_id && r.account_id ? [r.account_id] : [])));
+  for (const [key, sample] of first) {
     await dispatchOnce(
-      `task:${taskId}`,
+      `task:${key}`,
       async () => {
-        const account = accounts.get(taskId);
+        const account = sample.task_id ? taskAccounts.get(sample.task_id) : sample.account_id ? newAccounts.get(sample.account_id) : undefined;
         if (!account) return null; // the task is gone, and its ticks with it
-        const queue = await queuedTaskUpdatesFor(taskId);
-        const { apply: [row], superseded } = planTaskUpdates(queue);
-        if (!row) return null;
+        const queue = sample.task_id ? await queuedTaskUpdatesFor(sample.task_id) : await queuedTaskUpdateById(sample.id);
         const problem = taskAccountProblem(account);
-        const connector = running.get(account.id)?.connector;
-        if (problem || (connector && !connector.updateTask)) {
-          await failTaskUpdates(queue, problem ?? "Tasks in this account cannot be ticked from here yet.", account.provider);
+        if (problem) {
+          await failTaskUpdates(queue, problem, account.provider);
           return null;
         }
-        if (!connector?.updateTask) return null; // starting up: picked up on the next pass
-        const update = connector.updateTask.bind(connector);
+        const connector = running.get(account.id)?.connector;
+        if (!connector) return null; // starting up: picked up on the next pass
+        const unsupported = queue.filter((r) => !taskHandler(connector, r.action));
+        await failTaskUpdates(unsupported, unsupported.some((r) => isTaskWriteAction(r.action)) ? NOT_SUPPORTED_WRITE : NOT_SUPPORTED_TICK, account.provider);
+        const { apply: [row], superseded } = planTaskUpdates(queue.filter((r) => !unsupported.includes(r)));
+        if (!row) return null;
+        const handle = taskHandler(connector, row.action)!;
         await supersedeTaskUpdates(superseded);
         if (!(await claimTaskUpdate(row.id))) return null;
         return async () => {
           try {
-            await update(row);
+            await handle(row);
             await finishTaskUpdate(row, {}, account.provider);
           } catch (err) {
             log.warn("task update failed", { update: row.id, code: errorCode(err) });
             await finishTaskUpdate(row, { error: taskFailure(err, account.provider) }, account.provider);
           } finally {
-            // A tick made while this one was under way waits for the lock: it goes next, not at the next poll.
-            setTimeout(() => void dispatchTaskUpdatesFor(taskId), 0);
+            // A change made while this one was under way waits for the lock: it goes next, not at the next poll.
+            if (row.task_id) setTimeout(() => void dispatchTaskUpdatesFor(row.task_id!), 0);
           }
         };
       },
-      (err) => log.error("task update failed", { task: taskId, code: errorCode(err) }),
+      (err) => log.error("task update failed", { task: key, code: errorCode(err) }),
     );
   }
 }
@@ -455,7 +485,8 @@ async function dispatchTaskUpdatesFor(taskId: string) {
   }
 }
 
-// A View Original request is answered within seconds; a fetched original is deleted after an hour.
+// A View Original request is answered within seconds; a fetched original is deleted after an hour. A failed request
+// stores only a code (not_found, gone, no_layout, unreachable), never text from the provider; the app words it.
 const ORIGINAL_KEEP_MS = 60 * 60 * 1000;
 
 type OriginalRequest = Tables<"email_originals">;
@@ -476,7 +507,7 @@ async function dispatchOriginals(rows?: OriginalRequest[]) {
       row.id,
       async () => {
         const message = must(await db.from("messages").select("account_id, user_id, provider_meta").eq("id", row.message_id).maybeSingle(), "load original's email");
-        if (!message || message.user_id !== row.user_id) return () => finishOriginal(row.id, { status: "failed", error: "This email could not be found." });
+        if (!message || message.user_id !== row.user_id) return () => finishOriginal(row.id, { status: "failed", error: "not_found" });
         const connector = running.get(message.account_id)?.connector;
         if (!connector?.original) return null; // still connecting: the next poll picks it up
         const fetchOriginal = connector.original.bind(connector);
@@ -484,12 +515,12 @@ async function dispatchOriginals(rows?: OriginalRequest[]) {
           await finishOriginal(row.id, { status: "working" });
           try {
             const html = await fetchOriginal(message.provider_meta);
-            if (html === "missing") await finishOriginal(row.id, { status: "failed", error: "This email is no longer in your mailbox." });
-            else if (html === null) await finishOriginal(row.id, { status: "failed", error: "This email has no original layout to show." });
+            if (html === "missing") await finishOriginal(row.id, { status: "failed", error: "gone" });
+            else if (html === null) await finishOriginal(row.id, { status: "failed", error: "no_layout" });
             else await finishOriginal(row.id, { status: "done", html: await seal(row.user_id, FIELD.html, html) });
           } catch (err) {
             log.warn("original fetch failed", { code: errorCode(err) });
-            await finishOriginal(row.id, { status: "failed", error: "Your mailbox could not be reached. Try again." });
+            await finishOriginal(row.id, { status: "failed", error: "unreachable" });
           }
         };
       },
@@ -506,23 +537,28 @@ async function expireOriginals() {
 /** Work the app asks for arrives through Realtime at once, with a poll as a safety net. */
 function watchQueues() {
   const guard = (what: string, work: Promise<void>) => work.catch((err) => log.error(`${what} failed`, { code: errorCode(err) }));
+  // A queued item arriving means someone is using the app: the safety-net poll and Gmail checks speed up.
+  const live = (what: string, work: Promise<void>) => { markActivity(); return guard(what, work); };
   db.channel("queues")
-    .on("postgres_changes", { event: "INSERT", schema: "public", table: "outbox" }, (p) => void guard("outbox", dispatchOutbox([p.new as OutboxRow])))
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "outbox" }, (p) => void live("outbox", dispatchOutbox([p.new as OutboxRow])))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "mail_actions" }, (p) =>
-      void guard("mail actions", dispatchMailActions([p.new as Tables<"mail_actions">])))
+      void live("mail actions", dispatchMailActions([p.new as Tables<"mail_actions">])))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "unsubscribes" }, (p) =>
-      void guard("unsubscribes", dispatchUnsubscribes([p.new as Tables<"unsubscribes">])))
+      void live("unsubscribes", dispatchUnsubscribes([p.new as Tables<"unsubscribes">])))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "calendar_outbox" }, (p) =>
-      void guard("calendar outbox", dispatchCalendarOutbox([p.new as CalendarOutboxRow])))
+      void live("calendar outbox", dispatchCalendarOutbox([p.new as CalendarOutboxRow])))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "calendar_deletes" }, (p) =>
-      void guard("calendar deletes", dispatchCalendarDeletes([p.new as CalendarDeleteRow])))
+      void live("calendar deletes", dispatchCalendarDeletes([p.new as CalendarDeleteRow])))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "calendar_updates" }, (p) =>
-      void guard("calendar updates", dispatchCalendarUpdates([p.new as CalendarUpdateRow])))
+      void live("calendar updates", dispatchCalendarUpdates([p.new as CalendarUpdateRow])))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "task_updates" }, (p) =>
-      void guard("task updates", dispatchTaskUpdates([p.new as TaskUpdateRow])))
+      void live("task updates", dispatchTaskUpdates([p.new as TaskUpdateRow])))
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "email_originals" }, (p) =>
-      void guard("originals", dispatchOriginals([p.new as OriginalRequest])))
+      void live("originals", dispatchOriginals([p.new as OriginalRequest])))
     .subscribe();
+  // A safety net for a missed Realtime event (queued work normally arrives at once): every 15 s while the
+  // app is in use, backing off to 60 s then 120 s when quiet. A queued item snaps it back.
+  let lastExpire = 0;
   const poll = () => {
     void guard("outbox", dispatchOutbox());
     void guard("mail actions", dispatchMailActions());
@@ -532,10 +568,27 @@ function watchQueues() {
     void guard("calendar updates", dispatchCalendarUpdates());
     void guard("task updates", dispatchTaskUpdates());
     void guard("originals", dispatchOriginals());
-    void guard("expire originals", expireOriginals());
+    if (Date.now() - lastExpire >= EXPIRE_ORIGINALS_MS) {
+      lastExpire = Date.now();
+      void guard("expire originals", expireOriginals());
+    }
   };
-  setInterval(poll, OUTBOX_POLL_MS);
+  let timer: ReturnType<typeof setTimeout>;
+  let scheduledMs = 0;
+  const schedule = () => {
+    scheduledMs = nextPollDelay(Date.now(), activity.since(), QUEUE_POLL);
+    timer = setTimeout(() => { poll(); schedule(); }, scheduledMs);
+    timer.unref();
+  };
+  activity.onMark(() => {
+    // Moved from a long wait to a short one: restart the timer so the shorter delay applies now.
+    if (nextPollDelay(Date.now(), activity.since(), QUEUE_POLL) < scheduledMs) {
+      clearTimeout(timer);
+      schedule();
+    }
+  });
   poll();
+  schedule();
 }
 
 async function main() {
@@ -561,10 +614,15 @@ async function main() {
   watchAccounts();
   watchQueues();
   startPhotoSync();
+  startCompanyLogos();
   startOutboxCleanup();
   startContactLinker(); // finds and merges contacts that are one person
   startAddressIndexer(); // blind indexes for rows written without one
   startMeetingLinker(); // ties Teams, Zoom and Meet meetings to contacts and calendar events
+  startUsageRollup(USAGE_ROLLUP_MS); // folds ai_usage rows older than 90 days into monthly totals
+  startShareJobs(); // moves chats marked as work (or moved back) between the agent's key and the team's
+  startTeamKeyRotation(); // new team key version after a member leaves, then re-seals the team's content under it
+  startTeamRules(); // shares chats with team clients (or suggests them), and suggests chats triage marked as work
   setInterval(() => reconcile().catch((err) => log.error("reconcile failed", { code: errorCode(err) })), RECONCILE_MS);
 
   const shutdown = async () => {

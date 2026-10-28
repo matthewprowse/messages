@@ -1,13 +1,13 @@
 import { initAuthCreds, type AuthenticationCreds, type SignalDataSet, type SignalDataTypeMap, type SignalKeyStore } from "baileys";
 import { SerialQueue } from "../backoff";
 import { db, must } from "../db";
-import { env } from "../env";
+import { credentialSealer } from "../vault";
 import { chunks, push } from "../util";
 import { CREDS, decodeKey, encodeKey } from "./auth-codec";
 
 // The linked device's WhatsApp session, kept in whatsapp_auth_keys instead of files: the account's
 // credentials plus the Signal keys Baileys creates as it talks to people. Every value is encrypted with
-// ENCRYPTION_KEY before it leaves the worker, and every change is written straight away, so a crash or
+// the user's own key (vault.ts, credentialSealer) before it leaves the worker, and every change is written straight away, so a crash or
 // restart never loses a key (a lost key means messages that can no longer be decrypted).
 
 const ID_BATCH = 100; // keeps each lookup's URL short
@@ -22,6 +22,7 @@ export interface DbAuthState {
 export async function useDbAuthState(accountId: string): Promise<DbAuthState> {
   // Writes run one after another, so an older value can never land after a newer one.
   const writes = new SerialQueue();
+  const sealer = await credentialSealer(accountId);
 
   const credsRow = must(
     await db
@@ -33,7 +34,7 @@ export async function useDbAuthState(accountId: string): Promise<DbAuthState> {
       .maybeSingle(),
     "load whatsapp creds",
   );
-  const creds = credsRow ? decodeKey<AuthenticationCreds>(CREDS.type, credsRow.ciphertext, env.encryptionKey) : initAuthCreds();
+  const creds = credsRow ? await decodeKey<AuthenticationCreds>(CREDS.type, credsRow.ciphertext, sealer) : initAuthCreds();
 
   const keys: SignalKeyStore = {
     async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
@@ -46,7 +47,7 @@ export async function useDbAuthState(accountId: string): Promise<DbAuthState> {
           ),
         ),
       );
-      for (const row of batches.flat()) out[row.key_id] = decodeKey<SignalDataTypeMap[T]>(type, row.ciphertext, env.encryptionKey);
+      for (const row of batches.flat()) out[row.key_id] = await decodeKey<SignalDataTypeMap[T]>(type, row.ciphertext, sealer);
       return out;
     },
 
@@ -55,7 +56,7 @@ export async function useDbAuthState(accountId: string): Promise<DbAuthState> {
       const deletes = new Map<string, string[]>();
       for (const [type, values] of Object.entries(data)) {
         for (const [id, value] of Object.entries(values ?? {})) {
-          if (value) upserts.push({ account_id: accountId, key_type: type, key_id: id, ciphertext: encodeKey(value, env.encryptionKey) });
+          if (value) upserts.push({ account_id: accountId, key_type: type, key_id: id, ciphertext: await encodeKey(value, sealer) });
           else push(deletes, type, id);
         }
       }
@@ -84,7 +85,7 @@ export async function useDbAuthState(accountId: string): Promise<DbAuthState> {
       writes.run(async () => {
         must(
           await db.from("whatsapp_auth_keys").upsert(
-            { account_id: accountId, key_type: CREDS.type, key_id: CREDS.id, ciphertext: encodeKey(creds, env.encryptionKey) },
+            { account_id: accountId, key_type: CREDS.type, key_id: CREDS.id, ciphertext: await encodeKey(creds, sealer) },
             { onConflict: "account_id,key_type,key_id" },
           ),
           "save whatsapp creds",

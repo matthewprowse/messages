@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   if (foreignOrigin(request)) return fail(403, "Not allowed from this site.");
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
-  if (overLimit(user.id) > 0) return fail(429, "Too many tries. Wait a minute and try again.");
+  if (await overLimit(user.id) > 0) return fail(429, "Too many tries. Wait a minute and try again.");
 
   const state = randomBytes(16).toString("base64url");
   const { verifier, challenge } = pkce();

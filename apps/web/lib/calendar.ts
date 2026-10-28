@@ -2,8 +2,10 @@ import { addressIndex } from "@messages/crypto/addresses";
 import type { TablesInsert } from "@messages/db";
 import { timeOf } from "./format";
 import { buildEventRow, dateKey, timeKey, type EventField, type EventForm } from "./new-items";
+import { sameRepeat } from "./recurrence";
 import type { Contact as AddressBookContact } from "./types";
 import { supabase } from "./supabase";
+import { openEvents } from "./open-rows";
 import { userKeys } from "./vault";
 
 // Calendar events as the Calendar page needs them. The worker copies events from Google Calendar into
@@ -36,6 +38,8 @@ export interface CalendarEvent {
   conferenceUrl?: string | null;
   /** Set when it is one occurrence of a repeating event; every occurrence shares it. */
   seriesId?: string | null;
+  /** How its series repeats, as an iCalendar rule (lib/recurrence.ts). Loaded with the details. */
+  recurrence?: string | null;
   /** Who invited you, when it is not you. */
   organizer?: { name: string; email: string } | null;
   /** Your answer to the invitation: accepted, tentative, declined or needsAction. Null when you were not invited. */
@@ -57,7 +61,7 @@ function attendeesOf(raw: unknown): StoredAttendee[] {
 
 // What the grid and lists need to draw an event. The notes, guests and meeting link are fetched when an event is opened.
 const GRID_COLUMNS = "id, account_id, title, starts_at, ends_at, all_day, location, calendar_name, series_id";
-const DETAIL_COLUMNS = `${GRID_COLUMNS}, attendees, description, conference_url, provider_event_id, calendar_id`;
+const DETAIL_COLUMNS = `${GRID_COLUMNS}, attendees, description, conference_url, provider_event_id, calendar_id, recurrence`;
 const CONTACT_TTL = 5 * 60_000;
 
 type Contact = { id: string; name: string } | null;
@@ -136,6 +140,7 @@ type Row = {
   conference_url?: string | null;
   provider_event_id?: string;
   calendar_id?: string;
+  recurrence?: string | null;
 };
 
 async function toEvents(data: Row[], detailed: boolean): Promise<CalendarEvent[]> {
@@ -170,6 +175,7 @@ async function toEvents(data: Row[], detailed: boolean): Promise<CalendarEvent[]
       conferenceUrl: e.conference_url && /^https:\/\//i.test(e.conference_url) ? e.conference_url : null,
       providerEventId: e.provider_event_id,
       calendarId: e.calendar_id,
+      recurrence: e.recurrence ?? null,
       organizer: organizer ? { name: nameOf(organizer), email: organizer.email!.toLowerCase() } : null,
       response: all.find((a) => a.self)?.response ?? null,
       attendees: all
@@ -198,7 +204,7 @@ export async function loadEvents(start: Date, end: Date, options: { details?: bo
     .order("starts_at")
     .limit(2000);
   if (error) throw new Error(`Load events failed (${error.code})`);
-  return toEvents(data as unknown as Row[], detailed);
+  return toEvents(await openEvents(data as unknown as Row[]), detailed);
 }
 
 /** One event with everything about it, or null when it is not there (any more). */
@@ -206,7 +212,7 @@ export async function loadEventDetail(id: string): Promise<CalendarEvent | null>
   const { data, error } = await supabase.from("calendar_events").select(DETAIL_COLUMNS).eq("id", id).maybeSingle();
   if (error) throw new Error(`Load event failed (${error.code})`);
   if (!data) return null;
-  return (await toEvents([data as unknown as Row], true))[0];
+  return (await toEvents(await openEvents([data as unknown as Row]), true))[0];
 }
 
 /** The link to a Google Calendar event in Google Calendar, or null when it cannot be worked out. Always https. */
@@ -267,7 +273,7 @@ export type UpdateScope = "occurrence" | "series";
 export type UpdateInsert = TablesInsert<"calendar_updates">;
 
 /** What the app shows of an event until the worker has made a change: the changed fields, laid over the event. */
-export type EventPatch = Partial<Pick<CalendarEvent, "title" | "startsAt" | "endsAt" | "allDay" | "location" | "description" | "attendees" | "response">>;
+export type EventPatch = Partial<Pick<CalendarEvent, "title" | "startsAt" | "endsAt" | "allDay" | "location" | "description" | "attendees" | "response" | "recurrence">>;
 
 export function withPatch(event: CalendarEvent, patch: EventPatch | undefined): CalendarEvent {
   return patch ? { ...event, ...patch, pending: true } : event;
@@ -281,7 +287,7 @@ const DAY_MS = 24 * HOUR_MS;
  * start and end time, so an event over several days (or of no length) keeps the time it has.
  */
 export function formOf(event: CalendarEvent): { form: EventForm; editableTime: boolean } {
-  const base = { title: event.title, location: event.location ?? "", description: event.description ?? "", guests: event.attendees.map((a) => a.email), sendInvites: true, addMeet: false };
+  const base = { title: event.title, location: event.location ?? "", description: event.description ?? "", guests: event.attendees.map((a) => a.email), sendInvites: true, addMeet: false, repeat: event.recurrence ?? "" };
   if (event.allDay) {
     const days = event.endsAt ? Math.round((Date.parse(`${event.endsAt.slice(0, 10)}T00:00:00Z`) - Date.parse(`${event.startsAt.slice(0, 10)}T00:00:00Z`)) / DAY_MS) : 1;
     return { form: { ...base, date: event.startsAt.slice(0, 10), allDay: true, startTime: "09:00", endTime: "10:00" }, editableTime: days <= 1 };
@@ -353,7 +359,12 @@ export function buildUpdate(
       return known ?? { email, name: contact?.name ?? email, contactId: contact?.id ?? null };
     });
   }
-  const changed = row.title !== undefined || row.location !== undefined || row.description !== undefined || row.starts_at !== undefined || row.attendees !== undefined;
+  // A new rule, never none: a series cannot be made a single event from here, and "" leaves a single event as it is.
+  if (form.repeat && !sameRepeat(form.repeat, initial.form.repeat ?? "", new Date(event.startsAt))) {
+    row.recurrence = form.repeat;
+    patch.recurrence = form.repeat;
+  }
+  const changed = row.title !== undefined || row.location !== undefined || row.description !== undefined || row.starts_at !== undefined || row.attendees !== undefined || row.recurrence !== undefined;
   return { ok: true, row: changed ? row : null, patch };
 }
 

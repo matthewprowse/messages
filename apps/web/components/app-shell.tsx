@@ -4,13 +4,14 @@ import Link from "next/link";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useIsOwner } from "@/lib/auth";
-import { SearchCommand, ShortcutsDialog, goToHint } from "@/components/search-command";
+import { SearchCommand, ShortcutsDialog } from "@/components/search-command";
 import { NEW_ITEM_EVENT, NewMenu } from "@/components/new-menu";
-import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, Ellipsis, Mail, MessageCircle, CalendarPlus, type LucideIcon } from "lucide-react";
+import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Ellipsis, Mail, MessageCircle, CalendarPlus, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { AppTour } from "@/components/tour";
 import { SyncBar } from "@/components/sync-bar";
 import { SetupDialog } from "@/components/onboarding/setup-dialog";
+import { TeamReview } from "@/components/team-review";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
@@ -18,9 +19,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: "/briefing", label: "Summary", icon: Newspaper },
+  { href: "/summary", label: "Summary", icon: Newspaper },
   { href: "/calendar", label: "Calendar", icon: Calendar },
-  { href: "/inbox", label: "Conversations", icon: Inbox },
+  { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/attachments", label: "Attachments", icon: Paperclip },
   { href: "/notes", label: "Notes", icon: NotebookPen },
@@ -29,17 +30,9 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
 const PRIMARY = NAV.slice(0, 4);
 const SECONDARY = NAV.slice(4);
 
-// On phones the rail and its New button are hidden, so More starts new things. The rail's NewMenu stays
-// mounted (only hidden) and opens the dialog when it hears NEW_ITEM_EVENT.
-const NEW_ITEMS: { item: "email" | "whatsapp" | "event"; label: string; icon: LucideIcon }[] = [
-  { item: "email", label: "New Email", icon: Mail },
-  { item: "whatsapp", label: "New WhatsApp Message", icon: MessageCircle },
-  { item: "event", label: "New Event", icon: CalendarPlus },
-];
-
 // Detail routes have their own back button on phones, so navigation steps aside there.
 const DETAIL_ROUTES: RegExp[] = [
-  /^\/(inbox|briefing|notes)\/[^/]+/,
+  /^\/(inbox|summary|notes)\/[^/]+/,
   /^\/contacts\/(?!companies$|merges$)[^/]+$/,
   /^\/contacts\/(companies|merges)(\/.*)?$/,
   /^\/settings\/[^/]+/,
@@ -92,8 +85,8 @@ function RailButton({ href, onClick, label, icon: Icon, active, dot, dotLabel = 
 }
 
 function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => void }) {
-  const pathname = usePathname();
   const isOwner = useIsOwner();
+  const pathname = usePathname();
   const hasUnread = useHasUnread();
   const attention = useAttentionCount();
   return (
@@ -107,15 +100,15 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
             key={item.href}
             {...item}
             active={pathname.startsWith(item.href)}
-            dot={item.href === "/inbox" ? hasUnread : item.href === "/briefing" && attention > 0}
-            dotLabel={item.href === "/briefing" ? `${attention} Need Attention` : "Unread"}
-            hint={goToHint(item.href)}
+            dot={item.href === "/inbox" ? hasUnread : item.href === "/summary" && attention > 0}
+            dotLabel={item.href === "/summary" ? `${attention} Need Attention` : "Unread"}
           />
         ))}
       </div>
       <div className="mt-auto flex flex-col gap-1">
         {isOwner && <RailButton href="/analytics" label="Analytics" icon={ChartColumn} active={pathname.startsWith("/analytics")} />}
-        <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings")} hint={goToHint("/settings")} />
+        {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin")} />}
+        <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings")} />
       </div>
     </nav>
   );
@@ -123,12 +116,9 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
 
 function BottomBar({ hidden }: { hidden: boolean }) {
   const pathname = usePathname();
-  const isOwner = useIsOwner();
   const hasUnread = useHasUnread();
-  const more = [...SECONDARY, ...(isOwner ? [{ href: "/analytics", label: "Analytics", icon: ChartColumn }] : []), { href: "/settings", label: "Settings", icon: Settings }];
-  const moreActive = more.some((m) => pathname.startsWith(m.href));
-  // A dialog opened from the menu keeps the focus; the menu must not hand it back to More as it closes.
-  const starting = useRef(false);
+  // More is its own screen (app/more), so it is lit there and on the places it leads to that the bar does not have.
+  const moreActive = ["/more", ...SECONDARY.map((m) => m.href), "/analytics", "/admin", "/settings"].some((href) => pathname.startsWith(href));
   if (hidden) return null;
   return (
     <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
@@ -154,34 +144,17 @@ function BottomBar({ hidden }: { hidden: boolean }) {
             </Link>
           );
         })}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            aria-label="More"
-            data-tour="more"
-            data-tour-side="top"
-            className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-xs outline-none", moreActive ? "text-foreground" : "text-muted-foreground")}
-          >
-            <Ellipsis className="size-5" />
-            More
-          </DropdownMenuTrigger>
-          <DropdownMenuContent side="top" align="end" onCloseAutoFocus={(e) => { if (starting.current) { e.preventDefault(); starting.current = false; } }}>
-            {NEW_ITEMS.map(({ item, label, icon: Icon }) => (
-              <DropdownMenuItem key={item} onSelect={() => { starting.current = true; window.dispatchEvent(new CustomEvent(NEW_ITEM_EVENT, { detail: item })); }}>
-                <Icon />
-                {label}
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            {more.map(({ href, label, icon: Icon }) => (
-              <DropdownMenuItem key={href} asChild>
-                <Link href={href}>
-                  <Icon />
-                  {label}
-                </Link>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Link
+          href="/more"
+          aria-label="More"
+          aria-current={pathname === "/more" ? "page" : undefined}
+          data-tour="more"
+          data-tour-side="top"
+          className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-xs", moreActive ? "text-foreground" : "text-muted-foreground")}
+        >
+          <Ellipsis className="size-5" />
+          More
+        </Link>
       </div>
     </nav>
   );
@@ -194,15 +167,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const onLogin = pathname === "/login";
   const onMarketing = pathname === "/";
+  const onInvite = pathname.startsWith("/invite/");
   const isDetail = useIsDetailRoute();
 
-  // Everything except the sign-in page and the marketing page needs a signed-in user: row-level security returns nothing otherwise.
+  // Everything except the sign-in page, the marketing page and an invite link needs a signed-in user: row-level security returns nothing otherwise.
+  // An invite page asks someone to sign in itself, so the link they were sent is not lost.
   useEffect(() => {
-    if (session === null && !onLogin && !onMarketing) router.replace("/login");
-  }, [session, onLogin, onMarketing, router]);
+    if (session === null && !onLogin && !onMarketing && !onInvite) router.replace("/login");
+  }, [session, onLogin, onMarketing, onInvite, router]);
 
   if (onMarketing) return children;
-  if (onLogin) return <main className="h-dvh w-full">{children}</main>;
+  if (onLogin || onInvite) return <main className="h-dvh w-full">{children}</main>;
   if (!session) return <div className="h-dvh w-full" />; // checking the stored session, or redirecting
 
   return (
@@ -224,6 +199,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <BottomBar hidden={isDetail} />
       <AppTour />
       <Suspense><SetupDialog /></Suspense>
+      <TeamReview />
     </div>
   );
 }
