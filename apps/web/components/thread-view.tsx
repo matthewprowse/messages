@@ -4,6 +4,7 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowDown, ArrowLeft, Check, CheckCheck, ChevronDown, Loader2, MoreHorizontal, X, Inbox, Paperclip } from "lucide-react";
@@ -33,7 +34,6 @@ import { RecordButton, RecordingActions, RecordingStatus, useVoiceRecorder } fro
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TemplatePicker } from "@/components/template-picker";
 import { isTypingKey } from "@/components/new-menu";
-import { ComposeDialog } from "@/components/compose-dialog";
 import { takeVia, track } from "@/lib/analytics";
 import { attachProvider, type OutboxUpload } from "@/lib/outbox-files";
 import { MESSAGE_PAGE } from "@/lib/data";
@@ -43,6 +43,9 @@ import { MeetingCard } from "@/components/meeting-card";
 import { ThreadShare } from "@/components/work-badge";
 import { ShareNotice } from "@/components/share-notice";
 import { InstagramReplyNotice, useInstagramReplyClosed } from "@/components/instagram-window";
+
+// Forward and new-email dialogs are rarely opened, so their code loads on its own (as in new-menu.tsx).
+const ComposeDialog = dynamic(() => import("@/components/compose-dialog").then((m) => m.ComposeDialog), { ssr: false });
 
 /** A conversation is marked read after it has been open this long in a visible tab. */
 const READ_AFTER_MS = 2000;

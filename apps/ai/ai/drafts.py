@@ -62,7 +62,7 @@ from .poll import Backoff
 from .fields import CONTACT_RELATIONSHIP, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, STYLE_RULE, WRITING_BODY, WRITING_SITUATION, BODY, CHOICES, DRAFT, HTML, INSTRUCTION, NAME, NOTE, NOTE_TITLE, QUOTE, SUBJECT, TRANSCRIPT, VOICE_INSTRUCTION
 from .config import edit_thinking, draft_thinking
 from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
-from .retry import not_in
+from .retry import billing_paused, not_in
 from .supabase import Supabase, in_list
 from .text import UNTRUSTED, clean, fenced, new_fence
 from .vault import Vault
@@ -80,7 +80,9 @@ FACT_CHARS = 1500  # of one note marked Use in Drafts
 FACTS_CHARS = 6000  # of them all, so a few long notes cannot crowd out the conversation
 MAX_ATTEMPTS = 3  # unexpected errors on one draft before it is failed instead of retried forever
 STALE_AFTER = timedelta(minutes=10)  # a draft still pending this long is failed, so the app never spins forever
-SWEEP_EVERY_S = 30  # how often drafts pending too long are looked for
+SWEEP_EVERY_S = 60  # how often drafts pending too long are looked for (STALE_AFTER is 10 minutes, so a minute late is nothing)
+AUDIO_SWEEP_EVERY_S = 300  # leftover recordings: the query (status<>pending and audio_path not null) has no index, so it runs rarely
+BILLING_HOLD_S = 30  # after billing_paused, pending drafts are left alone this long instead of asked about every half second
 MAX_RUNNING = 4
 HEDGE_AFTER_S = 4.5  # past the model's p90 (about 3.3s on a draft): a second request is sent and the first answer used
 DRAFT_MAX_OUTPUT = 4096  # tokens, thinking included: a reply is a few hundred; this only stops a runaway
@@ -91,7 +93,10 @@ def hedge_on() -> bool:
     """The hedged second request is off unless DRAFT_HEDGE is "true": about one draft in ten was billed twice for it."""
     return os.environ.get("DRAFT_HEDGE", "").strip().lower() == "true"
 POLL_IDLE_S = 1.5
-POLL_IDLE_MAX_S = 5.0  # a quiet worker looks this often at most; a draft asked for after a quiet spell waits up to this
+# A quiet worker looks every 1.5s, 2.25s, ... up to this. Nothing wakes the loop early, so a draft asked for after
+# a quiet spell waits up to this long: 10s, not 15s, keeps that worst case tolerable (about 6 looks a minute idle,
+# down from 12), and the 0.5s active cadence returns the moment a pending draft is found.
+POLL_IDLE_MAX_S = 10.0
 POLL_ACTIVE_S = 0.5
 ACTIVE_FOR_S = 120
 
@@ -353,6 +358,8 @@ class Drafts:
         self._running: dict[str, str] = {}  # draft id -> thread id, while it is being written
         self._attempts: dict[str, int] = {}
         self._swept = 0.0
+        self._audio_swept = 0.0
+        self._hold_until = 0.0  # time.monotonic: pending drafts are not looked for before this (billing paused)
         self._active_until = 0.0
         self._idle = Backoff(POLL_IDLE_S, POLL_IDLE_MAX_S, 1.5)
 
@@ -375,12 +382,16 @@ class Drafts:
                 {"status": "failed", "error": "The draft took too long. Try again.", "updated_at": _now()},
                 minimal=True,
             )
+        if time.monotonic() - self._audio_swept >= AUDIO_SWEEP_EVERY_S:
+            self._audio_swept = time.monotonic()
             # Recordings are kept only until their draft is written: one whose draft never was goes too.
             left = self.db.select("drafts", {"select": "id,user_id,status,audio_path", "status": "neq.pending", "audio_path": "not.is.null", "limit": "50"})
             left = [r for r in left if r.get("audio_path") and r.get("status") != "pending"]
             if left:
                 self.db.remove_files(BUCKET, [r["audio_path"] for r in left if own_audio_path(r.get("user_id"), r["audio_path"])])
                 self.db.update("drafts", {"id": in_list([r["id"] for r in left])}, {"audio_path": None}, minimal=True)
+        if time.monotonic() < self._hold_until:
+            return 0
         with self._lock:
             running = dict(self._running)
         if len(running) >= MAX_RUNNING:
@@ -687,6 +698,10 @@ class Drafts:
                 audio=audio,
             ), hedge=audio is None and hedge_on())
         except GeminiError as err:
+            if billing_paused(err):  # the draft stays pending and is written once the pause ends (or fails as stale)
+                self._hold_until = time.monotonic() + BILLING_HOLD_S
+                log.warn("draft held", draft=d["id"])
+                return
             log.warn("draft failed", draft=d["id"], status=err.status)
             self._fail(d, "The draft could not be written. Try again.")
             return

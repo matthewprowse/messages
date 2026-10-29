@@ -32,6 +32,7 @@ from typing import Any, Callable
 from . import log
 from .analytics import Analytics, event, prompt_id, traits as message_traits
 from .fields import ADDRESS, BODY, CHOICES, CONTACT_RELATIONSHIP, FILENAME, HTML, SUBJECT, SUMMARY, TRANSCRIPT, UNSUBSCRIBE
+from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, not_in
 from .supabase import Supabase, in_list
@@ -801,7 +802,7 @@ class Triage:
         except GeminiError as err:
             # Only an answer that was not usable (not JSON, blocked or empty, or the request refused) is worth asking
             # again one by one. A paused budget or a timeout would fail every single call too (a timeout was already billed).
-            if len(chunk) > 1 and (err.status == 400 or "was not JSON" in str(err) or "no candidates" in str(err)):
+            if len(chunk) > 1 and not is_billing_paused(err) and (err.status == 400 or "was not JSON" in str(err) or "no candidates" in str(err)):
                 return {k: v for m in chunk for k, v in self._ask(ctx, [m]).items()}
             self._failed(chunk, err.status)
             return {}

@@ -2,7 +2,7 @@
 // light read; only accounts that start are read in full and decrypted):
 // new accounts start, disconnected ones stop, and accounts with fresh credentials restart. Work queued
 // in the app (replies and new emails, mail actions, unsubscribes, calendar events, ticked tasks) arrives through
-// Realtime and a safety-net poll (every 60 s in use, 5 minutes when quiet, and once on every Realtime
+// Realtime and a safety-net poll (every 2 minutes in use, 10 minutes when quiet, and once on every Realtime
 // reconnect), and is handed to the account's connector. Alongside run photo sync, the contact
 // linker, and a daily cleanup of files sent with old outbox rows.
 //
@@ -635,8 +635,8 @@ function watchQueues() {
   db.channel("attachment-requests")
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "attachment_fetch_requests" }, () => void live("attachment requests", fetchAttachmentRequests()))
     .subscribe();
-  // A safety net for a missed Realtime event (queued work normally arrives at once): every 60 s while the
-  // app is in use, every 5 minutes when quiet. A queued item snaps it back. The real gap is a Realtime
+  // A safety net for a missed Realtime event (queued work normally arrives at once): every 2 minutes while the
+  // app is in use, every 10 minutes when quiet. A queued item snaps it back. The real gap is a Realtime
   // reconnect, so the queues are also read once each time the channel (re)subscribes.
   let lastExpire = 0;
   const poll = () => {

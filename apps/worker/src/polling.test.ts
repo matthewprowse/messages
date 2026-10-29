@@ -86,11 +86,11 @@ test("a forgotten account starts active again", () => {
   assert.equal(acts.delay("a", plan, 9_000_000), 5_000);
 });
 
-test("the real plans: mail 5 s to 60 s, Outlook side folders 20 s to 5 min, Teams 15 s to 60 s, queue 60 s to 5 min", () => {
+test("the real plans: mail 5 s to 60 s, Outlook side folders 20 s to 5 min, Teams 15 s to 60 s, queue 2 min to 10 min", () => {
   const hour = 60 * 60_000;
   const at = (p: PollPlan) => [nextPollDelay(1, 0, p), nextPollDelay(11 * 60_000, 0, p), nextPollDelay(hour + 1, 0, p)];
   assert.deepEqual(at(GMAIL_POLL), [5_000, 30_000, 60_000]);
   assert.deepEqual(at(OUTLOOK_SIDE_POLL), [20_000, 120_000, 300_000]);
   assert.deepEqual(at(TEAMS_POLL), [15_000, 30_000, 60_000]);
-  assert.deepEqual(at(QUEUE_POLL), [60_000, 300_000, 300_000]);
+  assert.deepEqual(at(QUEUE_POLL), [120_000, 600_000, 600_000]);
 });

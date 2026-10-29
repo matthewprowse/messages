@@ -43,12 +43,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from . import log
 from .fields import BRIEF, EVENT_LOCATION, EVENT_TITLE, NAME, SUMMARY, TASK_TITLE
 from .gemini import Gemini, GeminiError, UsageContext
+from .retry import billing_paused
 from .supabase import Supabase, in_list
 from .text import UNTRUSTED, fenced, new_fence
 from .vault import Vault
 
 POLL_S = 10  # while briefs are being made or asked for
-IDLE_S = 15  # the longest wait between looks when nothing has been asked for or is due (poll.Backoff)
+# An idle brief looks 10s, 20s, then every 30s (poll.Backoff), and every 10s again once a brief is asked for or due.
+# A brief is read in a minute or more and the daily one is due by the clock, so a request waiting up to 30s is fine,
+# and each look costs several requests.
+IDLE_S = 30
 PROFILES_TTL_S = 300  # briefing times and time zones are read this often, not on every look
 SCRIPT_MAX_OUTPUT = 6144  # tokens, thinking included: a spoken brief is a few minutes of text
 AUDIO_BUCKET = "brief-audio"
@@ -469,9 +473,23 @@ class Brief:
             return 1
         except Exception as err:
             reason = getattr(err, "status", None) or type(err).__name__
+            if billing_paused(err):  # not this brief's fault: back to the queue, tried again after the pause
+                log.warn("brief held", user=user_id)
+                self._requeue(brief_id, user_id, day, "pending" if speak else None)
+                return 0
             log.warn("brief failed", user=user_id, code=reason)
             self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "failed", "error": "write_failed", "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
             return 0
+
+    def _requeue(self, brief_id: str, user_id: str, day: date | None, status: str | None) -> None:
+        """Puts a claimed brief back to waiting. A daily brief nobody asked for (status None) is deleted instead, and
+        forgotten, so the next look makes it again once billing is back; a request must not turn into one."""
+        if status:
+            self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": status, "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
+            return
+        self.db.delete("briefs", {"id": f"eq.{brief_id}"})
+        if day:
+            self._made.discard((user_id, day.isoformat()))
 
     def _voice(self, profile: dict[str, Any]) -> str:
         return profile.get("brief_voice") if profile.get("brief_voice") in VOICES else self.voice
@@ -491,6 +509,10 @@ class Brief:
             log.info("brief spoken", user=user_id, parts=len(parts), seconds=seconds)
             return 1
         except Exception as err:
+            if billing_paused(err):
+                log.warn("brief speech held", user=user_id)
+                self._requeue(brief_id, user_id, None, "speak_pending")
+                return 0
             log.warn("brief speech failed", user=user_id, code=getattr(err, "status", None) or type(err).__name__)
             self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "failed", "error": "speak_failed", "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
             return 0

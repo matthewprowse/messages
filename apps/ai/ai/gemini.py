@@ -10,6 +10,7 @@ prompt code, time taken, tokens, cost, tries), for finding slow, failing or cost
 from __future__ import annotations
 
 import base64
+import functools
 import http.client
 import io
 import json
@@ -26,6 +27,7 @@ from typing import Any
 
 from . import log
 from .analytics import Analytics, event, prompt_id
+from .billing import Breaker, is_billing_error, is_billing_paused
 from .http import POOL
 from .pricing import AUDIO_TOKENS_PER_SECOND, SEARCH_QUERY_USD, cost_usd, price_or_fallback
 from .supabase import Supabase
@@ -50,6 +52,28 @@ class GeminiError(Exception):
         super().__init__(f"gemini failed ({status}): {reason}")
         self.status = status
         self.detail = detail  # Google's message about the request, for telling error kinds apart; not logged
+
+
+def guarded(fn):
+    """Runs a method that makes a Gemini request behind the billing breaker: refused at once with
+    billing_paused while it is tripped (no request made), a success closes it, and a probe that failed for
+    another reason lets the next caller probe."""
+
+    @functools.wraps(fn)
+    def run(self, *args, **kwargs):
+        if not self._breaker.allow():
+            raise GeminiError(None, "billing_paused")
+        try:
+            out = fn(self, *args, **kwargs)
+        except BaseException as err:
+            if not (isinstance(err, GeminiError) and is_billing_paused(err)):
+                self._breaker.release()
+            raise
+        if self._breaker.success():
+            log.info("gemini billing recovered, calls resumed")
+        return out
+
+    return run
 
 
 @dataclass(frozen=True)
@@ -186,6 +210,7 @@ class Gemini:
         self._db = db
         self._usage = ThreadPoolExecutor(max_workers=1, thread_name_prefix="usage")  # finishes its queue on exit
         self._events = Analytics(db)
+        self._breaker = Breaker()  # trips on a billing failure so calls stop at once instead of failing one by one
         self._no_minimal: set[str] = set()  # models that turned down thinkingLevel "minimal"
         self._lock = threading.Lock()
         # user -> (read at, month % per feature, week % per feature, month dollars per feature, week dollars per feature)
@@ -559,6 +584,16 @@ class Gemini:
             raise GeminiError(None, "embeddings missing or the wrong size")
         return vectors
 
+    def _failure(self, status: int | None, reason: str, detail: str = "") -> GeminiError:
+        """The error for a failed response. A billing failure trips the breaker (one warning, however many calls
+        see it) and is reported as billing_paused, so callers treat it like a paused budget, not a try."""
+        if not is_billing_error(status, reason, detail):
+            return GeminiError(status, reason, detail)
+        if self._breaker.trip():
+            log.warn("gemini billing failed, calls paused", code=status, minutes=int(self._breaker._window // 60))
+        return GeminiError(status, "billing_paused", detail)
+
+    @guarded
     def upload_file(self, data: bytes, mime: str, *, timeout: float = 600) -> tuple[str, str]:
         """Sends a file to Gemini's Files API for calls that are too large to carry it inline, such as a
         meeting recording, and waits until it can be used. Returns (name, uri): uri goes in json(file=...),
@@ -576,7 +611,7 @@ class Gemini:
             res = POOL.request("POST", UPLOAD_ENDPOINT, json.dumps({"file": {"display_name": "recording"}}).encode(), headers, timeout=60)
             url = res.headers.get("x-goog-upload-url")
             if res.status >= 300 or not url:
-                raise GeminiError(res.status, error_reason(res.body)[0])
+                raise self._failure(res.status, *error_reason(res.body))
             sent = POOL.request(
                 "POST",
                 url,
@@ -587,7 +622,7 @@ class Gemini:
         except (OSError, http.client.HTTPException) as err:
             raise GeminiError(None, type(err).__name__) from None
         if sent.status >= 300:
-            raise GeminiError(sent.status, error_reason(sent.body)[0])
+            raise self._failure(sent.status, *error_reason(sent.body))
         try:
             info = json.loads(sent.body).get("file") or {}
         except ValueError:
@@ -711,6 +746,7 @@ class Gemini:
         except Exception:
             pass
 
+    @guarded
     def _call(
         self, model: str, body: dict[str, Any], endpoint: str = ENDPOINT, *, attempts: int = 4, timeout: float = 90, stats: dict[str, int] | None = None
     ) -> dict[str, Any]:
@@ -736,8 +772,8 @@ class Gemini:
                         raise GeminiError(res.status, "response was not JSON") from None
                 reason, detail = error_reason(res.body)
                 asked = retry_wait(res.body, res.headers)
-                if res.status not in RETRY_STATUSES or last or (asked or 0) > MAX_RETRY_WAIT_S:
-                    raise GeminiError(res.status, reason, detail)
+                if is_billing_error(res.status, reason, detail) or res.status not in RETRY_STATUSES or last or (asked or 0) > MAX_RETRY_WAIT_S:  # billing is never waited out
+                    raise self._failure(res.status, reason, detail)
                 if asked is not None:
                     wait = asked + random.random()
             time.sleep(wait)

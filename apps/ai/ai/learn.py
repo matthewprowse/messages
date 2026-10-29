@@ -123,8 +123,7 @@ class Learn:
                 try:  # one row that fails must not hold up the ones behind it
                     self.vault.open_row(row["user_id"], row, [("body", BODY)])
                     self.vault.open_row(row["user_id"], row["drafts"], [("body", DRAFT)])
-                    self._learn(row["user_id"], row["draft_id"], row["thread_id"], row["drafts"]["body"] or "", row["body"], mark_sent=True)
-                    done += 1
+                    done += self._learn(row["user_id"], row["draft_id"], row["thread_id"], row["drafts"]["body"] or "", row["body"], mark_sent=True)
                 except Exception as err:
                     log.warn("draft outcome not learned", draft=row["draft_id"], code=log.code_of(err))
         if time.monotonic() - self._rewrites_at >= REWRITES_EVERY_S:
@@ -186,18 +185,19 @@ class Learn:
             sent_body = clean(reply.get("body_text"), reply.get("body_html"), limit=4000)
             if sent_body:
                 try:
-                    self._learn(d["user_id"], d["id"], d["thread_id"], d["body"], sent_body, mark_sent=False)
-                    done += 1
+                    done += self._learn(d["user_id"], d["id"], d["thread_id"], d["body"], sent_body, mark_sent=False)
                 except Exception as err:
                     log.warn("rewrite not learned", draft=d["id"], code=log.code_of(err))
         return done
 
-    def _learn(self, user_id: str, draft_id: str, thread_id: str, draft_body: str, sent_body: str, *, mark_sent: bool) -> None:
+    def _learn(self, user_id: str, draft_id: str, thread_id: str, draft_body: str, sent_body: str, *, mark_sent: bool) -> int:
+        """1 when the edit was learned from (or has nothing to learn), 0 when the model step failed and it will be tried again.
+        The count keeps run_once from reporting work while Gemini is down, which would hold the poll at its busy pace."""
         ratio = edit_ratio(draft_body, sent_body)
         row = {"user_id": user_id, "draft_id": draft_id, "thread_id": thread_id, "body": sent_body}
         thread = self.db.first("threads", {"select": "account_id,user_id", "id": f"eq.{thread_id}"})
         if not thread or thread["user_id"] != user_id:
-            return
+            return 1
         latest_in = self.db.first(
             "messages",
             {"select": "sender_contact_id", "thread_id": f"eq.{thread_id}", "direction": "eq.inbound", "order": "sent_at.desc"},
@@ -230,7 +230,7 @@ class Learn:
                 )
             except GeminiError as err:
                 log.warn("learning failed", draft=row["draft_id"], status=err.status)
-                return
+                return 0
 
         self.db.insert(
             "draft_outcomes",
@@ -248,7 +248,7 @@ class Learn:
             self.db.update("drafts", {"id": f"eq.{draft_id}"}, {"status": "sent"})
         log.info("draft outcome", draft=draft_id, edit_ratio=ratio, rewritten=not mark_sent)
         if ratio < LEARN_FROM_RATIO:
-            return
+            return 1
 
         by_text = {(r["rule"].strip().lower(), r["contact_id"]): r for r in existing}
         for item in (result.get("rules") or [])[:3]:
@@ -266,3 +266,4 @@ class Learn:
                     {"user_id": row["user_id"], "scope": scope, "contact_id": contact_id if scope == "contact" else None, "rule": self.vault.seal(row["user_id"], STYLE_RULE, text)},
                 )
         log.info("rules learned", draft=row["draft_id"], rules=len(result.get("rules") or []))
+        return 1

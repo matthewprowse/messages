@@ -123,12 +123,12 @@ export const TEAMS_POLL: PollPlan = {
 /**
  * The queue safety-net poll. Realtime delivers queued work at once, and index.ts reads the queues once
  * more every time the channel (re)subscribes, which is the real gap; this only catches an event that was
- * missed some other way. Every 60 s while the app was used in the last 10 minutes, every 5 minutes otherwise.
+ * missed some other way. Every 2 minutes while the app was used in the last 10 minutes, every 10 minutes otherwise.
  */
 export const QUEUE_POLL: PollPlan = {
-  activeMs: ms("QUEUE_POLL_ACTIVE_MS", 60_000),
-  idleMs: ms("QUEUE_POLL_IDLE_MS", 5 * 60_000),
-  deepIdleMs: ms("QUEUE_POLL_DEEP_IDLE_MS", 5 * 60_000),
+  activeMs: ms("QUEUE_POLL_ACTIVE_MS", 2 * 60_000),
+  idleMs: ms("QUEUE_POLL_IDLE_MS", 10 * 60_000),
+  deepIdleMs: ms("QUEUE_POLL_DEEP_IDLE_MS", 10 * 60_000),
   activeWindowMs: GMAIL_POLL.activeWindowMs,
   deepIdleAfterMs: GMAIL_POLL.deepIdleAfterMs,
 };

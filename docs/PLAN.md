@@ -2289,3 +2289,45 @@ Core for the test: email, WhatsApp, calendar and tasks. Instagram and LinkedIn a
 Claude writes most of the code, so building the MVP list is about a month. What takes longer is
 testing on real accounts, refining from feedback and waiting on the approvals above. Build time is
 about 2 hours each weekday morning, 2 hours each evening and full days on weekends.
+## Speed and Efficiency Pass (29 October 2026)
+
+Found by reading the code, not by measuring. The Gemini account was in arrears, so nothing here was tried live; the
+numbers below are estimates from the loop intervals.
+
+### Decided and Built
+
+- **Gemini billing breaker** (`apps/ai/ai/billing.py`). A billing refusal (402, 403, PERMISSION_DENIED, or a 429 or
+  400 with clear billing wording) pauses every Gemini call for 10 minutes, then lets one probe through. Ordinary
+  per-minute rate limits keep their retries and do not trip it. While paused, a call fails at once with
+  `billing_paused` and sends nothing. Transcribe and meetings do not count it as a try, triage does not re-ask a
+  failed batch one message at a time, and drafts, briefs and bulk reads stay queued instead of failing. An automatic
+  daily brief is recreated after the pause.
+- **Idle polling in the AI worker.** Drafts idle ceiling 5s to 10s (not 15s: nothing wakes the loop, so a longer wait
+  would delay a requested draft), stale-pending sweep 30s to 60s, audio cleanup every 300s on its own timer, brief
+  idle 30s. Active cadences are unchanged. Bulk read idle moves to 30s too, with the bulk read work itself.
+- **Sync worker queue safety poll** 60s/5min to 2min/10min. Realtime already pushes every queue and a read runs on
+  each subscribe, so the poll is a backstop. Named columns instead of `select("*")` in the queue loaders were tried
+  and dropped: the row types are passed whole to the connectors and used for patches, so narrowing touched many files
+  for no payload saving.
+- **Indexes** (`20261115090000_idle_query_indexes.sql`): contact_identities, contacts and address_book_cards on
+  (user_id, id), a drafts audio-cleanup partial index, drafts pending in claim order (replacing `drafts_pending_idx`),
+  and sent-from-draft outbox rows for learning. Not applied yet.
+- **Web:** compose dialog loaded with `next/dynamic`, and the phone-format load started in parallel.
+- **Learning** counted a row as done when Gemini failed; it now counts only real work.
+
+### Not Done
+
+- Written but held back, because they sit in files with other work in progress (`store.tsx`, `__main__.py`,
+  `bulk_read.py`): the flattened `messages` array computed only when read, `listThreads` cached per view and filter
+  (`memo-last.ts`), the bulk read idle interval, and `tests/test_idle_polling.py`. They go in with that work.
+- Split the store context into state and actions (about 80 to 120 files use `useApp()`; 1 to 1.5 days). The biggest
+  remaining web win, since any store change redraws every screen.
+- Realtime wakeups for drafts and bulk reads in the AI worker (needs a websocket client and the tables in the
+  Realtime publication). Revisit once the cheaper intervals are measured.
+- Check `pg_stat_user_indexes` and drop the likely duplicates: `messages_sender_idx` against
+  `messages_sender_address_idx`, and `feedback_thread_idx` against `feedback_thread_recent_idx`.
+- The attachment-requests Realtime channel has no read on resubscribe; if its publication migration is missing, an old
+  attachment can now wait up to 10 minutes.
+- A 5.6MB `simple-icons` chunk shows in the dev build with no import found; rebuild clean and look again.
+- Measure real per-job latency, cost and cache hit rate from the usage rows once Gemini is paid for.
+

@@ -15,6 +15,7 @@ from typing import Any
 from . import log
 from .crypto import is_ciphertext
 from .fields import ATTACHMENT_DATA, FILENAME, TRANSCRIPT
+from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, SupabaseError
 from .text import UNTRUSTED
@@ -202,8 +203,8 @@ class Transcribe:
         self.db.update("messages", {"id": f"eq.{message_id}"}, {"transcript": transcript, "transcript_status": status}, minimal=True)
 
     def _failed(self, m: dict[str, Any], err: Exception) -> None:
-        if isinstance(err, GeminiError) and "budget_" in str(err):
-            # The share is used up (or could not be read): not this note's fault, so it is not a try. Wait and look again.
+        if isinstance(err, GeminiError) and ("budget_" in str(err) or is_billing_paused(err)):
+            # The share is used up (or could not be read), or billing is paused: not this note's fault, so it is not a try. Wait and look again.
             self._tries[m["id"]] = (self._tries.get(m["id"], (0, 0.0))[0], time.monotonic() + RETRY_S)
             log.info("voice note waiting on the allowance", message=m["id"])
             return

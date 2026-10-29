@@ -38,3 +38,10 @@ class Backoff:
 def not_in(ids: list[str], column: str = "id") -> dict[str, str]:
     """A PostgREST filter leaving these ids out, or nothing when there are none."""
     return {column: "not.in.(" + ",".join(ids) + ")"} if ids else {}
+
+
+def billing_paused(err: BaseException) -> bool:
+    """True when Gemini refused because billing is paused (GeminiError reason billing_paused). Matched on the
+    reason string, which is in the message and, once the breaker lands, on a reason field, so it works either way.
+    Such a failure is not the row's fault: the row stays queued and is tried again after the pause."""
+    return getattr(err, "reason", None) == "billing_paused" or "billing_paused" in str(err)

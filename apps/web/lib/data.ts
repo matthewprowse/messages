@@ -411,6 +411,8 @@ async function loadSmall() {
 /** Everything the list screens need, in parallel. Messages load per conversation when it is opened. */
 export async function loadEverything(): Promise<Loaded> {
   const me = await myId();
+  // Independent of the queries, so it loads beside them instead of after.
+  const phoneReady = whenPhoneFormatReady();
   const [threads, small, contacts] = await Promise.all([
     // Deleted conversations (in the provider's bin) are never shown, so they are not loaded.
     supabase.from("threads").select(THREAD_WITH_IDS).eq("user_id", me).neq("status", "trash")
@@ -420,8 +422,7 @@ export async function loadEverything(): Promise<Loaded> {
     loadContacts().catch(() => null),
   ]);
   if (threads.error) throw threads.error;
-  await openThreads(threads.data ?? []);
-  await whenPhoneFormatReady();
+  await Promise.all([openThreads(threads.data ?? []), phoneReady]);
   const { draftOf, waiting, ...rest } = small;
   return {
     threads: (threads.data ?? []).map((t) => ({ ...threadWithIds(t), draft: draftOf.get(t.id), waiting: waiting.has(t.id) })),

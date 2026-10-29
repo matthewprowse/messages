@@ -38,6 +38,7 @@ from typing import Any
 from . import log
 from .crypto import is_sealed_bytes
 from .fields import MEETING_ACTIONS, MEETING_TITLE, NAME, RECORDING_DATA, SUMMARY, TRANSCRIPT
+from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .pricing import AUDIO_TOKENS_PER_SECOND, cost_usd
 from .supabase import Supabase, SupabaseError
@@ -519,8 +520,8 @@ class Meetings:
         self.db.update("meetings", {"id": f"eq.{meeting_id}", "status": f"eq.{status}"}, patch, minimal=True)
 
     def _failed(self, m: dict[str, Any], status: str, reason: str, err: Exception) -> None:
-        if isinstance(err, GeminiError) and err.args and "budget_" in str(err):
-            # The share is used up (or could not be read): not this meeting's fault, so it is not a try. Wait and look again.
+        if isinstance(err, GeminiError) and err.args and ("budget_" in str(err) or is_billing_paused(err)):
+            # The share is used up (or could not be read), or billing is paused: not this meeting's fault, so it is not a try. Wait and look again.
             self._tries[m["id"]] = (self._tries.get(m["id"], (0, 0.0))[0], time.monotonic() + RETRY_S)
             log.info("meeting step waiting on the allowance", meeting=m["id"], step=status)
             return
