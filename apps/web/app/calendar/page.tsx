@@ -7,7 +7,7 @@
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, CalendarDays } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarDays, Clock } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { visibleEvents } from "@/lib/event-filter";
@@ -15,7 +15,7 @@ import { applyEdits, type CalendarEvent } from "@/lib/calendar";
 import { daysOf } from "@/lib/calendar-days";
 import { addDays, dayKey, fromKey, parseKey, startOfDay, startOfMonth, startOfWeek } from "@/lib/dates";
 import { syncNotice } from "@/lib/sync-window";
-import { tasksByDay, visibleTasks, type DayTask } from "@/lib/tasks";
+import { tasksByDay, undatedTasks, visibleTasks, type DayTask } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -27,11 +27,13 @@ import { NewTaskDialog } from "@/components/new-task-dialog";
 import { DeleteEventDialog } from "@/components/delete-event-dialog";
 
 import { DAY_MIN, LABELS, View, byTime, rangeLabel } from "@/components/calendar/dates";
+import { CopyFreeTimes } from "@/components/calendar/copy-free-times";
 import { EventDialog } from "@/components/calendar/event-details";
 import { EventList } from "@/components/calendar/event-list";
 import { MonthView } from "@/components/calendar/month-view";
 import { Now, Page, PageContext, useWide } from "@/components/calendar/page-context";
 import { TaskDialog } from "@/components/calendar/task-parts";
+import { UndatedTasks } from "@/components/calendar/undated-tasks";
 import { useCalendarData } from "@/components/calendar/use-calendar-data";
 import { useCalendarKeys } from "@/components/calendar/use-calendar-input";
 import { usePendingChanges } from "@/components/calendar/use-pending-changes";
@@ -97,6 +99,7 @@ function CalendarPageContent() {
   const [editFor, setEditFor] = useState<CalendarEvent | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const [freeOpen, setFreeOpen] = useState(false);
   const [newDay, setNewDay] = useState<string | undefined>(undefined);
   const [newTime, setNewTime] = useState<string | undefined>(undefined);
   const [newUntil, setNewUntil] = useState<string | undefined>(undefined);
@@ -146,6 +149,7 @@ function CalendarPageContent() {
   }, [events, days]);
   // Tasks on the days shown, with open overdue ones on today. Shown once events have loaded, so the grid draws once.
   const tasksOnDays = useMemo(() => (events ? tasksByDay(visibleTasks(tasks, term), days, now) : new Map<string, DayTask[]>()), [events, tasks, term, days, now]);
+  const undated = useMemo(() => undatedTasks(tasks, term), [tasks, term]);
   const openTask = openTaskId ? (tasks.find((t) => t.id === openTaskId) ?? null) : null;
 
   const shownDetails = useMemo(() => {
@@ -185,7 +189,7 @@ function CalendarPageContent() {
     setNewOpen(true);
   };
 
-  useCalendarKeys({ today, blocked: newOpen || editOpen || !!deleteFor || !!openKey || !!openTask || newTaskOpen, setAnchor, setView, onNewEvent: () => openNew(anchorKey), onNewTask: () => setNewTaskOpen(true) });
+  useCalendarKeys({ today, blocked: newOpen || freeOpen || editOpen || !!deleteFor || !!openKey || !!openTask || newTaskOpen, setAnchor, setView, onNewEvent: () => openNew(anchorKey), onNewTask: () => setNewTaskOpen(true) });
 
   // With no account connected at all, the first step is connecting one.
   const noAccounts = !accounts.some((a) => a.status !== "disconnected");
@@ -240,7 +244,7 @@ function CalendarPageContent() {
         setEditFor(event);
         setEditOpen(true);
       },
-      answer: (event, response) => void pending.answer(event, response),
+      answer: (event, response, scope) => void pending.answer(event, response, scope),
       openTask: setOpenTaskId,
       sourceOf: (task) => {
         const provider = accounts.find((a) => a.id === task.accountId)?.provider;
@@ -262,6 +266,7 @@ function CalendarPageContent() {
             title="Calendar"
             action={
               <div className="flex shrink-0 items-center gap-2">
+                <Button variant="ghost" size="icon" aria-label="Copy Free Times" title="Copy Free Times" onClick={() => setFreeOpen(true)}><Clock /></Button>
                 <Button variant="secondary" onClick={() => setNewTaskOpen(true)}>New Task</Button>
                 <Button variant="secondary" onClick={() => openNew(anchorKey)}>New Event</Button>
               </div>
@@ -272,6 +277,7 @@ function CalendarPageContent() {
             </PaneControls>
           </PaneHeader>
           <SearchBand value={search} onChange={setSearch} placeholder="Filter This View" />
+          <UndatedTasks tasks={undated} onNewTask={() => setNewTaskOpen(true)} />
         </div>
 
         {/* The month or dates on show, with the arrows on the far right, like the header of every other page. */}
@@ -357,6 +363,7 @@ function CalendarPageContent() {
           )}
         </div>
 
+        <CopyFreeTimes open={freeOpen} onOpenChange={setFreeOpen} queued={queued} now={now} />
         <EventDialog event={openEvent} onClose={() => setOpenKey(null)} />
         <TaskDialog task={openTask} onClose={() => setOpenTaskId(null)} onEdit={(t) => { setOpenTaskId(null); setEditTarget(t); setNewTaskOpen(true); }} />
         <NewTaskDialog open={newTaskOpen} onOpenChange={(o) => { setNewTaskOpen(o); if (!o) setEditTarget(null); }} editing={editTarget ?? undefined} />

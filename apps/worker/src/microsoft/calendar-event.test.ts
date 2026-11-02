@@ -7,6 +7,13 @@ import { graphTimestamp, storedOutlookEvent } from "./calendar-event";
 
 const owner = { userId: "u1", accountId: "a1", calendarId: "cal1", selfAddresses: new Set(["me@firm.co.za"]) };
 
+test("an occurrence of a repeating event keeps its series master, which answers and deletes act on", () => {
+  const start = { dateTime: "2026-10-26T07:00:00.0000000", timeZone: "UTC" };
+  const row = storedOutlookEvent({ id: "occ1", seriesMasterId: "master1", subject: "Stand-up", start, end: start }, owner);
+  assert.equal(row?.series_id, "master1");
+  assert.equal(storedOutlookEvent({ id: "single", subject: "Once", start, end: start }, owner)?.series_id, null);
+});
+
 test("reads Graph's UTC times", () => {
   assert.equal(graphTimestamp({ dateTime: "2026-10-24T08:30:00.0000000", timeZone: "UTC" }, false), "2026-10-24T08:30:00.000Z");
   assert.equal(graphTimestamp({ dateTime: "2026-10-24T00:00:00.0000000", timeZone: "UTC" }, true), "2026-10-24T00:00:00Z");

@@ -135,6 +135,8 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
                     />
                   </PopoverContent>
                 </Popover>
+                {/* A task may have no date: Calendar lists those under No Date. */}
+                <Button type="button" variant="ghost" onClick={() => set({ date: "", time: "" })} disabled={!form.date}>No Date</Button>
               </div>
               {errorFor("date") && <p className="text-xs text-destructive">{errorFor("date")}</p>}
             </div>

@@ -154,7 +154,8 @@ class Triage(ContextMixin):
                 ask.append(m)
         settled_senders = self._settled_senders(ask)
         for m in list(ask):
-            if m["id"] in settled_senders:
+            # A starred contact is always looked at, even when the model has settled on the address as bulk.
+            if m["id"] in settled_senders and m.get("sender_contact_id") not in contexts[m["user_id"]].vip_contacts:
                 results[m["id"]] = (settled_senders[m["id"]], None)
                 sources[m["id"]] = "sender"
                 ask.remove(m)
@@ -200,7 +201,7 @@ class Triage(ContextMixin):
                 )
                 for m in done
             }
-            final = {m["id"]: apply_signals(results[m["id"]][0], (m.get("sender_address") or "").lower(), contexts[m["user_id"]], feedback.get(m["thread_id"], [])) for m in done}
+            final = {m["id"]: apply_signals(results[m["id"]][0], (m.get("sender_address") or "").lower(), contexts[m["user_id"]], feedback.get(m["thread_id"], []), m.get("sender_contact_id")) for m in done}
             self.db.upsert(
                 "message_ai",
                 [

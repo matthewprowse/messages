@@ -14,6 +14,18 @@ export type Database = {
   }
   public: {
     Tables: {
+      account_deletions: {
+        Row: { user_id: string; requested_at: string; run_after: string; status: string; attempts: number; error_code: string | null; started_at: string | null; updated_at: string }
+        Insert: { user_id: string; requested_at?: string; run_after: string; status?: string; attempts?: number; error_code?: string | null; started_at?: string | null; updated_at?: string }
+        Update: { user_id?: string; requested_at?: string; run_after?: string; status?: string; attempts?: number; error_code?: string | null; started_at?: string | null; updated_at?: string }
+        Relationships: []
+      }
+      account_removals: {
+        Row: { id: string; user_id: string; account_id: string; status: string; attempts: number; error_code: string | null; created_at: string; updated_at: string }
+        Insert: { id?: string; user_id: string; account_id: string; status?: string; attempts?: number; error_code?: string | null; created_at?: string; updated_at?: string }
+        Update: { id?: string; user_id?: string; account_id?: string; status?: string; attempts?: number; error_code?: string | null; created_at?: string; updated_at?: string }
+        Relationships: []
+      }
       ai_budget: {
         Row: { id: boolean; monthly_usd: number; shares: Json; weekly_pct: number; weekly_features: string[]; setup_usd: number; setup_days: number; regen_per_hour: number; auto_drafts_per_day: number; summaries_per_day: number; flag_multiple: number; flag_day_usd: number; updated_at: string }
         Insert: { id?: boolean; monthly_usd?: number; shares?: Json; weekly_pct?: number; weekly_features?: string[]; setup_usd?: number; setup_days?: number; regen_per_hour?: number; auto_drafts_per_day?: number; summaries_per_day?: number; flag_multiple?: number; flag_day_usd?: number; updated_at?: string }
@@ -116,6 +128,30 @@ export type Database = {
           n?: number
           user_hash?: string
           window_start?: string
+        }
+        Relationships: []
+      }
+      account_composer: {
+        Row: {
+          account_id: string
+          has_signature: boolean
+          settings: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          account_id: string
+          has_signature?: boolean
+          settings: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          account_id?: string
+          has_signature?: boolean
+          settings?: string
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -1200,6 +1236,7 @@ export type Database = {
       }
       contacts: {
         Row: {
+          about_note: string | null
           ai_summary: string | null
           hidden: boolean
           kind_override: string | null
@@ -1218,8 +1255,10 @@ export type Database = {
           style_updated_at: string | null
           updated_at: string
           user_id: string
+          vip: boolean
         }
         Insert: {
+          about_note?: string | null
           ai_summary?: string | null
           hidden?: boolean
           kind_override?: string | null
@@ -1238,8 +1277,10 @@ export type Database = {
           style_updated_at?: string | null
           updated_at?: string
           user_id: string
+          vip?: boolean
         }
         Update: {
+          about_note?: string | null
           ai_summary?: string | null
           hidden?: boolean
           kind_override?: string | null
@@ -1258,6 +1299,7 @@ export type Database = {
           style_updated_at?: string | null
           updated_at?: string
           user_id?: string
+          vip?: boolean
         }
         Relationships: [
           {
@@ -1555,6 +1597,30 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      labels: {
+        Row: {
+          color: string
+          created_at: string
+          id: string
+          name: string
+          user_id: string
+        }
+        Insert: {
+          color?: string
+          created_at?: string
+          id?: string
+          name: string
+          user_id?: string
+        }
+        Update: {
+          color?: string
+          created_at?: string
+          id?: string
+          name?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       mail_actions: {
         Row: {
@@ -2009,8 +2075,68 @@ export type Database = {
           },
         ]
       }
+      note_links: {
+        Row: {
+          contact_id: string | null
+          created_at: string
+          event_id: string | null
+          id: string
+          note_id: string
+          thread_id: string | null
+          user_id: string
+        }
+        Insert: {
+          contact_id?: string | null
+          created_at?: string
+          event_id?: string | null
+          id?: string
+          note_id: string
+          thread_id?: string | null
+          user_id?: string
+        }
+        Update: {
+          contact_id?: string | null
+          created_at?: string
+          event_id?: string | null
+          id?: string
+          note_id?: string
+          thread_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "note_links_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "note_links_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "note_links_note_id_fkey"
+            columns: ["note_id"]
+            isOneToOne: false
+            referencedRelation: "notes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "note_links_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notes: {
         Row: {
+          archived: boolean
           body: string
           created_at: string
           excerpt: string | null
@@ -2022,6 +2148,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          archived?: boolean
           body?: string
           created_at?: string
           excerpt?: string | null
@@ -2033,6 +2160,7 @@ export type Database = {
           user_id?: string
         }
         Update: {
+          archived?: boolean
           body?: string
           created_at?: string
           excerpt?: string | null
@@ -2102,6 +2230,7 @@ export type Database = {
           id: string
           provider_message_id: string | null
           reply_to_message_id: string | null
+          send_after: string | null
           sent_at: string | null
           status: string
           subject: string | null
@@ -2123,6 +2252,7 @@ export type Database = {
           id?: string
           provider_message_id?: string | null
           reply_to_message_id?: string | null
+          send_after?: string | null
           sent_at?: string | null
           status?: string
           subject?: string | null
@@ -2144,6 +2274,7 @@ export type Database = {
           id?: string
           provider_message_id?: string | null
           reply_to_message_id?: string | null
+          send_after?: string | null
           sent_at?: string | null
           status?: string
           subject?: string | null
@@ -2273,6 +2404,7 @@ export type Database = {
           briefing_time: string
           created_at: string
           display_name: string | null
+          draft_tone: string | null
           important_people: string | null
           push_important: boolean
           push_urgent: boolean
@@ -2296,6 +2428,7 @@ export type Database = {
           briefing_time?: string
           created_at?: string
           display_name?: string | null
+          draft_tone?: string | null
           important_people?: string | null
           push_important?: boolean
           push_urgent?: boolean
@@ -2319,6 +2452,7 @@ export type Database = {
           briefing_time?: string
           created_at?: string
           display_name?: string | null
+          draft_tone?: string | null
           important_people?: string | null
           push_important?: boolean
           push_urgent?: boolean
@@ -2362,6 +2496,42 @@ export type Database = {
           p256dh?: string
           user_agent?: string | null
           user_id?: string
+        }
+        Relationships: []
+      }
+      storage_deletions: {
+        Row: { attempts: number; created_at: string; id: string; path: string; user_id: string }
+        Insert: { attempts?: number; created_at?: string; id?: string; path: string; user_id: string }
+        Update: { attempts?: number; created_at?: string; id?: string; path?: string; user_id?: string }
+        Relationships: []
+      }
+      saved_views: {
+        Row: {
+          created_at: string
+          filter: string
+          id: string
+          label_id: string | null
+          name: string
+          user_id: string
+          view: string
+        }
+        Insert: {
+          created_at?: string
+          filter?: string
+          id?: string
+          label_id?: string | null
+          name: string
+          user_id?: string
+          view?: string
+        }
+        Update: {
+          created_at?: string
+          filter?: string
+          id?: string
+          label_id?: string | null
+          name?: string
+          user_id?: string
+          view?: string
         }
         Relationships: []
       }
@@ -2523,11 +2693,13 @@ export type Database = {
         Row: {
           account_id: string | null
           action: string
+          contact_id: string | null
           created_at: string
           due_all_day: boolean
           due_at: string | null
           error: string | null
           id: string
+          linked_at: string | null
           notes: string | null
           priority: number | null
           status: string
@@ -2538,11 +2710,13 @@ export type Database = {
         Insert: {
           account_id?: string | null
           action: string
+          contact_id?: string | null
           created_at?: string
           due_all_day?: boolean
           due_at?: string | null
           error?: string | null
           id?: string
+          linked_at?: string | null
           notes?: string | null
           priority?: number | null
           status?: string
@@ -2553,11 +2727,13 @@ export type Database = {
         Update: {
           account_id?: string | null
           action?: string
+          contact_id?: string | null
           created_at?: string
           due_all_day?: boolean
           due_at?: string | null
           error?: string | null
           id?: string
+          linked_at?: string | null
           notes?: string | null
           priority?: number | null
           status?: string
@@ -2731,6 +2907,27 @@ export type Database = {
           },
         ]
       }
+      thread_labels: {
+        Row: {
+          created_at: string
+          label_id: string
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          label_id: string
+          thread_id: string
+          user_id?: string
+        }
+        Update: {
+          created_at?: string
+          label_id?: string
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       thread_notes: {
         Row: {
           body: string
@@ -2826,6 +3023,7 @@ export type Database = {
           needs_reply: boolean
           pinned: boolean
           priority: string | null
+          push_notified_at: string | null
           provider_thread_id: string
           provider_thread_index: string | null
           share_from: string | null
@@ -2835,6 +3033,9 @@ export type Database = {
           share_suggestion: string | null
           shared_at: string | null
           shared_by: string | null
+          snooze_kind: string | null
+          snoozed_at: string | null
+          snoozed_until: string | null
           status: string
           subject: string | null
           subscription: boolean
@@ -2864,6 +3065,7 @@ export type Database = {
           needs_reply?: boolean
           pinned?: boolean
           priority?: string | null
+          push_notified_at?: string | null
           provider_thread_id: string
           provider_thread_index?: string | null
           share_from?: string | null
@@ -2873,6 +3075,9 @@ export type Database = {
           share_suggestion?: string | null
           shared_at?: string | null
           shared_by?: string | null
+          snooze_kind?: string | null
+          snoozed_at?: string | null
+          snoozed_until?: string | null
           status?: string
           subject?: string | null
           subscription?: boolean
@@ -2902,6 +3107,7 @@ export type Database = {
           needs_reply?: boolean
           pinned?: boolean
           priority?: string | null
+          push_notified_at?: string | null
           provider_thread_id?: string
           provider_thread_index?: string | null
           share_from?: string | null
@@ -2911,6 +3117,9 @@ export type Database = {
           share_suggestion?: string | null
           shared_at?: string | null
           shared_by?: string | null
+          snooze_kind?: string | null
+          snoozed_at?: string | null
+          snoozed_until?: string | null
           status?: string
           subject?: string | null
           subscription?: boolean
@@ -3028,6 +3237,39 @@ export type Database = {
           title?: string
           updated_at?: string
           version?: string | null
+        }
+        Relationships: []
+      }
+      user_templates: {
+        Row: {
+          body: string
+          created_at: string
+          id: string
+          kind: string
+          position: number
+          shortcut: string | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          id?: string
+          kind: string
+          position?: number
+          shortcut?: string | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          id?: string
+          kind?: string
+          position?: number
+          shortcut?: string | null
+          title?: string
+          user_id?: string
         }
         Relationships: []
       }
@@ -3667,7 +3909,14 @@ export type Database = {
       }
     }
     Functions: {
+      cancel_outbox: { Args: { p_id: string }; Returns: boolean }
+      send_outbox_now: { Args: { p_id: string }; Returns: boolean }
+      disconnect_account: { Args: { p_accounts: string[] }; Returns: number }
+      request_account_removal: { Args: { p_accounts: string[]; p_confirm: string }; Returns: number }
+      list_my_sessions: { Args: never; Returns: { id: string; created_at: string; refreshed_at: string | null; user_agent: string | null; aal: string | null; current: boolean }[] }
       set_attachment_hidden: { Args: { p_ids: string[]; p_hidden: boolean }; Returns: number }
+      delete_attachment_files: { Args: { p_ids: string[] }; Returns: number }
+      attachment_copies: { Args: { p_id: string }; Returns: { attachment_id: string; message_id: string; thread_id: string }[] }
       my_ai_allowance: { Args: never; Returns: Json }
       my_workspace_id: { Args: never; Returns: string }
       my_workspace_role: { Args: never; Returns: string }
@@ -4092,6 +4341,14 @@ export type Database = {
       }
       confirm_unsubscribe: { Args: { p_id: string }; Returns: undefined }
       contact_merge_caller: { Args: { p_user: string }; Returns: string }
+      contact_last_touch: {
+        Args: { p_contact?: string }
+        Returns: {
+          contact_id: string
+          last_inbound_at: string
+          last_outbound_at: string
+        }[]
+      }
       contact_summaries: {
         Args: never
         Returns: {

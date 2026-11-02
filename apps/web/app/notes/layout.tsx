@@ -6,6 +6,7 @@
 import { usePathname } from "next/navigation";
 import { NoteList } from "@/components/note-list";
 import { NotesProvider } from "@/components/notes-data";
+import { NoteCaptureShortcut } from "@/components/note-capture";
 import { cn } from "@/lib/utils";
 
 export default function NotesLayout({ children }: { children: React.ReactNode }) {
@@ -13,6 +14,7 @@ export default function NotesLayout({ children }: { children: React.ReactNode })
   const isDetail = /^\/notes\/[^/]+/.test(pathname);
   return (
     <NotesProvider>
+      <NoteCaptureShortcut />
       <div className="flex h-full min-h-0">
         <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-80 md:border-r lg:w-1/3", isDetail ? "hidden" : "flex")}>
           <NoteList />

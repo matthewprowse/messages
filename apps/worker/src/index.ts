@@ -30,8 +30,10 @@ import { startUsageRollup } from "./usage-rollup";
 import { isPrimaryShard } from "./shard";
 import { failInterruptedWork, requeueWorkingActions } from "./recovery";
 import { Lease } from "./lease";
+import { startPushSender } from "./push/sender";
 import { startOutboxCleanup } from "./send/outbox-attachments";
 import { startStorageMaintenance } from "./runtime/maintenance";
+import { startAccountJobs } from "./account/jobs";
 import { watchQueues } from "./runtime/queues";
 import { reconcile, watchAccounts } from "./runtime/reconcile";
 import { stopAndExit } from "./runtime/shutdown";
@@ -77,7 +79,8 @@ async function main() {
   //  - photos: address-book imports match across a person's accounts, which may sit on different shards, and the shared company icons;
   //  - logos: one shared company queue; contacts and addresses: whole-table scans and merges that would race each other;
   //  - meetings: links across providers; usage rollup: a single table fold; outbox cleanup: sweeps old files;
-  //  - share jobs, key rotation, team rules: re-seal and share chats under keys that must change once.
+  //  - share jobs, key rotation, team rules: re-seal and share chats under keys that must change once;
+  //  - push: reads every person's new Urgent and Important threads in one pass.
   if (isPrimaryShard) {
     startPhotoSync();
     startCompanyLogos();
@@ -90,6 +93,8 @@ async function main() {
     startTeamKeyRotation(); // new team key version after a member leaves, then re-seals the team's content under it
     startTeamRules(); // shares chats with team clients (or suggests them), and suggests chats triage marked as work
     startStorageMaintenance();
+    startPushSender(); // content-free web push for Urgent and Important messages, within each person's settings
+    startAccountJobs(); // Delete My Account after its grace period, and Remove Account
   } else {
     log.info("not the primary shard: shared jobs run on shard 0", { shard: env.shardIndex });
   }

@@ -9,9 +9,9 @@ import { buildEventRow, type EventField, type EventForm } from "./new-items";
 import { sameRepeat } from "./recurrence";
 import type { Contact as AddressBookContact } from "./types";
 
-/** The calendars whose events can be edited and answered from here. Outlook Calendar's sign-in is read only for now. */
+/** The calendars whose events can be created, edited, answered and deleted from here. Outlook needs Calendars.ReadWrite, which the worker checks. */
 export function canChangeEvents(provider: string | undefined) {
-  return provider === "google_calendar" || provider === "icloud_calendar";
+  return provider === "google_calendar" || provider === "icloud_calendar" || provider === "outlook_calendar";
 }
 
 /** Your answers to an invitation, as the calendar_updates table spells them. */
@@ -134,7 +134,7 @@ export function buildUpdate(
   return { ok: true, row: changed ? row : null, patch };
 }
 
-/** The calendar_updates row that answers an invitation. */
-export function buildResponse(event: CalendarEvent, response: EventResponse): UpdateInsert {
-  return { account_id: event.accountId ?? "", event_id: event.id, kind: "rsvp", scope: "occurrence", response };
+/** The calendar_updates row that answers an invitation: for this event, or for every event in its series. */
+export function buildResponse(event: CalendarEvent, response: EventResponse, scope: UpdateScope = "occurrence"): UpdateInsert {
+  return { account_id: event.accountId ?? "", event_id: event.id, kind: "rsvp", scope: scope === "series" && event.seriesId ? "series" : "occurrence", response };
 }

@@ -87,6 +87,11 @@ function byDue(a: DayTask, b: DayTask) {
   );
 }
 
+/** The tasks with no due date still to do (or being saved), matching the filter box, by title: the No Date list. */
+export function undatedTasks(all: Task[], term: string): Task[] {
+  return visibleTasks(all.filter((t) => !t.dueAt && (!t.completed || t.pending)), term).sort((a, b) => a.title.localeCompare(b.title));
+}
+
 /** A tick waiting on the worker: the state it asked for, shown until the row settles. */
 export interface PendingTick {
   /** The task_updates row's id, or a temporary one until it is stored. */
@@ -112,6 +117,7 @@ export function tasksForToday(tasks: Task[], now: Date = new Date()): DayTask[] 
 /** What a task row says on its right: Saving while a tick is on its way, else Overdue, its time or All Day. */
 export function taskWhen(item: DayTask, timeOf: (iso: string) => string): string {
   if (item.task.pending) return "Saving";
+  if (!item.task.dueAt) return "No Date";
   if (item.overdue) return "Overdue";
   return item.timed && item.task.dueAt ? timeOf(item.task.dueAt) : "All Day";
 }
@@ -169,12 +175,12 @@ export function formOfTask(task: Task): TaskForm {
   };
 }
 
-/** Why a form cannot be saved, or null. The calendar draws tasks on their due day, so every task needs a date. */
+/** Why a form cannot be saved, or null. A task may have no date (Calendar lists those under No Date), but a time needs one. */
 export function taskProblem(form: TaskForm): { field: "title" | "notes" | "date"; text: string } | null {
   if (!form.title.trim()) return { field: "title", text: "Enter a title." };
   if (form.title.trim().length > MAX_TASK_TITLE) return { field: "title", text: `Keep the title under ${MAX_TASK_TITLE} characters.` };
   if (form.notes.length > MAX_NOTES) return { field: "notes", text: `Keep the notes under ${MAX_NOTES} characters.` };
-  if (!form.date) return { field: "date", text: "Pick a due date so the task shows in the calendar." };
+  if (!form.date && form.time) return { field: "date", text: "Pick a due date for the time, or clear the time." };
   return null;
 }
 

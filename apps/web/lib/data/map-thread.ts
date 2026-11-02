@@ -46,6 +46,8 @@ export function mapThread(row: ThreadRow, participantIds: string[], provider: Pr
     summary: row.summary ?? "",
     needsReply: row.needs_reply,
     lastFromMe: row.last_from_me,
+    snoozedUntil: row.snoozed_until ?? undefined,
+    snoozeKind: row.snooze_kind === "snooze" || row.snooze_kind === "reminder" ? row.snooze_kind : undefined,
     lastSenderId: row.last_sender_contact_id ?? undefined,
     workspaceId: row.workspace_id ?? undefined,
     sharedBy: (row.shared_by as Thread["sharedBy"]) ?? undefined,

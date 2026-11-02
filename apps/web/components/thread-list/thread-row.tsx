@@ -6,9 +6,11 @@
 import { memo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Archive, MailCheck, OctagonAlert, Pin, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, Clock, MailCheck, OctagonAlert, Pin, Trash2, type LucideIcon } from "lucide-react";
 import type { Contact, Thread } from "@/lib/types";
 import { niceName, relTime } from "@/lib/format";
+import { labelDot, type Label } from "@/lib/labels";
+import { isSnoozed, returnText, snoozeMark } from "@/lib/snooze";
 import { rowMarker, withQuery } from "@/lib/thread-list";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -17,13 +19,18 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { ContactAvatar, GroupAvatar } from "@/components/primitives";
 import { ProviderLogo } from "@/components/provider-logo";
 import { WorkTag } from "@/components/work-badge";
+import { LabelItems } from "@/components/labels/label-items";
+import { CONTEXT_KIT } from "@/components/snooze/menu-kit";
+import { SnoozeItems } from "@/components/snooze/snooze-items";
 import { ROW_FADE, SWIPED_FADE, SWIPE_PX } from "./fade";
 import { RowButton } from "./row-button";
 import type { RowAction } from "./use-row-actions";
 
 // A row's hover actions, in order from the left.
-const ROW_ACTIONS = (thread: Thread): { action: RowAction; label: string; icon: LucideIcon; keys: string; destructive?: boolean }[] => [
+const ROW_ACTIONS = (thread: Thread, doneForNow: boolean): { action: RowAction; label: string; icon: LucideIcon; keys: string; destructive?: boolean }[] => [
   { action: "archive", label: thread.status === "archived" ? "Unarchive" : "Archive", icon: Archive, keys: "e" },
+  // Snooze opens the choices (H); on the Summary, Done for Now snoozes to tomorrow morning in one click. A snoozed one offers Unsnooze.
+  ...(thread.status === "inbox" ? [isSnoozed(thread) ? { action: "unsnooze" as const, label: "Unsnooze", icon: Clock, keys: "h" } : { action: "snooze" as const, label: doneForNow ? "Done for Now" : "Snooze", icon: Clock, keys: "h" }] : []),
   { action: "trash", label: "Delete", icon: Trash2, keys: "#", destructive: true },
   { action: "junk", label: thread.junk ? "Not Junk" : "Move to Junk", icon: thread.junk ? MailCheck : OctagonAlert, keys: "!" },
 ];
@@ -47,6 +54,10 @@ export const ThreadRow = memo(function ThreadRow({
   swiped = false,
   onSwipe,
   onTouchRow,
+  onSnooze,
+  doneForNow = false,
+  labels,
+  pickedIds,
 }: {
   thread: Thread;
   /** Only read through relTime: a new day redraws the row. */
@@ -76,6 +87,14 @@ export const ThreadRow = memo(function ThreadRow({
   onSwipe?: (id: string | null) => void;
   /** A finger came down on this row, which closes any other row left open. */
   onTouchRow?: (id: string) => void;
+  /** A time chosen in the right-click menu, or "pick" to open the dialog on its calendar. */
+  onSnooze?: (id: string, mode: "snooze" | "remind", at: Date | "pick") => void;
+  /** The Summary's one-click Snooze to tomorrow morning, named Done for Now. */
+  doneForNow?: boolean;
+  /** The labels this conversation wears. */
+  labels?: Label[];
+  /** The checked conversations, given only to a checked row: the menu's Label then applies to all of them. */
+  pickedIds?: string[];
 }) {
   const router = useRouter();
   const title = niceName((thread.isGroup ? thread.groupName : contact?.name ?? thread.fallbackName) ?? "Unknown");
@@ -95,6 +114,9 @@ export const ThreadRow = memo(function ThreadRow({
   // 100+ rows would each mount three tooltip buttons and a checkbox that stay hidden until hover, so they mount when the pointer or focus first reaches the row.
   const [armed, setArmed] = useState(false);
   const marker = rowMarker(thread);
+  // Snoozed until a time, or back from a snooze or a reminder for a while.
+  const snoozedNow = isSnoozed(thread);
+  const mark = snoozeMark(thread);
 
   // A swipe is a sideways move, clearly more sideways than down, so scrolling the list is never one.
   const touch = useRef<{ x: number; y: number; done: boolean } | null>(null);
@@ -156,6 +178,10 @@ export const ThreadRow = memo(function ThreadRow({
                   <WorkTag thread={thread} />
                   {/* One quiet marker for what the AI found: Urgent, or Needs Reply. */}
                   {marker && <Badge variant={marker === "urgent" ? "destructive" : "secondary"}>{marker === "urgent" ? "Urgent" : "Needs Reply"}</Badge>}
+                  {snoozedNow && <Badge variant="secondary">{thread.snoozeKind === "reminder" ? "Reminder" : "Snoozed"} {returnText(thread.snoozedUntil!)}</Badge>}
+                  {mark && <Badge variant="secondary">{mark === "follow_up" ? "Follow Up" : "Snoozed"}</Badge>}
+                  {labels?.slice(0, 2).map((l) => <span key={l.id} className="flex min-w-0 shrink-[3] items-center gap-1 text-xs text-muted-foreground"><span className={cn("size-2 shrink-0 rounded-full", labelDot(l.color))} aria-hidden /><span className="truncate">{l.name}</span></span>)}
+                  {labels && labels.length > 2 && <span className="shrink-0 text-xs text-muted-foreground">+{labels.length - 2}</span>}
                   {thread.pinned && <Pin className="size-3 shrink-0 text-muted-foreground" aria-label="Pinned" />}
                 </span>
                 <span data-hover-hide className="shrink-0 text-xs tabular-nums text-muted-foreground">{relTime(thread.lastMessageAt)}</span>
@@ -187,7 +213,7 @@ export const ThreadRow = memo(function ThreadRow({
           {/* Shown on hover, or slid out by a swipe, over the faded content. */}
           {!selecting && (armed || open) && (
             <div className={cn("absolute top-1/2 right-3 -translate-y-1/2 items-center gap-1", open ? "flex animate-in fade-in-0 slide-in-from-right-4 duration-150" : "hidden group-hover/row:flex pointer-fine:group-focus-within/row:flex")}>
-              {ROW_ACTIONS(thread).map((a) => (
+              {ROW_ACTIONS(thread, doneForNow).map((a) => (
                 <RowButton
                   key={a.action}
                   variant="secondary"
@@ -202,7 +228,7 @@ export const ThreadRow = memo(function ThreadRow({
           )}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
+      <ContextMenuContent className="w-60">
         <ContextMenuItem onSelect={() => onCheck(thread.id, false)}>{checked ? "Deselect" : "Select"}</ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => act("archive")}>{thread.status === "archived" ? "Unarchive" : "Archive"}<ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
@@ -211,6 +237,13 @@ export const ThreadRow = memo(function ThreadRow({
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => act("read")}>{thread.unread ? "Mark as Read" : "Mark as Unread"}<ContextMenuShortcut>U</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuItem onSelect={() => act("pin")}>{thread.pinned ? "Unpin" : "Pin"}</ContextMenuItem>
+        {thread.status === "inbox" && (
+          <>
+            <ContextMenuSeparator />
+            <SnoozeItems kit={CONTEXT_KIT} thread={thread} onAt={(mode, at) => onSnooze?.(thread.id, mode, at)} onDate={(mode) => onSnooze?.(thread.id, mode, "pick")} onUnsnooze={() => act("unsnooze")} />
+          </>
+        )}
+        <LabelItems kit={CONTEXT_KIT} ids={pickedIds ?? [thread.id]} />
       </ContextMenuContent>
     </ContextMenu>
   );

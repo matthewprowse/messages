@@ -84,7 +84,7 @@ export async function dispatchCalendarOutbox(rows?: CalendarOutboxRow[]) {
   await dispatchCalendar(list, "added to", failEvent, (c) => c.createEvent?.bind(c), "calendar event", { table: "calendar_outbox", status: "creating" });
 }
 
-/** Events the app asked to delete. Outlook cannot delete yet. */
+/** Events the app asked to delete. */
 export async function dispatchCalendarDeletes(rows?: CalendarDeleteRow[]) {
   await dispatchCalendar(rows ?? (await queuedDeletes(runningIds())), "deleted from", failDelete, (c) => c.deleteEvent?.bind(c), "calendar delete", { table: "calendar_deletes", status: "deleting" });
 }

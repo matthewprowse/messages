@@ -34,6 +34,8 @@ export interface Note {
   /** What is stored is still plaintext or lacks an excerpt, so saving the note rewrites it sealed. */
   stale?: boolean;
   pinned: boolean;
+  /** Put away: out of the main list and not given to drafts, but kept. */
+  archived?: boolean;
   /** The row's edited time as last read or written here: what a save expects, so a change elsewhere is noticed. Not shown. */
   serverAt?: string;
   /** Counts times the text was replaced from outside the editor (taking the other version), so the editor opens afresh. */
@@ -56,13 +58,13 @@ export interface NoteFile {
 /** Each file can be up to 50 MB: the Supabase Free plan stops uploads there. */
 export const MAX_NOTE_FILE_BYTES = 50 * 1024 * 1024;
 
-const NOTE_COLUMNS = "id, title, excerpt, pinned, use_in_drafts, created_at, updated_at";
+const NOTE_COLUMNS = "id, title, excerpt, pinned, archived, use_in_drafts, created_at, updated_at";
 const FILE_COLUMNS = "id, note_id, storage_path, name, mime_type, size_bytes";
-type NoteRow = { id: string; title: string; excerpt: string | null; pinned: boolean; use_in_drafts: boolean; created_at: string; updated_at: string };
+type NoteRow = { id: string; title: string; excerpt: string | null; pinned: boolean; archived: boolean; use_in_drafts: boolean; created_at: string; updated_at: string };
 type FileRow = { id: string; note_id: string; storage_path: string; name: string; mime_type: string; size_bytes: number };
 
 function mapNote(r: NoteRow, stale: boolean): Note {
-  return { id: r.id, title: r.title ?? "", body: "", excerpt: r.excerpt, unloaded: true, stale, pinned: r.pinned, serverAt: r.updated_at, useInDrafts: r.use_in_drafts, createdAt: r.created_at, updatedAt: r.updated_at };
+  return { id: r.id, title: r.title ?? "", body: "", excerpt: r.excerpt, unloaded: true, stale, pinned: r.pinned, archived: r.archived, serverAt: r.updated_at, useInDrafts: r.use_in_drafts, createdAt: r.created_at, updatedAt: r.updated_at };
 }
 
 function mapFile(r: FileRow): NoteFile {
@@ -151,11 +153,11 @@ export async function saveNoteCopy(fields: { title: string; body: string }): Pro
  * A new, empty note, handed back at once so it can open without waiting for the database. The id is made here;
  * `saved` settles with the row's edited time when the row exists, and anything that needs the row (a save, a file) waits for it.
  */
-export function createNote(): { note: Note; saved: Promise<string> } {
+export function createNote(init?: { title: string; body: string }): { note: Note; saved: Promise<string> } {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const note: Note = { id, title: "", body: "", excerpt: "", pinned: false, useInDrafts: false, createdAt: now, updatedAt: now };
-  return { note, saved: insertNoteRow(id) };
+  const note: Note = { id, title: init?.title ?? "", body: init?.body ?? "", excerpt: init ? excerptOf(init.body) : "", pinned: false, useInDrafts: false, createdAt: now, updatedAt: now };
+  return { note, saved: insertNoteRow(id, init) };
 }
 
 // A page-closing request may carry about 64 KB; a bigger one takes the ordinary path.
@@ -204,6 +206,12 @@ export async function saveNote(id: string, note: { title: string; body: string }
 
 export async function pinNote(id: string, pinned: boolean): Promise<void> {
   const { error } = await supabase.from("notes").update({ pinned }).eq("id", id);
+  if (error) throw error;
+}
+
+/** Puts a note away or brings it back. Archiving also stops drafts using it, as the AI worker reads only use_in_drafts. */
+export async function archiveNote(id: string, archived: boolean): Promise<void> {
+  const { error } = await supabase.from("notes").update(archived ? { archived, use_in_drafts: false } : { archived }).eq("id", id);
   if (error) throw error;
 }
 

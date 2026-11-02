@@ -22,6 +22,8 @@ export interface ContactsData {
   needCompanies: () => void;
   /** Loads the contacts, companies and suggestions again, after one of them failed to load. */
   reload: () => void;
+  /** Shows a change to one listed contact at once (a star), without reading the list again. */
+  patchContact: (id: string, patch: Partial<ContactSummary>) => void;
 }
 
 export const ContactsDataContext = createContext<ContactsData>({
@@ -32,6 +34,7 @@ export const ContactsDataContext = createContext<ContactsData>({
   restoreSuggestion: () => {},
   needCompanies: () => {},
   reload: () => {},
+  patchContact: () => {},
 });
 
 export function useContactsData() {

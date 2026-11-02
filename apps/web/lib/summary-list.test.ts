@@ -9,9 +9,10 @@ const event = (id: string, startsAt: string, endsAt: string | null, allDay = fal
 
 test("no filter links to the bare Summary path", () => {
   assert.equal(listHref("none"), "/summary");
-  assert.equal(listHref("unread"), "/summary?filter=unread");
+  assert.equal(listHref("waiting"), "/summary?filter=waiting");
   assert.equal(filterOf("email"), "email");
-  assert.equal(filterOf("waiting"), "none");
+  assert.equal(filterOf("waiting"), "waiting");
+  assert.equal(filterOf("unread"), "none"); // Unread was replaced by Waiting On Others
   assert.equal(filterOf(null), "none");
 });
 

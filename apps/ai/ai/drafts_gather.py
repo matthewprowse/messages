@@ -25,6 +25,7 @@ from .drafts_prompt import build_prompt, is_adjust
 from .fields import (
     BODY,
     CHOICES,
+    CONTACT_ABOUT,
     CONTACT_RELATIONSHIP,
     CONTACT_STYLE_NOTE,
     CONTACT_SUMMARY,
@@ -184,6 +185,32 @@ class GatherMixin:
             log.warn("company voice not read", thread=thread_id, code=log.code_of(err))
             return None
 
+    def _composer(self, user: str) -> dict[str, Any]:
+        """The tone chosen in Settings and whether any send address has a signature, for the prompt. Two small reads of
+        plain columns (the signature text itself is sealed and never opened here). Never fails the draft."""
+        try:
+            tone = self.db.select("profiles", {"select": "draft_tone", "user_id": f"eq.{user}", "limit": "1"})
+            signed = self.db.select("account_composer", {"select": "account_id", "user_id": f"eq.{user}", "has_signature": "eq.true", "limit": "1"})
+            return {"draft_tone": (tone[0].get("draft_tone") if tone else None), "has_signature": bool(signed)}
+        except Exception as err:
+            log.warn("draft settings not read", code=log.code_of(err))
+            return {}
+
+    def _about_note(self, user: str, contact: dict[str, Any]) -> str:
+        """What the user wrote about this person (contacts.about_note, sealed). The draft_context and
+        compose_context functions do not return it, so it is read here. Never fails the draft: without it
+        the prompt is written as before."""
+        if contact.get("about_note") is not None:
+            return self.vault.open(user, CONTACT_ABOUT, contact.get("about_note")) or ""
+        if not contact.get("id"):
+            return ""
+        try:
+            row = self.db.first("contacts", {"select": "about_note", "id": f"eq.{contact['id']}", "user_id": f"eq.{user}"}) or {}
+            return self.vault.open(user, CONTACT_ABOUT, row.get("about_note")) or ""
+        except Exception as err:
+            log.warn("about note not read", code=log.code_of(err))
+            return ""
+
     def _you(self, user: str, first: dict[str, Any], similar: list[tuple[str, str]]) -> dict[str, Any]:
         """The parts of the prompt about you and the person, from draft_context or compose_context."""
         profile = first.get("profile") or {}
@@ -194,6 +221,7 @@ class GatherMixin:
         opened = lambda field, value: self.vault.open(user, field, value) or ""  # sealed or plain
         rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in first["rules"]]
         return {
+            **self._composer(user),
             "me": profile.get("display_name") or "",
             "about": opened(PROFILE_ABOUT, profile.get("about")),
             "rules": [r["rule"] for r in rules if r["scope"] == "global" and r["rule"]][:20],
@@ -203,6 +231,7 @@ class GatherMixin:
             "them": self.vault.open(user, NAME, contact.get("display_name")) or "",
             "relationship": opened(CONTACT_RELATIONSHIP, contact.get("relationship")),
             "style_note": opened(CONTACT_STYLE_NOTE, contact.get("style_note")),
+            "about_note": self._about_note(user, contact),
             "who_they_are": opened(CONTACT_SUMMARY, contact.get("ai_summary")) or (f"{opened(NAME, org.get('name'))}: {opened(ORG_SUMMARY, org['summary'])}" if org.get("summary") else ""),
             "person_rules": [r["rule"] for r in rules if contact_id and r["scope"] == "contact" and r.get("contact_id") == contact_id and r["rule"]][:10],
             "more_voice": pick_more_voice(first.get("to_them") or [], first["recent"], shown=recent, similar=similar),

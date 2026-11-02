@@ -19,6 +19,8 @@ export interface NewEmail {
   files?: OutboxUpload[];
   /** The AI draft it started from, so learning can read what was changed. */
   draftId?: string;
+  /** Send Later: an ISO time. Left out, the message waits only for the Undo Send window. */
+  sendAt?: string;
 }
 
 /** A draft for New Email or New WhatsApp, which has no conversation yet: kept by the dialog that asked. */
@@ -48,10 +50,12 @@ export interface ComposeStatus {
   status: "queued" | "sending" | "sent" | "failed";
   threadId?: string;
   error?: string;
+  /** While the message waits for its Undo window or chosen time: when the worker may send it. */
+  sendAfter?: string;
 }
 
-export function composeStatusOf(row: Pick<Tables<"outbox">, "status" | "thread_id" | "error">): ComposeStatus {
-  return { status: row.status as ComposeStatus["status"], threadId: row.thread_id ?? undefined, error: row.error ?? undefined };
+export function composeStatusOf(row: Pick<Tables<"outbox">, "status" | "thread_id" | "error"> & { send_after?: string | null }): ComposeStatus {
+  return { status: row.status as ComposeStatus["status"], threadId: row.thread_id ?? undefined, error: row.error ?? undefined, sendAfter: row.send_after ?? undefined };
 }
 
 export interface PendingSend {
@@ -67,6 +71,8 @@ export interface PendingSend {
   copies?: { to: string[]; cc: string[] };
   /** Files the row was queued with. Placeholders reloaded from the outbox have the count but not the files. */
   fileCount?: number;
+  /** When the worker may send it: the end of the Undo window, or the time chosen with Send Later. */
+  sendAfter?: string;
 }
 
 /**

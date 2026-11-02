@@ -44,7 +44,8 @@ Run from the repo root, with `pnpm worker` running or restarted afterwards so it
    addresses: `http://localhost` for the worker and `<your app address>/api/connect/microsoft/callback` for the web
    page. Microsoft needs the second to match exactly. No client secret is needed.
 3. Under API Permissions, add these Microsoft Graph delegated permissions: Mail.ReadWrite, Mail.Send, Calendars.Read,
-   Tasks.ReadWrite, User.Read and offline_access. For Teams, also add Chat.ReadWrite, OnlineMeetings.Read and
+   Tasks.ReadWrite, User.Read and offline_access. To let Konva create, change, answer and delete Outlook events, also add
+   Calendars.ReadWrite; people agree to it from the Calendar page (Allow Editing), so it is not part of the first sign-in. For Teams, also add Chat.ReadWrite, OnlineMeetings.Read and
    OnlineMeetingTranscript.Read.All. Many organisations let only an IT admin approve the Teams ones; the web page then
    shows a link for the admin.
 4. Copy the Application (Client) ID into both `apps/web/.env.local` and `apps/worker/.env` as `MICROSOFT_CLIENT_ID`.

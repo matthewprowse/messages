@@ -45,6 +45,7 @@ class UserContext:
     accounts: list[str] = field(default_factory=list)  # every connected account, for finding the same email twice
     timezone: str = ""  # profiles.timezone, for the time of day in a message's traits
     language: str = ""  # profiles.language: en-GB, en-US or af; empty follows how they write
+    vip_contacts: set[str] = field(default_factory=set)  # contacts.vip: starred people, whose mail is never junk
 
 
 def matches(address: str, targets: list[str]) -> bool:
@@ -60,8 +61,9 @@ def matches(address: str, targets: list[str]) -> bool:
     return False
 
 
-def apply_signals(result: dict[str, Any], sender: str, ctx: UserContext, thread_feedback: list[str]) -> dict[str, Any]:
-    """Your own signals override the model. thread_feedback is newest first."""
+def apply_signals(result: dict[str, Any], sender: str, ctx: UserContext, thread_feedback: list[str], sender_contact: str | None = None) -> dict[str, Any]:
+    """Your own signals override the model. thread_feedback is newest first. sender_contact is the contact the
+    message came from: a starred one (VIP) is at least important and never junk, unless you unsubscribed."""
     out = dict(result)
     if out.get("priority") not in PRIORITIES:
         out["priority"] = "normal"
@@ -74,6 +76,8 @@ def apply_signals(result: dict[str, Any], sender: str, ctx: UserContext, thread_
     if sender and matches(sender, ctx.never):
         out.update(priority="low")
     if sender and matches(sender, ctx.always):
+        out.update(junk=False, priority="urgent" if out["priority"] == "urgent" else "important")
+    if sender_contact and sender_contact in ctx.vip_contacts and not (sender and sender.lower() in ctx.unsubscribed):
         out.update(junk=False, priority="urgent" if out["priority"] == "urgent" else "important")
 
     for value in thread_feedback:  # the latest correction on this conversation wins per kind

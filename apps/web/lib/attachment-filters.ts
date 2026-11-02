@@ -3,6 +3,7 @@
 // tested here (attachment-filters.test.ts); the page only wires state to it.
 
 import { filesLabel, SOURCE_LABEL, sourceOf, type Source } from "./attachment-view";
+import type { Sort } from "./attachment-actions/selection";
 import { formatSize } from "./format";
 import type { Attachment, FiledAttachment, Provider } from "./types";
 
@@ -27,8 +28,8 @@ export const DATES: { key: string; label: string; days: number }[] = [
 ];
 
 /** Everything the page's controls set. All of it lives in the address, so a reload or a shared link comes back the same. */
-export type Filters = { kind: Kind; source: string; date: string; person: string; q: string };
-export const NO_FILTERS: Filters = { kind: "all", source: "all", date: "any", person: "all", q: "" };
+export type Filters = { kind: Kind; source: string; date: string; person: string; q: string; sort: Sort };
+export const NO_FILTERS: Filters = { kind: "all", source: "all", date: "any", person: "all", q: "", sort: "newest" };
 
 /** The filters an address carries; an unknown tab or date falls back to the default rather than showing nothing. */
 export function parseFilters(get: (key: string) => string | null): Filters {
@@ -40,6 +41,7 @@ export function parseFilters(get: (key: string) => string | null): Filters {
     date: DATES.some((d) => d.key === date) ? (date as string) : "any",
     person: get("person") || "all",
     q: get("q") ?? "",
+    sort: get("sort") === "largest" ? "largest" : "newest",
   };
 }
 
@@ -51,12 +53,13 @@ export function filtersHref(f: Filters): string {
   if (f.date !== "any") next.set("date", f.date);
   if (f.person !== "all") next.set("person", f.person);
   if (f.q.trim()) next.set("q", f.q);
+  if (f.sort !== "newest") next.set("sort", f.sort);
   const text = next.toString();
   return text ? `/attachments?${text}` : "/attachments";
 }
 
-/** True when a filter other than the tab narrows the list, which is when the page must hold every file to count honestly. */
-export const isNarrowed = (f: Filters) => f.source !== "all" || f.date !== "any" || f.person !== "all" || f.q.trim() !== "";
+/** True when a filter other than the tab narrows the list, or Largest reorders it: the page must hold every file to be honest. */
+export const isNarrowed = (f: Filters) => f.source !== "all" || f.date !== "any" || f.person !== "all" || f.q.trim() !== "" || f.sort !== "newest";
 
 /** A WhatsApp voice note belongs to its chat, so the Audio tab leaves it out. */
 export const isVoiceNote = (a: Pick<Attachment, "kind" | "name">) => a.kind === "audio" && /^voice note\b/i.test(a.name);

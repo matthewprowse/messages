@@ -39,3 +39,23 @@ test("the Priority view keeps only urgent and important, urgent first", () => {
   ], "priority:none");
   assert.deepEqual(list.map((t) => t.id), ["u", "i"]);
 });
+
+test("a snoozed conversation leaves every inbox view until its time passes, and the Snoozed view lists it soonest first", () => {
+  const now = Date.parse("2026-11-18T12:00:00Z");
+  const threads = [
+    thread({ id: "plain" }),
+    thread({ id: "later", snoozedUntil: "2026-11-19T08:00:00Z" }),
+    thread({ id: "soon", snoozedUntil: "2026-11-18T18:00:00Z", priority: "urgent" }),
+    thread({ id: "back", snoozedUntil: "2026-11-18T09:00:00Z" }),
+  ];
+  assert.deepEqual(listThreadsFor(threads, "all:none", now).map((t) => t.id).sort(), ["back", "plain"]);
+  assert.deepEqual(listThreadsFor(threads, "priority:none", now), []);
+  assert.deepEqual(listThreadsFor(threads, "snoozed:none", now).map((t) => t.id), ["soon", "later"]);
+  // The same list once the clock passes the return times: all are back.
+  assert.equal(listThreadsFor(threads, "all:none", Date.parse("2026-11-19T09:00:00Z")).length, 4);
+  assert.deepEqual(listThreadsFor(threads, "snoozed:none", Date.parse("2026-11-19T09:00:00Z")), []);
+});
+
+test("the Deleted view holds nothing in the store, since trashed conversations are read when it opens", () => {
+  assert.deepEqual(listThreadsFor([thread({ id: "a" }), thread({ id: "t", status: "trash" })], "deleted:none"), []);
+});

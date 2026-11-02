@@ -52,7 +52,7 @@ function fake(answer: (q: Query) => unknown = () => []) {
 const filter = (q: Query, column: string) => q.filters.find(([, c]) => c === column)?.[2];
 
 function row(patch: Partial<TaskUpdateRow> = {}): TaskUpdateRow {
-  return { id: "up1", user_id: "u", task_id: "t1", action: "complete", status: "updating", error: null, created_at: "2026-10-26T08:00:00Z", account_id: null, title: null, notes: null, due_at: null, due_all_day: false, priority: null, ...patch };
+  return { id: "up1", user_id: "u", task_id: "t1", action: "complete", status: "updating", error: null, created_at: "2026-10-26T08:00:00Z", account_id: null, contact_id: null, linked_at: null, title: null, notes: null, due_at: null, due_all_day: false, priority: null, ...patch };
 }
 
 test("a tick the provider took writes the task's status, then settles the row as done", async () => {

@@ -1,11 +1,13 @@
 "use client";
 
-// A contact's page under Contacts: their summary, details, conversations and meetings, and the buttons to message them.
+// A contact's page under Contacts: where you stand with them, their summary and About note, details, conversations and
+// meetings, and the buttons to message, star and follow up with them.
 
+import { NotesChip } from "@/components/notes-chip";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Users } from "lucide-react";
+import { Star, Users } from "lucide-react";
 import { toast } from "sonner";
 import type { ContactDetail } from "@/lib/contacts";
 import { useApp } from "@/lib/store";
@@ -23,6 +25,10 @@ import { withQuery } from "@/lib/utils";
 import { formatPhone, niceName } from "@/lib/format";
 import { EditContactDialog } from "@/components/contact-edit-dialog";
 import { MeetingList } from "@/components/meeting-card";
+import { FollowUpMenu } from "@/components/contacts/follow-up-menu";
+import { useContactsData } from "@/components/contacts-data";
+import { setContactVip } from "@/lib/contact-relations-io";
+import { statusLine } from "@/lib/relationship-status";
 import { useMeetings } from "@/components/meetings-data";
 
 // Email goes through New Email, a first WhatsApp message through New WhatsApp Message, and an event
@@ -84,12 +90,29 @@ function ContactMeetings({ contactId }: { contactId: string }) {
 export function ContactView({ contact }: { contact: ContactDetail | null }) {
   const backHref = withQuery("/contacts", useSearchParams().toString());
   const [editing, setEditing] = useState(false);
+  const { patchContact } = useContactsData();
+  // The star shows at once and is put back if it cannot be saved.
+  const [starred, setStarred] = useState<{ id: string; vip: boolean } | null>(null);
   // An address picked in Details opens New Email to it.
   const [email, setEmail] = useState({ open: false, to: "" });
 
   if (!contact) {
     return <EmptyState icon={Users} title="Contact Not Found" description="They may have been merged or deleted." action={<Button variant="secondary" asChild><Link href="/contacts">Back to Contacts</Link></Button>} />;
   }
+
+  const vip = contact && starred?.id === contact.id ? starred.vip : !!contact?.vip;
+  const toggleStar = async () => {
+    if (!contact) return;
+    const next = !vip;
+    setStarred({ id: contact.id, vip: next });
+    patchContact(contact.id, { vip: next });
+    if (!(await setContactVip(contact.id, next))) {
+      setStarred({ id: contact.id, vip: !next });
+      patchContact(contact.id, { vip: !next });
+      toast("Could not save the star. Check your connection and try again.");
+    }
+  };
+  const status = statusLine(contact.lastInboundAt, contact.lastOutboundAt);
 
   const copy = (text: string) => {
     navigator.clipboard.writeText(text).then(
@@ -128,6 +151,9 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
               {work && <span className="truncate text-xs text-muted-foreground">{work}</span>}
             </div>
           </div>
+          <Button variant="ghost" size="icon" aria-label={vip ? "Remove Star" : "Star Contact"} aria-pressed={vip} title={vip ? "Starred: always priority" : "Star to keep them at the top and always priority"} onClick={() => void toggleStar()}>
+            <Star className={vip ? "fill-current" : undefined} />
+          </Button>
           {/* On phones Edit moves into the More menu to leave room for the name. */}
           <Button variant="secondary" className="max-sm:hidden" onClick={() => setEditing(true)}>Edit</Button>
           <MessageButton contact={contact} />
@@ -137,9 +163,23 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
         </>
       }
     >
+      <div className="flex items-center justify-between gap-3">
+        <p className="min-w-0 text-sm">{status ?? "No one-to-one conversation yet."}</p>
+        <div className="flex items-center gap-2">
+          <NotesChip kind="contact" id={contact.id} />
+          <FollowUpMenu contactId={contact.id} name={contact.name} />
+        </div>
+      </div>
+
       {contact.summary && (
         <Section title="Summary">
           <p className="text-sm leading-6 text-muted-foreground">{contact.summary}</p>
+        </Section>
+      )}
+
+      {contact.aboutNote && (
+        <Section title="About">
+          <p className="text-sm leading-6 whitespace-pre-line text-muted-foreground">{contact.aboutNote}</p>
         </Section>
       )}
 

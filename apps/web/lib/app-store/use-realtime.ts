@@ -144,7 +144,7 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         return;
       }
       const outboxIds = [...pendingRef.current.map((p) => p.id), ...Object.keys(composedRef.current)];
-      const { data } = outboxIds.length ? await supabase.from("outbox").select("id, status, thread_id, error").in("id", outboxIds) : { data: [] };
+      const { data } = outboxIds.length ? await supabase.from("outbox").select("id, status, thread_id, error, send_after").in("id", outboxIds) : { data: [] };
       const rows = new Map((data ?? []).map((r) => [r.id, r]));
       setComposed((c) => Object.fromEntries(Object.entries(c).map(([id, v]) => [id, rows.has(id) ? composeStatusOf(rows.get(id)!) : v])));
       setPending((p) => p

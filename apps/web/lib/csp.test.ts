@@ -11,7 +11,7 @@ test("scripts need the nonce and never allow unsafe-inline", () => {
   assert.match(script, /'nonce-abc123'/);
   assert.match(script, /'strict-dynamic'/);
   assert.doesNotMatch(script, /unsafe-inline|unsafe-eval/);
-  assert.match(csp, /connect-src 'self' https:\/\/proj\.supabase\.co wss:\/\/proj\.supabase\.co(;|$)/);
+  assert.match(csp, /connect-src 'self' https:\/\/proj\.supabase\.co https:\/\/www\.googleapis\.com https:\/\/graph\.microsoft\.com https:\/\/login\.microsoftonline\.com wss:\/\/proj\.supabase\.co(;|$)/);
 });
 
 test("unsafe-eval and localhost sockets are for dev only", () => {
@@ -39,4 +39,10 @@ test("every fetch directive other than img-src stays narrow", () => {
     assert.doesNotMatch(line, /\shttps:(\s|$)|\*/, d);
   }
   assert.match(csp, /frame-ancestors 'none'/);
+});
+
+test("the cloud pickers get named hosts only, in connect-src and frame-src", () => {
+  const csp = buildCsp("n", false, "https://proj.supabase.co");
+  assert.match(csp, /frame-src 'self' https:\/\/docs\.google\.com /);
+  assert.match(csp, /connect-src [^;]*https:\/\/graph\.microsoft\.com/);
 });

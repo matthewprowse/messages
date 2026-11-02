@@ -32,13 +32,13 @@ export function TimeSelect({ id, value, onChange, invalid, disabled }: { id: str
 export function Reconnect({ provider, change = false }: { provider?: Account["provider"]; change?: boolean }) {
   const action = change ? "Change" : "Create";
   const gerund = change ? "Changing" : "Creating";
-  const title = !provider ? `Connect a Calendar to ${action} Events` : provider === "icloud_calendar" ? `Reconnect iCloud Calendar to Allow ${gerund} Events` : `Reconnect Google to Allow ${gerund} Events`;
+  const title = !provider ? `Connect a Calendar to ${action} Events` : provider === "icloud_calendar" ? `Reconnect iCloud Calendar to Allow ${gerund} Events` : provider === "outlook_calendar" ? `Reconnect Microsoft to Allow ${gerund} Events` : `Reconnect Google to Allow ${gerund} Events`;
   return (
     <Alert>
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>
         <p>
-          Open <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Connected Accounts</Link>, {provider ? "reconnect it" : "connect Google or iCloud Calendar"}, then try again.
+          Open <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Connected Accounts</Link>, {provider ? "reconnect it" : "connect Google, Outlook or iCloud Calendar"}, then try again.
         </p>
       </AlertDescription>
     </Alert>

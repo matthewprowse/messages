@@ -3,12 +3,18 @@
 // Every attachment from the connected chats in one place, filterable by kind, source, date, person and search. Files load a
 // page at a time and the header counts honestly; hidden files sit in a collapsed row under the grid, where they can be
 // opened and unhidden. The tab, source, date, person and search live in the address, so a reload or shared link comes back
-// the same. The filtering is in lib/attachment-filters.ts and the paging in lib/attachment-pages.ts.
+// the same. The filtering is in lib/attachment-filters.ts and the paging in lib/attachment-pages.ts. Select picks several
+// files for Download Selected (a zip), Hide Selected and Delete (Konva's copy only); Largest sorts by size. The rules for
+// those are in lib/attachment-actions/.
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronRight, Paperclip, Search } from "lucide-react";
 import { setAttachmentsHidden } from "@/lib/data";
+import { deleteAttachmentFiles } from "@/lib/attachment-actions/load-copies";
+import { downloadZip } from "@/lib/attachment-actions/download-zip";
+import { actionsFor, selectedFiles, SORTS, sortLargest, toggled, type Sort } from "@/lib/attachment-actions/selection";
+import { zipMessage } from "@/lib/attachment-actions/zip";
 import { useApp } from "@/lib/store";
 import { useAttachmentPages, type AttachmentList } from "@/lib/use-attachment-pages";
 import { countLabel, effectivePerson, filterFiles, filtersHref, isNarrowed, KINDS, DATES, NO_FILTERS, parseFilters, peopleIn, searchTextOf, sizeLabel, sourcesIn, type Filters, type Kind } from "@/lib/attachment-filters";
@@ -22,6 +28,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { ContactAvatar, EmptyState } from "@/components/primitives";
 import { AttachmentGrid } from "@/components/attachments";
+import { DeleteFilesDialog } from "@/components/attachments/delete-dialog";
+import { SelectionBar } from "@/components/attachments/selection-bar";
 
 function AttachmentsPage() {
   const router = useRouter();
@@ -82,8 +90,9 @@ function AttachmentsPage() {
   const people = useMemo(() => peopleIn(inViewVisible, nameOf), [inViewVisible, nameOf]);
   const person = effectivePerson(filters.person, people);
   const only = (files: FiledAttachment[]) => (person === "all" ? files : files.filter((a) => a.from === person));
-  const shown = useMemo(() => only(inViewVisible), [inViewVisible, person]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shownHidden = useMemo(() => only(inViewHidden), [inViewHidden, person]); // eslint-disable-line react-hooks/exhaustive-deps
+  const largest = filters.sort === "largest";
+  const shown = useMemo(() => (largest ? sortLargest(only(inViewVisible)) : only(inViewVisible)), [inViewVisible, person, largest]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownHidden = useMemo(() => (largest ? sortLargest(only(inViewHidden)) : only(inViewHidden)), [inViewHidden, person, largest]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Hide or unhide from the viewer: the file moves between the two lists at once, and goes back if it could not be saved.
   const toggleHidden = async (a: FiledAttachment) => {
@@ -93,6 +102,58 @@ function AttachmentsPage() {
     from.remove([a.id]);
     to.insert([{ ...a, hiddenReason: hide ? "manual" : undefined }]);
     return true;
+  };
+
+  // Select: files picked for the bar's actions. Ids that leave the lists (hidden, deleted, filtered out) drop out of the count.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [working, setWorking] = useState(false);
+  const everything = useMemo(() => [...shown, ...(hiddenOpen ? shownHidden : [])], [shown, shownHidden, hiddenOpen]);
+  const picked = useMemo(() => selectedFiles(everything, selected), [everything, selected]);
+  const endSelecting = () => { setSelecting(false); setSelected(new Set()); };
+
+  // Delete asks first (one dialog for the bar and the viewer). The promise says whether the files went, so the viewer can move on.
+  const [asking, setAsking] = useState<{ files: FiledAttachment[]; done: (ok: boolean) => void } | null>(null);
+  const requestDelete = (files: FiledAttachment[]) => new Promise<boolean>((done) => setAsking({ files: files.filter((f) => !!f.path), done }));
+  const confirmDelete = async () => {
+    if (!asking) return;
+    setWorking(true);
+    const ids = asking.files.map((f) => f.id);
+    const ok = await deleteAttachmentFiles(ids);
+    if (ok) {
+      visible.remove(ids);
+      hidden.remove(ids);
+      setSelected((s) => new Set([...s].filter((id) => !ids.includes(id))));
+      notify(`Deleted ${ids.length} ${ids.length === 1 ? "file" : "files"} from Konva. Your emails and chats are untouched.`);
+    } else notify("Could not delete that. Try again.");
+    asking.done(ok);
+    setAsking(null);
+    setWorking(false);
+  };
+  const cancelDelete = () => { asking?.done(false); setAsking(null); };
+
+  const downloadPicked = async () => {
+    setWorking(true);
+    try {
+      notify(zipMessage(await downloadZip(picked)));
+    } catch {
+      notify("The files did not download. Try again.");
+    } finally {
+      setWorking(false);
+    }
+  };
+  const hidePicked = async () => {
+    const hide = actionsFor(picked).hide;
+    const files = picked.filter((f) => !!f.hiddenReason !== hide);
+    if (files.length === 0) return;
+    setWorking(true);
+    const ids = files.map((f) => f.id);
+    if (await setAttachmentsHidden(ids, hide)) {
+      const [from, to]: AttachmentList[] = hide ? [visible, hidden] : [hidden, visible];
+      from.remove(ids);
+      to.insert(files.map((f) => ({ ...f, hiddenReason: hide ? ("manual" as const) : undefined })));
+    } else notify("Could not save that. Try again.");
+    setWorking(false);
   };
 
   const loaded = visible.files;
@@ -166,8 +227,26 @@ function AttachmentsPage() {
           <span className="flex items-center gap-3">
             {(narrowed || kind !== "all") && loaded && <Button variant="ghost" onClick={() => { setQuery(""); router.replace(filtersHref(NO_FILTERS), { scroll: false }); }}>Clear Filters</Button>}
             {loaded && <span className="flex h-8 items-center text-sm text-muted-foreground tabular-nums">{sizeLabel(shown, visible.more)}</span>}
+            <Select value={filters.sort} onValueChange={(sort) => go({ sort: sort as Sort })}>
+              <SelectTrigger aria-label="Sort" className="w-28 data-[size=default]:h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>{SORTS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}</SelectContent>
+            </Select>
+            {loaded && shown.length > 0 && !selecting && <Button variant="secondary" onClick={() => setSelecting(true)}>Select</Button>}
           </span>
         </header>
+        {selecting && (
+          <SelectionBar
+            files={picked}
+            total={everything.length}
+            busy={working}
+            onSelectAll={() => setSelected(new Set(everything.map((a) => a.id)))}
+            onClear={() => setSelected(new Set())}
+            onDownload={() => void downloadPicked()}
+            onHide={() => void hidePicked()}
+            onDelete={() => void requestDelete(picked)}
+            onDone={endSelecting}
+          />
+        )}
         <ScrollArea className="min-h-0 flex-1">
           <div className="p-3 md:px-4">
             {loaded === null && (
@@ -206,7 +285,7 @@ function AttachmentsPage() {
               </div>
             )}
             {shown.length > 0 && (
-              <AttachmentGrid items={shown} byMonth className="grid-cols-3 md:grid-cols-6" onToggleHidden={toggleHidden} onEnd={visible.more && !narrowed ? visible.loadMore : undefined} />
+              <AttachmentGrid items={shown} byMonth={!largest} className="grid-cols-3 md:grid-cols-6" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={visible.more && !narrowed ? visible.loadMore : undefined} />
             )}
             {loaded && shown.length === 0 && visible.more && (
               <p role="status" className="py-24 text-center text-sm text-muted-foreground">Searching your files</p>
@@ -224,7 +303,7 @@ function AttachmentsPage() {
                     {hidden.files === false && <p className="text-sm text-muted-foreground">Hidden files did not load.</p>}
                     {hidden.files && shownHidden.length === 0 && !hidden.more && <p className="text-sm text-muted-foreground">{narrowed ? "No hidden files fit these filters." : "Nothing is hidden."}</p>}
                     {shownHidden.length > 0 && (
-                      <AttachmentGrid items={shownHidden} byMonth className="grid-cols-3 md:grid-cols-6" onToggleHidden={toggleHidden} onEnd={hidden.more && !narrowed ? hidden.loadMore : undefined} />
+                      <AttachmentGrid items={shownHidden} byMonth={!largest} className="grid-cols-3 md:grid-cols-6" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={hidden.more && !narrowed ? hidden.loadMore : undefined} />
                     )}
                   </div>
                 )}
@@ -233,6 +312,7 @@ function AttachmentsPage() {
           </div>
         </ScrollArea>
       </section>
+      <DeleteFilesDialog files={asking?.files ?? null} busy={working} onCancel={cancelDelete} onConfirm={() => void confirmDelete()} />
     </div>
   );
 }

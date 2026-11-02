@@ -20,13 +20,14 @@ export async function POST(request: Request) {
   if (!user) return fail(401, "Sign in first.");
   if (await overLimit(user.id) > 0) return fail(429, "Too many tries. Wait a minute and try again.");
 
-  const body = ((await readJson(request)) ?? {}) as { back?: unknown; teams?: unknown };
+  const body = ((await readJson(request)) ?? {}) as { back?: unknown; teams?: unknown; calendarWrite?: unknown };
   const back = MICROSOFT_RETURNS.find((r) => r === body.back) ?? MICROSOFT_RETURNS[0];
   const teams = body.teams === true;
+  const calendarWrite = body.calendarWrite === true;
   const state = randomBytes(16).toString("base64url");
   const { verifier, challenge } = pkce();
-  const signIn: MicrosoftSignIn = { userId: user.id, state, verifier, back, teams, expires: Date.now() + 10 * 60_000 };
-  const url = authUrl({ redirectUri: `${appOrigin(request)}/api/connect/microsoft/callback`, state, challenge, teams });
+  const signIn: MicrosoftSignIn = { userId: user.id, state, verifier, back, teams, calendarWrite, expires: Date.now() + 10 * 60_000 };
+  const url = authUrl({ redirectUri: `${appOrigin(request)}/api/connect/microsoft/callback`, state, challenge, teams, calendarWrite });
 
   const secure = appOrigin(request).startsWith("https:") ? "; Secure" : "";
   return Response.json({ url }, {

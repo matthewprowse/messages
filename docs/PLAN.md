@@ -1810,6 +1810,29 @@ unwrap keys. Confidential Space removes that.
 - What it does not protect: a user's own browser, and Google itself, which we trust for KMS and the
   attestation service.
 
+### Deleting an Account and Downloading Your Data (Wave 4, 2 November 2026)
+
+POPIA gives people the right to see and to delete what is held about them. Settings, Profile and Privacy now has all of it:
+
+- **Download My Data** builds a zip in the browser, opening everything with the person's own key, so the server never holds
+  readable text. One JSON and one readable text file per conversation, contacts as CSV and vCard, notes as Markdown, tasks as
+  JSON, events as ICS and JSON, and the profile and AI settings (never credentials). Files are optional and come with a size
+  estimate. It shows progress, can be cancelled, and says it may take a while. The zip library is fflate, pinned exactly.
+- **Disconnect** (per connected account) stops syncing and drops the stored sign-in but keeps every message. **Remove** also deletes
+  that account's threads, messages, files in storage and derived rows, after typing REMOVE. A file shared by another account
+  of the same person (deduped by content) is kept until nothing points at it. The worker does the deleting from a queued
+  `account_removals` row (`request_account_removal`).
+- **Delete My Account** needs a re-authentication (authenticator code if one is set up, else password, else a code emailed to
+  them) and the typed word DELETE. It starts a **7 day grace period** shown as a banner with Cancel; after it the worker
+  stops syncing, deletes the team copies of their shared files and everything under their folders in storage, deletes their
+  wrapped key (crypto-shredding), removes any team they own with no other members, then deletes the auth user, which cascades
+  to every `user_id` table. It then counts rows in every owned table and fails the job if any remain. A team owner with other
+  members must hand the team over first. A test reads the migrations and fails if a new `user_id` table is not in the
+  deletion list or does not cascade from `auth.users`.
+- **Sign Out Everywhere** is Supabase's global sign out; the active sessions list shows a browser label and last use only.
+- Not done: revoking the Google and Microsoft refresh tokens at the provider, and logging a WhatsApp linked device out, when
+  an account is removed or deleted. The stored copy is deleted, so Konva can no longer use them.
+
 ## Product Analytics
 
 Built (October 2026). This is privacy Stage 6 in detail. Everyone's app and both workers record the events
@@ -2132,7 +2155,7 @@ Not built, or only partly:
 - Cheaper transcription model: setting exists, default unchanged, because nothing shows the speaker-turn format survives.
 - Presence ping from the web app, so Gmail polling stays at 5 seconds while someone reads. Today only mail and queued work count as activity.
 - The 80% storage email, the 3-address-farming cap (many different addresses still each earn a setup allowance), and a team copy is not counted in the storage meter.
-- Deleting an attachment, thread or account does not remove the team copy of a shared file (orphans possible).
+- Deleting a single attachment or thread does not remove the team copy of a shared file (orphans possible). Deleting or removing an account does.
 - Zoom recording backfill, merging old duplicate files, `create_contact` and address book company values (still plain), short-lived calendar queue rows.
 - Names of contacts and companies are still the earlier stage 2 encryption only.
 - Dashboard work: Confirm Email on, no OAuth provider with unverified email, check the owner row in `analytics_config`.
@@ -2408,7 +2431,7 @@ Decisions made while building the screens, so later work follows them:
 - **Profile Photo.** A photo in Settings, General is used for "You" (`profiles.avatar_path`, stored at `<user id>/me`).
 - **Seen on Instagram and LinkedIn.** Their conversations show "Seen" under your last seen message; WhatsApp keeps its ticks.
 - **Archive view (28 October 2026).** The inbox views are All, Priority, Junk, Subscriptions and Archive. Archive lists archived
-  conversations (junk or not), the row action becomes Unarchive there, and Undo works both ways. A Deleted view is agreed but
+  conversations (junk or not), the row action becomes Unarchive there, and Undo works both ways. A Deleted view came in Wave 4 (see below); it was agreed but
   not built: trashed threads are not loaded, so it needs an on-demand load, Restore, Delete Forever and a 30 day auto-empty
   (a `trashed_at` column and the retention job).
 - **Needs Reply sees the conversation (28 October 2026).** Triage judged only the newest incoming message with a one line
@@ -2682,9 +2705,50 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
   who is kept.
 - Search folds accents and takes words in any order; name order uses the South African collator and puts bare
   numbers last; no matches in People points at Companies and Hidden.
-- Not done (decided to wait): relationship status, nudges, notes, VIP, pickers, import and export (Wave 4);
-  `hidden` and `name_locked` in `merge_contacts`; passing the chosen name into `merge_contacts`; one shared role
-  address list for web and worker; virtualising the list rows.
+- Not done (decided to wait): relationship status, nudges, notes, VIP, pickers, import and export (built in Wave 4,
+  below); `hidden` and `name_locked` in `merge_contacts`; passing the chosen name into `merge_contacts`; one shared
+  role address list for web and worker; virtualising the list rows.
+
+### Built: Wave 4, Contact Relationships (2 November 2026)
+
+A light relationship layer on Contacts. It is not a CRM: no stages, scores, pipeline or custom fields (the Full App
+Review "Do not add" list stands).
+
+- **Status line** on every contact, computed and never typed, in the list and on the page: "Waiting on you since
+  Tuesday" when their message is the newest, "Waiting on them since Monday" when yours is the newest and under a
+  week old, otherwise "You last wrote 12 days ago". `contact_last_touch()` returns the newest incoming and outgoing
+  message per contact across channels, leaving out groups, junk, newsletters, notifications and the bin.
+- **Follow Up** on a contact: In 3 Days, 1 Week, 2 Weeks or 1 Month makes an all-day "Check In With Sipho" task in the
+  user's own task list through the same queue as New Task. The queue row carries `task_updates.contact_id`; a trigger
+  on new tasks pairs the task with the oldest unlinked reminder of the same account and due time from the last 15
+  minutes and sets `tasks.contact_id`. If nothing matches, the task still exists, just unlinked. Needs a connected
+  task list; without one the menu says so.
+- **Going Quiet**: starred people and clients (not hidden, not companies) with no contact for 14, 30 (default), 60 or
+  90 days, longest silence first. A Contacts tab that appears when there is anyone. `goingQuiet()` in
+  `lib/going-quiet.ts` is the selector the Summary card should call.
+- **About note**: one free-text note per contact (`contacts.about_note`, sealed as `contact_about`), edited in Edit
+  Contact and shown under Summary. Drafts get it as a separate fenced block, "What they wrote about this person", next
+  to the AI's own notes (`apps/ai/ai/drafts_gather.py` reads it with one extra query, since `draft_context` and
+  `compose_context` do not return it).
+- **Star (VIP)**: `contacts.vip`. Starred people sort to the top of People and show a star. In triage their mail is at
+  least important and never junk (an address the user unsubscribed from stays junk), and a settled bulk sender is
+  still looked at when it is a VIP. Nothing hides a contact on its own today; the star keeps it that way.
+- **Relationship picker**: Client, Prospect, Colleague, Supplier, Personal, Other, or Custom (typed), in New Contact
+  and Edit Contact. The list has a Relationship filter (All, the six, any custom one in use), kept in the address
+  as `rel=`.
+- **Tidy Up** replaces the Suggested Merges row: possible duplicates plus people who only have a number or an address
+  for a name, on `/contacts/tidy`, which links on to Suggested Merges and to each unnamed contact.
+- **Export and import**: More, in the Contacts header. Export as CSV or vCard is read and written in the browser (a
+  cell starting with = or @ is prefixed so a spreadsheet does not run it). Import takes a vCard or a CSV (our own,
+  Google Contacts, Outlook style headers), up to 500 rows, shows a preview of what is new, what adds details to
+  someone already here (matched by shared email address or phone number) and what is skipped, and saves nothing
+  until confirmed. Matched people only get missing details; nothing they already have is overwritten.
+- **Birthdays**: not built. Synced address book cards (`address_book_cards`) have only name, emails and phones columns,
+  so there is no birthday data for the daily brief yet. To do: keep `BDAY` when cards
+  are synced, then add a "Birthdays this week" line to `apps/ai/ai/brief.py`.
+- **Not done**: a merge drops the merged contact's star and About note (`merge_contacts` is unchanged); the Summary
+  card that uses `goingQuiet()` belongs to the Summary page; Going Quiet is not in the daily brief; no analytics
+  events were added (new dialog names need adding to `packages/analytics`).
 
 ### Built: Wave 1, Fix First and Security (2 November 2026)
 
@@ -2722,11 +2786,11 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
   spoken brief cannot drift. Conversations that aged out of the windows (unanswered over 14 days, urgent over 7) show
   as an "Older" row linking to Inbox, Priority. The filter replaces the address and keeps the open conversation;
   archiving, deleting or answering the open one opens the next row on wide screens. `summary_shown` is emitted once a
-  visit with section counts. Not built yet: snooze, draft chips, Waiting On Others.
+  visit with section counts. Snooze and Waiting On Others came in Wave 4; draft chips are not built yet.
 - Settings is six pages: Accounts (with WhatsApp Read Receipts and Resume Sync, no sign-in needed), AI (What Drafts
   Use, About, Writing Style, Priorities, Auto-Draft, Language, Daily Brief), Notifications, Usage, Team, and Profile
-  and Privacy. Old addresses redirect from `next.config.ts`. Push, Urgent, Important and Quiet Hours are shown
-  disabled and marked Coming Soon until push is built. A failed Settings save puts the screen back. About and
+  and Privacy. Old addresses redirect from `next.config.ts`. Push, Urgent, Important and Quiet Hours work
+  (see Web push and PWA, Wave 4). A failed Settings save puts the screen back. About and
   Important People are sealed (`profile_about`, `profile_people`); older plain rows are sealed the next time the
   profile loads, and the AI worker reads both. Display name is still plain.
 
@@ -2745,3 +2809,133 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
   and N remain. N is a new event and Shift N a new task.
 - **Not done:** sealing `calendar_events.attendees` (see the encryption section), choosing which calendar a new event goes in,
   Outlook creating and changing events (the sign-in is read only).
+
+## Web push and PWA, Wave 4 (2 November 2026)
+
+- **Push is real.** `apps/web/public/sw.js` (registered from the app shell by `PwaBoot`) shows a push and opens `/inbox/<id>` on
+  click. It has no fetch handler and no cache, so it can never store an authenticated page or API response. Settings,
+  Notifications saves the subscription to `push_subscriptions` (`lib/use-push.ts`); iPhone and iPad must add Konva to the Home
+  Screen first. Needs `NEXT_PUBLIC_VAPID_PUBLIC_KEY`; keys come from `pnpm --filter worker vapid:generate`.
+- **Sender:** `apps/worker/src/push` (primary shard, every 20 seconds; needs `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+  `VAPID_SUBJECT`, otherwise off). It pushes a thread whose newest message is unread, from someone else, in the inbox, not junk,
+  under 30 minutes old and Urgent or Important. Urgent ignores quiet hours; Important respects them (read in `profiles.timezone`);
+  the Urgent and Important switches apply. `threads.push_notified_at` (migration `20261118120000`) makes each message push once,
+  also when it was held back by a setting. A person gets at most 6 pushes per 10 minutes. 404 and 410 delete the subscription.
+- **Content-free:** the payload is fixed words plus the thread id ("New message from a client"), never a name, address or text.
+  End-to-end sealed payloads are not built; the push service sees only that something waits.
+- **PWA:** 192 and 512 icons, maskable versions (`pnpm --filter worker pwa:icons`), `id`, `scope`, shortcuts (New Email, Summary),
+  and a text share target that opens New Email at `/new-email`. The app badge shows unread inbox conversations. Shared files
+  are not handled yet.
+
+## Wave 4: Linked Notes
+
+- A note can be linked to contacts, conversations and calendar events (`note_links`, ids only). A Notes chip (`NotesChip`) lists a target's notes and starts a linked one.
+- Quick capture: Cmd+Shift+N (linked to the open conversation or contact), `useCaptureNote` for other screens, titled with the conversation subject.
+- Create Note From Summary makes an editable note from a meeting summary, linked to its event and attendees. No AI call.
+- Extract Tasks turns unchecked checklist items into tasks through `task_updates`; the task notes name the note and client.
+- Templates: Call Note, Meeting Note, Quote, Onboarding Checklist. Archive keeps a note out of the list and out of drafts (use_in_drafts is switched off).
+
+## Composer, Wave 4 (2 November 2026)
+
+- **Signatures:** one per send address (every email account and alias), written in Settings, Accounts, Signatures as plain text with line
+  breaks. Kept in `account_composer.settings`, a JSON object sealed in the browser with the user's key (migration
+  `20261118150000_composer_signatures_templates.sql`, written, not applied yet). The web app adds the signature below an email's text
+  when it queues the send (`lib/signature.ts`), never to WhatsApp, LinkedIn or Instagram, and never twice: text that already ends with
+  it is left alone. Drafts and AI drafts are kept free of it. The AI worker is told not to write its own signature block (the sign-off
+  phrase only) when the plain flag `account_composer.has_signature` is set. The reply box and New Email show the signature under the
+  text with a per-message **No Signature** toggle. The worker send path is unchanged.
+- **Writing As:** the From address is a chip (Writing As, address) in the reply box and New Email, with the same choice of addresses.
+  Settings, Accounts has a **Default Send-From** for each account with more than one address. It decides only when the latest email
+  does not say (the address it was sent to still wins), and it is sent along with the reply so the worker agrees.
+- **Templates and Snippets:** your own, in Settings, AI, Templates and Snippets (`user_templates`, title, shortcut and body sealed).
+  Variables `{first_name}`, `{name}`, `{company}` and `{my_name}` are filled from the contact and your profile; one with nothing to
+  fill it stays visible and the reply box warns before sending. Snippets expand when you type `;shortcut` and a space. The template menu
+  now shows in every chat, with the team's templates added in a work chat.
+- **Suggest Times:** a permanent calendar button in the reply box, New Email and New WhatsApp that adds three free times (the same
+  `freeSlots` as guided drafting).
+- **One-step Draft:** the draft bar has a **What Should This Say?** field; Enter or Draft drafts at once. The Draft dialog is gone;
+  Edit Text keeps its dialog. Edit With AI already holds Fix Typos and Grammar, Edit Text and the tone changes in one menu.
+- **Draft Tone:** Settings, AI, Behaviour, Draft Tone (Match How I Write, Formal, Friendly, Brief) in `profiles.draft_tone`. The AI worker
+  reads it for a draft written afresh; a tone picked for one draft still wins, and edits ignore it.
+- **Not done:** per contact domain default send-from; signatures with images or HTML; the worker adding a signature for sends that do
+  not come from the app.
+
+## Snooze, reminders, labels and Deleted, Wave 4 (2 November 2026)
+
+- **Snooze:** `threads.snoozed_until`, `snooze_kind` and `snoozed_at` (`20261118110000_snooze_labels.sql`, written, not applied
+  yet). A snoozed thread is out of every inbox view and the Summary until the time passes; the Snoozed view lists them,
+  soonest first, with Unsnooze. Choices: Later Today (before 15:00), Tomorrow, This Weekend (weekdays only), Next Week
+  (all 08:00 except Later Today at 18:00) and Pick a Date (08:00 that day). H opens the choices; Snooze is also a row
+  button, a menu item and a bulk action. Nothing runs to bring a thread back: the store schedules one redraw for the next
+  due time (`use-snooze-clock.ts`). A new inbound message clears the snooze in the database (trigger, only for a message
+  sent after the snooze was set). A thread that came back wears Snoozed for 24 hours.
+- **Done for Now:** the Summary row button snoozes to tomorrow at 08:00. The Summary's bulk Snooze opens the choices.
+- **Remind Me If No Reply:** offered when you wrote last; 1, 3 or 7 days or a date. It is a snooze of kind `reminder`,
+  so the thread leaves Inbox and returns on the date with a Follow Up tag (up to 7 days, until they or you move it on). A
+  reply cancels it. `follow_ups` (the AI's note that a message expects an answer) is not reused: it has no time.
+- **Labels:** `labels`, `thread_labels` and `saved_views`, all row level security on `user_id`. Label and view names are
+  sealed with the user's key as field `name`. Colours are nine stock palette names. Labels are set from the thread menu, the
+  row right-click menu and the bulk bar; the Inbox shows a chip per label (`?label=`) and a Saved Views menu (view, filter and
+  label). Deleting a label removes it everywhere; a saved view that used it keeps its view and filter. Not live across tabs yet.
+- **Deleted view:** read on demand (the store does not hold trash), newest 200, with Restore (email also queues `untrash`).
+  Delete Forever is not offered: the mail action path has no permanent delete and non-email chats have nothing to remove at
+  a provider. The 30 day auto-empty is still not built.
+- **Waiting On Others:** replaces Unread in the Summary filter. It lists inbox threads where you wrote last, the AI says an
+  answer is expected and none has come for 2 days, quietest first; the usual sections give way to it.
+- The daily brief skips snoozed threads like the Summary does (`brief.py`).
+
+## Search, Wave 4 (2 November 2026)
+
+- **One engine, private by construction:** Cmd-K and the Inbox list search both read a local index (`apps/web/lib/search`). The
+  server never sees search text, and analytics still count only the length of a query and how many results it had.
+- **What is indexed:** every conversation and message (paged through the whole history in the background, 250 at a time,
+  newest first, resuming where a closed tab stopped), contacts, notes (title and the start of the text), calendar events, tasks
+  (dated or not) and attachment names. Message text is cut to 600 characters, notes to 4,000, and messages are capped at 150,000
+  and files at 100,000 (the oldest drop first), so memory stays bounded.
+- **Where it lives:** built and searched in a Web Worker from text the page has already decrypted, held in memory, and saved in
+  IndexedDB in 512 shards, each sealed with AES-GCM under the user's field key (name of the shard bound in as additional data).
+  A key that cannot open it (another user, a rotated key, damage) clears it and the build starts again. Sign-out clears it.
+  If a Worker cannot start, the same code runs on the page. First build shows "Indexing N of M" in the palette footer.
+- **Kept current:** the app's own conversations, contacts and tasks are diffed into it as they change; Realtime on messages,
+  notes and calendar events (each on its own channel) updates or removes documents; a tab that was hidden for two minutes
+  catches up on messages when it returns.
+- **Operators:** `from:`, `to:` (both accept `me`), `has:attachment`, `is:unread`, `before:` and `after:` (a day such as
+  2026-11-02, a month, a year, today or yesterday). Words match in any order, ignoring case and accents. Quoted text is a phrase.
+- **Result groups:** Conversations, Messages, Contacts, Notes, Events, Tasks, Files. A message opens its conversation at that
+  message, loading the conversation first if it is older than the 1,000 the list holds. Phones get a Search Everything bar above
+  every list page that opens the same palette.
+- **Limits:** the Inbox list can only show conversations it has loaded (the newest 1,000); older ones are found in the palette.
+  Messages in a binned conversation that is not loaded are not yet left out. Search never reads the event `attendees` column
+  through the address keys, so it uses it as stored (see the sealing item above).
+
+- **Not done:** sealing `calendar_events.attendees` (see the encryption section). Choosing a calendar and Outlook writes
+  came in Wave 4 below.
+
+## Calendar page, Wave 4 (2 November 2026)
+
+- **Copy Free Times:** a clock button in the Calendar header opens a dialog that copies "Thursday 14:00 to 15:00, Friday 09:30
+  to 10:30" for the next 3, 5 or 10 working days, or for dates picked on a calendar. Working hours default to 08:00 to 17:00,
+  Monday to Friday (no setting existed), and are changed in the dialog and remembered in the browser. Gaps are at least 30
+  minutes (or 1 or 2 hours), on the quarter hour, at most three a day. All-day events do not block time, except ones over several
+  days; every timed event does, declined or not (offering a taken time is worse than leaving one out). The sums are in the
+  browser's time zone (`apps/web/lib/free-times.ts`).
+- **Schedule from a conversation:** `<ScheduleButton thread={thread} />` (`components/schedule-button.tsx`) opens New Event with
+  the people in the conversation as guests (their first email) and the subject, without Re: and Fwd:, as the title. The AI
+  proposing the time is not built.
+- **Invitations in conversations:** `<InviteCard message={message} />` (`components/invite-card.tsx`) reads the .ics an email
+  carries and shows Accept, Maybe and Decline, answered through the same calendar_updates path as the Calendar page. The
+  file is matched to the stored event by start and title (the file does not carry the calendar's own id); if the sync has not
+  stored it yet the card says so and offers Check Again. A repeating invitation is answered for the whole series.
+- **Calendar picker:** New Event lists every calendar of every connected calendar account (learned from the stored events, as
+  there is no calendar list table; read-only ones such as holidays are left out) and each account's default, kept in the
+  browser. iCloud now creates in the chosen calendar.
+- **No Date:** tasks with no due date are loaded and listed under a No Date row below the search box on the Calendar page, and a
+  task can be made without a date (a time still needs one).
+- **Outlook calendar writes:** create, change, delete and answer go through Microsoft Graph in the worker, the same queues
+  Google uses (`apps/worker/src/microsoft/calendar-write.ts`, `connectors/outlook-calendar.ts`). Needs Calendars.ReadWrite,
+  asked for later on its own (incremental consent, Allow Editing, back through the same Microsoft sign-in) so an organisation
+  that has not approved it cannot block the first sign-in. Until then each write is refused with a message that offers the button.
+  Outlook always invites guests, so Send Invites is not offered and guests with it off are refused; repeating Outlook events
+  cannot be made from here. Migration `20261118190000_outlook_calendar_events.sql` lets the outbox take Outlook accounts.
+- **Answer for the whole series:** the Reply row has a switch for every event in a series (Google, iCloud and Outlook; Outlook
+  answers on the series master). A change to a series that does not move its time also goes to the master in Outlook.

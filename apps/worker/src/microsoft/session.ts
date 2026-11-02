@@ -11,7 +11,7 @@ import { env } from "../env";
 import { credentialSealer } from "../vault";
 import { errorCode, log } from "../log";
 import { GraphClient, signInRevoked } from "./client";
-import { optionalGranted, type MicrosoftCredentials } from "./oauth";
+import { CALENDAR_SCOPE, CALENDAR_WRITE_SCOPE, optionalGranted, type MicrosoftCredentials } from "./oauth";
 
 /**
  * A client for this account's Microsoft sign-in, once it is known to grant every scope in `scopes`. Throws
@@ -29,7 +29,9 @@ export async function openGraphClient(accountId: string, scopes: string[]): Prom
   const sealer = await credentialSealer(accountId);
   const signedIn = await sealer.openJson<MicrosoftCredentials>(row.ciphertext);
   const creds = row.refreshed ? await sealer.openJson<MicrosoftCredentials>(row.refreshed) : signedIn;
-  if (scopes.some((s) => !creds.scopes.includes(s))) throw Object.assign(new Error("scope not granted"), { code: "NOT_GRANTED" });
+  // Calendars.ReadWrite includes Calendars.Read, whichever of the two Microsoft listed.
+  const has = (scope: string) => creds.scopes.includes(scope) || (scope === CALENDAR_SCOPE && creds.scopes.includes(CALENDAR_WRITE_SCOPE));
+  if (scopes.some((s) => !has(s))) throw Object.assign(new Error("scope not granted"), { code: "NOT_GRANTED" });
 
   const keep = async (refreshToken: string) => {
     const { error } = await db

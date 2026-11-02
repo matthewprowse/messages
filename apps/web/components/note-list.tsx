@@ -1,12 +1,12 @@
 "use client";
 
-// The Notes list: search, pinned notes first then newest edits, and the delete dialog.
+// The Notes list: search, pinned notes first then newest edits, an Archived view, templates for New Note, and the delete dialog.
 
 import { PaneHeader, SearchBand } from "@/components/pane";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ListChecks, NotebookPen, Pin, PinOff, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronDown, ListChecks, NotebookPen, Pin, PinOff, Trash2, type LucideIcon } from "lucide-react";
 import type { Note } from "@/lib/notes";
 import { checklistProgress, matchesNote, matchingLine, noteExcerpt, searchWords } from "@/lib/note-text";
 import { factStatus } from "@/lib/note-facts";
@@ -23,6 +23,9 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Kbd } from "@/components/ui/kbd";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { fromTemplate, NOTE_TEMPLATES, shortDate } from "@/lib/note-templates";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
@@ -60,7 +63,7 @@ function Highlight({ text, words }: { text: string; words: string[] }) {
   );
 }
 
-const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onPin, onDelete, onDraft, onWarm }: {
+const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onPin, onDelete, onDraft, onArchive, onWarm }: {
   note: Note;
   /** How the note stands for drafts, passed as plain text so the row only redraws when it changes. */
   drafts: DraftsStatus;
@@ -72,6 +75,7 @@ const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onP
   onPin: (note: Note) => void;
   onDelete: (note: Note) => void;
   onDraft: (note: Note) => void;
+  onArchive: (note: Note) => void;
   /** Called when the row is pointed at (after a short pause) or focused, to have the note ready. */
   onWarm: (id: string) => void;
 }) {
@@ -114,12 +118,14 @@ const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onP
           </Link>
           <div className="absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex group-focus-within/row:flex pointer-coarse:flex">
             <RowButton label={note.pinned ? "Unpin" : "Pin"} icon={note.pinned ? PinOff : Pin} onClick={() => onPin(note)} />
+            <RowButton label={note.archived ? "Restore" : "Archive"} icon={note.archived ? ArchiveRestore : Archive} onClick={() => onArchive(note)} />
             <RowButton label="Delete" icon={Trash2} onClick={() => onDelete(note)} />
           </div>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-max">
         <ContextMenuItem onSelect={() => onPin(note)}>{note.pinned ? "Unpin" : "Pin"}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => onArchive(note)}>{note.archived ? "Restore From Archive" : "Archive"}</ContextMenuItem>
         <ContextMenuCheckboxItem checked={note.useInDrafts} onCheckedChange={() => onDraft(note)}>Use in Drafts</ContextMenuCheckboxItem>
         <ContextMenuItem variant="destructive" onSelect={() => onDelete(note)}>Delete</ContextMenuItem>
       </ContextMenuContent>
@@ -217,8 +223,12 @@ function useRowNavigation<T extends HTMLElement>() {
 }
 
 export function NoteList() {
-  const { notes, loading, error, reload, opening, ensureAllBodies, pin, draftWith, warm } = useNotes();
-  const facts = useDraftFacts(notes);
+  const { notes: all, loading, error, reload, opening, ensureAllBodies, pin, archive, draftWith, warm } = useNotes();
+  const [view, setView] = useState<"notes" | "archived">("notes");
+  const archivedView = view === "archived";
+  const notes = useMemo(() => all.filter((n) => !!n.archived === archivedView), [all, archivedView]);
+  const archivedCount = useMemo(() => all.filter((n) => n.archived).length, [all]);
+  const facts = useDraftFacts(all);
   const params = useParams<{ id?: string }>();
   const router = useRouter();
   const [search, setSearch] = useState("");
@@ -233,6 +243,7 @@ export function NoteList() {
   const rowsRef = useRowNavigation<HTMLDivElement>();
   const today = useToday();
   const onPin = useCallback((note: Note) => pin(note.id, !note.pinned), [pin]);
+  const onArchive = useCallback((note: Note) => archive(note.id, !note.archived), [archive]);
   const onDraft = useCallback((note: Note) => draftWith(note.id, !note.useInDrafts), [draftWith]);
   const clearSearch = useCallback(() => setSearch(""), []);
   const { creating, newNote } = useNewNote(clearSearch);
@@ -246,7 +257,7 @@ export function NoteList() {
       {list.map((n, i) => (
         <Fragment key={n.id}>
           {i > 0 && <div className="px-3"><Separator /></div>}
-          <NoteRow note={n} drafts={factStatus(facts, n)} term={term} today={today} selected={params.id === n.id} onPin={onPin} onDelete={setDeleting} onDraft={onDraft} onWarm={warm} />
+          <NoteRow note={n} drafts={factStatus(facts, n)} term={term} today={today} selected={params.id === n.id} onPin={onPin} onDelete={setDeleting} onDraft={onDraft} onArchive={onArchive} onWarm={warm} />
         </Fragment>
       ))}
     </section>
@@ -259,16 +270,27 @@ export function NoteList() {
         <PaneHeader
           title="Notes"
           action={
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="secondary" className="shrink-0" disabled={creating} aria-keyshortcuts="N" onClick={() => void newNote()}>New Note</Button>
-              </TooltipTrigger>
-              <TooltipContent>New Note <Kbd>N</Kbd></TooltipContent>
-            </Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" className="shrink-0" disabled={creating} aria-keyshortcuts="N">New Note<ChevronDown /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-max">
+                <DropdownMenuItem onClick={() => void newNote()}>Blank Note<Kbd>N</Kbd></DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>From a Template</DropdownMenuLabel>
+                {NOTE_TEMPLATES.map((t) => <DropdownMenuItem key={t.id} onClick={() => void newNote(fromTemplate(t, shortDate(new Date())))}>{t.name}</DropdownMenuItem>)}
+              </DropdownMenuContent>
+            </DropdownMenu>
           }
         />
         <SearchBand inputRef={searchRef} value={search} onChange={setSearch} placeholder="Search Notes" keyShortcut="/" hint={<>Search Notes <Kbd>/</Kbd></>} />
-        <DraftsSummary report={facts} />
+        <Tabs value={view} onValueChange={(v) => setView(v as "notes" | "archived")} className="px-3 pb-2">
+          <TabsList className="w-full">
+            <TabsTrigger value="notes">Notes</TabsTrigger>
+            <TabsTrigger value="archived">Archived{archivedCount > 0 && <span className="tabular-nums text-muted-foreground">{archivedCount}</span>}</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        {!archivedView && <DraftsSummary report={facts} />}
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div ref={rowsRef} className="p-3">
@@ -280,7 +302,8 @@ export function NoteList() {
               ) : term ? (
                 <EmptyState icon={NotebookPen} title="No Matches" description="No notes match your search." />
               ) : (
-                <EmptyState icon={NotebookPen} title="No Notes Yet" description="Notes you write appear here." />
+                archivedView ? <EmptyState icon={Archive} title="Nothing Archived" description="Archived notes are kept here, out of the way." />
+                  : <EmptyState icon={NotebookPen} title="No Notes Yet" description="Notes you write appear here." />
               )}
             </div>
           ))}

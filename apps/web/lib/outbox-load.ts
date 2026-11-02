@@ -18,6 +18,7 @@ export interface OutboxLoadRow {
   to_addresses: string[];
   cc_addresses: string[];
   attachment_count: number;
+  send_after?: string | null;
 }
 
 /** The placeholder for a loaded row (body and addresses already opened), or null when it is not a reply in a conversation. */
@@ -36,6 +37,7 @@ export function pendingOfRow(row: OutboxLoadRow): PendingSend | null {
     fromAddress: row.from_address ?? undefined,
     copies,
     fileCount: row.attachment_count,
+    sendAfter: row.send_after ?? undefined,
   };
 }
 

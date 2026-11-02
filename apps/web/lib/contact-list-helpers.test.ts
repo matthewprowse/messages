@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { byName, byRecent, bySort, firstReach, fold, haystack, matchesQuery, plural, queryOf, sortAndView } from "./contact-list-helpers";
+import { byName, byRecent, bySort, byVipThen, detailOf, firstReach, fold, haystack, matchesQuery, plural, queryOf, sortAndView } from "./contact-list-helpers";
 
 test("search finds words in any order and ignores accents", () => {
   const hay = haystack(["John Smith", "Zoë Müller"], []);
@@ -29,10 +29,17 @@ test("the default view and sort leave the query empty", () => {
   assert.equal(queryOf("recent", "hidden"), "view=hidden");
 });
 
+test("a relationship and the quiet days are kept in the query only when they are not the defaults", () => {
+  assert.equal(queryOf("recent", "people", { rel: "Client", quiet: 30 }), "rel=Client");
+  assert.equal(queryOf("recent", "quiet", { rel: "all", quiet: 60 }), "view=quiet&quiet=60");
+  assert.equal(queryOf("recent", "people", { rel: "Golf Buddy", quiet: 60 }), "rel=Golf%20Buddy");
+});
+
 test("unknown sort and view params fall back to the defaults", () => {
   const p = (o: Record<string, string>) => ({ get: (k: string) => o[k] ?? null });
-  assert.deepEqual(sortAndView(p({ sort: "x", view: "y" })), { sort: "recent", view: "people", query: "" });
-  assert.deepEqual(sortAndView(p({ sort: "name", view: "hidden" })), { sort: "name", view: "hidden", query: "view=hidden&sort=name" });
+  assert.deepEqual(sortAndView(p({ sort: "x", view: "y" })), { sort: "recent", view: "people", query: "", rel: "all", quiet: 30 });
+  assert.deepEqual(sortAndView(p({ sort: "name", view: "hidden" })), { sort: "name", view: "hidden", query: "view=hidden&sort=name", rel: "all", quiet: 30 });
+  assert.deepEqual(sortAndView(p({ view: "quiet", quiet: "90", rel: "Client" })), { sort: "recent", view: "quiet", query: "view=quiet&rel=Client&quiet=90", rel: "Client", quiet: 90 });
 });
 
 test("recent puts the newest conversation first, then breaks ties by name, and no conversation sorts last", () => {
@@ -57,4 +64,18 @@ test("search matches text anywhere, and digits however a number is spaced", () =
   assert.equal(matchesQuery("12", "abc", "12345"), false); // under three digits never matches a number
   assert.equal(matchesQuery("123", "abc", "12345"), true);
   assert.equal(matchesQuery("zzz", hay, digits), false);
+});
+
+test("starred people come first whichever order is chosen", () => {
+  const list = [{ name: "A", lastAt: "2026-03-01", vip: false }, { name: "Z", lastAt: null, vip: true }, { name: "M", lastAt: "2026-04-01" }];
+  assert.deepEqual([...list].sort(byVipThen("recent")).map((x) => x.name), ["Z", "M", "A"]);
+  assert.deepEqual([...list].sort(byVipThen("name")).map((x) => x.name), ["Z", "A", "M"]);
+});
+
+test("the line under a name is where you stand, else their work, else how to reach them", () => {
+  const base = { id: "1", name: "Sam", company: "Firm", role: "Partner", emails: ["sam@firm.co.za"], phones: [], lastAt: null, isCompany: false, organizationName: null, conversationCount: 0, hasWhatsApp: false, handles: [], hasLinkedIn: false, hidden: false };
+  const now = new Date(2026, 10, 12, 15);
+  assert.equal(detailOf({ ...base, lastInboundAt: new Date(2026, 10, 10, 9).toISOString() }, now), "Waiting on you since Tuesday");
+  assert.equal(detailOf(base, now), "Partner, Firm");
+  assert.equal(detailOf({ ...base, role: null, company: null }, now), "sam@firm.co.za");
 });

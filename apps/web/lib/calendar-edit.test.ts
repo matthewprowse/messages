@@ -12,10 +12,11 @@ const event = (over: Partial<CalendarEvent> = {}): CalendarEvent => ({
   allDay: false, location: null, attendees: [], detailed: true, ...over,
 });
 
-test("only Google and iCloud events can be changed from here", () => {
+test("Google, iCloud and Outlook events can be changed from here, nothing else", () => {
   assert.equal(canChangeEvents("google_calendar"), true);
   assert.equal(canChangeEvents("icloud_calendar"), true);
-  assert.equal(canChangeEvents("outlook_calendar"), false);
+  assert.equal(canChangeEvents("outlook_calendar"), true);
+  assert.equal(canChangeEvents("gmail"), false);
   assert.equal(canChangeEvents(undefined), false);
 });
 
@@ -71,6 +72,13 @@ test("a time the form cannot show cannot stop an edit of the title", () => {
 
 test("an answer to an invitation is a one occurrence rsvp row", () => {
   assert.deepEqual(buildResponse(event(), "tentative"), { account_id: "a1", event_id: "e1", kind: "rsvp", scope: "occurrence", response: "tentative" });
+});
+
+test("an answer can be for every event in a series, but only for an event that is in one", () => {
+  const inSeries = event({ seriesId: "s1" });
+  assert.equal(buildResponse(inSeries, "accepted", "series").scope, "series");
+  assert.equal(buildResponse(inSeries, "accepted").scope, "occurrence");
+  assert.equal(buildResponse(event(), "accepted", "series").scope, "occurrence");
 });
 
 test("a saved change shows on its event, marked as saving, and others are left alone", () => {

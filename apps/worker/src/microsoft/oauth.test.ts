@@ -26,6 +26,14 @@ test("asks for every Graph scope, a refresh token and PKCE", () => {
   assert.equal(url.searchParams.get("redirect_uri"), "http://localhost:5000");
 });
 
+test("Calendars.ReadWrite is asked for only on a later sign-in and brings Calendars.Read with it", () => {
+  const base = { clientId: "client", redirectUri: "http://localhost:5000", state: "s", challenge: "c" };
+  assert.ok(!new URL(authUrl(base)).searchParams.get("scope")!.includes("Calendars.ReadWrite"));
+  assert.ok(new URL(authUrl({ ...base, extraScopes: ["Calendars.ReadWrite"] })).searchParams.get("scope")!.includes("https://graph.microsoft.com/Calendars.ReadWrite"));
+  assert.deepEqual(grantedScopes("https://graph.microsoft.com/Calendars.ReadWrite openid"), ["Calendars.ReadWrite", "Calendars.Read"]);
+  assert.deepEqual(optionalGranted(["Mail.ReadWrite", "Calendars.ReadWrite", "Calendars.Read"]), ["Calendars.ReadWrite"]);
+});
+
 test("asks for To Do only when it is chosen", () => {
   const base = { clientId: "client", redirectUri: "http://localhost:5000", state: "s", challenge: "c" };
   const scopes = (url: string) => new URL(url).searchParams.get("scope")!.split(" ");

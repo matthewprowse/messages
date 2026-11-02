@@ -10,9 +10,10 @@ export const rank: Record<Priority, number> = { urgent: 0, important: 1, normal:
 export const NO_MESSAGES: Message[] = [];
 
 // Junk splits in two: Subscriptions (it offers a way to unsubscribe) and Junk (spam, cold outreach).
-// Archive holds archived conversations whatever they are; every other view holds only the inbox's.
+// Archive holds archived conversations whatever they are; every other view holds only the inbox's. Snoozed takes any
+// (selectors.ts picks the snoozed ones out). Deleted is read from the database when opened, so no loaded thread is in it.
 export const inView = (t: Thread, view: View) =>
-  view === "archive" ? true : view === "junk" ? t.junk && !t.subscription : view === "subscriptions" ? t.junk && t.subscription : !t.junk;
+  view === "archive" || view === "snoozed" ? true : view === "deleted" ? false : view === "junk" ? t.junk && !t.subscription : view === "subscriptions" ? t.junk && t.subscription : !t.junk;
 // Once you have answered, a conversation does not need you until they write again.
 export const isPriority = (t: Thread) => (t.priority === "urgent" || t.priority === "important") && !t.lastFromMe && t.category !== "newsletter" && t.category !== "notification";
 
@@ -28,7 +29,7 @@ export function inFilter(t: Thread, filter: ListFilter) {
 
 /** Waiting: you wrote last, your message expects an answer, and none has come for WAITING_DAYS. */
 export const WAITING_DAYS = 2;
-export const isWaiting = (t: Thread) => t.lastFromMe && !!t.waiting && Date.now() - Date.parse(t.lastMessageAt) >= WAITING_DAYS * 86_400_000;
+export const isWaiting = (t: Thread, now: number = Date.now()) => t.lastFromMe && !!t.waiting && now - Date.parse(t.lastMessageAt) >= WAITING_DAYS * 86_400_000;
 
 export type MailAction = "read" | "unread" | "archive" | "unarchive" | "trash" | "untrash" | "spam" | "unspam";
 

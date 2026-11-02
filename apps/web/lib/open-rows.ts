@@ -23,6 +23,7 @@ const CONTENT_KEYS: Record<string, Field> = {
   company: FIELD.contactCompany,
   role: FIELD.contactRole,
   relationship: FIELD.contactRelationship,
+  about_note: FIELD.contactAbout,
   style_note: FIELD.contactStyleNote,
   ai_summary: FIELD.contactSummary,
 };

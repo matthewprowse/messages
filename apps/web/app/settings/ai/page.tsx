@@ -1,7 +1,7 @@
 "use client";
 
 // Settings, AI: everything the AI knows or does for you, in one place: what drafts use, About, Writing Style,
-// Priorities, Auto-Draft, Language and the Daily Brief.
+// Priorities, Templates, Auto-Draft, Draft Tone, Language and the Daily Brief.
 
 import { Suspense } from "react";
 import { useApp } from "@/lib/store";
@@ -11,6 +11,7 @@ import { AiBehaviourSection } from "@/components/settings/ai-behaviour";
 import { BriefSection } from "@/components/settings/brief";
 import { DraftsUseSection } from "@/components/settings/drafts-use";
 import { PrioritiesSection } from "@/components/settings/priorities-section";
+import { TemplatesSection } from "@/components/settings/templates-section";
 import { WritingSection } from "@/components/settings/writing-section";
 
 export default function AiPage() {
@@ -23,6 +24,7 @@ export default function AiPage() {
         {/* The form copies the profile when it mounts, so it remounts once the saved profile has loaded. */}
         <AboutSection key={loading ? "loading" : "loaded"} />
         <WritingSection />
+        <TemplatesSection />
         <Suspense fallback={null}>
           <PrioritiesSection />
         </Suspense>

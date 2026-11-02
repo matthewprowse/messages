@@ -10,10 +10,10 @@ export function sendAddressesOf(account: Pick<Account, "detail" | "sendAddresses
 
 /**
  * The default From for a reply: an address you can send from that the latest email was sent to. In a
- * conversation you started with no answer yet, the address your latest email went from. Else the
- * account's own address.
+ * conversation you started with no answer yet, the address your latest email went from. Else the default
+ * you set for the account in Settings (preferred, when it is still one of its addresses), else its own address.
  */
-export function defaultFrom(account: Pick<Account, "detail" | "sendAddresses">, msgs: Message[]): string {
+export function defaultFrom(account: Pick<Account, "detail" | "sendAddresses">, msgs: Message[], preferred?: string): string {
   const own = sendAddressesOf(account);
   // Newest first, skipping replies still sending: the latest email from someone else, else your latest.
   let latest: Message | undefined;
@@ -26,7 +26,8 @@ export function defaultFrom(account: Pick<Account, "detail" | "sendAddresses">, 
   }
   const candidates = latest ? latest.toAddresses ?? [] : [mine?.address ?? ""];
   const match = candidates.map((a) => a.toLowerCase()).find((a) => own.includes(a));
-  return match ?? own[0] ?? "";
+  const chosen = preferred?.trim().toLowerCase();
+  return match ?? (chosen && own.includes(chosen) ? chosen : own[0]) ?? "";
 }
 
 export interface Recipient {

@@ -11,7 +11,7 @@ export type IdentityRow = Pick<Tables<"contact_identities">, "kind" | "value">;
 export type ThreadRow = Pick<
   Tables<"threads">,
   | "id" | "account_id" | "channel" | "subject" | "is_group" | "group_name" | "avatar_path" | "provider_thread_id" | "last_message_at"
-  | "created_at" | "last_message_preview" | "junk" | "subscription" | "last_sender_contact_id" | "unread_count" | "pinned" | "status" | "priority" | "category" | "summary" | "needs_reply" | "last_from_me"
+  | "created_at" | "last_message_preview" | "junk" | "subscription" | "last_sender_contact_id" | "unread_count" | "pinned" | "status" | "priority" | "category" | "summary" | "needs_reply" | "last_from_me" | "snoozed_until" | "snooze_kind"
 > & { workspace_id?: string | null; shared_by?: string | null; share_match?: string | null; share_suggestion?: string | null };
 export type AttachmentRow = Pick<Tables<"attachments">, "id" | "message_id" | "filename" | "kind" | "size_bytes" | "storage_path" | "hidden" | "sealed" | "not_kept"> & { team_path?: string | null; thumb_path?: string | null };
 export type MessageRow = Pick<
@@ -26,7 +26,7 @@ export type UnsubscribeRow = Pick<Tables<"unsubscribes">, "id" | "account_id" | 
 // With the company, whose logo stands in for the photo of a sender that writes as the company.
 export const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path, kind_override, organizations(id, name, logo_path)";
 export const THREAD_COLUMNS =
-  "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me, workspace_id, shared_by, share_match, share_suggestion";
+  "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me, snoozed_until, snooze_kind, workspace_id, shared_by, share_match, share_suggestion";
 // One thread with its account's provider and its people in full, for a single conversation that has only just appeared.
 export const THREAD_WITH_PEOPLE = `${THREAD_COLUMNS}, accounts(provider), thread_participants(contact_id, contacts(${CONTACT_COLUMNS}, contact_identities(kind, value)))` as const;
 // The list: only the ids of who is in each thread. A person in fifty threads is sent once, by loadContacts, not fifty times here.

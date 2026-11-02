@@ -4,6 +4,7 @@
 // items, and its transcript in a dialog with search. Shown among a conversation's messages, on a contact's
 // page and on the calendar event it was.
 
+import { MeetingNoteButton } from "@/components/note-from-meeting";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Video } from "lucide-react";
 import { track } from "@/lib/analytics";
@@ -87,6 +88,7 @@ export const MeetingCard = memo(function MeetingCard({ meeting: m, place, classN
       {hasTranscript(m) && (
         <Button variant="secondary" className="self-start" onClick={() => setReading(true)}>View Transcript</Button>
       )}
+      <MeetingNoteButton meeting={m} />
       <TranscriptDialog meeting={m} place={place} open={reading} onOpenChange={setReading} />
     </article>
   );

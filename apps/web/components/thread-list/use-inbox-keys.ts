@@ -1,7 +1,7 @@
 "use client";
 
 // The Inbox keyboard: J and K (or [ and ]) step through conversations, Enter opens the first, E archives, # deletes,
-// ! moves to Junk, U toggles unread, / searches, Escape closes. Keys typed in a field, menu or dialog are left alone.
+// ! moves to Junk, U toggles unread, H snoozes, / searches, Escape closes. Keys typed in a field, menu or dialog are left alone.
 // Mounted by ThreadList, which stays mounted beside the open conversation, so the keys work with one open.
 
 import { useEffect, useRef } from "react";
@@ -67,7 +67,7 @@ export function useInboxKeys(keys: Keys) {
       const row = focusedRow();
       const target = picked.length ? picked : openId ? [openId] : row ? [row] : [];
       if (target.length === 0) return;
-      const action: RowAction | null = e.key === "u" || e.key === "U" ? "read" : shortcutAction(e);
+      const action: RowAction | null = e.key === "u" || e.key === "U" ? "read" : e.key === "h" || e.key === "H" ? "snooze" : shortcutAction(e);
       if (!action) return;
       e.preventDefault();
       run(target, action);

@@ -23,6 +23,12 @@ test("defaultFrom uses the address the latest inbound email was sent to", () => 
   assert.equal(defaultFrom(account, msgs), "hello@shop.co");
 });
 
+test("defaultFrom uses the default set in Settings when no email decides, and ignores one that is gone", () => {
+  assert.equal(defaultFrom(account, [msg({ toAddresses: ["other@x.com"] })], "Sales@Shop.co"), "sales@shop.co");
+  assert.equal(defaultFrom(account, [msg({ toAddresses: ["hello@shop.co"] })], "sales@shop.co"), "hello@shop.co");
+  assert.equal(defaultFrom(account, [], "removed@x.com"), "me@example.com");
+});
+
 test("defaultFrom falls back to the account address", () => {
   assert.equal(defaultFrom(account, [msg({ toAddresses: ["other@x.com"] })]), "me@example.com");
   assert.equal(defaultFrom(account, [msg({ toAddresses: ["sales@shop.co"] }), msg({})]), "me@example.com");

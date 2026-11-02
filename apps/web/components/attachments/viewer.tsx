@@ -20,6 +20,7 @@ import { MyAvatar } from "@/components/my-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { STAGE_HEIGHT, VideoPlayer, VoiceNote } from "@/components/media-player";
+import { AlsoIn } from "./also-in";
 import { FileGlyph } from "./file-glyph";
 import { ImageViewer } from "./image-viewer";
 import { useRequestedFile } from "./use-requested-file";
@@ -55,6 +56,10 @@ type ViewerProps = {
   onNavigate?: (index: number) => void;
   /** Given by a list that can hide files (the Attachments page): adds Hide, or Unhide for a hidden file, to the footer. */
   onToggleHidden?: () => Promise<void>;
+  /** Given by a list that can delete files (the Attachments page): adds Delete to the footer and "Also in N Conversations" under the name. */
+  onDelete?: () => Promise<void>;
+  /** The conversation the open file is in, so "Also in N Conversations" leaves it out. */
+  threadId?: string;
 };
 
 // Opens any attachment. PDFs open in the built-in viewer, images zoom and pan, videos play, and other
@@ -68,8 +73,9 @@ export function AttachmentViewer({ attachment, ...rest }: ViewerProps) {
   return last ? <ViewerDialog attachment={last} open={!!attachment} {...rest} /> : null;
 }
 
-function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClose, items, index, onNavigate, onToggleHidden }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
+function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClose, items, index, onNavigate, onToggleHidden, onDelete, threadId }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
   const [toggling, setToggling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const requested = useRequestedFile(a, open);
   // Once the worker has stored a requested file the viewer opens it like any other.
   const file = useStoredFile(requested.path ? { ...a, path: requested.path, sealed: requested.sealed } : a, open && (requested.status === "none" || requested.status === "ready"));
@@ -167,6 +173,7 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
             <DialogDescription className={cn("truncate text-xs", !sentAt && "sr-only")}>{sentAt ? viewerStamp(sentAt) : KIND_LABEL[a.kind]}</DialogDescription>
             {/* What you are about to download: the file's own name and size, always on show. */}
             <span className="block truncate text-xs text-muted-foreground">{[a.name, a.size].filter(Boolean).join(", ")}</span>
+            {onDelete && <AlsoIn attachmentId={a.id} threadId={threadId} open={open} />}
             <span className="sr-only">{[KIND_LABEL[a.kind], place >= 0 ? `${place + 1} of ${count}` : ""].filter(Boolean).join(" · ")}</span>
           </div>
           {href && (
@@ -205,6 +212,9 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
           <div className="flex items-center gap-2">
             {onToggleHidden && (
               <Button variant="secondary" disabled={toggling} onClick={() => { setToggling(true); void onToggleHidden().finally(() => setToggling(false)); }}>{a.hiddenReason ? "Unhide" : "Hide"}</Button>
+            )}
+            {onDelete && a.path && (
+              <Button variant="secondary" disabled={deleting} onClick={() => { setDeleting(true); void onDelete().finally(() => setDeleting(false)); }}>Delete</Button>
             )}
             <Button variant="secondary" disabled={file?.state !== "ready" || saving} onClick={() => void download()}>Download</Button>
             <DialogClose asChild><Button variant="secondary">Close</Button></DialogClose>

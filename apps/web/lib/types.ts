@@ -14,7 +14,7 @@ export type Provider = "icloud" | "gmail" | "outlook" | "whatsapp" | "google_cal
 export type Priority = "urgent" | "important" | "normal" | "low";
 export type Category = "personal" | "work" | "needs_reply" | "fyi" | "newsletter" | "notification";
 export type ThreadStatus = "inbox" | "archived" | "trash";
-export type View = "priority" | "all" | "junk" | "subscriptions" | "archive";
+export type View = "priority" | "all" | "junk" | "subscriptions" | "archive" | "snoozed" | "deleted";
 export type ListFilter = "none" | "unread" | "email" | "whatsapp" | "waiting";
 export type AccountStatus = "connecting" | "syncing" | "connected" | "disconnected" | "error";
 
@@ -54,7 +54,7 @@ export interface Attachment {
   hiddenReason?: "inline" | "tiny" | "junk" | "manual"; // set for files kept out of the attachment lists
   thumbPath?: string; // a sealed 256 px thumbnail of a photo, which grid tiles open instead of the whole file
   sealed?: boolean; // the stored file is encrypted: it is opened in the browser, not shown from a signed link
-  notKept?: "video_link" | "over_cap" | "deferred" | "unavailable"; // why no copy was made: a video left at the provider, the storage is full, an old or large email file fetched when opened, or one the mailbox no longer has
+  notKept?: "video_link" | "over_cap" | "deferred" | "unavailable" | "deleted"; // why no copy was made: a video left at the provider, the storage is full, an old or large email file fetched when opened, or one the mailbox no longer has, or one you deleted from Konva
 }
 
 /** An attachment with the message it came with, for views that gather files from many messages. */
@@ -107,6 +107,8 @@ export interface Message {
   /** Set on a reply you just sent until the real message arrives from the mail server. */
   sendState?: "queued" | "sending" | "sent" | "failed";
   sendError?: string;
+  /** A queued reply waiting for a time chosen with Send Later (an ISO time). Not set while it only waits for Undo. */
+  scheduledFor?: string;
   /** For a failed send: "retry" is definitely not sent, "unsure" may have gone out (no Retry), "none" cannot be re-queued. */
   sendRecovery?: "retry" | "unsure" | "none";
 }
@@ -156,6 +158,10 @@ export interface Thread {
   lastSenderId?: string;
   /** That message of yours expects an answer (a question, a request, documents sent), as the AI read it. */
   waiting?: boolean;
+  /** When a snoozed conversation returns, or a "remind me if no reply" falls due. Kept after it passes, for the Snoozed and Follow Up marks. */
+  snoozedUntil?: string;
+  /** A plain snooze, or a reminder that fires only if nobody has replied. */
+  snoozeKind?: "snooze" | "reminder";
   /** Spam, marketing or impersonal bulk mail, kept out of All and Priority. */
   junk: boolean;
   /** Offers a way to unsubscribe. Junk that does is shown under Subscriptions, the rest under Junk. */

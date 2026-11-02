@@ -15,7 +15,7 @@ import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/format";
 import { displayName, mimeOf, pastedName, UploadError } from "@/lib/outbox-files";
-import { noteAttachment, noteFileError, removeNoteFiles, takeNoteFiles, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
+import { MAX_NOTE_FILE_BYTES, noteAttachment, noteFileError, removeNoteFiles, takeNoteFiles, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
 import { noteReady, useNotes, useSaveState } from "@/components/notes-data";
 import { NoteConflictBar } from "@/components/note-conflict";
 import { DraftsBadge, useDraftFacts } from "@/components/note-drafts-badge";
@@ -23,7 +23,12 @@ import { factStatus } from "@/lib/note-facts";
 import { NoteToolbar, useKeyboardInset, useNoteEditor } from "@/components/note-editor";
 import { NoteFilesContext, type NoteFilesValue } from "@/components/note-file-node";
 import { DeleteNoteDialog } from "@/components/note-list";
+import { LinkChips, LinkMenu, useNoteLinks } from "@/components/note-links";
+import { ExtractTasksDialog } from "@/components/note-extract-tasks";
+import { useApp } from "@/lib/store";
 import { AttachmentViewer } from "@/components/attachments";
+import { CloudAttachDialog } from "@/components/attachments/cloud-attach-dialog";
+import { availableSources } from "@/lib/cloud-pick/config";
 import { EmptyState } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -38,8 +43,15 @@ const closing = new Map<string, ReturnType<typeof setTimeout>>();
 type Upload = { file: File; name: string; image: boolean; key: string };
 
 export function NoteView({ noteId }: { noteId: string }) {
-  const { noteById, loading, ensureBody } = useNotes();
+  const { noteById, loading, ensureBody, reload } = useNotes();
   const note = noteById(noteId);
+  // A note made elsewhere (quick capture, a meeting) is not in the list yet: read the list once before saying it is gone.
+  const looked = useRef<string | null>(null);
+  useEffect(() => {
+    if (note || loading || looked.current === noteId) return;
+    looked.current = noteId;
+    reload();
+  }, [note, loading, noteId, reload]);
   const unloaded = !!note?.unloaded;
   // A note's text is downloaded when the note is opened, ahead of the rest of the list.
   useEffect(() => { if (unloaded) void ensureBody(noteId); }, [unloaded, noteId, ensureBody]);
@@ -53,7 +65,11 @@ export function NoteView({ noteId }: { noteId: string }) {
 }
 
 function OpenNote({ note }: { note: Note }) {
-  const { edit, flush, close, pin, draftWith, upgrade, notes } = useNotes();
+  const { edit, flush, close, pin, archive, draftWith, upgrade, notes } = useNotes();
+  const { links, add: addLink, remove: removeLink } = useNoteLinks(note.id);
+  const { contactById } = useApp();
+  // The text Extract Tasks reads, taken from the editor when it is chosen (the store's copy waits for the next save); null while closed.
+  const [extracting, setExtracting] = useState<string | null>(null);
   const state = useSaveState(note.id);
   const facts = useDraftFacts(notes);
   const router = useRouter();
@@ -183,12 +199,16 @@ function OpenNote({ note }: { note: Note }) {
     canRetry: (key) => stopped.current.has(key),
     retry: (key) => { const item = stopped.current.get(key); if (item) startUpload(item); },
   }), [files, loaded, uploads, startUpload]);
+  const contactLink = links.find((l) => l.kind === "contact");
+  const contactName = contactLink ? contactById(contactLink.id)?.name : undefined;
   const offline = useOffline();
   const status = state === "conflict" ? "Changed Elsewhere"
     : state === "failed" ? (offline ? "Offline, Will Save When Back Online" : "Not Saved, Retrying")
     : state === "saving" ? "Saving" : state === "saved" ? "Saved" : `Edited ${relTime(note.updatedAt)}`;
   const drafts = factStatus(facts, note);
-  const attach = () => pickerRef.current?.click();
+  // With a cloud source set up, Attach Files asks where from; otherwise it opens the device's file chooser at once.
+  const [attachOpen, setAttachOpen] = useState(false);
+  const attach = () => (availableSources().length > 0 ? setAttachOpen(true) : pickerRef.current?.click());
   const exportPdf = () => void exportNotePdf(editorRef.current, note.title, () => filesRef.current);
 
   // Esc and Cmd+Enter leave the note for the list (saving it), and Cmd+Shift+P pins it, without reaching for the mouse.
@@ -216,6 +236,7 @@ function OpenNote({ note }: { note: Note }) {
         {/* The title field below carries the name for screen readers, so this copy is hidden from them. */}
         <h1 aria-hidden className="min-w-0 flex-1 truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
         <DraftsBadge status={drafts} />
+        <LinkMenu links={links} onAdd={addLink} />
         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
           <span className={state === "failed" || state === "conflict" ? "text-destructive" : undefined}>{status}</span>
           {state === "failed" && <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => void flush(id)}>Try Again</Button>}
@@ -227,7 +248,9 @@ function OpenNote({ note }: { note: Note }) {
             <DropdownMenuCheckboxItem checked={note.useInDrafts} onCheckedChange={(on) => draftWith(id, on)}>Use in Drafts</DropdownMenuCheckboxItem>
             <DropdownMenuItem onClick={attach}>Attach Files</DropdownMenuItem>
             <DropdownMenuItem onClick={() => void exportPdf()}>Export as PDF</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setExtracting(editorRef.current?.getMarkdown() ?? note.body)}>Extract Tasks</DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => archive(id, !note.archived)}>{note.archived ? "Restore From Archive" : "Archive"}</DropdownMenuItem>
             <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>Delete</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -275,6 +298,7 @@ function OpenNote({ note }: { note: Note }) {
               aria-label="Title"
               className="w-full bg-transparent py-1 text-2xl font-semibold outline-none placeholder:text-muted-foreground/60"
             />
+            <LinkChips links={links} onRemove={removeLink} />
             <NoteFilesContext.Provider value={filesValue}>
               {editor ? <EditorContent editor={editor} /> : <Skeleton className="h-24 w-full" />}
             </NoteFilesContext.Provider>
@@ -293,7 +317,9 @@ function OpenNote({ note }: { note: Note }) {
           e.target.value = "";
         }}
       />
+      <CloudAttachDialog open={attachOpen} onOpenChange={setAttachOpen} rule={{ maxBytes: MAX_NOTE_FILE_BYTES }} onFiles={(picked) => addFiles(picked, null, false)} notify={(m) => { if (m) toast.error(m); }} onDevice={() => pickerRef.current?.click()} />
       <AttachmentViewer attachment={viewing ? noteAttachment(viewing) : null} detail={note.title.trim() || undefined} onClose={() => setViewing(null)} />
+      <ExtractTasksDialog open={extracting !== null} onOpenChange={(o) => !o && setExtracting(null)} title={note.title} body={extracting ?? ""} contactName={contactName} />
       <DeleteNoteDialog note={deleting ? note : null} onClose={() => setDeleting(false)} onDeleted={() => router.push("/notes")} />
     </div>
   );

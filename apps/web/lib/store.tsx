@@ -20,6 +20,8 @@ import { NO_MESSAGES, listState } from "./app-store/thread-filters";
 import { memoLast, perSource } from "./app-store/memo-last";
 import { useContactMerging } from "./app-store/use-contact-merging";
 import { useDrafts } from "./app-store/use-drafts";
+import { useLabels } from "./app-store/use-labels";
+import { useSnoozeClock } from "./app-store/use-snooze-clock";
 import { useOutbox } from "./app-store/use-outbox";
 import { usePreDraft } from "./app-store/use-pre-draft";
 import { useProfileDispatch } from "./app-store/use-profile-dispatch";
@@ -170,14 +172,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const messagesFailed = useCallback((threadId: string) => failedThreadIds.has(threadId), [failedThreadIds]);
 
   // Filtered and sorted once per (view, filter) until the threads change. "Waiting" depends on the clock, so it is not cached.
-  const listCache = useMemo(() => perSource((threads: Thread[], key: string) => listThreadsFor(threads, key)), []);
+  // A snoozed conversation comes back by itself: the cache is dropped whenever one falls due (snoozeClock).
+  const snoozeClock = useSnoozeClock(state.threads);
+  const listCache = useMemo(() => perSource((threads: Thread[], key: string) => listThreadsFor(threads, key)), [snoozeClock]);
   const listThreads = useCallback(
     (view: View, filter: ListFilter) => listCache(state.threads, `${view}:${filter}`, filter !== "waiting"),
     [state.threads, listCache],
   );
 
-  const { markRead, pin, archive, unarchive, trash, react, setJunk, giveFeedback } = useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, notify, saveFailed });
-  const { removePending, replyTo, setReplyTo, send, retryPending, composeEmail, composeWhatsApp, refreshCompose, saveSendAddresses } = useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, draftAskRef, setPending, setComposed, saveFailed });
+  const labels = useLabels({ userId, notify, saveFailed });
+  const { markRead, pin, archive, unarchive, trash, restore, snooze, unsnooze, react, setJunk, giveFeedback } = useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, notify, saveFailed });
+  const { removePending, replyTo, setReplyTo, send, cancelScheduled, sendScheduledNow, retryPending, composeEmail, composeWhatsApp, refreshCompose, saveSendAddresses } = useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, draftAskRef, setPending, setComposed, saveFailed });
   const { generateDraft, generateComposeDraft, discardComposeDraft, discardDraft } = useDrafts({ userId, rawDispatch, threadMapRef, draftAskRef, draftWaitRef, composeWaitRef, setDrafting, setComposeDrafts, saveFailed });
   const { unsubscribe, confirmUnsubscribe } = useUnsubscribes({ rawDispatch, stateRef });
   const { refreshContacts, undoMerge, mergeContacts, splitContact, patchContact, removeContact, contactChanges, contactsRefreshed } = useContactMerging({ rawDispatch, stateRef, loadedRef, notify, setContactsReady, setContactsVersion, setMergedInto });
@@ -186,12 +191,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // One value per change, so components that read the store redraw only when something changed.
   const value = useMemo<Ctx>(() => ({
     ...listState(state), dispatch, contactById, threadById, get messages() { return flatMessages(state.byThread); }, messagesByThread, messagesFor, messagesLoaded, messagesFailed,loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
-    listThreads, notify, markRead, archive, unarchive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
+    listThreads, notify, markRead, archive, unarchive, trash, restore, snooze, unsnooze, snoozeClock, labels, pin, send, cancelScheduled, sendScheduledNow, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   }), [
     state, dispatch, contactById, threadById, flatMessages, messagesByThread, messagesFor, messagesLoaded, messagesFailed, loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
-    listThreads, notify, markRead, archive, unarchive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
+    listThreads, notify, markRead, archive, unarchive, trash, restore, snooze, unsnooze, snoozeClock, labels, pin, send, cancelScheduled, sendScheduledNow, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   ]);

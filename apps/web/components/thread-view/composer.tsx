@@ -1,13 +1,22 @@
 // The reply box at the bottom of a conversation: the text, drafts and AI edits, files, voice, and Send. What it types and
-// asks is remembered per conversation (composer-memory.ts); the AI buttons are in draft-bar.tsx and its dialogs in ask-dialogs.tsx.
+// asks is remembered per conversation (composer-memory.ts); the AI controls are in draft-bar.tsx and the Edit Text dialog in ask-dialogs.tsx.
+// An email's signature is added below the text when it is sent, not typed into the box (lib/signature.ts), so a draft never doubles it.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { toast } from "sonner";
+import { useApp } from "@/lib/store";
 import type { DraftPhase } from "@/lib/store";
 import type { Decision, Draft, Message, Thread } from "@/lib/types";
 import { attachProvider, type OutboxUpload } from "@/lib/outbox-files";
 import { cn } from "@/lib/utils";
+import { appendSignature, carriesSignature } from "@/lib/signature";
+import { signatureFor } from "@/lib/composer-settings";
+import { expandSnippet } from "@/lib/snippets";
+import { unresolvedVariables, varsFor } from "@/lib/template-vars";
+import { addBelow } from "@/lib/suggest-times";
+import { useAccountComposer } from "@/lib/use-account-composer";
+import { useUserTemplates } from "@/lib/use-user-templates";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,6 +27,10 @@ import { ReplyHeader, useReplyAll, useReplyFrom } from "@/components/reply-heade
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
 import { RecordButton, RecordingActions, RecordingStatus, SpeakButton, useVoiceRecorder } from "@/components/voice-recorder";
 import { TemplatePicker } from "@/components/template-picker";
+import { SendLaterMenu } from "@/components/send-later-menu";
+import { onRestoreReply, takeRestored } from "@/lib/reply-restore";
+import { SuggestTimesButton } from "@/components/suggest-times-button";
+import { SignatureNote } from "@/components/signature-note";
 import { InstagramReplyNotice, useInstagramReplyClosed } from "@/components/instagram-window";
 
 import { DraftBar } from "@/components/thread-view/draft-bar";
@@ -26,9 +39,17 @@ import { beforeAsk, typedText } from "@/components/thread-view/composer-memory";
 // The ask dialogs open on a click, so their code loads on its own the first time one is wanted.
 const AskDialogs = dynamic(() => import("@/components/thread-view/ask-dialogs").then((m) => m.AskDialogs), { ssr: false });
 
-export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { thread: Thread; msgs: Message[]; phase?: DraftPhase; onDraft: (tone?: Draft["tone"], instruction?: string, decision?: Decision, source?: string, audio?: Blob) => void; onDiscardDraft: () => void; onSend: (body: string, from?: string, files?: OutboxUpload[], copies?: { to: string[]; cc: string[] }) => Promise<boolean> }) {
+export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { thread: Thread; msgs: Message[]; phase?: DraftPhase; onDraft: (tone?: Draft["tone"], instruction?: string, decision?: Decision, source?: string, audio?: Blob) => void; onDiscardDraft: () => void; onSend: (body: string, from?: string, files?: OutboxUpload[], copies?: { to: string[]; cc: string[] }, sendAt?: string) => Promise<boolean> }) {
   const replyFrom = useReplyFrom(thread, msgs);
   const replyAll = useReplyAll(thread, msgs, replyFrom);
+  const { contactById, profile } = useApp();
+  // Variables in templates and snippets come from the person you write to (not a group) and your own name.
+  const vars = useMemo(() => varsFor(thread.isGroup ? undefined : contactById(thread.participantIds[0]), profile.name), [thread.isGroup, thread.participantIds, contactById, profile.name]);
+  const snippets = useUserTemplates().items.filter((t) => t.kind === "snippet");
+  // The signature for the address this email goes from. Off for this one message with No Signature.
+  const accountComposer = useAccountComposer().of(thread.accountId);
+  const signature = carriesSignature(thread.channel) ? signatureFor(accountComposer, replyFrom.from) : "";
+  const [noSignature, setNoSignature] = useState(false);
   const [text, setText] = useState("");
   const [instruction, setInstruction] = useState("");
   const draft = thread.draft;
@@ -71,6 +92,12 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
     askedIn.current = thread.id;
     setInstruction(draft?.instruction ?? "");
   }, [thread.id, draft?.id, draft?.instruction, draft?.auto]);
+  // ;shortcut followed by a space becomes the snippet's text; the caret goes after it.
+  const typeWithSnippets = (value: string, caret: number) => {
+    const hit = expandSnippet(value, caret, snippets.map((s) => ({ shortcut: s.shortcut, body: s.body })), vars);
+    type(hit ? hit.text : value);
+    if (hit) requestAnimationFrame(() => ref.current?.setSelectionRange(hit.caret, hit.caret));
+  };
   const type = (value: string) => {
     setText(value);
     if (value.trim() && value !== (draft?.body ?? "")) typedText.set(thread.id, value);
@@ -91,14 +118,13 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
     onDiscardDraft();
   };
   const said = instruction.trim();
-  // Draft and Edit Text each ask what you want first, in a dialog, so it is clear what they will do.
-  const [asking, setAsking] = useState<"draft" | "edit" | null>(null);
+  // Draft asks in its own field in the draft bar; Edit Text asks in a dialog, so it is clear what each will do.
+  const [asking, setAsking] = useState<"edit" | null>(null);
   const [change, setChange] = useState("");
   // The ask dialog and its note belong to one conversation; they must not follow you to the next.
-  useEffect(() => { setAsking(null); setChange(""); }, [thread.id]);
+  useEffect(() => { setAsking(null); setChange(""); setNoSignature(false); }, [thread.id]);
   const draftLabel = draft ? "New Draft" : thread.lastFromMe ? "Draft Follow-Up" : "Draft";
   const startDraft = () => {
-    setAsking(null);
     ask(said ? "custom" : "default", said || undefined, draft?.decision);
   };
   const startEdit = () => {
@@ -125,7 +151,14 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
   const recorder = voice.recording ? voice : speech.recording ? speech : undefined;
   const closed = useInstagramReplyClosed(thread, msgs);
   const canSend = (text.trim().length > 0 || files.items.length > 0) && !busy && !sending && !files.blocked && !replyAll.error && !recorder && !closed;
-  const submit = async () => {
+  // Text handed back by Undo or Edit on a scheduled message comes into the box, now or when this conversation opens.
+  useEffect(() => {
+    const take = () => { const back = takeRestored(thread.id); if (back !== undefined) { setText(back); typedText.set(thread.id, back); ref.current?.focus(); } };
+    take();
+    return onRestoreReply(thread.id, take);
+  }, [thread.id]);
+  // at is a Send Later time; left out, the reply waits only for the Undo Send window.
+  const submit = async (at?: Date) => {
     if (!canSend) return;
     setSending(true);
     const sentFrom = thread.id;
@@ -133,7 +166,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
     try {
       const uploaded = await files.upload();
       if (!uploaded) return;
-      queued = await onSend(text, replyFrom.chosen ?? undefined, uploaded, replyAll.copies);
+      queued = await onSend(signature && !noSignature ? appendSignature(text, signature) : text, replyFrom.explicit ?? undefined, uploaded, replyAll.copies, at?.toISOString());
     } catch {
       toast("Could not send. Your reply is still in the box.");
     } finally {
@@ -143,7 +176,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
     typedText.delete(sentFrom);
     beforeAsk.delete(sentFrom);
     // Only the box that sent is cleared: you may have moved to another conversation meanwhile.
-    if (threadRef.current === sentFrom) { setText(""); setInstruction(""); files.clear(); replyAll.reset(); }
+    if (threadRef.current === sentFrom) { setText(""); setInstruction(""); files.clear(); replyAll.reset(); setNoSignature(false); }
   };
 
   // Once opened, the dialogs stay mounted so closing one still animates.
@@ -165,7 +198,9 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
             undoable={undoable}
             hasDraft={!!draft}
             draftLabel={draftLabel}
-            onAskDraft={() => setAsking("draft")}
+            instruction={instruction}
+            onInstruction={setInstruction}
+            onDraft={startDraft}
             onFix={() => ask("edit", undefined, undefined, text)}
             onAskEdit={() => setAsking("edit")}
             onAdjust={(tone) => ask(tone, said || undefined, draft?.decision, text)}
@@ -189,7 +224,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
               ref={ref}
               value={text}
               readOnly={phase === "streaming"}
-              onChange={(e) => type(e.target.value)}
+              onChange={(e) => typeWithSnippets(e.target.value, e.target.selectionStart)}
               onPaste={files.onPaste}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
               placeholder="Message"
@@ -197,6 +232,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
               className="min-h-5 resize-none rounded-none border-0 bg-transparent p-0 text-base leading-5 md:text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
           )}
+          {!recorder && phase !== "thinking" && <SignatureNote signature={signature} off={noSignature} hasText={!!text.trim()} onToggle={() => setNoSignature((v) => !v)} left={unresolvedVariables(text)} />}
           <div className="mt-3 empty:hidden"><AttachmentChips files={files} /></div>
           <div className="mt-6 flex items-center justify-between gap-3">
             {recorder ? <div /> : (
@@ -204,12 +240,18 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
                 <AttachButton files={files} />
                 <SpeakButton voice={speech} disabled={busy} />
                 <RecordButton files={files} voice={voice} />
-                <TemplatePicker workspaceId={thread.workspaceId} disabled={busy} onInsert={(t) => type(text.trim() ? `${text.trimEnd()}\n\n${t}` : t)} />
+                <TemplatePicker workspaceId={thread.workspaceId} disabled={busy} vars={vars} onInsert={(t) => type(addBelow(text, t))} />
+                <SuggestTimesButton disabled={busy} onInsert={(t) => type(addBelow(text, t))} />
               </div>
             )}
             {recorder
               ? <RecordingActions voice={recorder} done={recorder === speech ? "Draft" : "Stop"} />
-              : <Button disabled={!canSend} onClick={submit}>Send via {providerLabel[thread.provider]}</Button>}
+              : (
+                <div className="flex">
+                  <Button disabled={!canSend} onClick={() => submit()} className="rounded-r-none">Send via {providerLabel[thread.provider]}</Button>
+                  <SendLaterMenu variant="default" disabled={!canSend} onPick={(at) => submit(at)} className="rounded-l-none border-l border-primary-foreground/20" />
+                </div>
+              )}
           </div>
         </div>
       </div>
@@ -217,15 +259,9 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
         asking={asking}
         onClose={() => setAsking(null)}
         busy={busy}
-        hasDraft={!!draft}
-        draftLabel={draftLabel}
-        instruction={instruction}
-        onInstruction={setInstruction}
         change={change}
         onChange={setChange}
-        onStartDraft={startDraft}
         onStartEdit={startEdit}
-        onRecordInstead={() => { setAsking(null); speech.start(); }}
       />}
     </div>
   );

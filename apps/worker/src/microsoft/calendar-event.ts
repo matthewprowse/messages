@@ -19,6 +19,8 @@ interface GraphEmail {
 export interface GraphEvent {
   id?: string;
   iCalUId?: string | null;
+  /** Set on each occurrence of a repeating event: the id of the series' master, which answers and deletes act on. */
+  seriesMasterId?: string | null;
   subject?: string | null;
   isAllDay?: boolean;
   isCancelled?: boolean;
@@ -104,6 +106,7 @@ export function storedOutlookEvent(
     description: eventNotes(event.body?.content),
     calendar_name: owner.calendarName ?? null,
     conference_url: outlookMeetingUrl(event),
+    series_id: event.seriesMasterId ?? null,
   };
 }
 

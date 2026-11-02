@@ -11,15 +11,29 @@ import { useApp } from "@/lib/store";
 import { MAX_RECIPIENTS, parseAddresses, sendAddressesOf } from "@/lib/send-from";
 import { attachProvider } from "@/lib/outbox-files";
 import { enterSubmitsByAccident } from "@/lib/send-safety";
+import { cancelOutbox } from "@/lib/outbox-queue";
+import { supabase } from "@/lib/supabase";
+import { describeWhen } from "@/lib/send-schedule";
 import { composeIsDirty } from "@/lib/compose-dirty";
 import { cn } from "@/lib/utils";
+import { appendSignature } from "@/lib/signature";
+import { signatureFor } from "@/lib/composer-settings";
+import { expandSnippet } from "@/lib/snippets";
+import { addBelow } from "@/lib/suggest-times";
+import { unresolvedVariables, varsFor } from "@/lib/template-vars";
+import { useAccountComposer } from "@/lib/use-account-composer";
+import { useUserTemplates } from "@/lib/use-user-templates";
+import { SignatureNote } from "@/components/signature-note";
+import { SuggestTimesButton } from "@/components/suggest-times-button";
+import { TemplatePicker } from "@/components/template-picker";
+import { WritingAsChip } from "@/components/writing-as-chip";
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
 import { ComposeAi, type Composed } from "@/components/compose-ai";
 import { Button } from "@/components/ui/button";
+import { SendLaterMenu } from "@/components/send-later-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const POLL_MS = 4000; // in case a Realtime update is missed
@@ -51,6 +65,17 @@ export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => v
   const waiting = queueing || (!!outboxId && !failed && !sent);
   const threadId = status?.threadId;
 
+  // Undo Send: while the row waits for its window the dialog says so and offers Undo, which keeps everything typed.
+  const holdUntil = status?.status === "queued" && status.sendAfter ? Date.parse(status.sendAfter) : 0;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (holdUntil <= Date.now()) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [holdUntil]);
+  const holdLeft = holdUntil > now ? Math.ceil((holdUntil - now) / 1000) : 0;
+
   useEffect(() => {
     if (!outboxId || !open) return;
     if (threadId) {
@@ -72,14 +97,20 @@ export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => v
     return () => { clearInterval(t); clearTimeout(stop); };
   }, [outboxId, open, threadId, failed, sent, ensureThread, refreshCompose, router]);
 
-  /** Runs queue, which resolves to the new outbox row's id (or null when nothing was queued), and follows it. */
-  const run = useCallback(async (queue: () => Promise<string | null>) => {
+  /**
+   * Runs queue, which resolves to the new outbox row's id (or null when nothing was queued), and follows it.
+   * With scheduledAt (Send Later) it does not follow: the dialog closes and a toast says when it goes.
+   */
+  const run = useCallback(async (queue: () => Promise<string | null>, scheduledAt?: Date) => {
     setQueueing(true);
     try {
       const id = await queue();
       if (id) {
         markSubmitted(dialog);
-        setOutboxId(id);
+        if (scheduledAt) {
+          toast(`Scheduled for ${describeWhen(scheduledAt, new Date())}.`, { action: { label: "Cancel", onClick: () => void cancelOutbox(id, (fn, args) => supabase.rpc(fn, args) as never).then((ok) => toast(ok ? "Cancelled." : "Too late to cancel.")) } });
+          close.current(false);
+        } else setOutboxId(id);
       }
     } catch {
       // Whatever threw, the dialog is usable again and says so.
@@ -89,13 +120,23 @@ export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => v
     }
   }, [dialog]);
   const reset = useCallback(() => setOutboxId(null), []);
+  /** Undo during the window: the row is cancelled while the worker has not taken it, and the dialog is editable again. */
+  const undo = useCallback(async () => {
+    if (!outboxId) return;
+    const done = await cancelOutbox(outboxId, (fn, args) => supabase.rpc(fn, args) as never);
+    if (done === true) { setOutboxId(null); toast("Cancelled. Your message is back in the box."); }
+    else toast(done === false ? "Too late to undo. It is already sending." : "Could not undo. Try again.");
+  }, [outboxId]);
 
-  return { sent, waiting, locked: waiting || sent, error: failed ? status.error : undefined, failed, run, reset };
+  return { sent, waiting, locked: waiting || sent, holding: holdLeft > 0, holdLeft, undo, error: failed ? status.error : undefined, failed, run, reset };
 }
 
 /** A new email to anyone. Once the worker has sent it, the new conversation opens. */
 export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSubject = "", body: initialBody = "" }: { open: boolean; onOpenChange: (open: boolean) => void; to?: string[]; subject?: string; body?: string }) {
-  const { accounts, contacts, composeEmail } = useApp();
+  const { accounts, contacts, composeEmail, profile } = useApp();
+  const composerSettings = useAccountComposer();
+  const snippets = useUserTemplates().items.filter((t) => t.kind === "snippet");
+  const [noSignature, setNoSignature] = useState(false);
   const sending = useComposeSend(open, onOpenChange, "compose");
   const { locked, sent, waiting, reset } = sending;
   const emailAccounts = useMemo(
@@ -107,7 +148,9 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
     () => emailAccounts.map((a) => ({ account: a, addresses: sendAddressesOf(a).map((address) => ({ key: `${a.id} ${address}`, address })) })),
     [emailAccounts],
   );
-  const firstKey = options[0]?.addresses[0]?.key ?? "";
+  // Opens on the first account's default send-from (Settings, Accounts), else its own address.
+  const firstDefault = options[0] ? composerSettings.of(options[0].account.id).defaultFrom : undefined;
+  const firstKey = options[0]?.addresses.find((x) => x.address === firstDefault)?.key ?? options[0]?.addresses[0]?.key ?? "";
 
   const [fromKey, setFromKey] = useState("");
   const [toText, setToText] = useState("");
@@ -139,6 +182,7 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
     setBody(initialBody);
     setDraftId(undefined);
     setChecked(false);
+    setNoSignature(false);
     reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, toKey]);
@@ -163,12 +207,16 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
 
   // Files go up when Send is pressed, then the email is queued with them. The limit follows the From account.
   const fromAccount = emailAccounts.find((a) => a.id === from.split(" ")[0]);
+  const signature = signatureFor(composerSettings.of(fromAccount?.id), from.split(" ")[1]);
+  const toContact = useMemo(() => contacts.find((c) => c.id === contactId), [contacts, contactId]);
+  const vars = useMemo(() => varsFor(toContact, profile.name), [toContact, profile.name]);
   const files = useOutboxFiles(attachProvider(fromAccount?.provider), locked);
   const clearFiles = files.clear;
   useEffect(() => { if (open) clearFiles(); }, [open, toKey, clearFiles]);
   const ready = !!from && (body.trim().length > 0 || files.items.length > 0) && !locked && !files.blocked && !ccError && !bccError;
 
-  const submit = async () => {
+  // at is a Send Later time; left out, the email waits only for the Undo Send window.
+  const submit = async (at?: Date) => {
     setChecked(true);
     if (!ready || toError || ccError || bccError) return;
     const [accountId, fromAddress] = from.split(" ");
@@ -184,11 +232,12 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
         cc: showCc ? ccRecipients.valid.filter((a) => !recipients.valid.includes(a)) : [],
         bcc: showBcc ? bccRecipients.valid.filter((a) => !recipients.valid.includes(a) && !(showCc && ccRecipients.valid.includes(a))) : [],
         subject: cleanSubject,
-        body,
+        body: signature && !noSignature ? appendSignature(body, signature) : body,
         files: uploaded,
         draftId,
+        sendAt: at?.toISOString(),
       }) : null;
-    });
+    }, at);
   };
 
   const keepWork = (e: Event) => {
@@ -210,20 +259,8 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
         ) : (
           // Enter in To, Cc, Bcc or Subject must never send: only the Send button or Cmd/Ctrl Enter in the message does.
           <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }} onKeyDown={noEnterSubmit} {...files.dropProps}>
-            <div className="grid gap-2">
-              <Label htmlFor="compose-from">From</Label>
-              <Select value={from} onValueChange={setFromKey} disabled={locked}>
-                <SelectTrigger id="compose-from" className="w-full"><SelectValue placeholder="Choose an Address" /></SelectTrigger>
-                <SelectContent>
-                  {options.map((o, i) => (
-                    <SelectGroup key={o.account.id}>
-                      {i > 0 && <SelectSeparator />}
-                      <SelectLabel>{o.account.label}</SelectLabel>
-                      {o.addresses.map((x) => <SelectItem key={x.key} value={x.key}>{x.address}</SelectItem>)}
-                    </SelectGroup>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="flex">
+              <WritingAsChip id="compose-from" value={from} disabled={locked} onChange={setFromKey} groups={options.map((o) => ({ label: o.account.label, items: o.addresses.map((x) => ({ value: x.key, label: x.address })) }))} />
             </div>
             <div className="grid gap-2">
               <div className="flex items-center justify-between">
@@ -280,20 +317,33 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
                 id="compose-body"
                 rows={8}
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
+                onChange={(e) => {
+                  const hit = expandSnippet(e.target.value, e.target.selectionStart, snippets.map((x) => ({ shortcut: x.shortcut, body: x.body })), vars);
+                  setBody(hit ? hit.text : e.target.value);
+                }}
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
                 onPaste={files.onPaste}
                 disabled={locked}
                 className={cn("max-h-80", files.dragging && "border-ring ring-3 ring-ring/30")}
               />
             </div>
+            <div className="-mt-2 flex items-center gap-1">
+              <TemplatePicker disabled={locked} vars={vars} onInsert={(t) => setBody((b) => addBelow(b, t))} />
+              <SuggestTimesButton disabled={locked} onInsert={(t) => setBody((b) => addBelow(b, t))} />
+            </div>
+            <SignatureNote signature={signature} off={noSignature} hasText={!!body.trim()} disabled={locked} onToggle={() => setNoSignature((v) => !v)} left={unresolvedVariables(`${subject}\n${body}`)} />
             <AttachmentChips files={files} />
             {sent && <p className="text-xs text-muted-foreground">Sent. The conversation opens here once it is filed.</p>}
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The email could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <AttachButton files={files} className="self-start sm:mr-auto" />
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
-              <Button type="submit" variant="secondary" disabled={!ready}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
+              {sending.holding
+                ? <Button type="button" variant="ghost" onClick={sending.undo}>Undo</Button>
+                : <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>}
+              <div className="flex">
+                <Button type="submit" variant="secondary" disabled={!ready} className="flex-1 rounded-r-none">{sending.holding ? `Sending in ${sending.holdLeft}s` : waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
+                <SendLaterMenu disabled={!ready} onPick={(at) => submit(at)} className="rounded-l-none border-l border-border" />
+              </div>
             </div>
           </form>
         )}

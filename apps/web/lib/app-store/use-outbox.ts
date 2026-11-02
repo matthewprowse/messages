@@ -9,6 +9,9 @@ import { supabase } from "../supabase";
 import { pendingAttachments, type OutboxUpload } from "../outbox-files";
 import { seal } from "../vault";
 import { createSendKeys, insertOnce, sendRecovery, sendSignature } from "../send-safety";
+import { cancelOutbox, sendOutboxNow, type Rpc } from "../outbox-queue";
+import { describeWhen, readUndoSeconds, sendAfterIso } from "../send-schedule";
+import { restoreReply } from "../reply-restore";
 import { rememberDismissed } from "../outbox-load";
 import { sealAddress } from "../address-refs";
 import { track } from "../analytics";
@@ -35,6 +38,30 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
   // A failed row cannot be deleted in the database, so a deleted one is also remembered here and stays gone after a reload.
   const removePending = useCallback((outboxId: string) => { rememberDismissed(outboxId); setPending((p) => p.filter((x) => x.id !== outboxId)); }, []);
 
+  // Undo and Send Now are database functions that act only while the row is queued (see outbox-queue.ts).
+  const rpc: Rpc = (fn, args) => supabase.rpc(fn, args) as unknown as ReturnType<Rpc>;
+  // Cancels a queued or scheduled reply. Only while the worker has not taken it: otherwise it is on its way and says so.
+  const cancelScheduled = useCallback(async (outboxId: string, restoreText: boolean) => {
+    const p = pendingRef.current.find((x) => x.id === outboxId);
+    const done = await cancelOutbox(outboxId, rpc);
+    if (done !== true) {
+      toast(done === false ? "Too late to cancel. It is already sending." : "Could not cancel. Try again.");
+      return false;
+    }
+    setPending((list) => list.filter((x) => x.id !== outboxId));
+    if (restoreText && p) restoreReply(p.threadId, p.body);
+    return true;
+  }, []);
+  const sendScheduledNow = useCallback(async (outboxId: string) => {
+    const done = await sendOutboxNow(outboxId, rpc);
+    if (done !== true) {
+      toast(done === false ? "It has already gone." : "Could not send it now. Try again.");
+      return false;
+    }
+    setPending((list) => list.map((x) => (x.id === outboxId ? { ...x, sendAfter: undefined } : x)));
+    return true;
+  }, []);
+
   const [replyTo, setReplyToState] = useState<Record<string, Message | undefined>>({});
   const replyToRef = useRef(replyTo);
   replyToRef.current = replyTo;
@@ -42,7 +69,7 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     setReplyToState((r) => ({ ...r, [threadId]: message ?? undefined }));
   }, []);
 
-  const send = useCallback(async (threadId: string, body: string, fromAddress?: string, files: OutboxUpload[] = [], standalone = false, copies?: { to: string[]; cc: string[] }) => {
+  const send = useCallback(async (threadId: string, body: string, fromAddress?: string, files: OutboxUpload[] = [], standalone = false, copies?: { to: string[]; cc: string[] }, sendAt?: string) => {
     // A reply that started as an AI draft keeps the link, so the AI can learn from what you changed.
     const draftId = standalone ? null : threadMapRef.current.get(threadId)?.draft?.id ?? null;
     const replyToId = standalone ? null : replyToRef.current[threadId]?.id ?? null;
@@ -56,16 +83,19 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     // The placeholder is in before the insert resolves: a fast worker can update the row first, and the outbox
     // handler (use-realtime.ts) only updates placeholders that already exist. Its id is chosen here for the same reason.
     // The id is kept for as long as the message is unsettled, so Send pressed again after a lost response inserts the same row.
-    const signature = sendSignature({ scope: `${threadId}${standalone ? " standalone" : ""}`, body, from: fromAddress, to: copies?.to, cc: copies?.cc, files: files.length, draftId });
+    // Send Later uses the chosen time; otherwise the message waits only for the Undo Send window (Off sends at once).
+    const undoSeconds = sendAt ? 0 : readUndoSeconds();
+    const sendAfter = sendAt ?? sendAfterIso(undoSeconds) ?? undefined;
+    const signature = sendSignature({ scope: `${threadId}${standalone ? " standalone" : ""}${sendAt ? ` at ${sendAt}` : ""}`, body, from: fromAddress, to: copies?.to, cc: copies?.cc, files: files.length, draftId });
     const key = sendKeysRef.current.begin(signature);
     if (key.busy) return false; // the same message is being queued already (a double click)
     const outboxId = key.id;
     const attachments = files.length ? pendingAttachments(files) : undefined;
     const dropPlaceholder = () => setPending((p) => p.filter((x) => x.id !== outboxId));
-    if (sealed !== null && addresses !== null) setPending((p) => (p.some((x) => x.id === outboxId) ? p : [...p, { id: outboxId, threadId, body, createdAt: new Date().toISOString(), status: "queued", attachments, fromAddress, copies, fileCount: files.length }]));
+    if (sealed !== null && addresses !== null) setPending((p) => (p.some((x) => x.id === outboxId) ? p : [...p, { id: outboxId, threadId, body, createdAt: new Date().toISOString(), status: "queued", attachments, fromAddress, copies, fileCount: files.length, sendAfter }]));
     const { data, error } = sealed === null || addresses === null ? { data: null, error: true } : await insertOnce<{ id: string; created_at: string }>(
       () => supabase.from("outbox")
-        .insert({ id: outboxId, thread_id: threadId, body: sealed, draft_id: draftId, from_address: addresses[0], reply_to_message_id: replyToId, attachment_count: files.length,
+        .insert({ id: outboxId, thread_id: threadId, body: sealed, draft_id: draftId, from_address: addresses[0], reply_to_message_id: replyToId, attachment_count: files.length, send_after: sendAfter ?? null,
           // Reply All: the worker sends to exactly these. Sealed like any address.
           ...(copies ? { to_addresses: addresses[1] ?? [], cc_addresses: addresses[2] ?? [] } : {}) })
         .select("id, created_at").single(),
@@ -107,6 +137,14 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     setPending((p) => p.map((x) => (x.id === data.id ? { ...x, createdAt: data.created_at } : x)));
     if (draftId) rawDispatch({ type: "setDraft", id: threadId });
     if (replyToId) setReplyTo(threadId, null);
+    if (sendAt) toast(`Scheduled for ${describeWhen(new Date(sendAt), new Date())}.`);
+    else if (undoSeconds > 0) {
+      toast("Sending Reply", {
+        description: `You have ${undoSeconds} seconds to undo.`,
+        duration: undoSeconds * 1000,
+        action: { label: "Undo", onClick: () => void cancelScheduled(data.id, true).then((ok) => { if (ok && files.length) toast("Add your files again."); }) },
+      });
+    }
     return true;
   }, [setReplyTo]);
 
@@ -132,9 +170,10 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
       Promise.all((email.bcc ?? []).map((a) => sealAddress(a))),
     ]).catch(() => null);
     // One id per unsettled email, so pressing Send again after a lost answer cannot queue it twice.
-    const signature = sendSignature({ scope: `email ${email.accountId}`, body: email.body, from: email.fromAddress, to: email.to, cc: email.cc, bcc: email.bcc, subject: email.subject, files: files.length, draftId: email.draftId });
+    const signature = sendSignature({ scope: `email ${email.accountId}${email.sendAt ? ` at ${email.sendAt}` : ""}`, body: email.body, from: email.fromAddress, to: email.to, cc: email.cc, bcc: email.bcc, subject: email.subject, files: files.length, draftId: email.draftId });
     const key = sendKeysRef.current.begin(signature);
     if (key.busy) return null;
+    const sendAfter = email.sendAt ?? sendAfterIso(readUndoSeconds()) ?? undefined;
     const { data, error } = sealed === null || addresses === null ? { data: null, error: true } : await insertOnce<{ id: string }>(
       () => supabase.from("outbox")
         .insert({
@@ -148,6 +187,7 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
           body: sealed[1],
           attachment_count: files.length,
           draft_id: email.draftId ?? null,
+          send_after: sendAfter ?? null,
         })
         .select("id").single(),
       () => supabase.from("outbox").select("id").eq("id", key.id).maybeSingle(),
@@ -161,20 +201,21 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
       toast("Could not attach the files. Your email is still in the box.");
       return null;
     }
-    setComposed((c) => ({ ...c, [data.id]: { status: "queued" } }));
+    setComposed((c) => ({ ...c, [data.id]: { status: "queued", sendAfter } }));
     return data.id;
   }, []);
 
   // A new WhatsApp chat: one number, no subject or From address. The worker sets thread_id once it is sent.
-  const composeWhatsApp = useCallback(async (accountId: string, to: string, body: string, draftId?: string) => {
+  const composeWhatsApp = useCallback(async (accountId: string, to: string, body: string, draftId?: string, sendAt?: string) => {
     const sealed = await seal(FIELD.body, body).catch(() => null);
     const sealedTo = await sealAddress(to).catch(() => null);
-    const signature = sendSignature({ scope: `whatsapp ${accountId}`, body, to: [to], draftId });
+    const signature = sendSignature({ scope: `whatsapp ${accountId}${sendAt ? ` at ${sendAt}` : ""}`, body, to: [to], draftId });
     const key = sendKeysRef.current.begin(signature);
     if (key.busy) return null;
+    const sendAfter = sendAt ?? sendAfterIso(readUndoSeconds()) ?? undefined;
     const { data, error } = sealed === null || sealedTo === null ? { data: null, error: true } : await insertOnce<{ id: string }>(
       () => supabase.from("outbox")
-        .insert({ id: key.id, account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0, draft_id: draftId ?? null })
+        .insert({ id: key.id, account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0, draft_id: draftId ?? null, send_after: sendAfter ?? null })
         .select("id").single(),
       () => supabase.from("outbox").select("id").eq("id", key.id).maybeSingle(),
     );
@@ -183,12 +224,12 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
       toast("Could not send. Your message is still in the box.");
       return null;
     }
-    setComposed((c) => ({ ...c, [data.id]: { status: "queued" } }));
+    setComposed((c) => ({ ...c, [data.id]: { status: "queued", sendAfter } }));
     return data.id;
   }, []);
 
   const refreshCompose = useCallback(async (outboxId: string) => {
-    const { data } = await supabase.from("outbox").select("status, thread_id, error").eq("id", outboxId).maybeSingle();
+    const { data } = await supabase.from("outbox").select("status, thread_id, error, send_after").eq("id", outboxId).maybeSingle();
     if (data) setComposed((c) => ({ ...c, [outboxId]: composeStatusOf(data) }));
   }, []);
 
@@ -206,5 +247,5 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     return true;
   }, [saveFailed]);
 
-  return { removePending, replyTo, setReplyTo, send, retryPending, composeEmail, composeWhatsApp, refreshCompose, saveSendAddresses };
+  return { removePending, replyTo, setReplyTo, send, cancelScheduled, sendScheduledNow, retryPending, composeEmail, composeWhatsApp, refreshCompose, saveSendAddresses };
 }

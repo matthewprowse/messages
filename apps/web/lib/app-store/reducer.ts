@@ -248,9 +248,8 @@ export function reducer(s: State, a: Action): State {
     case "removeContact":
       return s.contacts.some((c) => c.id === a.id) ? { ...s, contacts: s.contacts.filter((c) => c.id !== a.id) } : s;
     case "upsertTask": {
-      // A task that lost its date has no day to show on.
-      const others = s.tasks.filter((t) => t.id !== a.task.id);
-      return { ...s, tasks: a.task.dueAt ? [...others, a.task] : others };
+      // A task with no date is kept: Calendar lists those under No Date.
+      return { ...s, tasks: [...s.tasks.filter((t) => t.id !== a.task.id), a.task] };
     }
     case "removeTask":
       return s.tasks.some((t) => t.id === a.id) ? { ...s, tasks: s.tasks.filter((t) => t.id !== a.id) } : s;

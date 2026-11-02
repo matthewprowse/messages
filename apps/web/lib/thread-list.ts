@@ -11,6 +11,8 @@ export const VIEWS: { key: View; label: string }[] = [
   { key: "junk", label: "Junk" },
   { key: "subscriptions", label: "Subscriptions" },
   { key: "archive", label: "Archive" },
+  { key: "snoozed", label: "Snoozed" },
+  { key: "deleted", label: "Deleted" },
 ];
 
 export const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
@@ -27,6 +29,8 @@ export const EMPTY: Record<View, { title: string; description: string }> = {
   junk: { title: "No Junk", description: "Spam and cold outreach the AI sorts out lands here." },
   archive: { title: "Nothing Archived", description: "Conversations you archive are kept here until you move them back." },
   subscriptions: { title: "No Subscriptions", description: "Newsletters, promotions and alerts you can unsubscribe from land here." },
+  snoozed: { title: "Nothing Snoozed", description: "Snoozed conversations wait here and return to your inbox at the time you chose, or when they reply." },
+  deleted: { title: "Nothing Deleted", description: "Conversations you delete can be restored from here." },
 };
 
 /** The empty-state copy for a view, or for a filter that explains itself (Waiting has a two day rule people cannot guess). */
@@ -41,12 +45,13 @@ export function withQuery(path: string, query: string) {
   return query ? `${path}?${query}` : path;
 }
 
-/** The inbox link for a view and filter; defaults are left out of the address. */
-export function listHref(view: View, filter: ListFilter) {
+/** The inbox link for a view, filter and label; defaults are left out of the address. */
+export function listHref(view: View, filter: ListFilter, label?: string) {
   const p = new URLSearchParams();
   if (view !== "all") p.set("view", view);
   // A filter that does not apply to the view (WhatsApp in Subscriptions) is left out of its link.
   if (filter !== "none" && filtersForView(view).includes(filter)) p.set("filter", filter);
+  if (label) p.set("label", label);
   return withQuery("/inbox", p.toString());
 }
 
@@ -57,7 +62,7 @@ export function filterOf(raw: string | null): ListFilter {
 
 /** A view from the address, "all" when it is missing or unknown. */
 export function viewOf(raw: string | null): View {
-  return raw === "priority" || raw === "junk" || raw === "subscriptions" || raw === "archive" ? raw : "all";
+  return raw === "priority" || raw === "junk" || raw === "subscriptions" || raw === "archive" || raw === "snoozed" || raw === "deleted" ? raw : "all";
 }
 
 /** Whether a conversation matches a lower-cased search term: its name, subject or preview. */

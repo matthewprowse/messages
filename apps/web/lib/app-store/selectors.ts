@@ -5,6 +5,8 @@ import type { ListFilter, Message, Thread, View } from "../types";
 import type { PendingSend } from "./compose";
 import { sendRecovery } from "../send-safety";
 import { sendStateOf } from "../thread-send-state";
+import { isScheduled } from "../send-schedule";
+import { isSnoozed } from "../snooze";
 import { inFilter, inView, isPriority, rank } from "./thread-filters";
 
 /** Queued replies follow the stored messages. A conversation without any queued keeps its stored list as is. */
@@ -20,6 +22,7 @@ export function withQueuedReplies(byThread: Record<string, Message[]>, pending: 
       attachments: p.attachments,
       sendState: sendStateOf(p.status),
       sendError: p.error,
+      scheduledFor: p.status === "queued" && isScheduled(p.sendAfter, p.createdAt) ? p.sendAfter : undefined,
       sendRecovery: p.status === "failed" ? sendRecovery(p.error, p.fileCount ?? p.attachments?.length ?? 0) : undefined,
     };
     queued.set(p.threadId, [...(queued.get(p.threadId) ?? []), m]);
@@ -29,11 +32,18 @@ export function withQueuedReplies(byThread: Record<string, Message[]>, pending: 
   return out;
 }
 
-/** The threads of a list screen: key is "view:filter". Pinned first, then (in Priority) by rank, then newest first. */
-export function listThreadsFor(threads: Thread[], key: string): Thread[] {
+/**
+ * The threads of a list screen: key is "view:filter". Pinned first, then (in Priority) by rank, then newest first.
+ * A snoozed conversation is out of every inbox view until its time passes; the Snoozed view lists them, soonest back first.
+ * `now` is a parameter so the clock is the caller's and tests need no fake timers.
+ */
+export function listThreadsFor(threads: Thread[], key: string, now: number = Date.now()): Thread[] {
   const [view, filter] = key.split(":") as [View, ListFilter];
+  if (view === "snoozed") {
+    return threads.filter((t) => t.status === "inbox" && isSnoozed(t, now) && inFilter(t, filter)).sort((a, b) => Date.parse(a.snoozedUntil!) - Date.parse(b.snoozedUntil!));
+  }
   return threads
-    .filter((t) => t.status === (view === "archive" ? "archived" : "inbox") && inView(t, view) && (view !== "priority" || isPriority(t)) && inFilter(t, filter))
+    .filter((t) => t.status === (view === "archive" ? "archived" : "inbox") && inView(t, view) && (view === "archive" || !isSnoozed(t, now)) && (view !== "priority" || isPriority(t)) && inFilter(t, filter))
     .sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
       if (view === "priority" && rank[a.priority] !== rank[b.priority]) return rank[a.priority] - rank[b.priority];

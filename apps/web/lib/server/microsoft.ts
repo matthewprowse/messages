@@ -23,6 +23,8 @@ export const SEND_SCOPE = "Mail.Send";
 export const CALENDAR_SCOPE = "Calendars.Read";
 export const PROFILE_SCOPE = "User.Read";
 export const TASKS_SCOPE = "Tasks.ReadWrite";
+/** Create, change, answer and delete events. Asked for later, on its own (incremental consent), not on every sign-in. */
+export const CALENDAR_WRITE_SCOPE = "Calendars.ReadWrite";
 export const CHAT_SCOPE = "Chat.ReadWrite";
 export const MEETINGS_SCOPE = "OnlineMeetings.Read";
 export const TRANSCRIPT_SCOPE = "OnlineMeetingTranscript.Read.All";
@@ -40,8 +42,8 @@ export interface MicrosoftCredentials {
 }
 
 /** What a sign-in asks for beyond the base set. */
-export function extraScopes(teams: boolean): string[] {
-  return teams ? TEAMS_SCOPES : [];
+export function extraScopes(teams: boolean, calendarWrite = false): string[] {
+  return [...(teams ? TEAMS_SCOPES : []), ...(calendarWrite ? [CALENDAR_WRITE_SCOPE] : [])];
 }
 
 function requestScopes(extra: readonly string[] = []): string {
@@ -54,14 +56,14 @@ export function pkce() {
   return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
 }
 
-export function authUrl(opts: { redirectUri: string; state: string; challenge: string; teams?: boolean; clientId?: string }): string {
+export function authUrl(opts: { redirectUri: string; state: string; challenge: string; teams?: boolean; calendarWrite?: boolean; clientId?: string }): string {
   const url = new URL(`${base()}/authorize`);
   url.search = new URLSearchParams({
     client_id: opts.clientId ?? clientId,
     redirect_uri: opts.redirectUri,
     response_type: "code",
     response_mode: "query",
-    scope: requestScopes(extraScopes(opts.teams === true)),
+    scope: requestScopes(extraScopes(opts.teams === true, opts.calendarWrite === true)),
     prompt: "select_account",
     state: opts.state,
     code_challenge: opts.challenge,
@@ -72,13 +74,15 @@ export function authUrl(opts: { redirectUri: string; state: string; challenge: s
 
 /** The scopes Microsoft granted, short form, only the ones this app knows (as the worker's grantedScopes). */
 export function grantedScopes(scope: string | undefined): string[] {
-  const known = new Map([...BASE_SCOPES, ...TEAMS_SCOPES].map((s) => [s.toLowerCase(), s]));
+  const known = new Map([...BASE_SCOPES, ...TEAMS_SCOPES, CALENDAR_WRITE_SCOPE].map((s) => [s.toLowerCase(), s]));
   const out = new Set<string>();
   for (const raw of (scope ?? "").split(/\s+/)) {
     const short = raw.toLowerCase().startsWith(GRAPH_SCOPE_PREFIX) ? raw.slice(GRAPH_SCOPE_PREFIX.length) : raw;
     const name = known.get(short.toLowerCase());
     if (name) out.add(name);
   }
+  // Read-write includes read, and Microsoft may list only the broader one.
+  if (out.has(CALENDAR_WRITE_SCOPE)) out.add(CALENDAR_SCOPE);
   return [...out];
 }
 
@@ -88,10 +92,10 @@ export function needsAdminApproval(error: string | null, description: string | n
 }
 
 /** The address an IT admin opens to approve the permissions for everyone in their organisation. */
-export function adminConsentUrl(opts: { teams: boolean; clientId?: string }): string {
+export function adminConsentUrl(opts: { teams: boolean; calendarWrite?: boolean; clientId?: string }): string {
   const tenant = process.env.MICROSOFT_TENANT || "common";
   const url = new URL(`${LOGIN}/${encodeURIComponent(tenant === "common" ? "organizations" : tenant)}/v2.0/adminconsent`);
-  url.search = new URLSearchParams({ client_id: opts.clientId ?? clientId, scope: requestScopes(extraScopes(opts.teams)), redirect_uri: "http://localhost" }).toString();
+  url.search = new URLSearchParams({ client_id: opts.clientId ?? clientId, scope: requestScopes(extraScopes(opts.teams, opts.calendarWrite === true)), redirect_uri: "http://localhost" }).toString();
   return url.toString();
 }
 
@@ -101,7 +105,7 @@ export type MicrosoftProvider = "outlook" | "outlook_calendar" | "microsoft_todo
 export function accountsFor(scopes: string[]): { provider: MicrosoftProvider; label: string }[] {
   const rows: { provider: MicrosoftProvider; label: string }[] = [];
   if (scopes.includes(MAIL_SCOPE)) rows.push({ provider: "outlook", label: "Outlook" });
-  if (scopes.includes(CALENDAR_SCOPE)) rows.push({ provider: "outlook_calendar", label: "Outlook Calendar" });
+  if (scopes.includes(CALENDAR_SCOPE) || scopes.includes(CALENDAR_WRITE_SCOPE)) rows.push({ provider: "outlook_calendar", label: "Outlook Calendar" });
   if (scopes.includes(TASKS_SCOPE)) rows.push({ provider: "microsoft_todo", label: "Microsoft To Do" });
   if (scopes.includes(CHAT_SCOPE)) rows.push({ provider: "teams", label: "Microsoft Teams" });
   return rows;
@@ -114,7 +118,7 @@ export class MicrosoftError extends Error {
   }
 }
 
-export async function exchangeCode(code: string, redirectUri: string, verifier: string, teams: boolean) {
+export async function exchangeCode(code: string, redirectUri: string, verifier: string, teams: boolean, calendarWrite = false) {
   const response = await fetch(`${base()}/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -124,7 +128,7 @@ export async function exchangeCode(code: string, redirectUri: string, verifier: 
       code,
       redirect_uri: redirectUri,
       code_verifier: verifier,
-      scope: requestScopes(extraScopes(teams)),
+      scope: requestScopes(extraScopes(teams, calendarWrite)),
     }),
     signal: AbortSignal.timeout(20_000),
   });

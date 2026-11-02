@@ -4,11 +4,19 @@
 
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
-import { buildResponse, followUpdate, type CalendarEvent, type EventResponse, type PendingEdit } from "@/lib/calendar";
-import { supabase } from "@/lib/supabase";
+import { sendAnswer } from "@/lib/calendar-answer";
+import { type CalendarEvent, type EventResponse, type PendingEdit, type UpdateScope } from "@/lib/calendar";
+import { allowOutlookEditing, needsOutlookWrite } from "@/lib/outlook-write";
 import type { DeleteScope } from "@/components/delete-event-dialog";
 
 export type HiddenEvent = { token: string; id: string; seriesId: string | null; scope: DeleteScope };
+
+/** A failure toast that offers Allow Editing when Outlook Calendar has not been allowed to make changes yet. */
+export function failureToast(error: string | null | undefined, fallback: string) {
+  const text = error ?? fallback;
+  if (needsOutlookWrite(text)) toast.error(text, { action: { label: "Allow Editing", onClick: () => void allowOutlookEditing(false).catch(() => toast.error("Microsoft could not be reached. Try again.")) } });
+  else toast.error(text);
+}
 
 export function usePendingChanges(reload: () => void) {
   // Events saved in the dialog that the worker has not created yet, shown as if they were. One leaves this list when
@@ -24,29 +32,32 @@ export function usePendingChanges(reload: () => void) {
   const [edits, setEdits] = useState<PendingEdit[]>([]);
   const updated = useRef(new Set<string>());
 
-  // Answers an invitation. The answer shows at once, marked as saving, while the worker sends it to the calendar.
+  // Answers an invitation, for one event or every event in its series. The answer shows at once, marked as saving,
+  // while the worker sends it to the calendar.
   const answer = useCallback(
-    async (event: CalendarEvent, response: EventResponse) => {
+    async (event: CalendarEvent, response: EventResponse, scope: UpdateScope = "occurrence") => {
       if (!event.accountId) return;
-      const pending = { token: `answer-${event.id}-${Date.now()}`, id: event.id, seriesId: null, scope: "occurrence" as const, patch: { response } };
+      const series = scope === "series" && !!event.seriesId;
+      const pending = { token: `answer-${event.id}-${Date.now()}`, id: event.id, seriesId: series ? event.seriesId! : null, scope: series ? ("series" as const) : ("occurrence" as const), patch: { response } };
       setEdits((list) => [...list, pending]);
       const dropPending = (token: string) => setEdits((list) => list.filter((e) => e.token !== token));
-      const { data, error } = await supabase.from("calendar_updates").insert(buildResponse(event, response)).select("id").single();
-      if (error || !data) {
+      let token = pending.token;
+      const outcome = await sendAnswer(event, response, scope, (id) => {
+        token = id;
+        setEdits((list) => list.map((e) => (e.token === pending.token ? { ...e, token: id } : e)));
+      });
+      if (!outcome.saved) {
         dropPending(pending.token);
         toast.error("Could not save your answer. Try again.");
         return;
       }
-      const token = data.id;
-      setEdits((list) => list.map((e) => (e.token === pending.token ? { ...e, token } : e)));
-      const result = await followUpdate(token);
-      if (result.status === "done") {
+      if (outcome.status === "done") {
         updated.current.add(token);
         reload();
         return;
       }
       dropPending(token);
-      toast.error(result.error ?? "Your answer could not be sent.");
+      failureToast(outcome.error, "Your answer could not be sent.");
     },
     [reload],
   );

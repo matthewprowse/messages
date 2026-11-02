@@ -5,9 +5,19 @@ import { formatPhone } from "./format";
 import type { ContactSummary } from "./contacts";
 import { isPlaceholderName } from "./merging";
 import { phoneQueryMatches } from "./phone-search";
+import { DEFAULT_QUIET_DAYS, quietDaysOf } from "./going-quiet";
+import { statusLine } from "./relationship-status";
+import { ALL_RELATIONSHIPS } from "./relationships";
 
 export type Sort = "recent" | "name";
-export type View = "people" | "companies" | "hidden";
+export type View = "people" | "companies" | "hidden" | "quiet";
+
+/** The list's filters held in the URL: a relationship ("all" for none) and, in Going Quiet, the days of silence. */
+export interface Filters {
+  rel: string;
+  quiet: number;
+}
+export const NO_FILTERS: Filters = { rel: ALL_RELATIONSHIPS, quiet: DEFAULT_QUIET_DAYS };
 
 export function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
@@ -33,26 +43,40 @@ export function byRecent(a: { name: string; lastAt: string | null }, b: { name: 
   return x === y ? byName(a, b) : x < y ? 1 : -1;
 }
 
-/** The query string for a sort and view; the defaults (people, recent) leave it out so the URL stays clean. */
-export function queryOf(sort: Sort, view: View) {
-  return [view === "companies" ? "view=companies" : view === "hidden" ? "view=hidden" : "", sort === "name" ? "sort=name" : ""].filter(Boolean).join("&");
+/** The query string for a sort, view and filters; the defaults (people, recent, all, 30 days) leave it out so the URL stays clean. */
+export function queryOf(sort: Sort, view: View, filters: Filters = NO_FILTERS) {
+  return [
+    view !== "people" ? `view=${view}` : "",
+    sort === "name" ? "sort=name" : "",
+    filters.rel !== ALL_RELATIONSHIPS ? `rel=${encodeURIComponent(filters.rel)}` : "",
+    view === "quiet" && filters.quiet !== DEFAULT_QUIET_DAYS ? `quiet=${filters.quiet}` : "",
+  ].filter(Boolean).join("&");
 }
 
-/** Reads sort and view from search params, falling back to the defaults for anything unknown. */
-export function sortAndView(params: { get: (key: string) => string | null }): { sort: Sort; view: View; query: string } {
+const VIEWS: View[] = ["companies", "hidden", "quiet"];
+
+/** Reads sort, view and filters from search params, falling back to the defaults for anything unknown. */
+export function sortAndView(params: { get: (key: string) => string | null }): { sort: Sort; view: View; query: string } & Filters {
   const sort: Sort = params.get("sort") === "name" ? "name" : "recent";
-  const view: View = params.get("view") === "companies" ? "companies" : params.get("view") === "hidden" ? "hidden" : "people";
-  return { sort, view, query: queryOf(sort, view) };
+  const view: View = VIEWS.find((v) => v === params.get("view")) ?? "people";
+  const filters: Filters = { rel: params.get("rel")?.trim().slice(0, 60) || ALL_RELATIONSHIPS, quiet: quietDaysOf(params.get("quiet")) };
+  return { sort, view, query: queryOf(sort, view, filters), ...filters };
 }
 
-/** The line under a person's name: their role and company, or else how to reach them. */
-export function detailOf(c: ContactSummary) {
+/** The line under a person's name: where you stand with them, else their role and company, else how to reach them. */
+export function detailOf(c: ContactSummary, now: Date = new Date()) {
   const work = [c.role, c.company].filter(Boolean).join(", ");
-  return work || firstReach(c);
+  return statusLine(c.lastInboundAt, c.lastOutboundAt, now) ?? (work || firstReach(c));
 }
 
 export function bySort(sort: Sort) {
   return sort === "name" ? byName : byRecent;
+}
+
+/** Starred people first, then the chosen order. */
+export function byVipThen(sort: Sort) {
+  const order = bySort(sort);
+  return (a: { name: string; lastAt: string | null; vip?: boolean }, b: { name: string; lastAt: string | null; vip?: boolean }) => Number(!!b.vip) - Number(!!a.vip) || order(a, b);
 }
 
 /** Lower case without accents, so "Zoë" is found by "zoe" and the other way round. */

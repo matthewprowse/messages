@@ -54,7 +54,7 @@ export function SummaryEmpty({ noAccounts, importing, filter, onClearFilter }: {
       <EmptyState
         icon={CircleCheck}
         title="You're All Caught Up"
-        description={filter === "none" ? "Replies waiting on you, urgent conversations, today's events and tasks appear here." : "Nothing that needs you matches this filter."}
+        description={filter === "none" ? "Replies waiting on you, urgent conversations, today's events and tasks appear here." : filter === "waiting" ? "Nothing you wrote has gone 2 days without an answer." : "Nothing that needs you matches this filter."}
         action={filter !== "none" ? <Button variant="secondary" onClick={onClearFilter}>Clear Filter</Button> : undefined}
       />
     </div>

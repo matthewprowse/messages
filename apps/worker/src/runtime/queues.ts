@@ -12,11 +12,12 @@ import type { OutboxRow } from "../send/outbox";
 import { isPrimaryShard } from "../shard";
 import type { TaskUpdateRow } from "../tasks";
 import { dispatchCalendarDeletes, dispatchCalendarOutbox, dispatchCalendarUpdates } from "./dispatch-calendar";
-import { dispatchMailActions, dispatchOutbox, dispatchUnsubscribes, failStrandedOutbox, requeueStaleActions } from "./dispatch-mail";
+import { dispatchMailActions, dispatchOutbox, dispatchUnsubscribes, dispatchDueScheduled, failStrandedOutbox, requeueStaleActions } from "./dispatch-mail";
 import { dispatchOriginals, expireOriginals, fetchAttachmentRequests, type OriginalRequest } from "./dispatch-originals";
 import { dispatchTaskUpdates } from "./dispatch-tasks";
 
 const EXPIRE_ORIGINALS_MS = 5 * 60_000;
+const DUE_CHECK_MS = 30_000; // how soon after its time a scheduled message goes
 
 /** Work the app asks for arrives through Realtime at once, with a poll as a safety net. */
 export function watchQueues() {
@@ -83,4 +84,7 @@ export function watchQueues() {
   });
   poll();
   schedule();
+  // Scheduled messages (Send Later) come due while the safety-net poll is minutes away, so a cheap check runs on its own.
+  const due = setInterval(() => void guard("due outbox", dispatchDueScheduled()), DUE_CHECK_MS);
+  due.unref();
 }

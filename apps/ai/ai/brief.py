@@ -195,8 +195,13 @@ def sections(threads: list[dict[str, Any]], now: datetime) -> dict[str, list[dic
         at = datetime.fromisoformat(str(t["last_message_at"]).replace("Z", "+00:00"))
         return (now - at).total_seconds() / 3600
 
+    def snoozed(t: dict[str, Any]) -> bool:
+        # Snoozed (or waiting on a reminder) until a time still ahead: off the page, as in the Summary.
+        until = t.get("snoozed_until")
+        return bool(until) and datetime.fromisoformat(str(until).replace("Z", "+00:00")) > now
+
     # A conversation you answered last waits on them, whatever priority and category triage gave it.
-    open_ = [t for t in threads if t.get("status") == "inbox" and not t.get("junk") and not t.get("last_from_me")]
+    open_ = [t for t in threads if t.get("status") == "inbox" and not t.get("junk") and not t.get("last_from_me") and not snoozed(t)]
     reply = [t for t in open_ if t.get("needs_reply") and age_h(t) <= REPLY_DAYS * 24]
     taken = {t["id"] for t in reply}
     priority = [
@@ -432,7 +437,7 @@ class Brief:
             threads = self.db.select(
                 "threads",
                 {
-                    "select": "id,channel,is_group,group_name,summary,priority,category,needs_reply,last_from_me,status,junk,last_message_at,"
+                    "select": "id,channel,is_group,group_name,summary,priority,category,needs_reply,last_from_me,status,junk,snoozed_until,last_message_at,"
                     "thread_participants(contacts(display_name))",
                     "user_id": f"eq.{user_id}",
                     "status": "eq.inbox",

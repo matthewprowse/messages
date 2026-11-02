@@ -4,7 +4,7 @@
 // hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /summary. The sections and rows
 // are in components/summary/; this file wires them to the store. The section rules are in lib/summary.ts.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { track } from "@/lib/analytics";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/store";
@@ -12,6 +12,7 @@ import { dayKey } from "@/lib/calendar";
 import type { ListFilter, Thread } from "@/lib/types";
 import { longDate } from "@/lib/format";
 import { shortcutAction } from "@/lib/selection";
+import { isSnoozed, tomorrowMorning } from "@/lib/snooze";
 import { digest, olderWaiting, summarise } from "@/lib/summary";
 import { FILTER_OPTIONS, filterOf, listHref, SUMMARY_BASE as BASE } from "@/lib/summary-list";
 import { tasksForToday } from "@/lib/tasks";
@@ -23,6 +24,8 @@ import { OlderRow } from "@/components/summary/older-row";
 import { useAdvanceAfterDone } from "@/components/summary/use-advance-after-done";
 import { useNow } from "@/components/summary/use-now";
 import { useImporting } from "@/components/sync-bar";
+import { ManageLabelsHost } from "@/components/labels/manage-labels-dialog";
+import { useSnoozePick } from "@/components/snooze/use-snooze-pick";
 import { SelectionBar, ThreadRow, useSwipedRow, useThreadSelection } from "@/components/thread-list";
 import { BriefPlayer } from "@/components/brief-player";
 import { CalendarBody } from "@/components/summary/calendar-body";
@@ -53,7 +56,7 @@ export function SummaryList() {
   const { filter, query } = useListState();
   const params = useParams<{ id?: string }>();
   const router = useRouter();
-  const { threads, accounts, tasks, loading, contactById: contactOf, threadById, prefetchMessages } = useApp();
+  const { threads, accounts, tasks, loading, contactById: contactOf, threadById, prefetchMessages, snoozeClock, labels: labelApi } = useApp();
   const rowsRef = useRowNavigation<HTMLDivElement>();
   const { headerRef, headerHeight } = useHeaderHeight();
 
@@ -62,8 +65,10 @@ export function SummaryList() {
   const now = useNow(SECTIONS_REFRESH_MS);
   const eventsNow = useNow(EVENTS_CLOCK_MS);
 
-  const sections = useMemo(() => summarise(threads, filter, now), [threads, filter, now]);
-  const older = useMemo(() => olderWaiting(threads, filter, now), [threads, filter, now]);
+  // A snoozed conversation returns on the minute it falls due, not at the next slow tick of `now`.
+  const sectionsNow = useMemo(() => new Date(), [now, snoozeClock]);
+  const sections = useMemo(() => summarise(threads, filter, sectionsNow), [threads, filter, sectionsNow]);
+  const older = useMemo(() => olderWaiting(threads, filter, sectionsNow), [threads, filter, sectionsNow]);
   const { events: loadedEvents, failed: calendarFailed, retry: retryCalendar } = useTodaysEvents(eventsNow);
   // The calendar is not filtered: events are neither email nor WhatsApp nor unread, but they are still today.
   const events = loadedEvents ?? [];
@@ -73,7 +78,7 @@ export function SummaryList() {
     const provider = accounts.find((a) => a.id === accountId)?.provider;
     return provider ? providerLabel[provider] : undefined;
   };
-  const order = useMemo(() => [...sections.reply, ...sections.priority, ...sections.updates].map((t) => t.id), [sections]);
+  const order = useMemo(() => [...sections.reply, ...sections.priority, ...sections.updates, ...sections.waiting].map((t) => t.id), [sections]);
   // Conversations show as soon as they are ready; the calendar section joins when its events arrive.
   const busy = loading;
   // A new user with no account connected yet is pointed at connecting one.
@@ -86,13 +91,22 @@ export function SummaryList() {
   const empty = !headline && !calendarShown && older.length === 0;
   const stalled = noAccounts ? 0 : accounts.filter((a) => a.status === "disconnected" || a.status === "error").length;
 
-  const { picked, setChecked, check, run, onRowAction } = useThreadSelection(order, query, filter, BASE);
+  // A row's Done for Now snoozes to tomorrow at 08:00 with no questions; the bulk bar's Snooze opens the choices instead.
+  const { picked, setChecked, check, run, onRowAction } = useThreadSelection(order, query, filter, BASE, false, (ids, go) => go(ids, "snooze", tomorrowMorning(new Date())));
+  const snoozePick = useSnoozePick(run);
+  const pickLatest = useRef({ picked, snoozePick });
+  pickLatest.current = { picked, snoozePick };
+  const onSnooze = useCallback((id: string, mode: "snooze" | "remind", at: Date | "pick") => {
+    const { picked, snoozePick } = pickLatest.current;
+    const ids = picked.includes(id) ? picked : [id];
+    if (at === "pick") snoozePick.request(ids, mode, "date"); else snoozePick.snoozeAt(ids, at, mode);
+  }, []);
   const today = dayKey(now);
   const bandHeight = useBandHeight(rowsRef, `${busy}${empty}${calendarShown}${todaysTasks.length > 0}${sections.reply.length > 0}`);
 
   // Archiving, deleting or answering the open conversation opens the next row, so triage can run down the list.
   const open = params.id ? threadById(params.id) : undefined;
-  useAdvanceAfterDone(order, params.id, !!params.id && (!open || open.status !== "inbox" || open.junk || open.lastFromMe), filter);
+  useAdvanceAfterDone(order, params.id, !!params.id && (!open || open.status !== "inbox" || open.junk || (open.lastFromMe && filter !== "waiting") || isSnoozed(open)), filter);
 
   // One event a visit, once everything has loaded, so "do summaries save reading" can be answered from thread_opened.
   const shown = useRef(false);
@@ -139,6 +153,10 @@ export function SummaryList() {
           swiped={rowSwipe.swiped === t.id}
           onSwipe={rowSwipe.onSwipe}
           onTouchRow={rowSwipe.onTouchRow}
+          onSnooze={onSnooze}
+          doneForNow
+          labels={labelApi.labelsOf(t.id)}
+          pickedIds={pickedIds.has(t.id) ? picked : undefined}
         />
       ))}
     </Separated>
@@ -162,9 +180,10 @@ export function SummaryList() {
           <SelectionBar
             allPicked={picked.length === order.length}
             anyUnread={threads.some((t) => t.unread && pickedIds.has(t.id))}
+            ids={picked}
             onAll={() => setChecked(order)}
             onClear={() => setChecked([])}
-            onAction={(action) => run(picked, action)}
+            onAction={(action) => (action === "snooze" ? snoozePick.request(picked) : run(picked, action))}
           />
         ) : (
           <div className="flex items-center justify-between gap-2">
@@ -209,6 +228,7 @@ export function SummaryList() {
             {sections.reply.length > 0 && <Section title="Needs Reply" count={sections.reply.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0}>{rows(sections.reply)}</Section>}
             {sections.priority.length > 0 && <Section title="Important" count={sections.priority.length} headerHeight={headerHeight}>{rows(sections.priority)}</Section>}
             {sections.updates.length > 0 && <Section title="Updates" count={sections.updates.length} headerHeight={headerHeight}>{rows(sections.updates)}</Section>}
+            {sections.waiting.length > 0 && <Section title="Waiting On Others" count={sections.waiting.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0}>{rows(sections.waiting)}</Section>}
             {older.length > 0 && (
               <Section title="Older" count={older.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0 && sections.reply.length + sections.priority.length + sections.updates.length === 0}>
                 <OlderRow count={older.length} />
@@ -217,6 +237,8 @@ export function SummaryList() {
           </div>
         )}
       </div>
+      {snoozePick.dialog}
+      <ManageLabelsHost />
     </ScrollArea>
   );
 }

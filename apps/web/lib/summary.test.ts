@@ -154,6 +154,39 @@ test("old unanswered and old urgent conversations are counted as older, not drop
   assert.deepEqual(ids(olderWaiting(threads, "whatsapp", now)), ["whatsapp"]);
 });
 
+test("a snoozed conversation is off the page until its time passes", () => {
+  const later = new Date(now.getTime() + 3_600_000).toISOString();
+  const earlier = new Date(now.getTime() - 3_600_000).toISOString();
+  const threads = [
+    thread("hidden", { needsReply: true, snoozedUntil: later, snoozeKind: "snooze" }),
+    thread("back", { needsReply: true, snoozedUntil: earlier, snoozeKind: "snooze" }),
+    thread("hidden-urgent", { priority: "urgent", snoozedUntil: later, snoozeKind: "snooze" }),
+  ];
+  assert.deepEqual(ids(summarise(threads, "none", now).reply), ["back"]);
+  assert.deepEqual(ids(summarise(threads, "none", now).priority), []);
+  assert.equal(attentionCount(threads, now), 1);
+  assert.deepEqual(ids(olderWaiting([thread("old", { needsReply: true, lastMessageAt: hoursAgo(24 * 20), snoozedUntil: later })], "none", now)), []);
+});
+
+test("Waiting On Others lists what you wrote last and nobody answered for two days, quietest first", () => {
+  const sent = (id: string, hours: number, patch: Partial<Thread> = {}) => thread(id, { lastFromMe: true, waiting: true, lastMessageAt: hoursAgo(hours), ...patch });
+  const threads = [
+    sent("three-days", 72),
+    sent("five-days", 120),
+    sent("yesterday", 24),
+    sent("no-answer-expected", 100, { waiting: false }),
+    sent("snoozed", 100, { snoozedUntil: new Date(now.getTime() + 3_600_000).toISOString() }),
+    sent("junk", 100, { junk: true }),
+    thread("they-wrote", { needsReply: true }),
+  ];
+  const s = summarise(threads, "waiting", now);
+  assert.deepEqual(ids(s.waiting), ["five-days", "three-days"]);
+  assert.deepEqual([s.reply, s.priority, s.updates], [[], [], []]);
+  assert.equal(digest(s, 0), "2 Waiting on Others");
+  assert.deepEqual(olderWaiting(threads, "waiting", now), []);
+  assert.deepEqual(summarise(threads, "none", now).waiting, []);
+});
+
 // The same file is read by apps/ai/tests/test_brief.py, which pins the Python copy of these rules.
 test("the shared fixture sorts into the expected sections", () => {
   const fixture = JSON.parse(readFileSync(new URL("./summary-fixture.json", import.meta.url), "utf8"));

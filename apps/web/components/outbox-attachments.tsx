@@ -4,7 +4,7 @@
 // Nothing uploads until Send.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { File as FileIcon, Paperclip, Pause, Play, X } from "lucide-react";
+import { File as FileIcon, Pause, Play, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
   MAX_FILES,
@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
 import { clock, useMedia } from "@/components/media-player";
+import { AttachMenu } from "@/components/attachments/attach-menu";
 
 interface Item {
   id: string;
@@ -194,35 +195,18 @@ export function useOutboxFiles(provider: AttachProvider | null, disabled = false
   return { provider, items, add, addVoiceNote, notify, remove, clear, upload, uploading, dragging, dropProps, onPaste, error: limit || notice, blocked: !!limit, disabled };
 }
 
-/** The Paperclip button that opens the file picker. Hidden where files cannot be sent. */
+/** The Paperclip Attach menu: This Device, Google Drive and OneDrive (components/attachments/attach-menu.tsx). Hidden where files cannot be sent. */
 export function AttachButton({ files, className }: { files: OutboxFiles; className?: string }) {
-  const input = useRef<HTMLInputElement>(null);
   if (!files.provider) return null;
+  const provider = files.provider;
   return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className={className}
-        aria-label="Attach Files"
-        disabled={files.disabled || files.uploading}
-        onClick={() => input.current?.click()}
-      >
-        <Paperclip />
-      </Button>
-      <input
-        ref={input}
-        type="file"
-        multiple
-        hidden
-        tabIndex={-1}
-        onChange={(e) => {
-          files.add(Array.from(e.target.files ?? []));
-          e.target.value = ""; // so the same file can be picked again after removing it
-        }}
-      />
-    </>
+    <AttachMenu
+      rule={{ provider, existing: () => files.items.map((i) => ({ name: i.name, size: i.size })) }}
+      onFiles={(picked) => files.add(picked)}
+      notify={files.notify}
+      disabled={files.disabled || files.uploading}
+      className={className}
+    />
   );
 }
 

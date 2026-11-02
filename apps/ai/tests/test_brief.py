@@ -86,6 +86,18 @@ class Sections(unittest.TestCase):
         got = sections(threads, NOW)
         self.assertEqual(got, {"reply": [], "priority": [], "updates": []})
 
+    def test_snoozed_conversations_are_left_out_until_their_time_passes(self):
+        ahead = (NOW + timedelta(hours=3)).isoformat()
+        behind = (NOW - timedelta(hours=3)).isoformat()
+        threads = [
+            thread(1, 2, needs_reply=True, snoozed_until=ahead),
+            thread(2, 2, needs_reply=True, snoozed_until=behind),
+            thread(3, 2, priority="urgent", snoozed_until=ahead.replace("+00:00", "Z")),
+        ]
+        got = sections(threads, NOW)
+        self.assertEqual([t["id"] for t in got["reply"]], ["2"])
+        self.assertEqual(got["priority"], [])
+
     def test_prompt_has_events_in_local_time_and_who_is_waiting(self):
         jhb = ZoneInfo("Africa/Johannesburg")
         events = [{"title": "Viewing", "starts_at": "2026-10-23T13:00:00+00:00", "ends_at": "2026-10-23T14:00:00+00:00", "all_day": False, "location": "12 Oak Street"},

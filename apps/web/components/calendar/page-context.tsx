@@ -4,7 +4,7 @@
 
 
 import { createContext, useSyncExternalStore } from "react";
-import { type CalendarEvent, type EventResponse } from "@/lib/calendar";
+import { type CalendarEvent, type EventResponse, type UpdateScope } from "@/lib/calendar";
 import type { Task } from "@/lib/types";
 
 
@@ -41,8 +41,8 @@ export interface PageContext {
   askToDelete: (event: CalendarEvent) => void;
   /** Opens the editor for an event. */
   askToEdit: (event: CalendarEvent) => void;
-  /** Answers an invitation. The page shows the answer at once while the calendar takes it. */
-  answer: (event: CalendarEvent, response: EventResponse) => void;
+  /** Answers an invitation, for every event in its series when `scope` says so. The page shows the answer at once while the calendar takes it. */
+  answer: (event: CalendarEvent, response: EventResponse, scope?: UpdateScope) => void;
   /** Opens a task's details. */
   openTask: (id: string) => void;
   /** Where a task is from, such as "Google Tasks". */

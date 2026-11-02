@@ -18,9 +18,9 @@ export interface Connector {
   send?(row: OutboxRow): Promise<void>;
   applyAction?(row: Tables<"mail_actions">): Promise<void>;
   unsubscribe?(row: Tables<"unsubscribes">): Promise<void>;
-  /** Google Calendar and iCloud Calendar: creates an event queued in the app. */
+  /** Google, Outlook and iCloud Calendar: creates an event queued in the app. */
   createEvent?(row: CalendarOutboxRow): Promise<void>;
-  /** Google Calendar and iCloud Calendar: deletes an event, or an occurrence of one, queued in the app. */
+  /** Google, Outlook and iCloud Calendar: deletes an event, or an occurrence of one, queued in the app. */
   deleteEvent?(row: CalendarDeleteRow): Promise<void>;
   /** Google Calendar, iCloud Calendar and Outlook Calendar: changes an event, or answers an invitation, queued in the app. */
   updateEvent?(row: CalendarUpdateRow): Promise<void>;

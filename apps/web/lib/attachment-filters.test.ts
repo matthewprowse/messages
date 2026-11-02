@@ -12,9 +12,9 @@ const file = (id: string, over: Partial<FiledAttachment> = {}) => ({ id, name: `
 const ctx = (over: Partial<FilterContext> = {}): FilterContext => ({ sourceOf: () => "gmail", text: (a) => a.name.toLowerCase(), now: NOW, ...over });
 
 test("the address round trips every filter and writes only what is not the default", () => {
-  const f = { kind: "pdf" as const, source: "outlook", date: "month", person: "c9", q: "invoice" };
+  const f = { kind: "pdf" as const, source: "outlook", date: "month", person: "c9", q: "invoice", sort: "largest" as const };
   const href = filtersHref(f);
-  assert.equal(href, "/attachments?kind=pdf&source=outlook&date=month&person=c9&q=invoice");
+  assert.equal(href, "/attachments?kind=pdf&source=outlook&date=month&person=c9&q=invoice&sort=largest");
   assert.deepEqual(parseFilters((k) => new URL(href, "http://x").searchParams.get(k)), f);
   assert.equal(filtersHref(NO_FILTERS), "/attachments");
   assert.deepEqual(parseFilters(() => null), NO_FILTERS);
@@ -22,9 +22,9 @@ test("the address round trips every filter and writes only what is not the defau
   assert.equal(parseFilters((k) => (k === "date" ? "decade" : null)).date, "any");
 });
 
-test("only a source, date, person or search narrows the list, not the tab", () => {
+test("only a source, date, person, search or the Largest sort narrows the list, not the tab", () => {
   assert.equal(isNarrowed({ ...NO_FILTERS, kind: "pdf" }), false);
-  for (const over of [{ source: "gmail" }, { date: "week" }, { person: "c1" }, { q: "x" }]) assert.equal(isNarrowed({ ...NO_FILTERS, ...over }), true);
+  for (const over of [{ source: "gmail" }, { date: "week" }, { person: "c1" }, { q: "x" }, { sort: "largest" as const }]) assert.equal(isNarrowed({ ...NO_FILTERS, ...over }), true);
   assert.equal(isNarrowed({ ...NO_FILTERS, q: "  " }), false);
 });
 

@@ -16,6 +16,7 @@ import { useSeen } from "./use-seen";
 // Tiles are added a page at a time as the end of the grid scrolls near, so a library of thousands
 // of files does not mount thousands of tiles up front.
 const GRID_PAGE = 120;
+const noToggle = () => {};
 
 /** Calls onSeen once when it comes near the screen. Remount it (a new key) to watch again. */
 function MoreSentinel({ onSeen }: { onSeen: () => void }) {
@@ -28,12 +29,14 @@ function MoreSentinel({ onSeen }: { onSeen: () => void }) {
 }
 
 /** One tile in the grid. Memoized with a stable onView, so loading more files or a store change does not redraw every tile. */
-const GridTile = memo(function GridTile({ attachment: a, sender, onView }: { attachment: FiledAttachment; sender: string; onView: (a: FiledAttachment) => void }) {
+const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecting, selected, onToggle }: { attachment: FiledAttachment; sender: string; onView: (a: FiledAttachment) => void; selecting: boolean; selected: boolean; onToggle: (id: string) => void }) {
   return (
     <>
       <AttachmentTile
         attachment={a}
-        onOpen={() => onView(a)}
+        onOpen={() => (selecting ? onToggle(a.id) : onView(a))}
+        selecting={selecting}
+        selected={selected}
         showName={false}
         overlay={<><span className="truncate">{sender}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
         className="aspect-square size-auto w-full"
@@ -46,9 +49,9 @@ const GridTile = memo(function GridTile({ attachment: a, sender, onView }: { att
 
 /**
  * Files gathered from many messages, newest first; a document shows its name, and everything shows who sent it and when
- * on hover. With byMonth, a header with a count starts each month. Given onToggleHidden, the viewer offers Hide and Unhide.
+ * on hover. With byMonth, a header with a count starts each month. Given onToggleHidden, the viewer offers Hide and Unhide; given onDelete, Delete and the conversations a duplicate is also in.
  */
-export function AttachmentGrid({ items, hrefFor = messageHref, className, byMonth = false, onToggleHidden, onEnd }: { items: FiledAttachment[]; hrefFor?: (a: FiledAttachment) => string; className?: string; byMonth?: boolean; /** Hides or unhides a file; resolves true when it was saved. */ onToggleHidden?: (a: FiledAttachment) => Promise<boolean>; /** Called when the end of the files scrolls near, to load the next page. */ onEnd?: () => void }) {
+export function AttachmentGrid({ items, hrefFor = messageHref, className, byMonth = false, onToggleHidden, onDelete, selection, onEnd }: { items: FiledAttachment[]; hrefFor?: (a: FiledAttachment) => string; className?: string; byMonth?: boolean; /** Hides or unhides a file; resolves true when it was saved. */ onToggleHidden?: (a: FiledAttachment) => Promise<boolean>; /** Deletes a file from Konva's storage after asking; resolves true when it went. Also turns on "Also in N Conversations". */ onDelete?: (a: FiledAttachment) => Promise<boolean>; /** Multi-select (the Attachments page): clicking a tile picks it instead of opening it. */ selection?: { selecting: boolean; selected: ReadonlySet<string>; onToggle: (id: string) => void }; /** Called when the end of the files scrolls near, to load the next page. */ onEnd?: () => void }) {
   const { contactById } = useApp();
   const [viewing, setViewing] = useState<FiledAttachment | null>(null);
   const [limit, setLimit] = useState(GRID_PAGE);
@@ -66,6 +69,14 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
         if (await onToggleHidden(viewing)) setViewing(items[index + 1] ?? items[index - 1] ?? null);
       }
     : undefined;
+  const removeFile = onDelete && viewing
+    ? async () => {
+        const index = items.findIndex((x) => x.id === viewing.id);
+        if (await onDelete(viewing)) setViewing(items[index + 1] ?? items[index - 1] ?? null);
+      }
+    : undefined;
+  const selecting = !!selection?.selecting;
+  const toggleSelected = selection?.onToggle ?? noToggle;
   let month = "";
   return (
     <>
@@ -83,7 +94,7 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
                 </h2>
               )}
               <div className="flex min-w-0 flex-col gap-1">
-                <GridTile attachment={a} sender={who(a.from)} onView={setViewing} />
+                <GridTile attachment={a} sender={who(a.from)} onView={setViewing} selecting={selecting} selected={!!selection?.selected.has(a.id)} onToggle={toggleSelected} />
               </div>
             </Fragment>
           );
@@ -103,6 +114,8 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
         onNavigate={(i) => { if (items[i]) setViewing(items[i]); }}
         onClose={() => setViewing(null)}
         onToggleHidden={toggleHidden}
+        onDelete={removeFile}
+        threadId={viewing?.threadId}
       />
     </>
   );

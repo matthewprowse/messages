@@ -1,7 +1,8 @@
-// Actions on conversations that are shown at once and saved after: read, pin, archive, trash, junk, feedback and
-// reactions. Mail-server changes are queued as mail_actions rows for the sync worker.
+// Actions on conversations that are shown at once and saved after: read, pin, archive, trash, restore, snooze, junk,
+// feedback and reactions. Mail-server changes are queued as mail_actions rows for the sync worker.
 
 import { useCallback } from "react";
+import { returnText } from "../snooze";
 import { supabase } from "../supabase";
 import type { Message, Thread, ThreadStatus } from "../types";
 import { recordAction, recordCorrection, recordCorrections } from "./telemetry";
@@ -117,6 +118,50 @@ export function useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, 
     });
   }, [notify, saveStatus, restoreStatus, queueMailAction]);
 
+  // Brings deleted conversations back to the inbox (and the provider's inbox for email). They were not in the store, so
+  // they are put in it. Resolves false when it could not be saved.
+  const restore = useCallback(async (threads: Thread[]): Promise<boolean> => {
+    if (threads.length === 0) return true;
+    const { error } = await supabase.from("threads").update({ status: "inbox" }).in("id", threads.map((t) => t.id));
+    if (error) { saveFailed(); return false; }
+    recordAction(threads, "restore");
+    for (const t of threads) rawDispatch({ type: "upsertThread", thread: { ...t, status: "inbox" } });
+    queueMailAction(emailIds(threads), "untrash");
+    notify(threads.length === 1 ? "Restored to Inbox" : `Restored ${threads.length} conversations to Inbox`);
+    return true;
+  }, [notify, saveFailed, queueMailAction]);
+
+  // Snooze and reminders are saved on the thread. The app hides a thread while the time is ahead, and a new message
+  // from them clears it in the database (see 20261118110000_snooze_labels.sql), so there is no job to bring it back.
+  const saveSnooze = useCallback((ids: string[], until: string | null, kind: Thread["snoozeKind"] | null) => {
+    rawDispatch({ type: "patchThreads", ids, patch: { snoozedUntil: until ?? undefined, snoozeKind: kind ?? undefined } });
+    supabase.from("threads").update({ snoozed_until: until, snooze_kind: kind, snoozed_at: until ? new Date().toISOString() : null }).in("id", ids)
+      .then(({ error }) => { if (error) saveFailed(); });
+  }, [saveFailed]);
+
+  // Undo puts each conversation back with the snooze it had before.
+  const restoreSnooze = useCallback((before: Thread[]) => {
+    for (const t of before) saveSnooze([t.id], t.snoozedUntil ?? null, t.snoozeKind ?? null);
+  }, [saveSnooze]);
+
+  const snooze = useCallback((ids: string | string[], at: Date, kind: "snooze" | "reminder" = "snooze") => {
+    const before = threadsIn(stateRef.current.threads, ids);
+    if (before.length === 0) return;
+    recordAction(before, kind === "snooze" ? "snooze" : "remind_if_no_reply");
+    saveSnooze(before.map((t) => t.id), at.toISOString(), kind);
+    const when = returnText(at.toISOString());
+    const text = kind === "snooze" ? (before.length === 1 ? `Snoozed until ${when}` : `Snoozed ${before.length} conversations until ${when}`) : `You will be reminded ${when} if there is no reply`;
+    notify(text, () => restoreSnooze(before));
+  }, [notify, saveSnooze, restoreSnooze]);
+
+  const unsnooze = useCallback((ids: string | string[]) => {
+    const before = threadsIn(stateRef.current.threads, ids).filter((t) => t.snoozedUntil);
+    if (before.length === 0) return;
+    recordAction(before, "unsnooze");
+    saveSnooze(before.map((t) => t.id), null, null);
+    notify(before.length === 1 ? "Moved back to Inbox" : `Moved ${before.length} conversations back to Inbox`, () => restoreSnooze(before));
+  }, [notify, saveSnooze, restoreSnooze]);
+
   // Shown at once; the worker sends it over WhatsApp and the stored message then matches.
   const react = useCallback((message: Message, emoji: string) => {
     const reactions = { ...(message.reactions ?? {}) };
@@ -176,5 +221,5 @@ export function useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, 
     notify(value === "important" ? "Marked as important" : "Marked as not important");
   }, [userId, notify, saveFailed]);
 
-  return { markRead, pin, archive, unarchive, trash, react, setJunk, giveFeedback };
+  return { markRead, pin, archive, unarchive, trash, restore, snooze, unsnooze, react, setJunk, giveFeedback };
 }

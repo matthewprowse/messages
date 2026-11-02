@@ -1,6 +1,7 @@
 "use client";
 
 // The New Event dialog, which also edits an existing event. Saving closes it at once and the worker creates or changes the event in the calendar.
+// A new event can be opened with a title and guests already in it, such as from a conversation (components/schedule-button.tsx).
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
@@ -9,6 +10,8 @@ import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import { buildUpdate, followUpdate, formOf, GAVE_UP, type CalendarEvent, type EventPatch, type UpdateScope } from "@/lib/calendar";
 import { repeatOptionsFor, repeatSelectValue } from "@/lib/event-form";
+import { initialChoice } from "@/lib/event-calendars";
+import { allowOutlookEditing, needsOutlookWrite, OUTLOOK_WRITE_TEXT } from "@/lib/outlook-write";
 import { sameRepeat } from "@/lib/recurrence";
 import {
   buildEventRow,
@@ -23,9 +26,12 @@ import {
   type EventField,
 } from "@/lib/new-items";
 import { followEvent, type Row } from "@/components/new-event/follow-event";
+import { useCalendars } from "@/components/new-event/use-calendars";
+import { failureToast } from "@/components/calendar/use-pending-changes";
 import { DateField, RepeatField, Reconnect, SwitchRow, TimeSelect } from "@/components/new-event/event-fields";
 import { GuestPicker } from "@/components/new-event/guest-picker";
 import { ScopeDialog } from "@/components/new-event/scope-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,10 +39,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const CALENDARS = ["google_calendar", "icloud_calendar"] as const;
+const CALENDARS = ["google_calendar", "icloud_calendar", "outlook_calendar"] as const;
+const PROVIDER_NAME: Record<string, string> = { google_calendar: "Google", icloud_calendar: "iCloud", outlook_calendar: "Outlook" };
 
 /**
- * A new Google Calendar or iCloud Calendar event, or with `editing` a change to one. The dialog closes as soon as
+ * A new Google, Outlook or iCloud Calendar event, or with `editing` a change to one. The dialog closes as soon as
  * the event is saved and calls onQueued with it, so a page showing events can show it at once. The worker then
  * creates it, which takes a few seconds: onCreated follows when it has, so the page can load the events again, or
  * onFailed when it could not, and the dialog opens again with what was typed and the reason.
@@ -50,6 +57,7 @@ export function NewEventDialog({
   day,
   time,
   until,
+  title: initialTitle = "",
   guests: initialGuests = [],
   onQueued,
   onCreated,
@@ -68,6 +76,8 @@ export function NewEventDialog({
   time?: string;
   /** "HH:MM" to end at, such as the end of a range dragged out in the week view. */
   until?: string;
+  /** The title a new event starts with, such as a conversation's subject. */
+  title?: string;
   guests?: string[];
   onQueued?: (event: CalendarEvent) => void;
   onCreated?: (id: string) => void;
@@ -84,10 +94,15 @@ export function NewEventDialog({
 }) {
   const { accounts, contacts } = useApp();
   const choices = accounts.filter((a) => (CALENDARS as readonly string[]).includes(a.provider) && a.status !== "disconnected");
+  /** The calendar chosen for a new event, as accountId|calendarId (lib/event-calendars.ts); null until picked. */
   const [chosen, setChosen] = useState<string | null>(null);
   const edit = !!editing;
-  const account = edit ? accounts.find((a) => a.id === editing.accountId && a.status !== "disconnected") : (choices.find((a) => a.id === chosen) ?? choices[0]);
-  const google = account?.provider !== "icloud_calendar";
+  const { choices: calendarOptions, makeDefault } = useCalendars(choices, open && !edit);
+  const picked = edit ? undefined : initialChoice(calendarOptions, chosen);
+  const account = edit ? accounts.find((a) => a.id === editing.accountId && a.status !== "disconnected") : (choices.find((a) => a.id === picked?.accountId) ?? choices[0]);
+  const google = account?.provider === "google_calendar";
+  // Outlook always tells guests of an invitation or a change, so the switch is not offered and the answer is always yes.
+  const outlook = account?.provider === "outlook_calendar";
 
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
@@ -144,7 +159,7 @@ export function NewEventDialog({
     // A chosen hour is used as it is, on exactly the day chosen.
     const end = until && /^\d{2}:\d{2}$/.test(until) && time && until > time ? until : undefined;
     const times = time && day && /^\d{2}:\d{2}$/.test(time) ? { date: day, startTime: time, endTime: end ?? shiftEnd("00:00", "01:00", time) } : base;
-    setTitle("");
+    setTitle(initialTitle);
     setDate(times.date);
     setAllDay(false);
     setStartTime(times.startTime);
@@ -160,12 +175,12 @@ export function NewEventDialog({
     setChecked(false);
     setRow(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, day, time, until, guestKey, editing?.id]);
+  }, [open, day, time, until, initialTitle, guestKey, editing?.id]);
 
   const pending = parseGuests(guestQuery);
   // Google and iCloud repeat events; Outlook's are shown, not changed, from here.
   const repeats = account?.provider === "google_calendar" || account?.provider === "icloud_calendar";
-  const form = { title, date, allDay, startTime, endTime, location, description, guests, sendInvites, addMeet: addMeet && google, repeat: repeats ? repeat : "" };
+  const form = { title, date, allDay, startTime, endTime, location, description, guests, sendInvites: outlook || sendInvites, addMeet: addMeet && google, repeat: repeats ? repeat : "" };
   const timeZone = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ""; }
   }, []);
@@ -221,7 +236,7 @@ export function NewEventDialog({
     if (!account || locked || !built.ok) return;
     setQueueing(true);
     setRow(null);
-    const { data, error } = await supabase.from("calendar_outbox").insert(built.row).select("id, status, error, html_link").single();
+    const { data, error } = await supabase.from("calendar_outbox").insert({ ...built.row, calendar_id: picked?.calendarId ?? "primary" }).select("id, status, error, html_link").single();
     setQueueing(false);
     if (error || !data) {
       setRow({ status: "failed", error: "Could not save the event. Try again.", html_link: null });
@@ -300,7 +315,7 @@ export function NewEventDialog({
     }
     const reason = result.error ?? "The event could not be changed.";
     onEditFailed?.(id, editing, reason);
-    toast.error(reason);
+    failureToast(reason, "The event could not be changed.");
     if (openNow.current) return; // already editing something else: its form is not touched
     // Opens again with what was typed and the reason it failed.
     setRow({ status: "failed", error: reason, html_link: null });
@@ -313,21 +328,24 @@ export function NewEventDialog({
       <DialogContent track={edit ? "edit_event" : "new_event"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>{edit ? "Edit Event" : "New Event"}</DialogTitle>
-          <DialogDescription>{edit ? "Changed" : "Created"} in your {google ? "Google" : "iCloud"} Calendar, then shown on the Calendar page.</DialogDescription>
+          <DialogDescription>{edit ? "Changed" : "Created"} in your {PROVIDER_NAME[account?.provider ?? ""] ?? "Google"} Calendar, then shown on the Calendar page.</DialogDescription>
         </DialogHeader>
         {!account ? (
           <Reconnect change={edit} />
         ) : (
           <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? (repeating && (!repeatChanged || othersChanged) ? askScope() : submitEdit(repeating ? "series" : "occurrence")) : submit()); }}>
-            {!edit && choices.length > 1 && (
+            {!edit && picked && calendarOptions.length > 1 && (
               <div className="grid gap-2">
                 <Label htmlFor="event-calendar">Calendar</Label>
-                <Select value={account.id} onValueChange={setChosen} disabled={locked}>
+                <Select value={picked.key} onValueChange={setChosen} disabled={locked}>
                   <SelectTrigger id="event-calendar" className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {choices.map((a) => <SelectItem key={a.id} value={a.id}>{a.label} ({a.detail})</SelectItem>)}
+                    {calendarOptions.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {!picked.isDefault && (
+                  <SwitchRow id="event-default-calendar" label="Use as Default for This Account" checked={false} onChange={() => makeDefault(picked.accountId, picked.calendarId)} disabled={locked} />
+                )}
               </div>
             )}
             <div className="grid gap-2">
@@ -369,9 +387,18 @@ export function NewEventDialog({
               {errorFor("description") && <p className="text-xs text-destructive">{errorFor("description")}</p>}
             </div>
             <GuestPicker open={guestsOpen} onOpenChange={onGuestsOpen} query={guestQuery} onQuery={setGuestQuery} guests={guests} setGuests={setGuests} suggestions={suggestions} typed={typed} nameOf={nameOf} label={guestLabel} addGuests={addGuests} error={errorFor("guests")} disabled={locked} />
-            {(!edit || hadGuests || guests.length > 0) && <SwitchRow id="event-invites" label={edit ? "Send Updates" : "Send Invites"} checked={sendInvites} onChange={setSendInvites} disabled={locked} />}
+            {!outlook && (!edit || hadGuests || guests.length > 0) && <SwitchRow id="event-invites" label={edit ? "Send Updates" : "Send Invites"} checked={sendInvites} onChange={setSendInvites} disabled={locked} />}
             {!edit && google && <SwitchRow id="event-meet" label="Add Google Meet" checked={addMeet} onChange={setAddMeet} disabled={locked} />}
-            {failed && (reconnect ? <Reconnect provider={account.provider} change={edit} /> : <p className="text-xs text-destructive">{row?.error ?? (edit ? "The event could not be changed." : "The event could not be created.")}</p>)}
+            {failed && needsOutlookWrite(row?.error) && (
+              <Alert>
+                <AlertTitle>Allow Editing in Outlook Calendar</AlertTitle>
+                <AlertDescription>
+                  <p>{OUTLOOK_WRITE_TEXT}</p>
+                  <Button type="button" variant="secondary" size="sm" className="mt-2" onClick={() => void allowOutlookEditing(accounts.some((a) => a.provider === "teams")).catch(() => toast.error("Microsoft could not be reached. Try again."))}>Allow Editing</Button>
+                </AlertDescription>
+              </Alert>
+            )}
+            {failed && !needsOutlookWrite(row?.error) && (reconnect ? <Reconnect provider={account.provider} change={edit} /> : <p className="text-xs text-destructive">{row?.error ?? (edit ? "The event could not be changed." : "The event could not be created.")}</p>)}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
               {!edit ? (

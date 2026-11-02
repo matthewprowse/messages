@@ -8,6 +8,7 @@ import { errorCode, log } from "../log";
 import { requeueWorkingActions, STALE_ACTION_MS } from "../recovery";
 import { ACCOUNT_ERROR_WAIT_MS, accountVerdict, BROKEN_ACCOUNT_REASON } from "../send/account-wait";
 import { applyClaimed } from "../send/actions";
+import { dueFilter, isDue, msUntilDue, waitingSince } from "../send/send-after";
 import { failStuckSend, type OutboxRow } from "../send/outbox";
 import { withAttachmentSlot } from "../send/outbox-attachments";
 import { ownsAccount } from "../shard";
@@ -30,8 +31,8 @@ async function queuedOutbox(): Promise<QueuedOutbox[]> {
   const replyColumns = columns.replace("threads!outbox_thread_id_fkey(", "threads!outbox_thread_id_fkey!inner(");
   const [fresh, replies] = await Promise.all([
     // The select strings are built at run time, so the client cannot type the rows: they are cast to the shape they have.
-    readQueued<QueuedOutbox>(accountIds, async (slice) => (await db.from("outbox").select(columns).eq("status", "queued").in("account_id", slice).order("created_at").limit(50)) as unknown as { data: QueuedOutbox[] | null; error: { code?: string } | null }, "load outbox", 50),
-    readQueued<QueuedOutbox>(accountIds, async (slice) => (await db.from("outbox").select(replyColumns).eq("status", "queued").in("threads.account_id", slice).order("created_at").limit(50)) as unknown as { data: QueuedOutbox[] | null; error: { code?: string } | null }, "load outbox replies", 50),
+    readQueued<QueuedOutbox>(accountIds, async (slice) => (await db.from("outbox").select(columns).eq("status", "queued").or(dueFilter()).in("account_id", slice).order("created_at").limit(50)) as unknown as { data: QueuedOutbox[] | null; error: { code?: string } | null }, "load outbox", 50),
+    readQueued<QueuedOutbox>(accountIds, async (slice) => (await db.from("outbox").select(replyColumns).eq("status", "queued").or(dueFilter()).in("threads.account_id", slice).order("created_at").limit(50)) as unknown as { data: QueuedOutbox[] | null; error: { code?: string } | null }, "load outbox replies", 50),
   ]);
   const byId = new Map<string, QueuedOutbox>();
   for (const row of [...fresh, ...replies] as QueuedOutbox[]) byId.set(row.id, row);
@@ -65,14 +66,37 @@ async function failQueuedOutbox(id: string, reason: string) {
 export async function failStrandedOutbox() {
   const cutoff = new Date(Date.now() - ACCOUNT_ERROR_WAIT_MS).toISOString();
   const rows = must(
-    await db.from("outbox").select("*, threads!outbox_thread_id_fkey(account_id, accounts(status)), accounts(id, status)").eq("status", "queued").lt("created_at", cutoff).order("created_at").limit(200),
+    await db.from("outbox").select("*, threads!outbox_thread_id_fkey(account_id, accounts(status)), accounts(id, status)").eq("status", "queued").or(dueFilter()).lt("created_at", cutoff).order("created_at").limit(200),
     "load stranded outbox",
   ) as QueuedOutbox[];
   for (const row of rows) {
     const account = await sendingAccount(row);
     if (!account || !ownsAccount(account.id) || running.has(account.id)) continue; // a running account's email is the poll's
-    if (accountVerdict(account.status, row.created_at) === "fail") await failQueuedOutbox(row.id, BROKEN_ACCOUNT_REASON);
+    if (accountVerdict(account.status, waitingSince(row)) === "fail") await failQueuedOutbox(row.id, BROKEN_ACCOUNT_REASON);
   }
+}
+
+// Rows waiting for their send_after, by id: a timer wakes each one just after it is due, so an Undo Send window of a few
+// seconds is not stretched to the next poll. Anything longer is found by dispatchDueScheduled().
+const waking = new Map<string, ReturnType<typeof setTimeout>>();
+const WAKE_MAX_MS = 5 * 60_000;
+const WAKE_SLACK_MS = 250; // so the clock is past send_after when the claim runs
+
+function wakeWhenDue(row: QueuedOutbox) {
+  const wait = msUntilDue(row.send_after);
+  if (wait > WAKE_MAX_MS || waking.has(row.id)) return;
+  const timer = setTimeout(() => {
+    waking.delete(row.id);
+    void dispatchOutbox([row]).catch((err) => log.error("scheduled send failed", { code: errorCode(err) }));
+  }, wait + WAKE_SLACK_MS);
+  timer.unref?.();
+  waking.set(row.id, timer);
+}
+
+/** Scheduled messages that have come due, found by a cheap check so the full queue is read only when there is one. */
+export async function dispatchDueScheduled() {
+  const due = must(await db.from("outbox").select("id").eq("status", "queued").not("send_after", "is", null).lte("send_after", new Date().toISOString()).limit(1), "check due outbox");
+  if (due.length > 0) await dispatchOutbox();
 }
 
 /** Hands queued replies and new emails to their account's connector. Ones for a broken account fail with a reason. */
@@ -80,13 +104,15 @@ export async function dispatchOutbox(rows?: QueuedOutbox[]) {
   const list = rows ?? (await queuedOutbox());
   for (const queuedRow of list) {
     if (queuedRow.status !== "queued") continue;
+    // Not due yet (Undo Send or Send Later): left queued, and woken by a timer or the due check.
+    if (!isDue(queuedRow.send_after)) { wakeWhenDue(queuedRow); continue; }
     const { threads: _thread, accounts: _account, ...row } = queuedRow;
     await dispatchOnce(
       row.id,
       async () => {
         const account = await sendingAccount(queuedRow);
         if (!account || !ownsAccount(account.id)) return null; // another shard's account is left queued for it
-        const verdict = accountVerdict(account.status, row.created_at);
+        const verdict = accountVerdict(account.status, waitingSince(row));
         if (verdict === "wait") return null; // reconnecting: the poll tries it again, and fails it if the account stays broken
         if (verdict === "fail") {
           await failQueuedOutbox(row.id, BROKEN_ACCOUNT_REASON);

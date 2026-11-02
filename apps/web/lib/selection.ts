@@ -38,6 +38,7 @@ export function shortcutAction(e: { key: string; metaKey: boolean; ctrlKey: bool
  */
 export function filtersForView(view: string): string[] {
   if (view === "subscriptions") return ["none", "unread"];
+  if (view === "deleted") return ["none"];
   return view === "all" ? ["none", "unread", "email", "whatsapp", "waiting"] : ["none", "unread", "email", "whatsapp"];
 }
 

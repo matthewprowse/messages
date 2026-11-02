@@ -8,6 +8,7 @@ import { type TaskForm } from "../tasks";
 import { ComposeDraft, ComposeDraftRequest, ComposeStatus, NewEmail } from "./compose";
 import type { ContactChange, ContactPatch } from "./contact-patch";
 import { Action, State } from "./reducer";
+import type { LabelsApi } from "./use-labels";
 
 export type DraftPhase = "thinking" | "streaming";
 
@@ -15,7 +16,7 @@ export interface Ctx extends Omit<State, "byThread"> {
   dispatch: (action: Action) => void;
   contactById: (id: string) => Contact | undefined;
   threadById: (id: string) => Thread | undefined;
-  /** Every loaded message, for search. */
+  /** Every message held in memory (the conversations opened this session). Search does not read this: it has its own index of the whole history (lib/search). */
   messages: Message[];
   /** Loaded messages and queued replies by conversation, oldest first. A list only changes when its conversation does. */
   messagesByThread: Map<string, Message[]>;
@@ -45,10 +46,25 @@ export interface Ctx extends Omit<State, "byThread"> {
   /** Moves conversations to the mail provider's Bin (never deletes for good), with an Undo toast. */
   trash: (ids: string | string[]) => void;
   pin: (id: string, pinned: boolean) => void;
+  /** Brings deleted conversations back to the inbox. Resolves false when it could not be saved. */
+  restore: (threads: Thread[]) => Promise<boolean>;
+  /** Hides conversations until `at` (a reminder returns them only if nobody has replied), with an Undo toast. */
+  snooze: (ids: string | string[], at: Date, kind?: "snooze" | "reminder") => void;
+  /** Brings snoozed conversations back at once, with an Undo toast. */
+  unsnooze: (ids: string | string[]) => void;
+  /** Goes up whenever a snoozed conversation falls due, so a screen working out its own sections does so again. */
+  snoozeClock: number;
+  /** Labels, the labels on each conversation, and saved Inbox views. */
+  labels: LabelsApi;
   /** Queues a reply. Resolves false when it could not be queued, so the composer keeps the text. */
   /** standalone leaves out the conversation's AI draft and Reply-to, for a message started elsewhere. */
   /** copies is Reply All (or an edited To and Cc): the reply goes to exactly those. Left out, the worker picks. */
-  send: (threadId: string, body: string, fromAddress?: string, files?: OutboxUpload[], standalone?: boolean, copies?: { to: string[]; cc: string[] }) => Promise<boolean>;
+  /** sendAt (an ISO time) is Send Later; left out, the reply waits only for the Undo Send window set in Settings. */
+  send: (threadId: string, body: string, fromAddress?: string, files?: OutboxUpload[], standalone?: boolean, copies?: { to: string[]; cc: string[] }, sendAt?: string) => Promise<boolean>;
+  /** Cancels a queued or scheduled reply and gives its text back to the reply box (Edit), or just drops it (Cancel). False when the worker already has it. */
+  cancelScheduled: (outboxId: string, restoreText: boolean) => Promise<boolean>;
+  /** Sends a scheduled reply now. False when it could not be moved up. */
+  sendScheduledNow: (outboxId: string) => Promise<boolean>;
   /** The message the next reply in each conversation answers, chosen with Reply on a message. */
   replyTo: Record<string, Message | undefined>;
   setReplyTo: (threadId: string, message: Message | null) => void;
@@ -57,7 +73,7 @@ export interface Ctx extends Omit<State, "byThread"> {
   /** Queues a new email. Resolves to the outbox row id, or null when it could not be queued. */
   composeEmail: (email: NewEmail) => Promise<string | null>;
   /** Queues a first WhatsApp message to one E.164 number. Resolves to the outbox row id, or null. */
-  composeWhatsApp: (accountId: string, to: string, body: string, draftId?: string) => Promise<string | null>;
+  composeWhatsApp: (accountId: string, to: string, body: string, draftId?: string, sendAt?: string) => Promise<string | null>;
   /** Asks the AI to write (or with tone "edit", correct) a new message. Resolves to the draft's id; it arrives in composeDrafts. */
   generateComposeDraft: (request: ComposeDraftRequest) => Promise<string | null>;
   composeDrafts: Record<string, ComposeDraft | undefined>;

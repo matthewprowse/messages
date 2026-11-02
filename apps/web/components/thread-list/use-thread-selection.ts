@@ -11,8 +11,10 @@ import { useRowActions, type RowAction } from "./use-row-actions";
 /**
  * Checked rows, shift-click ranges and bulk actions. `order` is the rows top to bottom, the selection clears
  * whenever `reset` changes, and basePath is where it returns when the open conversation goes.
+ * A Snooze with no time (the button, the bulk bar) goes to `ask` instead, which opens the choices or, on the Summary,
+ * snoozes to tomorrow morning by calling `run` itself.
  */
-export function useThreadSelection(order: string[], query: string, reset: string, basePath = "/inbox", advance = false) {
+export function useThreadSelection(order: string[], query: string, reset: string, basePath = "/inbox", advance = false, ask?: (ids: string[], run: (ids: string[], action: RowAction, at?: Date) => void) => void) {
   const params = useParams<{ id?: string }>();
   const router = useRouter();
   const act = useRowActions();
@@ -30,13 +32,18 @@ export function useThreadSelection(order: string[], query: string, reset: string
   // side) or the list shows. It replaces the address, so Back does not return to a conversation that is gone.
   const orderRef = useRef(order);
   orderRef.current = order;
-  const run = useCallback((ids: string[], action: RowAction) => {
-    act(ids, action);
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const runRef = useRef<(ids: string[], action: RowAction, at?: Date) => void>(() => undefined);
+  const run = useCallback((ids: string[], action: RowAction, at?: Date): void => {
+    if (action === "snooze" && !at && askRef.current) return askRef.current(ids, (i, a, t) => runRef.current(i, a, t));
+    act(ids, action, at);
     if (action === "read" || action === "pin") return;
     const gone = new Set(ids);
     setChecked((c) => c.filter((id) => !gone.has(id)));
     if (params.id && gone.has(params.id)) router.replace(leaveHref(orderRef.current, gone, params.id, basePath, query, sideBySide(), advance));
   }, [act, params.id, router, query, basePath, advance]);
+  runRef.current = run;
 
   // Row callbacks and the key handler read the latest list through this ref, so they never change.
   const latest = useRef({ order, picked, run });

@@ -27,6 +27,14 @@ test("authUrl adds the three Teams scopes when ticked", () => {
   for (const s of TEAMS_SCOPES) assert.ok(scopes.includes(`https://graph.microsoft.com/${s}`), s);
 });
 
+test("Calendars.ReadWrite is asked for only on its own, and it brings Calendars.Read when Microsoft lists only the broader one", () => {
+  assert.ok(!scopesOf(authUrl(opts)).some((x) => x.endsWith("Calendars.ReadWrite")));
+  assert.ok(scopesOf(authUrl({ ...opts, calendarWrite: true })).includes("https://graph.microsoft.com/Calendars.ReadWrite"));
+  assert.ok(scopesOf(adminConsentUrl({ teams: false, calendarWrite: true, clientId: "client-1" })).includes("https://graph.microsoft.com/Calendars.ReadWrite"));
+  assert.deepEqual(grantedScopes("https://graph.microsoft.com/Calendars.ReadWrite openid"), ["Calendars.ReadWrite", "Calendars.Read"]);
+  assert.deepEqual(accountsFor(["Calendars.ReadWrite"]).map((r) => r.provider), ["outlook_calendar"]);
+});
+
 test("pkce challenge is a SHA-256 digest, not the verifier", () => {
   const { verifier, challenge } = pkce();
   assert.notEqual(verifier, challenge);

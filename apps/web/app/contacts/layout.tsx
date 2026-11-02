@@ -1,6 +1,6 @@
 "use client";
 
-// Layout for /contacts: loads contacts, companies and merge suggestions for the signed-in user. A merge, hide, change of
+// Layout for /contacts: loads contacts (with their star, relationship and last message each way), companies and merge suggestions for the signed-in user. A merge, hide, change of
 // kind or delete is patched into the lists as the store announces it (contactChanges), and the lists are read again only
 // after a full contact reload or Retry. Companies load when the Companies tab or a company is first opened.
 
@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { listContacts, type ContactSummary } from "@/lib/contacts";
+import { applyRelations } from "@/lib/contact-relations";
+import { loadRelations } from "@/lib/contact-relations-io";
 import { listContactsFromStore } from "@/lib/data";
 import { listCompanies, type CompanySummary } from "@/lib/organizations";
 import { listSuggestions, type MergeSuggestion } from "@/lib/contact-merging";
@@ -51,8 +53,13 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
     let cancelled = false;
     // Missing someone means the store is behind, so everything is read as before.
     const read = contactsReady ? listContactsFromStore(storedRef.current).then((rows) => rows ?? listContacts()) : listContacts();
-    read
-      .then((rows) => !cancelled && setContacts(rows))
+    // The star, relationship and last message each way. If they cannot be read the list still shows, without them.
+    const relations = loadRelations().catch((err) => {
+      console.error(err instanceof Error ? err.message : "Load relationships failed");
+      return null;
+    });
+    Promise.all([read, relations])
+      .then(([rows, found]) => !cancelled && setContacts(found ? applyRelations(rows, found) : rows))
       .catch((err) => {
         console.error(err instanceof Error ? err.message : "Load contacts failed");
         if (!cancelled) setContacts(null);
@@ -130,6 +137,7 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
     setSuggestions((list) => (list && !list.some((x) => x.id === s.id) ? [...list, s].sort((a, b) => b.score - a.score) : list));
   }, []);
   const needCompanies = useCallback(() => setWantCompanies(true), []);
+  const patchContact = useCallback((id: string, patch: Partial<ContactSummary>) => setContacts((list) => list && patchSummary(list, id, patch)), []);
 
   // A suggestion for someone no longer listed (merged or split elsewhere) is left out.
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
@@ -137,8 +145,8 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
   const data = useMemo(() => {
     const ids = new Set((contacts ?? []).map((c) => c.id));
     const shown = contacts && suggestions ? suggestions.filter((s) => ids.has(s.contactA) && ids.has(s.contactB)) : suggestions;
-    return { contacts, suggestions: shown, suggestionsMore, removeSuggestion, restoreSuggestion, needCompanies, reload };
-  }, [contacts, suggestions, suggestionsMore, removeSuggestion, restoreSuggestion, needCompanies, reload]);
+    return { contacts, suggestions: shown, suggestionsMore, removeSuggestion, restoreSuggestion, needCompanies, reload, patchContact };
+  }, [contacts, suggestions, suggestionsMore, removeSuggestion, restoreSuggestion, needCompanies, reload, patchContact]);
 
   return (
     <CompaniesContext.Provider value={renamed}>

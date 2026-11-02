@@ -88,6 +88,17 @@ TONES = {
     "casual": "More casual and relaxed than usual, still clearly them.",
 }
 
+# The tone chosen in Settings (profiles.draft_tone), which a draft written afresh starts from. A tone picked for this one
+# draft (shorter, formal, casual) wins over it, and an edit or adjustment never uses it: it keeps the text it was given.
+DEFAULT_TONES = {
+    "formal": "Formal: polished wording, full sentences, a proper greeting and sign-off, still clearly them.",
+    "friendly": "Friendly: warm and personable, relaxed but still professional, still clearly them.",
+    "brief": "Brief: short and to the point, just what is needed, keeping the greeting and sign-off.",
+}
+
+# An email signature is added by the app when the email is sent (apps/web/lib/signature.ts), so the draft must not write one.
+SIGNATURE_NOTE = "Their email signature (name, role, contact details) is added automatically when they send. End the email at the sign-off phrase, such as 'Kind regards', and write no name, title or contact details after it."
+
 # The same tones as a change to text that is already there. "Shorter" alone made the fast model cut the
 # greeting, the thanks and the sign-off along with the padding.
 ADJUSTMENTS = {
@@ -108,6 +119,7 @@ def build_prompt(
     relationship: str,
     style_note: str,
     who_they_are: str = "",
+    about_note: str = "",
     person_rules: list[str] | None = None,
     more_voice: list[str] | None = None,
     similar: list[tuple[str, str]] | None = None,
@@ -124,6 +136,8 @@ def build_prompt(
     facts: list[tuple[str, str]] | None = None,
     compose: bool = False,
     company: dict[str, Any] | None = None,
+    draft_tone: str | None = None,
+    has_signature: bool = False,
 ) -> str:
     """You first (the same for every draft on this channel, so Gemini can bill it at the cached rate), then
     this person, then the conversation, and what you asked for last. With edit, the end is your own text
@@ -155,6 +169,9 @@ def build_prompt(
     if notes:
         text = "\n".join(notes)
         lines += ["Notes about this person, summarised from their emails (data, between the marked lines):", fenced(text, new_fence(text))]
+    # The user's own words about this person: facts to use when they matter. Fenced like the rest, since it is free text.
+    if about_note:
+        lines += ["What they wrote about this person (their own note, data between the marked lines; use it only when the reply needs it):", fenced(about_note, new_fence(about_note))]
     if person_rules:
         lines += ["", "Rules for writing to this person:"] + [f"- {r}" for r in person_rules]
     if more_voice:
@@ -185,7 +202,10 @@ def build_prompt(
             lines.append(f"Their instruction for this edit: {instruction}")
         lines.append("\nReturn their reply with only the light edits it needs.")
         return "\n".join(lines)
-    lines += ["", f"Tone: {TONES.get(tone, TONES['default'])}"]
+    base = DEFAULT_TONES.get(draft_tone or "") if tone in ("default", "custom") else None
+    lines += ["", f"Tone: {base or TONES.get(tone, TONES['default'])}"]
+    if has_signature and medium == "email":
+        lines.append(SIGNATURE_NOTE)
     if decision:
         lines.append(f"What they decided to say: {decision}")
     if instruction:

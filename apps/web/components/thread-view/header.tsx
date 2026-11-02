@@ -1,4 +1,5 @@
-// The top bar of a conversation: Back, the person (linking to their contact page), channel tabs, sharing and the More menu.
+// The top bar of a conversation: Back, the person (linking to their contact page), channel tabs, sharing and the More menu
+// (which also holds Snooze, Remind Me If No Reply and Label).
 
 import Link from "next/link";
 import { ArrowLeft, MoreHorizontal } from "lucide-react";
@@ -10,7 +11,14 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { ThreadAvatar } from "@/components/primitives";
 import { ProviderLogo } from "@/components/provider-logo";
 import { ThreadShare } from "@/components/work-badge";
+import { NotesChip } from "@/components/notes-chip";
+import { ScheduleButton } from "@/components/schedule-button";
 import { ChannelTabs } from "@/components/thread-view/channel-tabs";
+import { LabelItems } from "@/components/labels/label-items";
+import { ManageLabelsHost } from "@/components/labels/manage-labels-dialog";
+import { DROPDOWN_KIT } from "@/components/snooze/menu-kit";
+import { SnoozeItems } from "@/components/snooze/snooze-items";
+import { useSnoozePick } from "@/components/snooze/use-snooze-pick";
 
 interface ThreadHeaderProps {
   thread: Thread;
@@ -31,8 +39,15 @@ interface ThreadHeaderProps {
 }
 
 export function ThreadHeader({ thread, primary, title, subtitle, address, backHref, hrefFor, forwardable, onLeave, onAttachments, onForward }: ThreadHeaderProps) {
-  const { contactById, pin, markRead, archive, trash, giveFeedback, setJunk } = useApp();
+  const { contactById, pin, markRead, archive, trash, giveFeedback, setJunk, snooze, unsnooze } = useApp();
+  // Snoozing the open conversation moves on, as archiving does.
+  const pick = useSnoozePick((ids, action, at) => {
+    if (!at) return;
+    snooze(ids, at, action === "remind" ? "reminder" : "snooze");
+    onLeave();
+  });
   return (
+    <>
       <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
         <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
           <Link href={backHref}><ArrowLeft /></Link>
@@ -60,6 +75,8 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
         </div>
         <ChannelTabs thread={thread} person={primary} hrefFor={hrefFor} />
         <ThreadShare thread={thread} />
+        <ScheduleButton thread={thread} />
+        <NotesChip kind="thread" id={thread.id} title={thread.subject} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-max">
@@ -67,6 +84,10 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
             <DropdownMenuItem onClick={() => markRead(thread.id, thread.unread)}>{thread.unread ? "Mark as Read" : "Mark as Unread"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => { archive(thread.id); onLeave(); }}>Archive</DropdownMenuItem>
             <DropdownMenuItem onClick={() => { trash(thread.id); onLeave(); }}>Delete</DropdownMenuItem>
+            {thread.status === "inbox" && (
+              <SnoozeItems kit={DROPDOWN_KIT} thread={thread} onAt={(mode, at) => pick.snoozeAt([thread.id], at, mode)} onDate={(mode) => pick.request([thread.id], mode, "date")} onUnsnooze={() => unsnooze(thread.id)} />
+            )}
+            <LabelItems kit={DROPDOWN_KIT} ids={[thread.id]} />
             <DropdownMenuItem onClick={() => onAttachments()}>Attachments</DropdownMenuItem>
             {forwardable && <DropdownMenuItem onClick={() => onForward()}>Forward</DropdownMenuItem>}
             <DropdownMenuSeparator />
@@ -80,5 +101,8 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+      {pick.dialog}
+      <ManageLabelsHost />
+    </>
   );
 }

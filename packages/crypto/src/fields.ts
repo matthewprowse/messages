@@ -87,6 +87,8 @@ export const FIELD = {
   contactRole: "contact_role",
   /** contacts.relationship */
   contactRelationship: "contact_relationship",
+  /** contacts.about_note: what the user wrote about the person */
+  contactAbout: "contact_about",
   /** contacts.style_note */
   contactStyleNote: "contact_style_note",
   /** contacts.ai_summary: written by the AI worker */

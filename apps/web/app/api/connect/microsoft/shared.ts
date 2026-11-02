@@ -6,6 +6,8 @@ export interface MicrosoftSignIn {
   back: string;
   /** Whether the Teams permissions were asked for too. */
   teams: boolean;
+  /** Whether Calendars.ReadWrite was asked for too, to create and change events (incremental consent). */
+  calendarWrite?: boolean;
   expires: number;
 }
 

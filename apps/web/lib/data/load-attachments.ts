@@ -38,7 +38,9 @@ function build<T extends string>(columns: T, userId: string, kind: Kind, mode: H
     .eq("user_id", userId)
     .neq("messages.threads.status", "trash")
     .eq("is_sticker", false)
-    .eq("hidden", mode === "hidden");
+    .eq("hidden", mode === "hidden")
+    // Files deleted from Konva's storage leave the library (their row stays in the conversation as "Deleted").
+    .or("not_kept.is.null,not_kept.neq.deleted");
   return kind === "all" ? query.neq("kind", "audio") : query.eq("kind", kind);
 }
 

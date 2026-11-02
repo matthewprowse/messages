@@ -2,8 +2,9 @@
 
 // The header bar that replaces the view and filter controls while conversations are checked: Select All, then the actions.
 
-import { Archive, Mail, MailCheck, OctagonAlert, Trash2, X } from "lucide-react";
+import { Archive, Clock, Mail, MailCheck, OctagonAlert, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LabelMenuButton } from "@/components/labels/label-menu-button";
 import { RowButton } from "./row-button";
 import type { RowAction } from "./use-row-actions";
 
@@ -25,12 +26,14 @@ export function BulkBar({ allPicked, count, onAll, onClear, onDone, children }: 
 }
 
 /** The header's actions on checked conversations. */
-export function SelectionBar({ allPicked, count, anyUnread, onAll, onClear, onDone, onAction }: { allPicked: boolean; count?: number; anyUnread: boolean; onAll: () => void; onClear: () => void; onDone?: () => void; onAction: (action: RowAction) => void }) {
+export function SelectionBar({ allPicked, count, anyUnread, ids, onAll, onClear, onDone, onAction }: { allPicked: boolean; count?: number; anyUnread: boolean; /** The checked conversations, for the Label menu. */ ids: string[]; onAll: () => void; onClear: () => void; onDone?: () => void; onAction: (action: RowAction) => void }) {
   return (
     <BulkBar allPicked={allPicked} count={count} onAll={onAll} onClear={onClear} onDone={onDone}>
       <RowButton label="Archive" icon={Archive} onClick={() => onAction("archive")} />
       <RowButton label="Delete" icon={Trash2} onClick={() => onAction("trash")} />
       <RowButton label="Move to Junk" icon={OctagonAlert} onClick={() => onAction("junk")} />
+      <RowButton label="Snooze" icon={Clock} onClick={() => onAction("snooze")} />
+      <LabelMenuButton ids={ids} />
       {/* The read action marks them read if any is unread, otherwise unread, so the label follows. */}
       <RowButton label={anyUnread ? "Mark as Read" : "Mark as Unread"} icon={anyUnread ? MailCheck : Mail} onClick={() => onAction("read")} />
     </BulkBar>

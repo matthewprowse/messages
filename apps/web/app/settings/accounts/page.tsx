@@ -17,7 +17,9 @@ import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/com
 import { AccountStatusBadge } from "@/components/settings/connect-family";
 import { PauseDialog, RenameDialog, groupName } from "@/components/settings/account-dialogs";
 import { ReadReceiptsSection } from "@/components/settings/read-receipts-section";
+import { UndoSendSection } from "@/components/settings/undo-send-section";
 import { SendAddressesSection } from "@/components/settings/send-addresses";
+import { SignaturesSection } from "@/components/settings/signatures-section";
 import { ADD_ACCOUNTS, PROVIDER_ICON } from "./providers";
 
 function RowIcon({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
@@ -95,6 +97,7 @@ export default function AccountsPage() {
         )}
 
         <ReadReceiptsSection />
+        <UndoSendSection />
 
         <SettingsSection id="add-account" title="Add an Account">
           <SettingsRows>
@@ -105,6 +108,7 @@ export default function AccountsPage() {
         </SettingsSection>
 
         <div className="empty:hidden"><SendAddressesSection /></div>
+        <div className="empty:hidden"><SignaturesSection /></div>
       </div>
 
       <PauseDialog group={pausing} onClose={() => setPausing(null)} onPause={pause} />

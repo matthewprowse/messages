@@ -300,7 +300,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
         onDraft={(tone, instruction, decision, source, audio) => generateDraft(thread.id, tone, instruction, decision, source, audio)}
         onDiscardDraft={() => discardDraft(thread.id)}
         msgs={msgs}
-        onSend={(body, from, files, copies) => send(thread.id, body, from, files, false, copies)}
+        onSend={(body, from, files, copies, sendAt) => send(thread.id, body, from, files, false, copies, sendAt)}
       />
 
       {(viewing || viewerUsed.current) && <AttachmentViewer

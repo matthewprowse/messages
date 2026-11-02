@@ -1,9 +1,10 @@
-// The row of AI buttons above the reply box: Draft, one Edit With AI menu (fix, edit, shorter, formal, casual), Undo and Discard Draft.
-// Presentational: the composer owns the state and passes the actions in.
+// The row of AI controls above the reply box: a "What Should This Say?" field with Draft (Enter drafts in one step), one Edit With AI
+// menu (fix, edit, shorter, formal, casual), Undo and Discard Draft. Presentational: the composer owns the state and passes the actions in.
 
 import { ChevronDown, X } from "lucide-react";
 import type { Draft } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -33,7 +34,10 @@ interface DraftBarProps {
   undoable: boolean;
   hasDraft: boolean;
   draftLabel: string;
-  onAskDraft: () => void;
+  /** What the reply should cover, as typed. Empty means write it from the conversation. */
+  instruction: string;
+  onInstruction: (value: string) => void;
+  onDraft: () => void;
   onFix: () => void;
   onAskEdit: () => void;
   onAdjust: (tone: Draft["tone"]) => void;
@@ -41,11 +45,21 @@ interface DraftBarProps {
   onDiscard: () => void;
 }
 
-export function DraftBar({ busy, hasText, editable, undoable, hasDraft, draftLabel, onAskDraft, onFix, onAskEdit, onAdjust, onUndo, onDiscard }: DraftBarProps) {
+export function DraftBar({ busy, hasText, editable, undoable, hasDraft, draftLabel, instruction, onInstruction, onDraft, onFix, onAskEdit, onAdjust, onUndo, onDiscard }: DraftBarProps) {
   return (
     // Draft writes a whole new reply and replaces the box. Edit With AI works on what is already there. Tooltips are one short line; Draft, discard, attach and voice notes have none (their labels and icons say enough).
     <div className="mb-3 flex flex-wrap items-center gap-2">
-      <Button type="button" variant="secondary" disabled={busy} onClick={onAskDraft}>{draftLabel}</Button>
+      {/* One step: say what it should cover (or nothing) and press Enter or Draft. The same text stays with the draft for another try. */}
+      <Input
+        value={instruction}
+        onChange={(e) => onInstruction(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); if (!busy) onDraft(); } }}
+        placeholder="What Should This Say?"
+        aria-label="What Should This Say?"
+        maxLength={1000}
+        className="h-8 min-w-0 flex-1 basis-48"
+      />
+      <Button type="button" variant="secondary" disabled={busy} onClick={onDraft}>{draftLabel}</Button>
       {(hasText || editable) && (
         // One menu for everything that works on the text in the box, so the bar stays one short row (and fits a phone).
         <DropdownMenu>

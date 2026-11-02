@@ -13,6 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { formatPhone } from "@/lib/format";
+import { useAccountComposer } from "@/lib/use-account-composer";
+import { WritingAsChip } from "@/components/writing-as-chip";
 
 export interface ReplyFrom {
   options: string[];
@@ -20,6 +22,8 @@ export interface ReplyFrom {
   from: string;
   /** Set only when you picked one. Otherwise the worker applies the same default from the stored mail. */
   chosen: string | null;
+  /** What to send as the From: your pick, else the Settings default when it changes what the worker would pick, else null. */
+  explicit: string | null;
   setFrom: (address: string) => void;
 }
 
@@ -28,11 +32,15 @@ export function useReplyFrom(thread: Thread, msgs: Message[]): ReplyFrom {
   const { accounts } = useApp();
   const account = thread.channel === "email" ? accounts.find((a) => a.id === thread.accountId) : undefined;
   const options = useMemo(() => (account ? sendAddressesOf(account) : []), [account]);
-  const fallback = useMemo(() => (account ? defaultFrom(account, msgs) : ""), [account, msgs]);
+  // The default set for the account in Settings decides only when no email does.
+  const preferred = useAccountComposer().of(account?.id).defaultFrom;
+  const fallback = useMemo(() => (account ? defaultFrom(account, msgs, preferred) : ""), [account, msgs, preferred]);
   // Kept per conversation, so a pick does not follow you into the next one.
   const [picked, setPicked] = useState<{ threadId: string; address: string } | null>(null);
   const chosen = picked?.threadId === thread.id && options.includes(picked.address) ? picked.address : null;
-  return { options, from: chosen ?? fallback, chosen, setFrom: (address) => setPicked({ threadId: thread.id, address }) };
+  // The worker knows nothing of the Settings default, so when it decides the From it is sent along with the reply.
+  const usual = useMemo(() => (account ? defaultFrom(account, msgs) : ""), [account, msgs]);
+  return { options, from: chosen ?? fallback, chosen, explicit: chosen ?? (fallback !== usual ? fallback : null), setFrom: (address) => setPicked({ threadId: thread.id, address }) };
 }
 
 export interface ReplyAllState {
@@ -164,16 +172,7 @@ export function ReplyHeader({ thread, msgs, reply, all }: { thread: Thread; msgs
             </SelectContent>
           </Select>
         )}
-        {reply.options.length > 0 && (
-          <Select value={reply.from} onValueChange={reply.setFrom}>
-            <SelectTrigger aria-label="From" className="max-w-40 min-w-0 data-[size=default]:h-8 sm:max-w-64">
-              <SelectValue placeholder="From" />
-            </SelectTrigger>
-            <SelectContent align="end">
-              {reply.options.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        )}
+        {reply.options.length > 0 && <WritingAsChip value={reply.from} groups={[{ items: reply.options.map((a) => ({ value: a, label: a })) }]} onChange={reply.setFrom} />}
       </div>
       {all.all && (
         <div className="mb-3 grid gap-2">

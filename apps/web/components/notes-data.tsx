@@ -14,9 +14,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { useAuth } from "@/lib/auth";
-import { createNote, deleteNote, insertNoteRow, loadNoteBodies, loadNoteRemote, loadNotes, pinNote, prefetchNoteFiles, removeNoteFiles, saveNote, saveNoteCopy, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
+import { archiveNote, createNote, deleteNote, insertNoteRow, loadNoteBodies, loadNoteRemote, loadNotes, pinNote, prefetchNoteFiles, removeNoteFiles, saveNote, saveNoteCopy, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
 import { isBlankNote, noteExcerpt, sortNotes, unusedFiles } from "@/lib/note-text";
 import { mergeLoaded } from "@/lib/note-merge";
+import { addNoteLinks } from "@/lib/note-links";
+import type { LinkTarget } from "@/lib/note-link-map";
 import { NoteSaver, isCreating, noteReady, trackCreating, type RemoteNote, type SaveState } from "@/lib/note-saver";
 import { useNotesSync } from "@/components/use-notes-sync";
 
@@ -49,12 +51,15 @@ interface NotesValue {
   conflictOf: (id: string) => RemoteNote | null | undefined;
   /** Settles a conflict: keep both versions (the other becomes a new note), keep only this one, or take the other. */
   resolveConflict: (id: string, how: "both" | "mine" | "theirs") => Promise<void>;
-  create: () => Promise<Note | null>;
+  /** Makes a note, optionally with a title, text and links (a template, or a note started from a conversation). */
+  create: (init?: { title: string; body: string; links?: LinkTarget[] }) => Promise<Note | null>;
   /** The text can be a function, read when the save is due. */
   edit: (id: string, fields: { title?: string; body?: string | (() => string) }) => void;
   /** Saves any change still waiting. */
   flush: (id: string) => Promise<boolean>;
   pin: (id: string, pinned: boolean) => void;
+  /** Puts a note away, or brings it back. Archived notes are not given to drafts. */
+  archive: (id: string, archived: boolean) => void;
   /** Whether the AI is given this note with every draft. */
   draftWith: (id: string, on: boolean) => void;
   remove: (id: string) => Promise<void>;
@@ -228,14 +233,16 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     if (!loading && needsExcerpt) loadMore();
   }, [loading, needsExcerpt, loadMore]);
 
-  const create = useCallback(async () => {
-    const { note, saved } = createNote();
+  const create = useCallback<NotesValue["create"]>(async (init) => {
+    const { note, saved } = createNote(init);
     saver.setSaved(note.id, note);
     const written = saved.then((at) => {
       saver.setVersion(note.id, at);
       commit((prev) => prev.map((n) => (n.id === note.id ? { ...n, serverAt: at } : n)));
     });
     trackCreating(note.id, written);
+    // Links need the row, so they are written once it exists; a failure leaves the note, which can be linked again.
+    if (init?.links?.length) void written.then(() => addNoteLinks(note.id, init.links!)).catch(() => toast.error("Could not link the note."));
     commit((prev) => [note, ...prev]);
     track("feature_used", { feature: "note_created" });
     // The note stays, with what was typed, and its row is written again by the next save.
@@ -251,6 +258,16 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     noteReady(id).then(() => pinNote(id, pinned)).catch(() => {
       commit((prev) => prev.map((n) => (n.id === id ? { ...n, pinned: !pinned } : n)));
       toast.error(pinned ? "Could not pin the note." : "Could not unpin the note.");
+    });
+  }, [commit]);
+
+  const archive = useCallback((id: string, archived: boolean) => {
+    const before = notesRef.current.find((n) => n.id === id);
+    commit((prev) => prev.map((n) => (n.id === id ? { ...n, archived, useInDrafts: archived ? false : n.useInDrafts } : n)));
+    track("feature_used", { feature: archived ? "note_archived" : "note_unarchived" });
+    noteReady(id).then(() => archiveNote(id, archived)).catch(() => {
+      commit((prev) => prev.map((n) => (n.id === id ? { ...n, archived: !archived, useInDrafts: before?.useInDrafts ?? n.useInDrafts } : n)));
+      toast.error(archived ? "Could not archive the note." : "Could not restore the note.");
     });
   }, [commit]);
 
@@ -333,10 +350,11 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     edit,
     flush: (id) => save(id),
     pin,
+    archive,
     draftWith,
     remove,
     close,
-  }), [sorted, notes, loading, error, anyUnloaded, reload, ensureBody, warm, ensureAllBodies, upgrade, resolveConflict, create, edit, save, pin, draftWith, remove, close]);
+  }), [sorted, notes, loading, error, anyUnloaded, reload, ensureBody, warm, ensureAllBodies, upgrade, resolveConflict, create, edit, save, pin, archive, draftWith, remove, close]);
 
   return (
     <NotesContext.Provider value={value}>
@@ -362,11 +380,11 @@ export function useNewNote(onCreated?: () => void) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
   const busy = useRef(false);
-  const newNote = useCallback(async () => {
+  const newNote = useCallback(async (init?: { title: string; body: string; links?: LinkTarget[] }) => {
     if (busy.current) return;
     busy.current = true;
     setCreating(true);
-    const note = await create();
+    const note = await create(init);
     busy.current = false;
     setCreating(false);
     if (!note) return;

@@ -43,6 +43,7 @@ STYLE_RELATIONSHIP = "style_relationship"  # style_rules.relationship
 CONTACT_COMPANY = "contact_company"  # contacts.company
 CONTACT_ROLE = "contact_role"        # contacts.role
 CONTACT_RELATIONSHIP = "contact_relationship"  # contacts.relationship
+CONTACT_ABOUT = "contact_about"      # contacts.about_note: what the user wrote about the person
 CONTACT_STYLE_NOTE = "contact_style_note"  # contacts.style_note
 CONTACT_SUMMARY = "contact_summary"  # contacts.ai_summary, written by the AI worker
 ORG_SUMMARY = "org_summary"          # organizations.summary: what a company sends you, written by the AI worker

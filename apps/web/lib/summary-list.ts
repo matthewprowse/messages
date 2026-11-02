@@ -8,9 +8,10 @@ export const SUMMARY_BASE = "/summary";
 
 export const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
   { key: "none", label: "All" },
-  { key: "unread", label: "Unread" },
   { key: "email", label: "Email" },
   { key: "whatsapp", label: "WhatsApp" },
+  // Replaces Unread: this page is already what needs you, so the useful other half is what waits on them.
+  { key: "waiting", label: "Waiting on Others" },
 ];
 
 /** The Summary link for a filter; no filter is the bare path. With `openId` it keeps that conversation open beside the list. */

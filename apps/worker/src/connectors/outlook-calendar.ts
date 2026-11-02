@@ -1,32 +1,36 @@
 // Outlook Calendar through Microsoft Graph: the events in a window around today, for the briefing and for
 // triage to know who you are meeting. Every few minutes the window is fetched again from every calendar and
-// replaces what is stored, the same way as Google Calendar. Changing an event and answering an invitation from
-// the app work when the sign-in has Calendars.ReadWrite; creating and deleting events is Google and iCloud only
-// for now.
+// replaces what is stored, the same way as Google Calendar. Creating, changing and deleting an event and answering
+// an invitation from the app work when the sign-in has Calendars.ReadWrite, which the web page asks for later
+// (incremental consent); until then each is refused with a message saying so.
 
 import type { TablesInsert } from "@messages/db";
 import { Backoff, Sleeper, supervise } from "../backoff";
-import { setAccountStatus, type AccountRow } from "../db";
+import { db, setAccountStatus, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { mapLimit } from "../util";
 import { normAddresses } from "../send/from-address";
 import { storeWindow } from "../calendar/store-window";
 import { fullFetchDue, syncWindow } from "../calendar/sync-window";
 import { GraphApiError, signInRevoked, type GraphClient } from "../microsoft/client";
+import { sealEvent } from "../calendar/sealed";
+import { claimDelete, failDelete, settleDeleted, storedEventOf, type CalendarDeleteRow } from "../calendar/delete-event";
+import type { CalendarOutboxRow } from "../calendar/create-event";
+import { claimEvent, failEvent, settleCreated } from "./google-calendar";
 import { claimUpdate, failUpdate, settleUpdated, storeChange, storedEventOfUpdate } from "../calendar/update-queue";
 import { GONE, GRAPH_RESPONSE, graphBody, graphUpdateFailure, readChange, type CalendarUpdateRow, type GraphGuest } from "../calendar/update-event";
-import { CALENDAR_SCOPE } from "../microsoft/oauth";
+import { CALENDAR_SCOPE, CALENDAR_WRITE_SCOPE } from "../microsoft/oauth";
+import { READ_BACK, WRITE_NOT_GRANTED, MAYBE_CREATED, buildGraphCreate, graphCreateFailure, graphDeleteFailure, targetId } from "../microsoft/calendar-write";
 import { microsoftFatalDetail, openGraphClient } from "../microsoft/session";
 import { storedOutlookEvent, type GraphEvent } from "../microsoft/calendar-event";
 
 const POLL_MS = 5 * 60_000;
 const PAGE_SIZE = 200;
 const CALENDARS_AT_ONCE = 2; // calendars read together (Graph allows four requests at once per mailbox)
-/** The scope that lets the app change events. The sign-in asks only for Calendars.Read today, so until that is raised changes are refused. */
-const WRITE_SCOPE = "Calendars.ReadWrite";
-export const READ_ONLY = "Outlook Calendar is read only for now, so this event cannot be changed from here.";
+/** Said when the sign-in has only Calendars.Read: the web page can ask for the rest. */
+export const READ_ONLY = WRITE_NOT_GRANTED;
 
-const SELECT = "id,iCalUId,subject,isAllDay,isCancelled,start,end,location,attendees,organizer,body,onlineMeeting,onlineMeetingUrl";
+const SELECT = "id,iCalUId,seriesMasterId,subject,isAllDay,isCancelled,start,end,location,attendees,organizer,body,onlineMeeting,onlineMeetingUrl";
 
 interface GraphCalendar {
   id: string;
@@ -86,7 +90,7 @@ export class OutlookCalendarConnector {
     await setAccountStatus(this.id, "connecting");
     const { client, creds } = await openGraphClient(this.id, [CALENDAR_SCOPE]);
     this.client = client;
-    this.canWrite = creds.scopes.some((scope) => scope.toLowerCase() === WRITE_SCOPE.toLowerCase());
+    this.canWrite = creds.scopes.some((scope) => scope.toLowerCase() === CALENDAR_WRITE_SCOPE.toLowerCase());
     const me = await client.request<{ mail?: string | null; userPrincipalName?: string | null }>("/me", { query: { $select: "mail,userPrincipalName" } });
     this.selfAddresses = new Set(normAddresses([this.account.address, me.mail, me.userPrincipalName?.includes("@") ? me.userPrincipalName : null]));
 
@@ -155,6 +159,90 @@ export class OutlookCalendarConnector {
     log.info("outlook calendar synced", { account: this.id, calendars: calendars.length, events: rows.size, written, removed, full });
   }
 
+  /**
+   * Creates a queued event with one POST, stores it with the synced events and settles the row. A request that may
+   * have reached Outlook is never sent again (Graph also refuses a second POST with the same transactionId).
+   */
+  async createEvent(row: CalendarOutboxRow) {
+    const client = this.client;
+    if (!client || this.stopped) return; // still connecting: picked up on the next pass
+    if (row.account_id !== this.id || row.user_id !== this.account.user_id) {
+      await failEvent(row.id, "This event belongs to another account.");
+      return;
+    }
+    if (!this.canWrite) {
+      await failEvent(row.id, READ_ONLY);
+      return;
+    }
+    const request = buildGraphCreate(row);
+    if ("error" in request) {
+      await failEvent(row.id, request.error);
+      return;
+    }
+    if (!(await claimEvent(row.id))) return;
+
+    let event: GraphEvent & { webLink?: string };
+    try {
+      event = await client.request<GraphEvent & { webLink?: string }>(request.url, { method: "POST", body: request.body, prefer: READ_BACK, timeoutMs: 30_000 });
+    } catch (err) {
+      log.warn("outlook calendar event not created", { account: this.id, event: row.id, code: errorCode(err) });
+      await failEvent(row.id, err instanceof GraphApiError ? graphCreateFailure(err.status, err.graphCode) : MAYBE_CREATED);
+      return;
+    }
+
+    if (event.id) {
+      try {
+        // The sync files events under a calendar's real id, so "primary" is looked up to match the next pass.
+        const calendarId = row.calendar_id === "primary" ? ((await client.request<{ id?: string }>("/me/calendar", { query: { $select: "id" } })).id ?? row.calendar_id) : row.calendar_id;
+        const stored = storedOutlookEvent(event, { userId: row.user_id, accountId: this.id, calendarId, selfAddresses: this.selfAddresses });
+        if (stored) {
+          const saved = await db.from("calendar_events").upsert(await sealEvent(stored.user_id, stored), { onConflict: "account_id,provider_event_id" });
+          if (saved.error) log.warn("created event not stored", { account: this.id, event: row.id, code: saved.error.code });
+        }
+      } catch (err) {
+        log.warn("created event not stored", { account: this.id, event: row.id, code: errorCode(err) });
+      }
+    }
+    await settleCreated(row.id, event.id ?? row.id, event.webLink ?? null);
+    log.info("outlook calendar event created", { account: this.id, event: row.id, attendees: row.attendees.length });
+  }
+
+  /**
+   * Deletes an event (the whole series for a repeating event when asked to, else that occurrence), then removes the
+   * stored copy. Outlook tells the guests itself. An event Outlook no longer has counts as deleted.
+   */
+  async deleteEvent(row: CalendarDeleteRow) {
+    const client = this.client;
+    if (!client || this.stopped) return; // still connecting: picked up on the next pass
+    if (row.account_id !== this.id || row.user_id !== this.account.user_id) {
+      await failDelete(row.id, "This event belongs to another account.");
+      return;
+    }
+    const event = await storedEventOf(row);
+    if (!event) {
+      await failDelete(row.id, GONE);
+      return;
+    }
+    if (!this.canWrite) {
+      await failDelete(row.id, READ_ONLY);
+      return;
+    }
+    if (!(await claimDelete(row.id))) return;
+
+    try {
+      await client.request(`/me/events/${encodeURIComponent(targetId(event, row.scope === "series"))}`, { method: "DELETE", timeoutMs: 30_000 });
+    } catch (err) {
+      const gone = err instanceof GraphApiError && err.status === 404;
+      if (!gone) {
+        log.warn("outlook calendar event not deleted", { account: this.id, event: row.id, code: errorCode(err) });
+        await failDelete(row.id, graphDeleteFailure(err instanceof GraphApiError ? err.status : null, err instanceof GraphApiError ? err.graphCode : null));
+        return;
+      }
+    }
+    await settleDeleted(row, event);
+    log.info("outlook calendar event deleted", { account: this.id, event: row.id, scope: row.scope });
+  }
+
   /** Changes an event, or answers an invitation, as queued in calendar_updates. One at a time, in the order they arrive. */
   updateEvent(row: CalendarUpdateRow): Promise<void> {
     const run = this.updates.then(() => this.applyUpdate(row));
@@ -190,7 +278,10 @@ export class OutlookCalendarConnector {
     }
     if (!(await claimUpdate(row.id))) return;
 
-    const url = `/me/events/${encodeURIComponent(event.provider_event_id)}`;
+    // An answer, or a change that moves nothing in time, can go to the whole series by its master. A change of time
+    // cannot: it is made to that occurrence, as the note says.
+    const series = change.scope === "series" && !!event.series_id && (change.kind === "rsvp" || !change.time);
+    const url = `/me/events/${encodeURIComponent(targetId(event, series))}`;
     try {
       if (change.kind === "rsvp") {
         await client.request(`${url}/${GRAPH_RESPONSE[change.response!]}`, { method: "POST", body: { sendResponse: change.sendInvites, comment: "" }, timeoutMs: 30_000 });
@@ -209,8 +300,8 @@ export class OutlookCalendarConnector {
       else await failUpdate(row.id, graphUpdateFailure(err instanceof GraphApiError ? err.status : null));
       return;
     }
-    await storeChange(event, change, false, null);
-    await settleUpdated(row.id, change.scope === "series" ? "Only this event was changed. Changing every event in a series is not available for Outlook Calendar yet." : null);
-    log.info("outlook calendar event changed", { account: this.id, event: row.id, kind: change.kind });
+    await storeChange(event, change, series, null);
+    await settleUpdated(row.id, change.scope === "series" && !series ? "Only this event was moved. Moving every event in a series is not available for Outlook Calendar yet." : null);
+    log.info("outlook calendar event changed", { account: this.id, event: row.id, kind: change.kind, scope: series ? "series" : "occurrence" });
   }
 }

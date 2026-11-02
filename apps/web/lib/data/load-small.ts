@@ -18,12 +18,12 @@ export async function myId(): Promise<string> {
   return (await supabase.auth.getSession()).data.session?.user.id ?? "";
 }
 
-/** Tasks with a due date: every open one however old, and completed ones from the last TASK_DAYS days. Paged, so none is cut at 1000. */
+/** Every open task however old (those with no due date too, which sort last), and completed ones due in the last TASK_DAYS days. Paged, so none is cut at 1000. */
 export async function loadTasks(): Promise<Task[]> {
   const taskSince = new Date(Date.now() - TASK_DAYS * 86_400_000).toISOString();
   // id breaks ties between tasks due at the same moment, so paging neither repeats nor skips one.
   const rows = await allRows("Load tasks", (from, to) =>
-    supabase.from("tasks").select(TASK_COLUMNS).not("due_at", "is", null).or(`status.eq.open,due_at.gte.${taskSince}`).order("due_at").order("id").range(from, to));
+    supabase.from("tasks").select(TASK_COLUMNS).or(`status.eq.open,due_at.gte.${taskSince}`).order("due_at").order("id").range(from, to));
   await openTasks(rows);
   return rows.map(mapTask);
 }

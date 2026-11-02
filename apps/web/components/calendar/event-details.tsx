@@ -3,7 +3,8 @@
 // An event's details and dialog, and the chip that opens it.
 
 
-import { Fragment, useContext, useRef } from "react";
+import { NotesChip } from "@/components/notes-chip";
+import { Fragment, useContext, useRef, useState } from "react";
 import Link from "next/link";
 import { useApp } from "@/lib/store";
 import { canChangeEvents, googleEventUrl, type CalendarEvent, type EventResponse } from "@/lib/calendar";
@@ -12,7 +13,9 @@ import { describeRule } from "@/lib/recurrence";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { EventMeetings } from "@/components/meeting-card";
@@ -72,8 +75,8 @@ export function useEventState(event: CalendarEvent) {
   return {
     full,
     loading,
-    // Events still being created have no account yet, and Outlook Calendar cannot delete.
-    canDelete: provider === "google_calendar" || provider === "icloud_calendar",
+    // Events still being created have no account yet.
+    canDelete: canChangeEvents(provider),
     // Details of an event someone else invited you to are theirs to change; you can only answer.
     canEdit: canChangeEvents(provider) && !full.organizer && !full.pending,
     canReply: canChangeEvents(provider) && !!full.organizer && full.response != null && full.attendees.length > 0,
@@ -94,9 +97,12 @@ export function eventWhen(e: CalendarEvent) {
 export function EventDetails({ event }: { event: CalendarEvent }) {
   const { answer, detailsFailed } = useContext(Page);
   const { full, loading, canReply } = useEventState(event);
+  // Whether an answer goes to every event in the series; set per event and off until chosen, so one tap never answers more than it shows.
+  const [wholeSeries, setWholeSeries] = useState(false);
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {full.pending && <span className="text-sm text-muted-foreground">Saving</span>}
+      <NotesChip kind="event" id={event.id} />
       {full.conferenceUrl && (
         <Button asChild className="self-start">
           <a href={full.conferenceUrl} target="_blank" rel="noreferrer">Join Meeting</a>
@@ -110,18 +116,26 @@ export function EventDetails({ event }: { event: CalendarEvent }) {
         {full.response && (
           <Detail label="Reply">
             {canReply ? (
+              <div className="flex flex-col gap-2">
               <ToggleGroup
                 type="single"
                 variant="outline"
                 aria-label="Your reply"
                 value={YOUR_ANSWER[full.response] ?? ""}
                 disabled={loading || full.pending}
-                onValueChange={(value) => value && answer(full, value as EventResponse)}
+                onValueChange={(value) => value && answer(full, value as EventResponse, wholeSeries ? "series" : "occurrence")}
               >
                 <ToggleGroupItem value="accepted" aria-label="Yes">Yes</ToggleGroupItem>
                 <ToggleGroupItem value="tentative" aria-label="Maybe">Maybe</ToggleGroupItem>
                 <ToggleGroupItem value="declined" aria-label="No">No</ToggleGroupItem>
               </ToggleGroup>
+              {full.seriesId && (
+                <div className="flex items-center gap-2">
+                  <Switch id="reply-series" checked={wholeSeries} onCheckedChange={setWholeSeries} disabled={loading || full.pending} />
+                  <Label htmlFor="reply-series" className="text-muted-foreground">Answer for Every Event in the Series</Label>
+                </div>
+              )}
+              </div>
             ) : (
               (RESPONSES[full.response] ?? full.response)
             )}

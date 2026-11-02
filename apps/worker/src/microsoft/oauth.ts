@@ -23,6 +23,11 @@ export const MAIL_SCOPE = "Mail.ReadWrite";
 export const SEND_SCOPE = "Mail.Send";
 /** Read only: your calendars and their events. */
 export const CALENDAR_SCOPE = "Calendars.Read";
+/**
+ * Create, change, answer and delete events. Never in SCOPES: it is asked for later, in the web page (incremental
+ * consent), so an organisation that has not approved it cannot block the sign-in that reads mail and calendar.
+ */
+export const CALENDAR_WRITE_SCOPE = "Calendars.ReadWrite";
 /** Your own name and address, to label the account. */
 export const PROFILE_SCOPE = "User.Read";
 /** Without it Microsoft issues no refresh token. */
@@ -44,7 +49,7 @@ export const TEAMS_SCOPES = [CHAT_SCOPE, MEETINGS_SCOPE, TRANSCRIPT_SCOPE];
 /** Microsoft To Do: your lists and tasks, and ticking tasks off. */
 export const TASKS_SCOPE = "Tasks.ReadWrite";
 /** Asked for only when you choose them in pnpm connect:microsoft, on top of SCOPES. */
-export const OPTIONAL_SCOPES = [...TEAMS_SCOPES, TASKS_SCOPE];
+export const OPTIONAL_SCOPES = [...TEAMS_SCOPES, TASKS_SCOPE, CALENDAR_WRITE_SCOPE];
 
 /** Stored encrypted in account_credentials, shared by the Outlook, Outlook Calendar, Teams and Microsoft To Do accounts. */
 export interface MicrosoftCredentials {
@@ -151,6 +156,8 @@ export function grantedScopes(scope: string | undefined): string[] {
     const name = known.get(short.toLowerCase());
     if (name) out.add(name);
   }
+  // Read-write includes read, and Microsoft may list only the broader one.
+  if (out.has(CALENDAR_WRITE_SCOPE)) out.add(CALENDAR_SCOPE);
   return [...out];
 }
 

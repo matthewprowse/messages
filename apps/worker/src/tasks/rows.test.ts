@@ -29,7 +29,7 @@ function input(patch: Partial<TaskInput> = {}): TaskInput {
 }
 
 function update(id: string, taskId: string | null, at: string, patch: Partial<TaskUpdateRow> = {}): TaskUpdateRow {
-  return { id, user_id: "u", task_id: taskId, action: "complete", status: "queued", error: null, created_at: at, account_id: null, title: null, notes: null, due_at: null, due_all_day: false, priority: null, ...patch };
+  return { id, user_id: "u", task_id: taskId, action: "complete", status: "queued", error: null, created_at: at, account_id: null, contact_id: null, linked_at: null, title: null, notes: null, due_at: null, due_all_day: false, priority: null, ...patch };
 }
 
 test("a task is stored with its text sealed under the task fields", async () => {

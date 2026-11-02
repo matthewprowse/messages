@@ -1,6 +1,8 @@
 // What the Summary page gathers from your conversations. It is worked out in the browser from the labels
 // the AI already puts on each conversation: whether it needs a reply, its priority, category and summary.
 
+import { isWaiting } from "./app-store/thread-filters";
+import { isSnoozed } from "./snooze";
 import type { ListFilter, Priority, Thread } from "./types";
 
 /** Conversations waiting on a reply for longer than this are left to Conversations. */
@@ -19,6 +21,8 @@ export interface SummarySections {
   priority: Thread[];
   /** Recent FYI and work conversations with a summary, newest first. */
   updates: Thread[];
+  /** Only under the Waiting On Others filter: you wrote last and nobody has replied for 2 days, quietest longest first. The other sections are empty then. */
+  waiting: Thread[];
 }
 
 function matches(t: Thread, filter: ListFilter) {
@@ -38,9 +42,15 @@ const isPressing = (t: Thread) => t.priority === "urgent" || t.priority === "imp
 
 /** Sorts inbox conversations into the Summary's sections. Each conversation appears once, in the first that fits. */
 export function summarise(threads: Thread[], filter: ListFilter, now: Date = new Date()): SummarySections {
+  // Waiting On Others is the other half of follow-up work, so it swaps the page's usual sections for its own list.
+  if (filter === "waiting") {
+    const waiting = threads.filter((t) => t.status === "inbox" && !t.junk && !isSnoozed(t, now.getTime()) && isWaiting(t, now.getTime()));
+    return { reply: [], priority: [], updates: [], waiting: waiting.sort((a, b) => Date.parse(a.lastMessageAt) - Date.parse(b.lastMessageAt)) };
+  }
   // Junk, archived and deleted conversations never need you, and nor does one you answered last: it waits
   // on them until they write again, whatever priority and category the AI gave it.
-  const open = threads.filter((t) => t.status === "inbox" && !t.junk && !t.lastFromMe && matches(t, filter));
+  // A snoozed one is off the page until its time passes, or until they write again (which clears the snooze).
+  const open = threads.filter((t) => t.status === "inbox" && !t.junk && !t.lastFromMe && !isSnoozed(t, now.getTime()) && matches(t, filter));
   const within = (t: Thread, hours: number) => now.getTime() - Date.parse(t.lastMessageAt) <= hours * 3_600_000;
 
   // Only the needs-reply flag: the AI clears it once you have answered, while the category stays.
@@ -56,7 +66,7 @@ export function summarise(threads: Thread[], filter: ListFilter, now: Date = new
   for (const t of priority) taken.add(t.id);
   const updates = open.filter((t) => !taken.has(t.id) && (t.category === "fyi" || t.category === "work") && t.summary.trim() && within(t, UPDATE_HOURS));
 
-  return { reply: reply.sort(byPressing), priority: priority.sort(byPressing), updates: updates.sort(byNewest) };
+  return { reply: reply.sort(byPressing), priority: priority.sort(byPressing), updates: updates.sort(byNewest), waiting: [] };
 }
 
 /** How many conversations the page asks you to deal with: Needs Reply plus Important. The rail dot reads this, so it always agrees with the page. */
@@ -71,11 +81,12 @@ export function attentionCount(threads: Thread[], now: Date = new Date()): numbe
  * them, so a lost client does not vanish without a trace. Important ones are left out: that would be noise.
  */
 export function olderWaiting(threads: Thread[], filter: ListFilter, now: Date = new Date()): Thread[] {
+  if (filter === "waiting") return [];
   const { reply, priority } = summarise(threads, filter, now);
   const shown = new Set([...reply, ...priority].map((t) => t.id));
   return threads.filter(
     (t) =>
-      t.status === "inbox" && !t.junk && !t.lastFromMe && matches(t, filter) && !shown.has(t.id) &&
+      t.status === "inbox" && !t.junk && !t.lastFromMe && !isSnoozed(t, now.getTime()) && matches(t, filter) && !shown.has(t.id) &&
       (t.needsReply || (t.priority === "urgent" && isPriorityCategory(t))),
   );
 }
@@ -86,7 +97,9 @@ export function digest(sections: SummarySections, events: number, tasks = 0): st
   const reply = sections.reply.length;
   const priority = sections.priority.length;
   const updates = sections.updates.length;
+  const waiting = sections.waiting.length;
   return [
+    waiting > 0 && `${waiting} Waiting on Others`,
     reply > 0 && `${reply} ${reply === 1 ? "Needs" : "Need"} a Reply`,
     priority > 0 && `${priority} Urgent or Important`,
     events > 0 && `${events} ${events === 1 ? "Event" : "Events"} Today`,

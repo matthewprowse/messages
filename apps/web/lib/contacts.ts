@@ -43,6 +43,13 @@ export interface ContactSummary {
   kindOverride?: "person" | "company";
   /** Left out of the People list; shown under Hidden. */
   hidden: boolean;
+  /** Starred: pinned to the top of People, always priority in triage. Added by the Contacts layout (contact-relations.ts). */
+  vip?: boolean;
+  /** Client, Prospect, Colleague... or whatever was typed. */
+  relationship?: string | null;
+  /** Newest message from them and from you in one-to-one conversations, for the status line and Going Quiet. */
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
 }
 
 export interface ContactConversation {
@@ -59,6 +66,8 @@ export interface ContactConversation {
 export interface ContactDetail extends ContactSummary {
   relationship: string | null;
   summary: string | null;
+  /** What the user wrote about them (contacts.about_note, opened here). */
+  aboutNote: string | null;
   /** The company filed for their email domain, if any. */
   organization: { id: string; name: string } | null;
   conversations: ContactConversation[];
@@ -147,7 +156,7 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
   if (!isUuid(id)) return null;
   const { data: base, error } = await supabase
     .from("contacts")
-    .select("id, display_name, company, role, relationship, ai_summary, hidden, avatar_path, kind_override, organizations(id, name, logo_path), contact_identities(id, kind, value)")
+    .select("id, display_name, company, role, relationship, ai_summary, about_note, vip, hidden, avatar_path, kind_override, organizations(id, name, logo_path), contact_identities(id, kind, value)")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`Load contact failed (${error.code})`);
@@ -162,7 +171,7 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
       .range(from, to),
   );
   const c = { ...base, thread_participants };
-  await openNestedThreads([c]);
+  const [, touch] = await Promise.all([openNestedThreads([c]), lastTouch(id)]);
   // Deleted conversations (in the provider's bin) are left out here, as in Conversations.
   const conversations = c.thread_participants
     .flatMap((p) => (p.threads && p.threads.status !== "trash" ? [p.threads] : []))
@@ -189,6 +198,9 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
     relationship: c.relationship,
     hidden: c.hidden,
     summary: c.ai_summary,
+    aboutNote: c.about_note?.trim() || null,
+    vip: c.vip,
+    ...touch,
     organization: c.organizations ? { id: c.organizations.id, name: c.organizations.name } : null,
     organizationName: c.organizations?.name ?? null,
     ...ids,
@@ -200,6 +212,13 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
     identityRows: c.contact_identities,
     attachments: await contactAttachments(c.id, conversations.map((t) => t.id), groupIds),
   };
+}
+
+/** One contact's newest message from them and from you (contact_last_touch), for the status line on their page. */
+async function lastTouch(contactId: string): Promise<{ lastInboundAt: string | null; lastOutboundAt: string | null }> {
+  const { data, error } = await supabase.rpc("contact_last_touch", { p_contact: contactId });
+  if (error) throw new Error(`Load last contact failed (${error.code})`);
+  return { lastInboundAt: data?.[0]?.last_inbound_at ?? null, lastOutboundAt: data?.[0]?.last_outbound_at ?? null };
 }
 
 const ATTACHMENT_THREADS = 100;

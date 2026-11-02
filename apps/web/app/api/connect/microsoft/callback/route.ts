@@ -4,7 +4,7 @@
 // IT admin has to approve the app first, the page also gets &admin=<the link the admin opens>.
 
 import { ensureProfile, openJson, saveAccounts } from "@/lib/server/accounts";
-import { CHAT_SCOPE, MicrosoftError, accountsFor, adminConsentUrl, exchangeCode, needsAdminApproval, signedInAddress, SEND_SCOPE, MAIL_SCOPE, type MicrosoftCredentials } from "@/lib/server/microsoft";
+import { CALENDAR_WRITE_SCOPE, CHAT_SCOPE, MicrosoftError, accountsFor, adminConsentUrl, exchangeCode, needsAdminApproval, signedInAddress, SEND_SCOPE, MAIL_SCOPE, type MicrosoftCredentials } from "@/lib/server/microsoft";
 import { appOrigin } from "@/lib/server/request";
 import { MICROSOFT_COOKIE, MICROSOFT_RETURNS, readCookie, signInProblem, type MicrosoftSignIn } from "../shared";
 
@@ -22,7 +22,8 @@ export async function GET(request: Request) {
       headers: { Location: `${origin}${back}?${query}`, "Set-Cookie": `${MICROSOFT_COOKIE}=; Path=/api/connect/microsoft; Max-Age=0; HttpOnly; SameSite=Lax`, "Cache-Control": "no-store" },
     });
   const teams = signIn?.teams === true;
-  const needsAdmin = () => done(`connect_error=admin_approval&admin=${encodeURIComponent(adminConsentUrl({ teams }))}`);
+  const calendarWrite = signIn?.calendarWrite === true;
+  const needsAdmin = () => done(`connect_error=admin_approval&admin=${encodeURIComponent(adminConsentUrl({ teams, calendarWrite }))}`);
 
   const error = params.get("error");
   if (signIn && signIn.expires >= Date.now() && params.get("state") === signIn.state) {
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
   if (signInProblem(signIn, params, Date.now())) return done("connect_error=expired");
 
   try {
-    const tokens = await exchangeCode(params.get("code")!, `${origin}/api/connect/microsoft/callback`, signIn!.verifier, teams);
+    const tokens = await exchangeCode(params.get("code")!, `${origin}/api/connect/microsoft/callback`, signIn!.verifier, teams, calendarWrite);
     if (!tokens.refreshToken) return done("connect_error=no_refresh");
     const rows = accountsFor(tokens.scopes);
     if (!rows.length) return done("connect_error=not_granted");
@@ -49,6 +50,7 @@ export async function GET(request: Request) {
       tokens.scopes.includes(MAIL_SCOPE) ? "" : "mail=missing",
       tokens.scopes.includes(MAIL_SCOPE) && !tokens.scopes.includes(SEND_SCOPE) ? "send=missing" : "",
       teams && !tokens.scopes.includes(CHAT_SCOPE) ? "teams=missing" : "",
+      calendarWrite && !tokens.scopes.includes(CALENDAR_WRITE_SCOPE) ? "calendar_write=missing" : "",
       // Some saved and some not: the saved ones are connected, and the page is told how many were left out.
       failed.length ? `not_saved=${failed.length}` : "",
     ].filter(Boolean);

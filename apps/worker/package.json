@@ -21,12 +21,15 @@
     "rename-shared-senders": "tsx --env-file=.env scripts/rename-shared-senders.ts",
     "company-logos": "tsx --env-file=.env scripts/company-logos.ts",
     "rewrap-keys": "tsx --env-file=.env scripts/rewrap-keys.ts",
+    "pwa:icons": "tsx scripts/make-pwa-icons.ts",
+    "vapid:generate": "tsx scripts/vapid-generate.ts",
     "credentials:reseal": "tsx --env-file=.env scripts/credentials-reseal.ts"
   },
   "devDependencies": {
     "@types/mailparser": "^3.9.0",
     "@types/node": "^24.19.2",
     "@types/nodemailer": "^8.0.2",
+    "@types/web-push": "3.6.4",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   },
@@ -44,6 +47,7 @@
     "mailparser": "^3.12.4",
     "nodemailer": "^10.2.1",
     "pdfjs-dist": "6.4.299",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "web-push": "3.6.7"
   }
 }

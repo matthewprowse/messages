@@ -29,7 +29,10 @@ export interface Loaded {
   tasks: Task[];
 }
 
-/** A deliberate product cap: the list holds the newest 1000 conversations. Older ones are not loaded and nothing searches them. */
+/**
+ * A deliberate product cap: the list holds the newest 1000 conversations. Older ones are not loaded into the list, but search
+ * still finds them: its local index (lib/search) pages the whole history, and opening a result loads the conversation.
+ */
 const THREAD_LIMIT = 1000;
 /** The most conversations a catch-up after a dropped connection reads; more than that and everything is reloaded. */
 const CHANGE_LIMIT = 200;

@@ -11,6 +11,7 @@ import { useApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RelationshipPicker } from "./relationship-picker";
 
 /** A few lines of the same kind (addresses or numbers), with Add and Remove. */
 export function MultiInput({ id, label, addLabel, values, errors, onChange, disabled, type }: {
@@ -139,7 +140,7 @@ export function ContactFields({ idPrefix, fields, tried, disabled, editing = fal
       </div>
       <div className="grid gap-2">
         <Label htmlFor={`${idPrefix}-relationship`}>Relationship</Label>
-        <Input id={`${idPrefix}-relationship`} value={values.relationship} onChange={(e) => set("relationship")(e.target.value)} maxLength={60} disabled={disabled} placeholder="Client, colleague, family" />
+        <RelationshipPicker id={`${idPrefix}-relationship`} value={values.relationship} onChange={set("relationship")} disabled={disabled} />
       </div>
     </>
   );

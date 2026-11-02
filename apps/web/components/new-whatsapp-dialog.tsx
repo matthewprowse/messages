@@ -13,11 +13,18 @@ import { ContactAvatar } from "@/components/primitives";
 import { noEnterSubmit, useComposeSend } from "@/components/compose-dialog";
 import { ComposeAi, type Composed } from "@/components/compose-ai";
 import { Button } from "@/components/ui/button";
+import { SendLaterMenu } from "@/components/send-later-menu";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatPhone } from "@/lib/format";
+import { expandSnippet } from "@/lib/snippets";
+import { addBelow } from "@/lib/suggest-times";
+import { varsFor } from "@/lib/template-vars";
+import { useUserTemplates } from "@/lib/use-user-templates";
+import { SuggestTimesButton } from "@/components/suggest-times-button";
+import { TemplatePicker } from "@/components/template-picker";
 
 const ITEM = "p-2 [&>svg:last-child]:hidden";
 
@@ -27,7 +34,8 @@ export { whatsappLinked } from "@/lib/new-items";
 /** A first WhatsApp message to anyone. Once the worker has sent it, the chat opens. */
 export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; onOpenChange: (open: boolean) => void; to?: { phone: string; name?: string } }) {
   const router = useRouter();
-  const { accounts, contacts, contactById, threads, composeWhatsApp, send } = useApp();
+  const { accounts, contacts, contactById, threads, composeWhatsApp, send, profile } = useApp();
+  const snippets = useUserTemplates().items.filter((t) => t.kind === "snippet");
   const sending = useComposeSend(open, onOpenChange, "new_whatsapp");
   const { locked, sent, waiting, reset } = sending;
   const account = linkedAccount(accounts);
@@ -83,21 +91,22 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
     router.push(`/inbox/${threadId}`);
   };
 
-  const submit = async () => {
+  // at is a Send Later time; left out, the message waits only for the Undo Send window.
+  const submit = async (at?: Date) => {
     setChecked(true);
     if (!account || !ready || !number) return;
     await sending.run(async () => {
       // A chat with this number already exists, so the message goes there as a reply instead.
       if (chat) {
         // Standalone, so the chat's AI draft and Reply-to are left alone.
-        if (await send(chat.id, body, undefined, [], true)) {
+        if (await send(chat.id, body, undefined, [], true, undefined, at?.toISOString())) {
           markSubmitted("new_whatsapp");
           openChat(chat.id);
         }
         return null;
       }
-      return composeWhatsApp(account.id, number, body, draftId);
-    });
+      return composeWhatsApp(account.id, number, body, draftId, at?.toISOString());
+    }, at);
   };
 
   return (
@@ -194,18 +203,30 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
                 ref={bodyRef}
                 rows={6}
                 value={body}
-                onChange={(e) => setBody(e.target.value)}
+                onChange={(e) => {
+                  const hit = expandSnippet(e.target.value, e.target.selectionStart, snippets.map((x) => ({ shortcut: x.shortcut, body: x.body })), varsFor(contactId ? contactById(contactId) : undefined, profile.name));
+                  setBody(hit ? hit.text : e.target.value);
+                }}
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
                 disabled={locked}
                 autoFocus={!!to}
                 className="max-h-80"
               />
+              <div className="flex items-center gap-1">
+                <TemplatePicker disabled={locked} vars={varsFor(contactId ? contactById(contactId) : undefined, profile.name)} onInsert={(t) => setBody((b) => addBelow(b, t))} />
+                <SuggestTimesButton disabled={locked} onInsert={(t) => setBody((b) => addBelow(b, t))} />
+              </div>
             </div>
             {sent && <p className="text-xs text-muted-foreground">Sent. The chat opens here once it is stored.</p>}
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The message could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
-              <Button type="submit" variant="secondary" disabled={!ready || (checked && !!toError)}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
+              {sending.holding
+                ? <Button type="button" variant="ghost" onClick={sending.undo}>Undo</Button>
+                : <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>}
+              <div className="flex">
+                <Button type="submit" variant="secondary" disabled={!ready || (checked && !!toError)} className="flex-1 rounded-r-none">{sending.holding ? `Sending in ${sending.holdLeft}s` : waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
+                <SendLaterMenu disabled={!ready || (checked && !!toError)} onPick={(at) => submit(at)} className="rounded-l-none border-l border-border" />
+              </div>
             </div>
           </form>
         )}

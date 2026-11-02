@@ -69,6 +69,7 @@ export function downloadLink(view: string, name: string) {
 /** What the viewer says when there is no stored copy. A big video and a full seat each say why. */
 export function notKeptMessage(a: Attachment, notStored: boolean): string {
   if (a.notKept === "unavailable") return FETCH_TEXT.gone;
+  if (a.notKept === "deleted") return "Deleted from Konva. The original is still in your mailbox or chat.";
   if (a.notKept === "deferred") return "Not downloaded. It is fetched from your mailbox when you open it.";
   if (a.notKept === "video_link") return "Not kept here. Large videos stay at the original. Open it in your mailbox or chat.";
   if (a.notKept === "over_cap") return "Not kept here. Your storage is full. The original is in your mailbox or chat.";

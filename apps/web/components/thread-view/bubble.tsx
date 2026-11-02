@@ -11,8 +11,10 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ContactAvatar } from "@/components/primitives";
 import { AttachmentTile, StickerImage, isSticker } from "@/components/attachments";
+import { InviteCard } from "@/components/invite-card";
 import { MessageBody, hasFullText } from "@/components/message-body";
 import { VoiceNote } from "@/components/media-player";
+import { ScheduledLine } from "@/components/thread-view/scheduled-line";
 import { BubbleActions, QuoteBlock, ReactionChips, useTouchReveal, type NameOf, type OnReact } from "@/components/message-extras";
 
 /** The handlers and flags every bubble in the list shares. */
@@ -51,6 +53,7 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
   const actions = !m.sendState && !m.deleted ? <BubbleActions m={m} canReact={whatsapp} revealed={touch.revealed} onReply={onReply} onReact={onReact} expand={expandable ? { open: showFull, toggle: () => setShowFull((v) => !v) } : undefined} /> : null;
   return (
     <div ref={touch.ref} {...touch.props} data-message-id={m.id} className={cn("group/bubble flex flex-col gap-2", me ? "items-end" : "items-start")}>
+      <InviteCard message={m} />
       {m.attachments && m.attachments.length > 0 && (
         <div className={cn("flex max-w-full items-center gap-1", me && "flex-row-reverse")}>
           <div className={cn("flex flex-wrap gap-2", me && "justify-end")}>
@@ -86,6 +89,8 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
           {m.sendRecovery === "unsure" && <Button variant="ghost" size="xs" onClick={() => { navigator.clipboard?.writeText(m.body).then(() => toast("Copied")).catch(() => toast("Could not copy")); }}>Copy Text</Button>}
           <Button variant="ghost" size="xs" onClick={() => onDismiss(m)}>Delete</Button>
         </div>
+      ) : m.sendState === "queued" && m.scheduledFor ? (
+        <ScheduledLine m={m} />
       ) : m.sendState ? (
         <div className="px-3 text-xs text-muted-foreground">{sendStateLabel(m.sendState)}</div>
       ) : (

@@ -5,10 +5,9 @@ export type CalendarAccount = { id: string; provider: string; status: string };
 
 /** Why a calendar account cannot take queued work, or null when it can. */
 export function calendarAccountProblem(account: CalendarAccount, verb: "added to" | "deleted from" | "changed in"): string | null {
-  // Changing an event also works in Outlook Calendar; creating and deleting are Google and iCloud only.
-  const outlook = verb === "changed in" && account.provider === "outlook_calendar";
+  const outlook = account.provider === "outlook_calendar";
   if (account.provider !== "google_calendar" && account.provider !== "icloud_calendar" && !outlook) {
-    return `Events can only be ${verb} a Google Calendar or iCloud Calendar account for now.`;
+    return `Events can only be ${verb} a Google, Outlook or iCloud Calendar account.`;
   }
   if (account.status === "error" || account.status === "disconnected") {
     if (account.provider === "icloud_calendar") return "iCloud Calendar needs attention. Reconnect iCloud Calendar in Settings, Accounts, then try again.";

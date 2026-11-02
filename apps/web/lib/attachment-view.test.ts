@@ -39,6 +39,7 @@ test("a download link keeps the viewing link and adds the file name", () => {
 test("the not-kept message says why a file has no copy", () => {
   assert.equal(notKeptMessage(file({ notKept: "unavailable" }), true), FETCH_TEXT.gone);
   assert.match(notKeptMessage(file({ notKept: "deferred" }), true), /^Not downloaded\./);
+  assert.match(notKeptMessage(file({ notKept: "deleted" }), true), /^Deleted from Konva\./);
   assert.match(notKeptMessage(file({ notKept: "video_link" }), true), /Large videos/);
   assert.match(notKeptMessage(file({ notKept: "over_cap" }), true), /storage is full/);
   assert.match(notKeptMessage(file({}), true), /^Not kept here\./);

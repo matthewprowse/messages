@@ -156,12 +156,13 @@ export class ICloudCalendarConnector {
 
   /**
    * Creates a queued event in iCloud Calendar, stores it with the synced events and settles the row. It goes
-   * to the first event calendar iCloud lists. A request that may have reached iCloud is never sent again:
+   * to the calendar chosen, else the first event calendar iCloud lists. A request that may have reached iCloud is never sent again:
    * its row fails with a warning instead.
    */
   async createEvent(row: CalendarOutboxRow) {
     const session = this.live;
-    const calendar = session?.calendars[0];
+    // The calendar the person chose (its url, as stored with the synced events), else the first one iCloud lists.
+    const calendar = session?.calendars.find((c) => c.url === row.calendar_id) ?? session?.calendars[0];
     if (!session || !calendar || this.stopped) return; // still connecting: picked up on the next pass
     if (row.account_id !== this.id || row.user_id !== this.account.user_id) {
       await failEvent(row.id, "This event belongs to another account.");

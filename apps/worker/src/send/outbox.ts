@@ -11,13 +11,17 @@ import { FIELD } from "@messages/crypto/fields";
 import { open, openAddresses, openStrict } from "../vault";
 import { openOutgoingText } from "./outgoing-text";
 import { mayUseAccount, replyFor, type ReplyFor } from "./inbox";
+import { dueFilter, isDue } from "./send-after";
 
 export type OutboxRow = Tables<"outbox">;
 
-/** Marks a queued reply as sending. Returns false if another run already took it. */
+/**
+ * Marks a queued reply as sending. Returns false if another run already took it, if the app cancelled it (Undo), or if
+ * its send_after has not come yet. The due filter is in the same update as the status, so nothing can claim early.
+ */
 async function claim(id: string): Promise<boolean> {
   const rows = must(
-    await db.from("outbox").update({ status: "sending" }).eq("id", id).eq("status", "queued").select("id"),
+    await db.from("outbox").update({ status: "sending" }).eq("id", id).eq("status", "queued").or(dueFilter()).select("id"),
     "claim outbox row",
   );
   return rows.length === 1;
@@ -30,7 +34,7 @@ async function claim(id: string): Promise<boolean> {
  */
 export async function claimReady(row: OutboxRow): Promise<OutboxRow | null> {
   const current = must(await db.from("outbox").select("*").eq("id", row.id).maybeSingle(), "load outbox row");
-  if (!current || current.status !== "queued") return null;
+  if (!current || current.status !== "queued" || !isDue(current.send_after)) return null;
   const problem = await waitForAttachments(current);
   if (!(await claim(current.id))) return null;
   if (problem) {

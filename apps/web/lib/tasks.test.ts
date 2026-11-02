@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   MAX_TASK_TITLE, dateOnly, dueDay, formOfTask, isOverdue, isTempTask, mapTask, taskChanged, taskDetail, taskOfWrite, taskProblem, tasksByDay, tasksForToday, taskWhen, taskWriteFields,
-  tempTaskId, visibleTasks, withTicks, type TaskForm, type TaskRowOf,
+  tempTaskId, undatedTasks, visibleTasks, withTicks, type TaskForm, type TaskRowOf,
 } from "./tasks";
 import { timeChoices } from "./dates";
 import type { Task } from "./types";
@@ -116,13 +116,26 @@ test("Google Tasks keeps the date only: no time and no priority", () => {
   assert.equal(dateOnly("microsoft_todo"), false);
 });
 
-test("a form needs a title and a date", () => {
+test("a form needs a title, a date is optional, and a time needs a date", () => {
   const form: TaskForm = { title: "Call Sam", notes: "", accountId: "a", date: "2026-11-03", time: "", priority: 0 };
   assert.equal(taskProblem(form), null);
-  assert.equal(taskProblem({ ...form, date: "" })?.field, "date");
+  assert.equal(taskProblem({ ...form, date: "" }), null);
   assert.equal(taskProblem({ ...form, title: "  " })?.field, "title");
   assert.equal(taskProblem({ ...form, date: "", time: "09:30" })?.field, "date");
   assert.equal(taskProblem({ ...form, title: "x".repeat(MAX_TASK_TITLE + 1) })?.field, "title");
+});
+
+test("a task with no date is stored without one, and listed under No Date until it is done", () => {
+  const form: TaskForm = { title: "Call Sam", notes: "", accountId: "a", date: "", time: "", priority: 0 };
+  assert.deepEqual(taskWriteFields(form, "microsoft_todo"), { title: "Call Sam", notes: null, due_at: null, due_all_day: true, priority: null });
+  const open = task("open", { title: "b open", dueAt: null });
+  const done = task("done", { title: "done", dueAt: null, completed: true });
+  const ticking = task("ticking", { title: "a ticking", dueAt: null, completed: true, pending: true });
+  const dated = task("dated");
+  assert.deepEqual(undatedTasks([open, done, ticking, dated], "").map((t) => t.id), ["ticking", "open"]);
+  assert.deepEqual(undatedTasks([open, ticking], "open").map((t) => t.id), ["open"]);
+  assert.equal(taskWhen({ task: open, overdue: false, timed: false }, () => "09:00"), "No Date");
+  assert.deepEqual(ids([...(tasksByDay([open], ["2026-10-26"], now).get("2026-10-26") ?? [])]), []);
 });
 
 test("a task fills the form it is edited in, and the form knows when nothing changed", () => {

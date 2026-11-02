@@ -15,6 +15,8 @@ import { useOnboardingMeta } from "@/lib/onboarding";
 import { useMyTeam } from "@/lib/share";
 import { attentionCount } from "@/lib/summary";
 import { useNow } from "@/components/summary/use-now";
+import { PwaBoot } from "@/components/pwa-boot";
+import { NoteCaptureShortcut } from "@/components/note-capture";
 import { SyncBar } from "@/components/sync-bar";
 import { UsageRing } from "@/components/usage-ring";
 import { Button } from "@/components/ui/button";
@@ -230,11 +232,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         Skip to Content
       </a>
+      <PwaBoot />
+      <NoteCaptureShortcut />
       <Rail searchOpen={searchOpen} onSearch={() => { setWantSearch(true); setSearchOpen(true); }} />
       {searchReady && <SearchCommand open={searchOpen} onOpenChange={setSearchOpen} />}
       {searchReady && <ShortcutsDialog />}
       <main id="content" tabIndex={-1} className={cn("flex h-full min-w-0 flex-1 flex-col outline-none", !isDetail && "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0")}>
         <SyncBar />
+        {/* Phones have no rail, so the palette opens from a bar at the top of every list page (the same palette as Cmd-K). */}
+        {!isDetail && (
+          <div className="shrink-0 border-b px-3 py-2 md:hidden">
+            <Button variant="outline" className="w-full justify-start gap-2 font-normal text-muted-foreground" onClick={() => { setWantSearch(true); setSearchOpen(true); }}>
+              <Search aria-hidden />
+              Search Everything
+            </Button>
+          </div>
+        )}
         <div className="min-h-0 flex-1">{children}</div>
       </main>
       <BottomBar hidden={isDetail} />

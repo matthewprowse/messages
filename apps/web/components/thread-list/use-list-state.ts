@@ -21,8 +21,10 @@ export function useListState() {
   useEffect(() => {
     if (filter !== "none") track("feature_used", { feature: "conversation_filter", detail: filter });
   }, [filter]);
+  // The label filtering the list, by id; one that no longer exists is simply matched by nothing, so it is ignored by the list.
+  const label = params.get("label") ?? undefined;
   // A message jumped to from search belongs to one conversation, so it is not carried into list links.
   const query = new URLSearchParams(params);
   query.delete("message");
-  return { view, filter, query: query.toString() };
+  return { view, filter, label, query: query.toString() };
 }

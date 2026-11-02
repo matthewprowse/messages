@@ -8,15 +8,17 @@ import { markSubmitted } from "@/lib/analytics";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { updateContact, type ContactDetail } from "@/lib/contacts";
+import { MAX_ABOUT, setContactAbout } from "@/lib/contact-relations-io";
 import { useApp } from "@/lib/store";
 import { formatPhone } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { ContactFields, useContactFields } from "@/components/contact-list";
 
-/** Edit Contact: their name, company, role and relationship, and their email addresses and phone numbers. */
+/** Edit Contact: their name, company, role, relationship and About note, and their email addresses and phone numbers. */
 export function EditContactDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -43,6 +45,7 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
   const [tried, setTried] = useState(false);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<{ text: string; existingId?: string } | null>(null);
+  const [about, setAbout] = useState(contact.aboutNote ?? "");
   const fields = useContactFields(
     { name: contact.name, company: contact.company ?? "", role: contact.role ?? "", relationship: contact.relationship ?? "" },
     () => setFailure(null),
@@ -62,11 +65,18 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
       addPhones: fields.phoneValues.filter((p): p is string => !!p),
       remove: removed,
     });
-    setSaving(false);
     if (!result.ok) {
+      setSaving(false);
       setFailure({ text: result.error, existingId: result.existingId });
       return;
     }
+    // The note is sealed and saved on its own, since update_contact does not take it.
+    if (about.trim() !== (contact.aboutNote ?? "").trim() && !(await setContactAbout(contact.id, about))) {
+      setSaving(false);
+      setFailure({ text: "Your changes were saved, but the About note was not. Try saving again." });
+      return;
+    }
+    setSaving(false);
     markSubmitted("edit_contact");
     onDone();
     // Reloads this contact page and their name everywhere else in the app.
@@ -105,6 +115,11 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
           )
         }
       />
+      <div className="grid gap-2">
+        <Label htmlFor="edit-contact-about">About</Label>
+        <Textarea id="edit-contact-about" value={about} onChange={(e) => { setAbout(e.target.value); setFailure(null); }} maxLength={MAX_ABOUT} rows={3} disabled={saving} placeholder="Optional" />
+        <p className="text-xs text-muted-foreground">Only you see this. It is used when Konva writes to them, for example how they like to be addressed.</p>
+      </div>
       {failure && <p role="alert" className="text-sm text-destructive">{failure.text}</p>}
       <div className={DIALOG_BUTTONS}>
         <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>

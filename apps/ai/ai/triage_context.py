@@ -42,6 +42,7 @@ class ContextMixin:
             for f in feedback
         ]
         return UserContext(
+            vip_contacts=self._vip_contacts(user_id),
             name=profile.get("display_name") or "",
             own_addresses=sorted({a for a in ((self.vault.open(user_id, ADDRESS, r.get("address")) or "").lower() for r in accounts) if "@" in a}),
             about=self.vault.open(user_id, PROFILE_ABOUT, profile.get("about")) or "",  # sealed or plain
@@ -54,6 +55,15 @@ class ContextMixin:
             timezone=profile.get("timezone") or "",
             language=profile.get("language") or "",
         )
+
+    def _vip_contacts(self, user_id: str) -> set[str]:
+        """Ids of the contacts the user starred. Without the contacts.vip migration, or when the read fails,
+        nobody is a VIP and triage runs as before."""
+        try:
+            return {r["id"] for r in self.db.select("contacts", {"select": "id", "user_id": f"eq.{user_id}", "vip": "eq.true"})}
+        except Exception as err:
+            log.warn("vip contacts not read", code=log.code_of(err))
+            return set()
 
     def _latest(self, batch: list[dict[str, Any]]) -> dict[str, tuple[bool, bool]]:
         """For each message: (latest incoming in its conversation, conversation waiting on them). One read
