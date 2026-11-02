@@ -37,6 +37,12 @@ export function outgoingMessages(body: string, files: WhatsAppFile[]): AnyMessag
   return text && captioned < 0 ? [{ text }, ...messages] : messages;
 }
 
+/** The words a part shows, which decides how long "typing" lasts. A file with no caption has none. */
+export function partText(part: AnyMessageContent): string {
+  const p = part as { text?: string; caption?: string };
+  return p.text ?? p.caption ?? "";
+}
+
 /**
  * The number a new chat goes to: exactly one recipient, in E.164 (+ then 7 to 15 digits, no leading 0).
  * Returns its digits, or null when the row does not name one valid number.

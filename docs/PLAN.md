@@ -905,6 +905,23 @@ Transcripts come from the platform when transcription was on. When there is only
 audio), the AI worker transcribes it with Gemini, the way it does WhatsApp voice notes. Attendees are
 matched to contacts by email address. The transcript, summary and action items are encrypted per user.
 
+### WhatsApp Safety And History
+
+Decided 2 November 2026 (Wave 6). WhatsApp stays on Baileys; the official WhatsApp API is not built.
+
+- **Send rails.** Each account sends one message at a time, a jittered gap apart (6 s plus up to 6 s), with "typing" shown for a realistic time
+  first (about 45 ms a character, 1.2 to 8 s) and 2 to 4 s between the parts of one message. A cap of 300 messages in any 24 hours, and a stricter
+  20 to people the account has never chatted with (a new chat, or a conversation where they have not written). All set by environment variables
+  (`WHATSAPP_DAILY_CAP`, `WHATSAPP_NEW_CHAT_CAP`, `WHATSAPP_MIN_GAP_SECONDS`, and so on; `apps/worker/.env.example`). A message over a limit does
+  not fail: it stays queued, `outbox.wait_reason` says why and `send_after` moves to when the limit lifts. The app shows "Waiting: Daily WhatsApp
+  Limit" or "Waiting: New Chat Limit" with Cancel.
+- **Edit and delete history.** Before an edit or a deletion replaces a message's text, the text is kept sealed in `message_versions`. The bubble shows
+  "Edited" or "Deleted by Sender", and both open View Original. A message deleted before this change has no original to show.
+- **Business labels.** For a WhatsApp Business account, labels sync one way (WhatsApp to Konva) into Konva labels, with names sealed, and a label on a chat
+  becomes the label on its conversation. Labels on single messages are not shown.
+- **Missed calls and polls.** A missed WhatsApp call is stored as a "Missed Voice Call" or "Missed Video Call" line. A poll shows its options with vote
+  counts, kept as positions per voter on the poll message; votes are read with the poll's own key, which is stored sealed.
+
 ### Social Messaging
 
 Decided 26 October 2026: LinkedIn and Instagram connect through open-source Python libraries, the way
@@ -954,6 +971,29 @@ captured; (2) sending into an existing conversation, document and video uploads,
 stream were not in the captures (marked UNVERIFIED in the code); (3) one live read test with a real session. `queries.py`
 holds LinkedIn's query IDs, which change when it ships a new web build. The Go helper and `apps/linkedin` are deleted in
 the same change that switches the worker's command. Scope is the Go helper only: the worker, web app and packages are TypeScript.
+
+Which LinkedIn helper is live (checked 2 November 2026, for the owner to decide the switch). The Go helper in
+`apps/linkedin` is the live one: the worker starts `apps/linkedin/bin/konva-linkedin` (or `LINKEDIN_HELPER`) per account
+(`apps/worker/src/linkedin/helper.ts`), and the password sign-in only exists there. The Python helper in
+`apps/ai/ai/connectors/linkedin` is the replacement and nothing starts it yet. Nothing is deleted. Left before the
+switch: the password sign-in (`factory.password_login` still answers `unsupported`, and the code and app-approval steps
+were never captured); the UNVERIFIED parts (sending into an existing conversation, document and video uploads, message
+events from the real-time stream); one live read-only test with a real session; then change the worker's command to
+`python3 -m ai linkedin` and delete `apps/linkedin`, its CI step and `linkedin:build` in the same change. If the
+password sign-in cannot be made from a server, the choice is a cookie connect in the web page or keeping the Go helper.
+Reactions, decided 2 November 2026: the worker sends them (`linkedin/reactions.ts`, a `react` helper command with the
+conversation and message URNs, an emoji or an empty one to remove yours) and keeps yours on the message. Neither helper
+has the `react` command yet, so until one does a reaction fails with "Could not send your reaction to LinkedIn."; the
+reaction button is still shown for WhatsApp only.
+
+Instagram webhooks, decided 2 November 2026. Meta calls `/api/meta/webhook` (GET handshake with
+`META_WEBHOOK_VERIFY_TOKEN`; POST checked against `X-Hub-Signature-256` with `INSTAGRAM_APP_SECRET`). A valid event
+writes a content free row to `meta_webhook_hints` (the account's Meta ID and the kind of event, never a sender,
+conversation or text), the Instagram connector takes it within about five seconds and reads that inbox, and the full
+poll slows to a safety net of 15 minutes (`INSTAGRAM_WEBHOOKS` on in `apps/ai/.env`). With it off, nothing changes: the
+minute poll runs. Replies follow `window.py`: within 24 hours of their last message as before; up to 7 days with the
+HUMAN_AGENT tag when `INSTAGRAM_HUMAN_AGENT` is on (and `NEXT_PUBLIC_INSTAGRAM_HUMAN_AGENT` in the web app), which
+needs Meta's Human Agent feature approved in App Review; otherwise the composer shows "Reply Window Closed".
 
 Proxies, decided 27 October 2026: none at launch. A user's own code or app approval gets the sign-in
 through from any IP; the risk is later, when a session used from a data centre is checked again or
@@ -2526,6 +2566,29 @@ Claude writes most of the code, so building the MVP list is about a month. What 
 testing on real accounts, refining from feedback and waiting on the approvals above. Build time is
 about 2 hours each weekday morning, 2 hours each evening and full days on weekends.
 
+## Push Based Mail Sync (2 November 2026)
+
+Mail is no longer polled every few seconds. Built, not yet switched on: it needs the owner actions below.
+
+- **Gmail.** `users.watch` publishes to a Cloud Pub/Sub topic; the worker reads a PULL subscription (outbound only, so
+  no public endpoint and fine inside Confidential Space) and wakes the connector for that mailbox, which reads
+  `history.list` from its own stored `historyId`. A notification is only a hint: one no later than the stored cursor
+  is ignored. The watch is renewed daily. Several shards can share a subscription: a message for a mailbox another
+  shard owns is released back at once. Env: `GMAIL_PUBSUB_TOPIC`, `GMAIL_PUBSUB_SUBSCRIPTION`.
+- **Outlook.** Graph change notifications post to `apps/web/app/api/graph/notify`, which answers the validation
+  handshake and checks a signed `clientState` (account id plus HMAC under `GRAPH_NOTIFY_SECRET`), then upserts one row
+  per account into `mail_hints` (no content). The worker hears it through Realtime, debounces a burst (first hint at
+  once, the rest as one trailing sync), and syncs every folder. The worker creates the subscription and renews it when
+  under 48 hours remain (mail subscriptions last under 3 days). Env: `GRAPH_NOTIFICATION_URL`, `GRAPH_NOTIFY_SECRET`.
+- **IMAP.** Each account already holds one IDLE connection. Its housekeeping tick moves from 1 minute to 5
+  (`IMAP_POLL_MS`) when the server has IDLE, and stays at 1 minute without it. Slower jobs keep their wall-clock spacing.
+- **Fallback.** Without push configured, Gmail and Outlook are checked every 5 minutes (`MAIL_SLOW_POLL_MS`). With push
+  configured but failing for an account (watch or subscription refused), that account keeps the old activity based
+  cadence, so a broken setup never makes mail slower than before. Every interval is an env setting.
+- **Heartbeats.** The 15 minute per account heartbeat now writes `account_heartbeats`, which is not published to
+  Realtime, instead of `accounts.last_synced_at`. A status change still writes `last_synced_at`. The web app should
+  read `account_heartbeats` on demand for the Last Synced line.
+
 ## Reply Box AI Controls (29 October 2026)
 
 ### Decided and Built
@@ -2664,6 +2727,36 @@ after that. Automations are built so either can be added as one more "When" chan
 - The web app gets Settings, Automations: a gallery of template cards like the account cards, a builder for When,
   Read and Do, and the run history. Contacts gets a Leads filter.
 - Effort: templates and the engine M, the custom builder M.
+
+**Status: built in Wave 6, email only, not yet tested on real enquiry emails (2 November 2026).**
+
+- `automations`, `automation_runs` and `automation_previews` (migration `20261120110000_automations.sql`, written, not applied).
+  The name, conditions, fields and actions are one sealed JSON (`automations.spec`); a run has the sealed fields it read,
+  the contact, an error code and `effects` (ids only) so Undo can reverse exactly what it did. A message runs an
+  automation once (unique on automation and message). Only mail that arrives after an automation is turned on, and is
+  under three days old, is run.
+- The engine is `apps/ai/ai/automations/`, called once from `Triage._triage_once` after the triage rows are saved. Read:
+  the template's fixed parser, then Gemini only when there is no parser (Custom) or it failed, and only for an email
+  that holds an address or number other than the user's. Gemini is filed under the new `automations` feature (3% share,
+  weekly limit, taken from the largest share by the migration; Admin can change it) with a cap of 30 reads a person a
+  day. Answers are checked: an address or number the email never contained is dropped.
+- Do: find the contact by email and +27 number or make them, mark them a Lead (`contacts.relationship` is "Lead" only
+  when empty, so a Client stays a Client) with `contacts.lead_source`, put the conversation on their timeline
+  (`thread_participants`), queue a task through `task_updates`, queue a pending draft the normal draft loop writes in the
+  user's voice with `drafts.reply_to` set to the lead's own address, and make the conversation urgent so the existing push
+  sender sends its content-free text. Nothing is ever sent.
+- Templates: Property24 Enquiry and Private Property Enquiry, with parsers built from constructed fixtures in the publicly
+  known layout. **They must be tested against real enquiry emails (read only) before anyone turns them on.**
+- Preview: turning one on asks the AI worker (`automation_previews`) to read the last 30 days with the same When and parser
+  and shows "In the last 30 days this would have made N leads" with the list. Custom automations only count matching
+  emails, since reading them would cost AI usage.
+- Undo runs in the browser from the ids a run recorded: it removes the draft and task and the urgent mark, and deletes the
+  contact only when the run made them and nothing else has happened to them.
+- Web: Settings, Automations (template rows, Custom builder, run history with Undo); a contact shows its Lead Source; the
+  Contacts Relationship filter lists Lead once anyone is one.
+- Not done: the reply box must offer `drafts.reply_to` as the recipient (it still replies to the conversation's sender, the
+  portal), so a draft for a portal lead must be addressed by hand until it does; a lead's listing is not attached to their
+  timeline beyond the linked conversation; WhatsApp replies; SMS and the forwarding address (above).
 
 ### Build Order
 

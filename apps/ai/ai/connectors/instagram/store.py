@@ -423,6 +423,24 @@ class Store:
     def address(self, user_id: str, value: str | None) -> str:
         return self.vault.open(user_id, ADDRESS, value) or ""
 
+    # -- webhook hints ----------------------------------------------------------------------------------
+
+    def take_hints(self, ig_user_id: str) -> list[dict[str, Any]]:
+        """The webhook hints waiting for this Instagram account (oldest first), deleted as they are taken: a hint
+        is only a nudge to read the inbox, so one that is lost costs a slower read, never a message."""
+        rows = self.db.select(
+            "meta_webhook_hints",
+            {"select": "id,kind", "provider": "eq.instagram", "ig_user_id": f"eq.{ig_user_id}", "consumed_at": "is.null", "order": "id", "limit": "100"},
+        )
+        if rows:
+            self.db.delete("meta_webhook_hints", {"id": "in.(" + ",".join(str(int(r["id"])) for r in rows) + ")"})
+        return rows
+
+    def prune_hints(self) -> None:
+        """Drops hints more than a day old: the ones of an account that was paused and never took them."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        self.db.delete("meta_webhook_hints", {"created_at": f"lt.{cutoff}"})
+
     # -- actions ----------------------------------------------------------------------------------------
 
     def queued_actions(self, account_id: str) -> list[dict[str, Any]]:

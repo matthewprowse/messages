@@ -1,7 +1,9 @@
 // Outlook and Microsoft 365 mail through Microsoft Graph. Each folder's delta query says what changed
-// since the last check, which keeps new mail within seconds in use (the Inbox every 5 s while the mailbox is
-// active, backing off to 60 s when quiet; polling.ts) without Graph's push subscriptions (those
-// need a public web address). Messages are fetched as MIME, so they are parsed and stored exactly like
+// since the last check. With GRAPH_NOTIFICATION_URL and GRAPH_NOTIFY_SECRET set, a Graph change subscription (created
+// and renewed here) posts to the web app's public route, which writes a row to mail_hints; the worker hears it
+// (runtime/mail-hints.ts) and runs the delta now, with a slow check (every 5 minutes) as the safety net. Without them
+// only the slow check runs. If they are set but the subscription cannot be made, the old cadence returns (the Inbox
+// every 5 s while the mailbox is active, backing off to 60 s when quiet; polling.ts). Messages are fetched as MIME, so they are parsed and stored exactly like
 // iCloud and Gmail mail, and Outlook's conversation ID groups the thread. Read, unread, archive, delete
 // and junk in the app move or flag the mail in Outlook (delete moves it to Deleted Items, never deletes it
 // for good). Replies go out through Graph from your Outlook address; Outlook files them in Sent Items.
@@ -11,6 +13,10 @@ import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { Json, Tables } from "@messages/db";
 import { Backoff, SerialQueue, Sleeper, sleep, supervise } from "../backoff";
 import { accountActivity, OUTLOOK_POLL, OUTLOOK_SIDE_POLL } from "../polling";
+import { mailPollDelay, type PushState } from "../runtime/mail-poll";
+import { onMailHint } from "../runtime/mail-hints";
+import { formatSubscription, parseSubscription, renewalDue, type SavedSubscription } from "../microsoft/graph-notify";
+import { ensureMailSubscription } from "../microsoft/subscriptions";
 import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -41,6 +47,8 @@ import {
   type OutlookFolder,
 } from "../microsoft/outlook-place";
 
+const SUBSCRIPTION_SCOPE = "graph_sub"; // sync_state scope holding the subscription id and expiry
+const SUBSCRIPTION_RETRY_MS = 5 * 60_000; // a failed subscription is tried again no sooner than this
 const MAX_FAILED_CHECKS = 12; // about a minute of checks failing in a row
 const DELTAS_AT_ONCE = 3; // folders whose delta is read together
 const WRITE_AT_ONCE = 6; // row updates in flight together when many messages change at once
@@ -113,6 +121,11 @@ export class OutlookConnector {
   private readonly deltaLinks = new Map<OutlookFolder, string>();
   /** Attachment rows with no stored file yet, a page per catch-up. */
   private readonly missingFiles: MissingFiles;
+  /** Whether Graph push is off, working or failing for this session; it picks the check cadence (runtime/mail-poll.ts). */
+  private pushState: PushState = "off";
+  private subscription: SavedSubscription | null = null;
+  /** Set by a hint from the web app: one that lands during a check must not be lost, as an interrupt would be. */
+  private hinted = false;
 
   constructor(private readonly account: AccountRow) {
     this.missingFiles = new MissingFiles(account.id, FILES_AT_ONCE);
@@ -164,6 +177,9 @@ export class OutlookConnector {
     this.client = client;
     this.canSend = creds.scopes.includes(SEND_SCOPE);
     this.queue.reset();
+    this.pushState = "off";
+    this.subscription = null;
+    this.hinted = false;
 
     const [me, archive] = await Promise.all([
       client.request<{ mail?: string | null; userPrincipalName?: string | null; proxyAddresses?: string[] }>("/me", {
@@ -210,16 +226,33 @@ export class OutlookConnector {
     let lastTouch = Date.now();
     let failures = 0;
     let lastSide = Date.now();
+    let lastSubTry = 0;
+    const pushUrl = process.env.GRAPH_NOTIFICATION_URL?.trim();
+    const pushSecret = process.env.GRAPH_NOTIFY_SECRET?.trim();
+    const pushOn = !!pushUrl && !!pushSecret;
     accountActivity.mark(this.id); // a new session starts with quick checks
     // Work the app does for this account (a send, an action) ends an idle wait early.
     const wakeOnActivity = accountActivity.onMark(this.id, () => this.sleeper.interrupt());
+    // Push: a hint for this account (a change notification Graph sent the web app) wakes the check at once.
+    const unhint = pushOn ? onMailHint(this.id, () => { this.hinted = true; this.sleeper.interrupt(); }) : () => undefined;
     try {
       while (!this.stopped) {
-        // The Inbox every 5 s while this mailbox is active, backing off to 30 s then 60 s; the other folders
-        // every 20 s, 2 minutes, then 5 minutes (polling.ts). A failed check retries quickly.
-        await this.sleeper.wait(failures > 0 ? OUTLOOK_POLL.activeMs : accountActivity.delay(this.id, OUTLOOK_POLL));
+        if (pushOn && renewalDue(this.subscription, Date.now()) && Date.now() - lastSubTry >= SUBSCRIPTION_RETRY_MS) {
+          lastSubTry = Date.now();
+          await this.keepSubscription(pushUrl, pushSecret);
+        }
+        // Push on or off: the slow check (5 minutes). Push configured but failing: the Inbox every 5 s while this
+        // mailbox is active, backing off to 30 s then 60 s (polling.ts). A failed check retries quickly, and a hint
+        // skips the wait.
+        const hinted = this.hinted;
+        if (!hinted) {
+          await this.sleeper.wait(failures > 0 ? OUTLOOK_POLL.activeMs : mailPollDelay(this.pushState, OUTLOOK_POLL, accountActivity.since(this.id), Date.now()));
+        }
+        this.hinted = false;
         if (this.stopped) break;
-        const allDue = Date.now() - lastSide >= accountActivity.delay(this.id, OUTLOOK_SIDE_POLL);
+        // The other folders follow their own slower cadence (20 s, 2 minutes, 5 minutes), but a hint means something
+        // changed somewhere in the mailbox, so everything is read.
+        const allDue = hinted || Date.now() - lastSide >= accountActivity.delay(this.id, OUTLOOK_SIDE_POLL);
         if (allDue) lastSide = Date.now();
         const folders: OutlookFolder[] = allDue ? this.folders() : ["inbox"];
         // One failed check (Graph throttling, a database hiccup) is retried at the next one rather than
@@ -245,6 +278,28 @@ export class OutlookConnector {
       }
     } finally {
       wakeOnActivity();
+      unhint();
+    }
+  }
+
+  /**
+   * Creates or renews this mailbox's Graph subscription. A failure only means the old cadence returns; it never ends
+   * the session. A subscription made now sets a hint, so mail that arrived before it existed is read once.
+   */
+  private async keepSubscription(url: string, secret: string) {
+    try {
+      this.subscription ??= parseSubscription((await getSyncState(this.id, SUBSCRIPTION_SCOPE))?.sync_token);
+      const { sub, changed } = await ensureMailSubscription(this.need(), { accountId: this.id, url, secret, saved: this.subscription });
+      this.subscription = sub;
+      this.pushState = "healthy";
+      if (changed) {
+        await saveSyncState(this.id, SUBSCRIPTION_SCOPE, { sync_token: formatSubscription(sub) });
+        this.hinted = true;
+      }
+    } catch (err) {
+      if (signInRevoked(err)) throw err;
+      this.pushState = "failing";
+      log.warn("outlook subscription failed", { account: this.id, code: errorCode(err) });
     }
   }
 

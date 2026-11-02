@@ -73,6 +73,8 @@ export interface PendingSend {
   fileCount?: number;
   /** When the worker may send it: the end of the Undo window, or the time chosen with Send Later. */
   sendAfter?: string;
+  /** A WhatsApp send limit holding it back: it stays queued and goes by itself when the limit lifts. */
+  waitReason?: "daily_limit" | "new_chat_limit";
 }
 
 /**

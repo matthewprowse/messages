@@ -53,7 +53,7 @@ export function failureCode(reason: string): string {
 export async function setAccountStatus(accountId: string, status: AccountStatus, detail: string | null = null) {
   const before = await db.from("accounts").select("user_id, provider, status, status_detail, created_at, last_synced_at").eq("id", accountId).maybeSingle();
   // Nothing changed: the same status and detail is not written again (a write is a realtime event to every open browser).
-  if (before.data && before.data.status === status && (before.data.status_detail ?? null) === detail && !(status === "connected" && heartbeat.due(accountId))) return;
+  if (before.data && before.data.status === status && (before.data.status_detail ?? null) === detail) return;
   const patch: Database["public"]["Tables"]["accounts"]["Update"] = { status, status_detail: detail };
   if (status === "connected") patch.last_synced_at = new Date().toISOString();
   try {
@@ -129,16 +129,16 @@ export async function allRows<T>(
 const heartbeat = new HeartbeatGate();
 
 /**
- * Records that an account is still syncing, for the "Last synced" line in the app. accounts is published
- * to Realtime, so every write reaches every open browser: it is made at most once per ACCOUNT_HEARTBEAT_MS
- * (15 minutes) per account. A status change (setAccountStatus) writes the time itself. Never throws.
+ * Records that an account is still syncing, in account_heartbeats. That table is not published to Realtime: the
+ * same write to accounts reached every open browser, every 15 minutes for every account. It is made at most once
+ * per ACCOUNT_HEARTBEAT_MS per account. A status change (setAccountStatus) still writes accounts.last_synced_at
+ * itself. Never throws.
  */
 export async function touchAccount(accountId: string) {
   if (!heartbeat.due(accountId)) return;
   await db
-    .from("accounts")
-    .update({ last_synced_at: new Date().toISOString() })
-    .eq("id", accountId)
+    .from("account_heartbeats")
+    .upsert({ account_id: accountId, synced_at: new Date().toISOString() }, { onConflict: "account_id" })
     .then((result) => { if (result.error) heartbeat.forget(accountId); }, () => heartbeat.forget(accountId));
 }
 

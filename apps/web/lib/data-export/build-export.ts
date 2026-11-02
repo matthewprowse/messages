@@ -28,6 +28,8 @@ export interface ExportSource {
   tasks(): Promise<unknown[]>;
   /** Promises found in conversations; a source without them leaves the file out. */
   commitments?(): Promise<unknown[]>;
+  /** Automations and their run history; a source without them leaves the file out. */
+  automations?(): Promise<unknown[]>;
   events(): Promise<(ExportEvent & { calendar?: string | null })[]>;
   settings(): Promise<Record<string, unknown>>;
   /** Stored files, only asked for when attachments are chosen. */
@@ -116,6 +118,7 @@ export async function buildExport(source: ExportSource, options: { attachments: 
   const tasks = await note("Tasks", () => source.tasks(), [] as unknown[]);
   zip.add("tasks/tasks.json", JSON.stringify(tasks, null, 2));
   if (source.commitments) zip.add("tasks/promises.json", JSON.stringify(await note("Promises", () => source.commitments!(), [] as unknown[]), null, 2));
+  if (source.automations) zip.add("tasks/automations.json", JSON.stringify(await note("Automations", () => source.automations!(), [] as unknown[]), null, 2));
   const events = await note("Calendar", () => source.events(), [] as (ExportEvent & { calendar?: string | null })[]);
   zip.add("calendar/events.ics", icsCalendar(events, now));
   zip.add("calendar/events.json", JSON.stringify(events, null, 2));

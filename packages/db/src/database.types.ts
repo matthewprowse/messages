@@ -20,6 +20,29 @@ export type Database = {
         Update: { user_id?: string; requested_at?: string; run_after?: string; status?: string; attempts?: number; error_code?: string | null; started_at?: string | null; updated_at?: string }
         Relationships: []
       }
+      account_heartbeats: {
+        Row: {
+          account_id: string
+          synced_at: string
+        }
+        Insert: {
+          account_id: string
+          synced_at?: string
+        }
+        Update: {
+          account_id?: string
+          synced_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_heartbeats_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: true
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       account_removals: {
         Row: { id: string; user_id: string; account_id: string; status: string; attempts: number; error_code: string | null; created_at: string; updated_at: string }
         Insert: { id?: string; user_id: string; account_id: string; status?: string; attempts?: number; error_code?: string | null; created_at?: string; updated_at?: string }
@@ -573,6 +596,149 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      automation_previews: {
+        Row: {
+          claimed_at: string | null
+          created_at: string
+          error: string | null
+          id: string
+          result: string | null
+          spec: string
+          status: string
+          template_key: string | null
+          user_id: string
+        }
+        Insert: {
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          id?: string
+          result?: string | null
+          spec: string
+          status?: string
+          template_key?: string | null
+          user_id?: string
+        }
+        Update: {
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          id?: string
+          result?: string | null
+          spec?: string
+          status?: string
+          template_key?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      automation_runs: {
+        Row: {
+          automation_id: string
+          contact_id: string | null
+          created_at: string
+          effects: Json
+          error: string | null
+          fields: string | null
+          id: string
+          message_id: string
+          read_by: string | null
+          status: string
+          thread_id: string | null
+          user_id: string
+        }
+        Insert: {
+          automation_id: string
+          contact_id?: string | null
+          created_at?: string
+          effects?: Json
+          error?: string | null
+          fields?: string | null
+          id?: string
+          message_id: string
+          read_by?: string | null
+          status?: string
+          thread_id?: string | null
+          user_id?: string
+        }
+        Update: {
+          automation_id?: string
+          contact_id?: string | null
+          created_at?: string
+          effects?: Json
+          error?: string | null
+          fields?: string | null
+          id?: string
+          message_id?: string
+          read_by?: string | null
+          status?: string
+          thread_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "automation_runs_automation_id_fkey"
+            columns: ["automation_id"]
+            isOneToOne: false
+            referencedRelation: "automations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "automation_runs_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "automation_runs_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "automation_runs_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      automations: {
+        Row: {
+          created_at: string
+          enabled: boolean
+          enabled_at: string | null
+          id: string
+          spec: string
+          template_key: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          enabled?: boolean
+          enabled_at?: string | null
+          id?: string
+          spec: string
+          template_key?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Update: {
+          created_at?: string
+          enabled?: boolean
+          enabled_at?: string | null
+          id?: string
+          spec?: string
+          template_key?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       brief_parts: {
         Row: {
@@ -1385,6 +1551,7 @@ export type Database = {
           updated_at: string
           user_id: string
           vip: boolean
+          lead_source: string | null
         }
         Insert: {
           about_note?: string | null
@@ -1407,6 +1574,7 @@ export type Database = {
           updated_at?: string
           user_id: string
           vip?: boolean
+          lead_source?: string | null
         }
         Update: {
           about_note?: string | null
@@ -1429,6 +1597,7 @@ export type Database = {
           updated_at?: string
           user_id?: string
           vip?: boolean
+          lead_source?: string | null
         }
         Relationships: [
           {
@@ -1557,6 +1726,7 @@ export type Database = {
           feedback_at: string | null
           feedback_reason: string | null
           report: string | null
+          reply_to: string | null
         }
         Insert: {
           account_id?: string | null
@@ -1584,6 +1754,7 @@ export type Database = {
           feedback_at?: string | null
           feedback_reason?: string | null
           report?: string | null
+          reply_to?: string | null
         }
         Update: {
           account_id?: string | null
@@ -1611,6 +1782,7 @@ export type Database = {
           feedback_at?: string | null
           feedback_reason?: string | null
           report?: string | null
+          reply_to?: string | null
         }
         Relationships: [
           {
@@ -1840,6 +2012,8 @@ export type Database = {
           user_id: string
           auto: boolean
           auto_description: string | null
+          wa_account_id: string | null
+          wa_label_id: string | null
         }
         Insert: {
           color?: string
@@ -1849,6 +2023,8 @@ export type Database = {
           user_id?: string
           auto?: boolean
           auto_description?: string | null
+          wa_account_id?: string | null
+          wa_label_id?: string | null
         }
         Update: {
           color?: string
@@ -1858,6 +2034,8 @@ export type Database = {
           user_id?: string
           auto?: boolean
           auto_description?: string | null
+          wa_account_id?: string | null
+          wa_label_id?: string | null
         }
         Relationships: []
       }
@@ -1914,6 +2092,29 @@ export type Database = {
             columns: ["thread_id"]
             isOneToOne: false
             referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mail_hints: {
+        Row: {
+          account_id: string
+          hinted_at: string
+        }
+        Insert: {
+          account_id: string
+          hinted_at?: string
+        }
+        Update: {
+          account_id?: string
+          hinted_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_hints_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: true
+            referencedRelation: "accounts"
             referencedColumns: ["id"]
           },
         ]
@@ -2143,6 +2344,68 @@ export type Database = {
             foreignKeyName: "message_embeddings_message_id_fkey"
             columns: ["message_id"]
             isOneToOne: true
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      meta_webhook_hints: {
+        Row: {
+          consumed_at: string | null
+          created_at: string
+          id: number
+          ig_user_id: string
+          kind: string
+          provider: string
+        }
+        Insert: {
+          consumed_at?: string | null
+          created_at?: string
+          id?: number
+          ig_user_id: string
+          kind?: string
+          provider?: string
+        }
+        Update: {
+          consumed_at?: string | null
+          created_at?: string
+          id?: number
+          ig_user_id?: string
+          kind?: string
+          provider?: string
+        }
+        Relationships: []
+      }
+      message_versions: {
+        Row: {
+          body_text: string | null
+          created_at: string
+          id: string
+          message_id: string
+          reason: string
+          user_id: string
+        }
+        Insert: {
+          body_text?: string | null
+          created_at?: string
+          id?: string
+          message_id: string
+          reason: string
+          user_id: string
+        }
+        Update: {
+          body_text?: string | null
+          created_at?: string
+          id?: string
+          message_id?: string
+          reason?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_versions_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
             referencedRelation: "messages"
             referencedColumns: ["id"]
           },
@@ -2488,6 +2751,8 @@ export type Database = {
           thread_id: string | null
           to_addresses: string[]
           user_id: string
+          wait_reason: string | null
+          cold_chat: boolean
         }
         Insert: {
           account_id?: string | null
@@ -2510,6 +2775,8 @@ export type Database = {
           thread_id?: string | null
           to_addresses?: string[]
           user_id?: string
+          wait_reason?: string | null
+          cold_chat?: boolean
         }
         Update: {
           account_id?: string | null
@@ -2532,6 +2799,8 @@ export type Database = {
           thread_id?: string | null
           to_addresses?: string[]
           user_id?: string
+          wait_reason?: string | null
+          cold_chat?: boolean
         }
         Relationships: [
           {
@@ -4928,6 +5197,34 @@ export type Database = {
           p_account_id: string
           p_provider_message_id: string
           p_status: string
+        }
+        Returns: boolean
+      }
+      whatsapp_label: {
+        Args: {
+          p_account_id: string
+          p_color: string
+          p_deleted?: boolean
+          p_name: string
+          p_wa_label_id: string
+        }
+        Returns: string
+      }
+      whatsapp_label_chat: {
+        Args: {
+          p_account_id: string
+          p_add: boolean
+          p_chat_indexes: string[]
+          p_wa_label_id: string
+        }
+        Returns: boolean
+      }
+      whatsapp_poll_vote: {
+        Args: {
+          p_account_id: string
+          p_provider_message_id: string
+          p_selected: number[]
+          p_voter: string
         }
         Returns: boolean
       }

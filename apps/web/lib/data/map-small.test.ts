@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { EMPTY_PROFILE, mapAccount, mapDraft, mapProfile, profilePatch } from "./map-small";
+import { EMPTY_PROFILE, latestSync, mapAccount, mapDraft, mapProfile, profilePatch } from "./map-small";
 import type { ProfileRow } from "./columns";
 
 test("a missing profile row is the empty profile", () => {
@@ -34,4 +34,16 @@ test("an account without send addresses gets an empty list", () => {
   const a = mapAccount({ id: "1", provider: "gmail", label: "L", nickname: null, address: "a@b.c", status: "connected", status_detail: null, last_synced_at: null, send_addresses: null } as never);
   assert.deepEqual(a.sendAddresses, []);
   assert.equal(a.detail, "a@b.c");
+});
+
+test("the last sync is the newer of the account's own time and the worker's heartbeat", () => {
+  assert.equal(latestSync({ last_synced_at: "2026-11-02T10:00:00Z", account_heartbeats: { synced_at: "2026-11-02T12:00:00Z" } }), "2026-11-02T12:00:00Z");
+  assert.equal(latestSync({ last_synced_at: "2026-11-02T13:00:00Z", account_heartbeats: [{ synced_at: "2026-11-02T12:00:00Z" }] }), "2026-11-02T13:00:00Z");
+  assert.equal(latestSync({ last_synced_at: null, account_heartbeats: null }), undefined);
+});
+
+test("a draft for a portal lead keeps the lead's own address to reply to", () => {
+  const row = { id: "d", body: "", tone: "default", instruction: null, decision: null, decision_kind: null, source: null, auto: false, updated_at: "2026-11-02T10:00:00Z", report: null, audit: null, feedback: null, reply_to: "thandi@example.co.za" };
+  assert.equal(mapDraft(row as never).replyTo, "thandi@example.co.za");
+  assert.equal(mapDraft({ ...row, reply_to: null } as never).replyTo, undefined);
 });

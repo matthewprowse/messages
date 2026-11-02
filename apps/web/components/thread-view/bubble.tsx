@@ -16,6 +16,10 @@ import { MessageBody, hasFullText } from "@/components/message-body";
 import { VoiceNote } from "@/components/media-player";
 import { askVoiceReply } from "@/lib/voice-reply";
 import { ScheduledLine } from "@/components/thread-view/scheduled-line";
+import { CallLine } from "@/components/thread-view/call-line";
+import { DeletedNote, EditedMark } from "@/components/thread-view/message-history";
+import { PollCard } from "@/components/thread-view/poll-card";
+import { WaitingLine } from "@/components/thread-view/waiting-line";
 import { BubbleActions, QuoteBlock, ReactionChips, useTouchReveal, type NameOf, type OnReact } from "@/components/message-extras";
 
 /** The handlers and flags every bubble in the list shares. */
@@ -52,6 +56,8 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
   const showBubble = !!(m.body.trim() || m.quoted || m.quote || !m.attachments?.length);
   // Replies and reactions need a stored message: not one still sending, and not one its sender deleted.
   const actions = !m.sendState && !m.deleted ? <BubbleActions m={m} canReact={whatsapp} revealed={touch.revealed} onReply={onReply} onReact={onReact} expand={expandable ? { open: showFull, toggle: () => setShowFull((v) => !v) } : undefined} /> : null;
+  // A call is a line between messages, not a bubble.
+  if (m.call) return <CallLine m={m} />;
   return (
     <div ref={touch.ref} {...touch.props} data-message-id={m.id} className={cn("group/bubble flex flex-col gap-2", me ? "items-end" : "items-start")}>
       <InviteCard message={m} />
@@ -74,7 +80,7 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
           <div className={cn("min-w-0 rounded-lg p-3 text-sm leading-6 ring-ring/50 transition-shadow duration-500", me ? "rounded-br-[2px] bg-primary text-primary-foreground" : "rounded-bl-[2px] bg-muted", flash && "ring-2")}>
             {m.quote && <QuoteBlock quote={m.quote} me={me} nameOf={nameOf} onJump={quotedId ? () => onJump(quotedId) : undefined} />}
             {/* Email text is always shown as plain text. Sender-supplied HTML never reaches the page. */}
-            {m.deleted ? <p className="opacity-70">{m.body}</p> : <MessageBody m={m} whatsapp={whatsapp} bulk={bulk} showFull={showFull} />}
+            {m.deleted ? <DeletedNote m={m} /> : m.poll ? <PollCard m={m} /> : <MessageBody m={m} whatsapp={whatsapp} bulk={bulk} showFull={showFull} />}
           </div>
           {actions}
         </div>
@@ -90,6 +96,8 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
           {m.sendRecovery === "unsure" && <Button variant="ghost" size="xs" onClick={() => { navigator.clipboard?.writeText(m.body).then(() => toast("Copied")).catch(() => toast("Could not copy")); }}>Copy Text</Button>}
           <Button variant="ghost" size="xs" onClick={() => onDismiss(m)}>Delete</Button>
         </div>
+      ) : m.sendState === "queued" && m.waitReason ? (
+        <WaitingLine m={m} />
       ) : m.sendState === "queued" && m.scheduledFor ? (
         <ScheduledLine m={m} />
       ) : m.sendState ? (
@@ -101,8 +109,8 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
               {sender && showMeta && <ContactAvatar contact={senderContact} className="size-6" />}
               <span className="truncate">
                 {showMeta ? (sender ? `${sender} · ${timeOf(m.sentAt)}` : timeOf(m.sentAt)) : ""}
-                {m.edited ? (showMeta ? " · Edited" : "Edited") : ""}
               </span>
+              {m.edited && <EditedMark m={m} dot={showMeta} />}
               {me && (whatsapp ? m.receipt && <Ticks receipt={m.receipt} /> : seen && <span>Seen</span>)}
             </span>
             {!me && showMeta && <ReactionChips m={m} me={false} nameOf={nameOf} onReact={onReact} inline />}

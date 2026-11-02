@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fileMessage, newChatNumber, outgoingMessages } from "./outgoing";
+import { fileMessage, newChatNumber, outgoingMessages, partText } from "./outgoing";
 
 const file = (contentType: string, filename = "f") => ({ filename, contentType, content: Buffer.from("x") });
 
@@ -63,4 +63,10 @@ test("a new chat names exactly one number in E.164", () => {
   assert.equal(newChatNumber(["+123"]), null);
   assert.equal(newChatNumber(["+27815956488", "+447700900123"]), null);
   assert.equal(newChatNumber([]), null);
+});
+
+test("the words of a part are its text or its caption, and a bare file has none", () => {
+  assert.equal(partText({ text: "Hi" }), "Hi");
+  assert.equal(partText(fileMessage(file("image/png"), "Look")), "Look");
+  assert.equal(partText(fileMessage(file("image/png"))), "");
 });

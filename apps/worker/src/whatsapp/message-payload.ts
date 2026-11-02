@@ -65,6 +65,9 @@ export async function buildPayload(ctx: AccountCtx, p: PayloadInput) {
     ...(d.media && content ? { media: mediaRef(d.media.type, content) } : {}),
     ...(p.unread ? { receipt: "pending" } : {}),
     ...(p.quoted ? { quoted: p.quoted } : {}),
+    ...(d.call ? { call: d.call } : {}),
+    // The vote key is sealed: whoever holds it can read the votes (polls.ts). Sealed as a quote, which is also free text.
+    ...(d.poll ? { poll: { multi: d.poll.multi, ...(d.poll.secret ? { secret: await seal(ctx.userId, FIELD.quote, Buffer.from(d.poll.secret).toString("base64")) } : {}) } } : {}),
     ...(msg.reactions?.length ? await historyReactions(ctx.userId, msg.reactions) : {}),
   };
 

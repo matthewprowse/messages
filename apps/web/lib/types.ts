@@ -103,6 +103,12 @@ export interface Message {
   deleted?: boolean;
   /** A WhatsApp message changed by its sender after it was sent. */
   edited?: boolean;
+  /** A WhatsApp call line (a missed call). Drawn as a line, not a bubble. */
+  call?: { video: boolean; missed: boolean };
+  /** A WhatsApp poll: who voted for which options (positions), by a content-free name. The options are in the body. */
+  poll?: { votes: Record<string, number[]>; multi: boolean };
+  /** A reply held back by a WhatsApp send limit: it goes by itself once the limit lifts. */
+  waitReason?: "daily_limit" | "new_chat_limit";
   /** How far a WhatsApp message you sent has got: WhatsApp's one tick, two ticks, two blue ticks. */
   receipt?: "sent" | "delivered" | "read";
   /** Set on a reply you just sent until the real message arrives from the mail server. */
@@ -131,6 +137,8 @@ export interface Draft {
   audit?: DraftAudit;
   /** Your thumbs up or down on it. */
   feedback?: "up" | "down";
+  /** Who the reply should go to when it is not the sender: a lead from a portal enquiry, whose own address is in the email. */
+  replyTo?: string;
   generatedAt: string;
 }
 

@@ -8,7 +8,8 @@
 // brings new messages as they arrive, so nothing is polled. Replies you queue in the app are sent, and so is the first message of a new conversation; a
 // conversation is marked read on LinkedIn only when you open it in the app; nothing else is ever sent. Photos,
 // videos and documents go with a reply (each as a message of its own, the text with the first). The profile
-// pictures of the people you talk to become their contact photos where they have none (linkedin/avatars.ts).
+// pictures of the people you talk to become their contact photos where they have none (linkedin/avatars.ts). Your
+// emoji reactions are sent too (linkedin/reactions.ts).
 
 import type { Tables } from "@messages/db";
 import { addressIndex, chatIndex } from "@messages/crypto/addresses";
@@ -29,6 +30,7 @@ import { ingestPayload, others, seenByOther, skipConversation, stubConversation,
 import { CODE_TIMED_OUT, NO_COOKIES, NOT_BUILT, PushBack, RECONNECTING, SIGNED_OUT, SIGN_IN_EXPIRED, START_NO_PERSON, checkpointDetail, endsSession, outcomeOf, recipientOf, sendFailure, signInFailure, startFailure, surelyNotSent, type Outcome } from "../linkedin/policy";
 import { waitForReply, type Reply, type SignInStep } from "../linkedin/relay";
 import { readRelay, writeRelay } from "../linkedin/relay-db";
+import { sendReaction } from "../linkedin/react-action";
 
 const SYNC_SCOPE = "conversations"; // sync_state.sync_token: LinkedIn's token for "what changed since"
 const CATCH_UP_CONVERSATIONS = 20; // the conversations imported on the first run, newest first (later runs read every changed one)
@@ -601,13 +603,14 @@ export class LinkedInConnector {
 
   /**
    * A 'read' action means you opened the conversation in the app: only then is LinkedIn told it was read,
-   * and only if it had unread messages. Reactions are not sent; archive, unread and the rest stay in the app.
+   * and only if it had unread messages. A 'react' action sends your reaction (linkedin/reactions.ts); archive, unread and the rest stay in the app.
    */
   async applyAction(row: Tables<"mail_actions">) {
     const helper = this.helper;
     if (!helper || !this.ready) throw new NotReady(); // not connected: back to queued, the next poll retries it
     if (row.action === "react") {
-      await finishAction(row.id, "Reactions are not sent to LinkedIn.");
+      const err = await sendReaction(this.id, helper, row); // settles the action itself
+      if (err && endsSession(err)) this.end?.(outcomeOf(err, this.pushback));
       return;
     }
     if (row.action !== "read") {

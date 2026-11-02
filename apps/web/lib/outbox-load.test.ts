@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mergePending, pendingOfRow, readDismissed, rememberDismissed, shownRows, type OutboxLoadRow } from "./outbox-load";
+import { mergePending, pendingOfRow, readDismissed, rememberDismissed, shownRows, waitReasonOf, type OutboxLoadRow } from "./outbox-load";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const row = (o: Partial<OutboxLoadRow> = {}): OutboxLoadRow => ({
@@ -45,4 +45,10 @@ test("dismissed ids are remembered and survive a bad store", () => {
   assert.deepEqual([...readDismissed(s)], ["a", "b"]);
   assert.deepEqual([...readDismissed({ getItem: () => { throw new Error("blocked"); } })], []);
   assert.deepEqual([...readDismissed({ getItem: () => "not json" })], []);
+});
+
+test("a row held back by a WhatsApp limit carries the reason, and an unknown value is ignored", () => {
+  assert.equal(pendingOfRow(row({ wait_reason: "daily_limit" }))?.waitReason, "daily_limit");
+  assert.equal(pendingOfRow(row({ wait_reason: "something_else" }))?.waitReason, undefined);
+  assert.equal(waitReasonOf(null), undefined);
 });

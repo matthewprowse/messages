@@ -26,9 +26,13 @@ export type Described =
       mentions: string[];
       /** A type not shown here yet: the text says to open WhatsApp. */
       unsupported?: boolean;
+      /** A call line from the call log; `missed` when nobody picked up. Shown as a line, not a bubble. */
+      call?: { video: boolean; missed: boolean };
+      /** A poll: its vote key (needed to read the votes that follow) and whether several options may be picked. */
+      poll?: { secret: Uint8Array | null; multi: boolean };
     }
   | { kind: "reaction"; targetId: string; emoji: string }
-  /** Edits, deletions and other protocol messages arrive separately as updates. Key sharing, calls and group notices are not shown. */
+  /** Edits, deletions and other protocol messages arrive separately as updates. Key sharing and group notices are not shown. Votes (pollUpdateMessage) are read by polls.ts. */
   | { kind: "skip" };
 
 export interface Quoted {
@@ -93,13 +97,16 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
     return r.key?.id ? { kind: "reaction", targetId: r.key.id, emoji: r.text ?? "" } : { kind: "skip" };
   }
 
-  const type = getContentType(content);
+  // Baileys misses call logs: the field's name is spelled "Messsage" in WhatsApp's protocol, so it is not recognised as a message.
+  const type = getContentType(content) ?? (content.callLogMesssage ? "callLogMesssage" : undefined);
   if (!type) return { kind: "skip" };
 
   let text = "";
   let preview = "";
   let media: MediaInfo | null = null;
   let unsupported = false;
+  let call: { video: boolean; missed: boolean } | undefined;
+  let poll: { secret: Uint8Array | null; multi: boolean } | undefined;
   let context: proto.IContextInfo | null | undefined;
 
   switch (type) {
@@ -179,7 +186,8 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
     case "pollCreationMessageV2":
     case "pollCreationMessageV3": {
       const m = (content.pollCreationMessage ?? content.pollCreationMessageV2 ?? content.pollCreationMessageV3)!;
-      text = [`Poll: ${m.name ?? ""}`, ...(m.options ?? []).map((o) => `• ${o.optionName ?? ""}`)].join("\n");
+      text = pollText(m.name ?? "", (m.options ?? []).map((o) => o.optionName ?? ""));
+      poll = { secret: raw?.messageContextInfo?.messageSecret ?? content.messageContextInfo?.messageSecret ?? null, multi: (m.selectableOptionsCount ?? 0) !== 1 };
       context = m.contextInfo;
       break;
     }
@@ -194,9 +202,13 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
     case "scheduledCallCreationMessage":
       text = `Scheduled Call: ${content.scheduledCallCreationMessage?.title ?? ""}`;
       break;
-    case "callLogMesssage":
-      text = content.callLogMesssage?.isVideo ? "Video Call" : "Voice Call";
+    case "callLogMesssage": {
+      const video = !!content.callLogMesssage?.isVideo;
+      const missed = content.callLogMesssage?.callOutcome === CALL_MISSED;
+      text = missed ? (video ? "Missed Video Call" : "Missed Voice Call") : video ? "Video Call" : "Voice Call";
+      call = { video, missed };
       break;
+    }
     case "interactiveMessage":
       text = [content.interactiveMessage?.header?.title, content.interactiveMessage?.body?.text, content.interactiveMessage?.footer?.text].filter(Boolean).join("\n");
       context = content.interactiveMessage?.contextInfo;
@@ -233,11 +245,11 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
     case "protocolMessage":
     case "senderKeyDistributionMessage":
     case "messageContextInfo":
-    case "pollUpdateMessage":
     case "keepInChatMessage":
     case "pinInChatMessage":
     case "encReactionMessage":
     case "encEventResponseMessage":
+    case "pollUpdateMessage": // a vote: stored on its poll by polls.ts, not as a message
     case "call":
       return { kind: "skip" };
     default:
@@ -262,7 +274,17 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
     quoted,
     mentions: context?.mentionedJid ?? [],
     ...(unsupported ? { unsupported } : {}),
+    ...(call ? { call } : {}),
+    ...(poll ? { poll } : {}),
   };
+}
+
+/** callLogMesssage.callOutcome for a call nobody answered (proto.Message.CallLogMessage.CallOutcome.MISSED). */
+export const CALL_MISSED = 1;
+
+/** A poll as the text kept for it: the question, then one bullet per option. polls.ts reads it back. */
+export function pollText(name: string, options: string[]): string {
+  return [`Poll: ${name}`, ...options.map((o) => `• ${o}`)].join("\n");
 }
 
 /** Wrappers Baileys does not unwrap itself: animated stickers and bot replies carry an ordinary message inside. */

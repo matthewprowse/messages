@@ -65,6 +65,8 @@ export interface ContactConversation {
 
 export interface ContactDetail extends ContactSummary {
   relationship: string | null;
+  /** Where a lead came from, such as "Property24 Enquiry" (contacts.lead_source, set by an automation). */
+  leadSource: string | null;
   summary: string | null;
   /** What the user wrote about them (contacts.about_note, opened here). */
   aboutNote: string | null;
@@ -156,7 +158,7 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
   if (!isUuid(id)) return null;
   const { data: base, error } = await supabase
     .from("contacts")
-    .select("id, display_name, company, role, relationship, ai_summary, about_note, vip, hidden, avatar_path, kind_override, organizations(id, name, logo_path), contact_identities(id, kind, value)")
+    .select("id, display_name, company, role, relationship, lead_source, ai_summary, about_note, vip, hidden, avatar_path, kind_override, organizations(id, name, logo_path), contact_identities(id, kind, value)")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`Load contact failed (${error.code})`);
@@ -196,6 +198,7 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
     company: c.company,
     role: c.role,
     relationship: c.relationship,
+    leadSource: c.lead_source?.trim() || null,
     hidden: c.hidden,
     summary: c.ai_summary,
     aboutNote: c.about_note?.trim() || null,

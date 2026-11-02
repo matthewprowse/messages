@@ -1,7 +1,8 @@
 // WhatsApp, as a linked device (the way WhatsApp Web works) through Baileys. Messages and the history the
 // phone sends when the device links are stored like email; replies queued in the outbox go out over the
-// link. Nothing is ever sent on its own: no presence, no "online", and read receipts only when you open a
-// chat in the app with read receipts turned on in Settings.
+// link. Nothing is ever sent on its own: no "online", and read receipts only when you open a chat in the app with
+// read receipts turned on in Settings. The one presence there is: "typing" for a moment before a reply you sent goes
+// out, with a jittered gap between messages and daily limits (../whatsapp/send-rails.ts) so the link sends like a person.
 //
 // Memory and reads: the name, chat, group, privacy ID and download-count maps are size-bounded (least recently
 // used first, ../whatsapp/bounded-map.ts) and re-derived on demand; groups are cleared on reconnect. The
@@ -21,6 +22,7 @@ import makeWASocket, {
   type GroupMetadata,
   type WAMessage,
   type WAMessageKey,
+  type WACallEvent,
   type WASocket,
   type proto,
 } from "baileys";
@@ -43,6 +45,11 @@ import { retryStore } from "../whatsapp/retry";
 import { decideClose, noCloses } from "../whatsapp/close-policy";
 import { ownsAccount } from "../shard";
 import { applyWhatsAppAction } from "../whatsapp/actions";
+import { isBusinessAccount } from "../whatsapp/business";
+import { missedCallMessage } from "../whatsapp/calls";
+import { saveLabelAssociation, saveLabels } from "../whatsapp/labels";
+import { applyPollVote, voteOf } from "../whatsapp/poll-votes";
+import { Pacer, railsFromEnv } from "../whatsapp/send-rails";
 import { importHistory } from "../whatsapp/history";
 import { missingMediaJobs } from "../whatsapp/missing-media";
 import { People, MAX_LIDS } from "../whatsapp/people";
@@ -95,6 +102,14 @@ export class WhatsAppConnector {
   /** Privacy IDs already mapped in the database this run, so repeated history batches skip the write. */
   private mappedLids = new BoundedMap<string, string>(MAX_LIDS);
   private historyBatches = 0;
+  /** Sends go out one at a time, so the gap between messages and the daily count are kept per account. */
+  private readonly sendQueue = new SerialQueue();
+  private readonly pace = (() => {
+    const rails = railsFromEnv(process.env);
+    return { rails, pacer: new Pacer(rails) };
+  })();
+  /** Whether this link is a WhatsApp Business account (labels sync only then); null until asked or when WhatsApp could not say. */
+  private business: boolean | null = null;
   private photosRunning = false;
   private lastMediaCatchUp = 0;
   /** When the sticker pass of the media catch-up last found nothing missing; it then waits STICKER_PASS_IDLE_MS. */
@@ -165,6 +180,7 @@ export class WhatsAppConnector {
     // Both are rebuilt by the link on open (group list) or by the next history batch (database mapping writes).
     this.groups.clear();
     this.mappedLids.clear();
+    this.business = null; // asked again for the new link
 
     // The bundled WhatsApp Web version goes stale; ask for the current one (kept for a few hours, so a
     // reconnect does not ask again), else use the bundled one.
@@ -219,6 +235,9 @@ export class WhatsAppConnector {
           const newGroups = events["groups.upsert"];
           const groupUpdates = events["groups.update"] as GroupMetadata[] | undefined;
           const lidMapping = events["lid-mapping.update"];
+          const labelEdit = events["labels.edit"];
+          const labelChat = events["labels.association"];
+          const calls = events["call"];
           if (history) this.background(() => this.onHistory(history));
           if (upsert) this.background(() => this.onMessages(upsert.messages, upsert.type === "notify"));
           if (updates) this.background(() => applyUpdates(this.ctx, updates));
@@ -230,6 +249,9 @@ export class WhatsAppConnector {
           if (newGroups) this.background(() => this.onGroups(newGroups));
           if (groupUpdates) this.background(() => this.onGroups(groupUpdates));
           if (lidMapping) this.background(() => this.onLidMapping([lidMapping]));
+          if (labelEdit) this.background(() => this.onLabel(labelEdit));
+          if (labelChat) this.background(() => this.onLabelChat(labelChat));
+          if (calls) this.background(() => this.onCalls(calls));
         } catch (err) {
           log.warn("whatsapp event failed", { account: this.id, code: errorCode(err) });
         }
@@ -391,6 +413,10 @@ export class WhatsAppConnector {
     let inserted = 0;
     for (const msg of messages) {
       try {
+        if (voteOf(msg)) {
+          await this.onPollVote(msg);
+          continue;
+        }
         // A live message from someone else arrives unread; one from you (sent from your phone) is read.
         if (await this.store(msg, { live, unread: live && !msg.key.fromMe })) inserted++;
       } catch (err) {
@@ -482,20 +508,23 @@ export class WhatsAppConnector {
 
   /** A reaction is kept on the message it reacts to. `reactor` is the key of the reaction itself. */
   private async react(reactor: WAMessageKey, targetId: string, emoji: string) {
-    let who = SELF;
-    let sealed: string | null = null;
-    if (!reactor.fromMe) {
-      const jid = reactor.participant ?? reactor.remoteJid;
-      if (!jid) return;
-      const p = await this.people.person(jid, reactor.participantAlt ?? reactor.remoteJidAlt);
-      const address = p.phone ?? p.lid ?? p.jid;
-      who = await addressIndex(await keysFor(this.account.user_id), address);
-      sealed = await sealAddress(this.account.user_id, address);
-    }
+    const found = await this.whoIs(reactor);
+    if (!found) return;
+    const { who, sealed } = found;
     must(
       await db.rpc("whatsapp_react", { p_account_id: this.id, p_provider_message_id: targetId, p_sender: who, p_emoji: emoji, p_reactor: sealed ?? undefined }),
       "save reaction",
     );
+  }
+
+  /** Who a reaction or vote is from: "me", or a blind index of their number, with the sealed number for a reaction. Null when the key names nobody. */
+  private async whoIs(key: WAMessageKey): Promise<{ who: string; sealed: string | null } | null> {
+    if (key.fromMe) return { who: SELF, sealed: null };
+    const jid = key.participant ?? key.remoteJid;
+    if (!jid) return null;
+    const p = await this.people.person(jid, key.participantAlt ?? key.remoteJidAlt);
+    const address = p.phone ?? p.lid ?? p.jid;
+    return { who: await addressIndex(await keysFor(this.account.user_id), address), sealed: await sealAddress(this.account.user_id, address) };
   }
 
   private async onReactions(items: BaileysEventMap["messages.reaction"]) {
@@ -505,6 +534,50 @@ export class WhatsAppConnector {
         await this.react(reaction.key as WAMessageKey, key.id, reaction.text ?? "");
       } catch (err) {
         log.warn("whatsapp reaction failed", { account: this.id, code: errorCode(err) });
+      }
+    }
+  }
+
+  /** A vote on a poll is kept on the poll (../whatsapp/poll-votes.ts). One that cannot be read is dropped, not retried. */
+  private async onPollVote(msg: WAMessage) {
+    const me = this.sock?.user?.id;
+    if (!me) return;
+    await applyPollVote(this.ctx, me, msg, async (key) => {
+      const found = await this.whoIs(key);
+      if (!found) throw new Error("vote from nobody");
+      return found.who;
+    });
+  }
+
+  /** Whether labels are worth saving: true for a Business account. Not knowing (a failed lookup) lets them through, as only Business links get label events. */
+  private async isBusiness(): Promise<boolean> {
+    if (this.business === null && this.sock) this.business = await isBusinessAccount(this.sock);
+    return this.business !== false;
+  }
+
+  private async onLabel(label: BaileysEventMap["labels.edit"]) {
+    if (await this.isBusiness()) await saveLabels(this.ctx, [label]);
+  }
+
+  private async onLabelChat(event: BaileysEventMap["labels.association"]) {
+    if (!(await this.isBusiness())) return;
+    // A chat may be known by a phone number or by a privacy ID: try the other one too.
+    const chat = event.association.chatId;
+    const alt = chat.endsWith("@lid") ? (this.people.pnByLid.get(chat) ?? null) : null;
+    await saveLabelAssociation(this.ctx, event, alt);
+  }
+
+  /** A call that rang out unanswered is stored as a missed call line (../whatsapp/calls.ts). */
+  private async onCalls(calls: WACallEvent[]) {
+    const me = this.sock?.user;
+    const mine = new Set([me?.id, me?.lid].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j)));
+    for (const call of calls) {
+      const msg = missedCallMessage(call, mine.has(jidNormalizedUser(call.from)));
+      if (!msg) continue;
+      try {
+        await this.store(msg, { live: true, unread: true });
+      } catch (err) {
+        log.warn("whatsapp call failed", { account: this.id, code: errorCode(err) });
       }
     }
   }
@@ -548,7 +621,8 @@ export class WhatsAppConnector {
   async send(queuedRow: OutboxRow) {
     const sock = this.sock;
     if (!sock || !this.open) return; // not connected: picked up again on the next pass
-    await sendQueued(this.ctx, sock, queuedRow, () => this.sock === sock && this.open, (sent, outboxId) => this.storeSent(sent, outboxId));
+    // One at a time per account: the gap between messages and the daily count only mean something in order.
+    await this.sendQueue.run(() => sendQueued(this.ctx, sock, queuedRow, () => this.sock === sock && this.open, (sent, outboxId) => this.storeSent(sent, outboxId), this.pace));
   }
 
   /** Stores what went out, so it shows in the conversation at once. Files are fetched back like any other. */

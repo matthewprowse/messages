@@ -10,6 +10,7 @@ export const AI_FEATURES: { key: string; label: string; note: string }[] = [
   { key: "transcribe", label: "Transcripts", note: "Voice note and meeting transcripts." },
   { key: "bulk_read", label: "Readable Bulk Email", note: "The short readable version of a newsletter or marketing email, made when it is opened." },
   { key: "documents", label: "Document Cards", note: "The type, amount and due date read from a PDF or scanned document, for files you ask about and files from your contacts." },
+  { key: "automations", label: "Automations", note: "Reading a lead's details out of an enquiry email, only for a custom automation or when a portal changes its email." },
 ];
 
 /** The name of a feature, or its key when Admin does not know it yet. */

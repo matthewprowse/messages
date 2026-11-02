@@ -51,3 +51,6 @@ DOC_CARD = "doc_card"            # attachments.doc_card: the card for a document
 EMBEDDING_DATA = "embedding_data"  # message_embeddings.embedding_data: a vector sealed with encrypt_bytes, base64
 ACTION = "action"            # actions.args: the arguments of a next step the AI proposed (JSON)
 BULK_READ ="bulk_read"          # message_ai.bulk_read: the readable version of a bulk email (JSON)
+AUTOMATION = "automation"        # automations.spec, automation_previews.spec: name, conditions, fields and actions (JSON)
+AUTOMATION_RUN = "automation_run"  # automation_runs.fields, automation_previews.result: what an automation read (JSON)
+LEAD_SOURCE = "lead_source"      # contacts.lead_source: where a lead came from

@@ -22,6 +22,13 @@ export const EMPTY_PROFILE: Profile = {
   language: null,
 };
 
+/** The newer of the account's own sync time (set on a status change) and the worker's heartbeat. */
+export function latestSync(row: Pick<AccountRow, "last_synced_at" | "account_heartbeats">): string | undefined {
+  const beat = Array.isArray(row.account_heartbeats) ? row.account_heartbeats[0]?.synced_at : row.account_heartbeats?.synced_at;
+  const times = [row.last_synced_at, beat].filter((t): t is string => !!t);
+  return times.length ? times.reduce((a, b) => (Date.parse(a) >= Date.parse(b) ? a : b)) : undefined;
+}
+
 export function mapAccount(row: AccountRow): Account {
   return {
     id: row.id,
@@ -31,7 +38,7 @@ export function mapAccount(row: AccountRow): Account {
     detail: row.address,
     status: row.status as AccountStatus,
     statusDetail: row.status_detail ?? undefined,
-    lastSync: row.last_synced_at ?? undefined,
+    lastSync: latestSync(row),
     sendAddresses: row.send_addresses ?? [],
   };
 }
@@ -84,6 +91,7 @@ export function mapDraft(row: DraftRow): Draft {
     report: parseReport(row.report),
     audit: parseAudit(row.audit),
     feedback: row.feedback === "up" || row.feedback === "down" ? row.feedback : undefined,
+    replyTo: row.reply_to || undefined,
     generatedAt: row.updated_at,
   };
 }

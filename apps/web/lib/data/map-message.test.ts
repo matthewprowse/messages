@@ -46,3 +46,17 @@ test("a chat message takes new text and reactions, and an untouched one is retur
 test("a voice note transcript written later is added", () => {
   assert.equal(patchMessage(held(), { transcript: "hello" }).transcript, "hello");
 });
+
+test("a missed call and a poll with votes come through provider_meta", () => {
+  const x = whatsappExtras({ call: { video: true, missed: true }, poll: { multi: true }, poll_votes: { a: [0, 1] } });
+  assert.deepEqual(x.call, { video: true, missed: true });
+  assert.deepEqual(x.poll, { multi: true, votes: { a: [0, 1] } });
+  assert.equal(whatsappExtras({}).call, undefined);
+  assert.equal(whatsappExtras({}).poll, undefined);
+});
+
+test("a vote arriving by Realtime changes the poll the bubble shows", () => {
+  const poll = { id: "m", threadId: "t", from: "u", sentAt: "", body: "Poll: Q\n• A\n• B", whatsapp: true, poll: { multi: false, votes: {} } };
+  const next = patchMessage(poll, { provider_meta: { poll: { multi: false }, poll_votes: { x: [1] } } });
+  assert.deepEqual(next.poll?.votes, { x: [1] });
+});

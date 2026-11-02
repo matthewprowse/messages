@@ -218,6 +218,7 @@ def main() -> None:
     threading.Thread(target=meeting_steps, name="meetings", daemon=True).start()
     threading.Thread(target=bulk_reads, name="bulk_read", daemon=True).start()
     threading.Thread(target=documents.loop, args=(stop,), name="documents", daemon=True).start()
+    threading.Thread(target=triage.automations.loop, args=(stop,), name="automation_previews", daemon=True).start()  # answers "what would this have done" requests
     log.info(
         "ai worker starting",
         model=cfg.model,

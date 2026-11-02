@@ -9,6 +9,11 @@ export function sendStateOf(status: "queued" | "sending" | "sent" | "failed"): N
   return status;
 }
 
+/** Why a queued WhatsApp message is still waiting: a send limit the account has reached. It goes by itself once the limit lifts. */
+export function waitLabel(reason: NonNullable<Message["waitReason"]>): string {
+  return reason === "daily_limit" ? "Waiting: Daily WhatsApp Limit" : "Waiting: New Chat Limit";
+}
+
 /** The line under the bubble, Title Case free text for each state. */
 export function sendStateLabel(state: NonNullable<Message["sendState"]>): string {
   switch (state) {

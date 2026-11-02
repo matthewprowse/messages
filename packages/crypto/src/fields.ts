@@ -101,6 +101,12 @@ export const FIELD = {
   bulkRead: "bulk_read",
   /** attachments.doc_card: the AI's card for a document (type, who, amount, due date, summary), as JSON */
   docCard: "doc_card",
+  /** automations.spec and automation_previews.spec: an automation's name, conditions, fields and actions, as JSON */
+  automation: "automation",
+  /** automation_runs.fields and automation_previews.result: what an automation read from an email, as JSON */
+  automationRun: "automation_run",
+  /** contacts.lead_source: where a lead came from, such as "Property24 Enquiry" */
+  leadSource: "lead_source",
   /** message_embeddings.embedding_data: a vector sealed with encryptBytes, base64 */
   embeddingData: "embedding_data",
 } as const;

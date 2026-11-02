@@ -19,6 +19,12 @@ export interface OutboxLoadRow {
   cc_addresses: string[];
   attachment_count: number;
   send_after?: string | null;
+  wait_reason?: string | null;
+}
+
+/** A WhatsApp limit that is holding a row back, or undefined for any other value. */
+export function waitReasonOf(reason: string | null | undefined): PendingSend["waitReason"] {
+  return reason === "daily_limit" || reason === "new_chat_limit" ? reason : undefined;
 }
 
 /** The placeholder for a loaded row (body and addresses already opened), or null when it is not a reply in a conversation. */
@@ -38,6 +44,7 @@ export function pendingOfRow(row: OutboxLoadRow): PendingSend | null {
     copies,
     fileCount: row.attachment_count,
     sendAfter: row.send_after ?? undefined,
+    waitReason: waitReasonOf(row.wait_reason),
   };
 }
 

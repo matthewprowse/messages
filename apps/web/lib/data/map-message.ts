@@ -7,13 +7,16 @@ import { emailParts, emphasisRuns, type Emphasis } from "../email-text";
 import type { AttachmentRow, MessageRow } from "./columns";
 
 /** What a WhatsApp message carries in provider_meta besides where it lives: its quote, reactions and state. */
-export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reactions" | "deleted" | "edited" | "receipt"> {
+export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reactions" | "deleted" | "edited" | "receipt" | "call" | "poll"> {
   const m = (meta ?? {}) as {
     quoted?: { id?: string; author?: string; from_me?: boolean; text?: string };
     reactions?: Record<string, string>;
     deleted?: boolean;
     edited?: boolean;
     receipt?: string;
+    call?: { video?: boolean; missed?: boolean };
+    poll?: { multi?: boolean };
+    poll_votes?: Record<string, number[]>;
   };
   const q = m.quoted;
   return {
@@ -21,6 +24,8 @@ export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reaction
     reactions: m.reactions && Object.keys(m.reactions).length ? m.reactions : undefined,
     deleted: m.deleted || undefined,
     edited: m.edited || undefined,
+    call: m.call ? { video: !!m.call.video, missed: !!m.call.missed } : undefined,
+    poll: m.poll ? { multi: !!m.poll.multi, votes: m.poll_votes ?? {} } : undefined,
     receipt: m.receipt === "sent" || m.receipt === "delivered" || m.receipt === "read" ? m.receipt : undefined,
   };
 }
@@ -98,6 +103,6 @@ export function patchMessage(m: Message, row: { provider_meta?: unknown; body_te
     next.body = parts.body;
     next.quoted = parts.quoted;
   }
-  const shown = (x: Message) => JSON.stringify([x.body, x.quoted, x.quote, x.reactions, x.deleted, x.edited, x.transcript]);
+  const shown = (x: Message) => JSON.stringify([x.body, x.quoted, x.quote, x.reactions, x.deleted, x.edited, x.transcript, x.poll]);
   return shown(next) === shown(m) ? m : next;
 }

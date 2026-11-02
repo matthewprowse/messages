@@ -31,16 +31,18 @@ import { sealAddress } from "../vault";
 import { reconcileDue, type InboxMark } from "./inbox-check";
 import type { ImapCredentials, MailCredentials, MailService } from "./mail-service";
 import { applyMessageAction } from "../imap/apply-action";
+import { imapPollPlan } from "../imap/poll-plan";
+import { IMAP_NO_IDLE_POLL_MS, IMAP_POLL_MS } from "../runtime/mail-poll";
 import { actionFailureReason, isImapError, maybeSent, sendFailureReason } from "../imap/errors";
 import { saveMissingFiles } from "../imap/missing-files";
 import { placeThreads } from "../imap/place-threads";
 import { reconcileInboxFully } from "../imap/reconcile-inbox";
 import { syncFolder, type Folder, type SyncCtx } from "../imap/sync-folder";
 
-const SIDE_FOLDER_POLL_MS = 60_000; // every folder is checked each minute (the others by STATUS); the Inbox is also live through IDLE
-const RECONCILE_EVERY_TICKS = 5; // the Inbox is checked every 5 minutes (a full pass only when its numbers moved, see ./inbox-check.ts); expunge events cover quick changes
-const FILES_EVERY_TICKS = 10;
-const SELF_EVERY_TICKS = 10; // ticks (minutes) between reads of the account for edited send addresses
+// The tick (other folders by STATUS, an Inbox check, housekeeping) is 5 minutes on a server with IDLE, where the Inbox is live
+// and flags arrive as events, and a minute on one without it (imap/poll-plan.ts; IMAP_POLL_MS and IMAP_NO_IDLE_POLL_MS). The
+// slower jobs keep their wall-clock spacing: the Inbox reconcile every 5 minutes (a full pass only when its numbers moved, see
+// ./inbox-check.ts; expunge events cover quick changes), files every 10, edited send addresses every 10.
 
 export class ImapConnector<C extends MailCredentials = ImapCredentials> {
   private client: ImapFlow | null = null;
@@ -166,6 +168,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         const uidValidity = mailbox;
         this.background(() => applyReadState(this.account, event.path, uid, event.flags.has("\\Seen"), uidValidity));
       });
+      const plan = imapPollPlan(client.capabilities.has("IDLE"), IMAP_POLL_MS, IMAP_NO_IDLE_POLL_MS);
       let ticking = false;
       let ticks = 0;
       this.pollTimer = setInterval(() => {
@@ -179,8 +182,8 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         // and it opens the Inbox again if a folder above was synced.
         this.background(() => this.syncFolder(client, inbox));
         // Files that failed before are rarely ready a minute later: look again every ten minutes.
-        if (tick % FILES_EVERY_TICKS === 0) this.background(() => this.saveMissingFiles(client));
-        if (tick % RECONCILE_EVERY_TICKS === 0) this.background(() => this.reconcileInbox(client));
+        if (tick % plan.filesEvery === 0) this.background(() => this.saveMissingFiles(client));
+        if (tick % plan.reconcileEvery === 0) this.background(() => this.reconcileInbox(client));
         this.background(() => this.selectInbox(client));
         this.background(() => touchAccount(this.id));
         this.background(() => this.linkSent());
@@ -193,9 +196,9 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         );
         // Send addresses edited in the app count as you within ten minutes: the account is read and decrypted for
         // this, which is too much work to repeat every minute for every mailbox. The session start read them already.
-        if (tick > 0 && tick % SELF_EVERY_TICKS === 0)
+        if (tick > 0 && tick % plan.selfEvery === 0)
           void this.refreshSelf(creds).catch((err) => log.warn(`${this.service.tag} send addresses failed`, { account: this.id, code: errorCode(err) }));
-      }, SIDE_FOLDER_POLL_MS);
+      }, plan.tickMs);
 
       await closed;
     } finally {

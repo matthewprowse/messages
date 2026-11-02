@@ -127,9 +127,13 @@ class Graph:
     def profile(self, igsid: str) -> dict[str, Any]:
         return self.call("GET", f"/{igsid}", {"fields": "name,username"})
 
-    def send(self, recipient: str, text: str) -> dict[str, Any]:
-        """POST /me/messages: a text reply to someone who messaged within the last 24 hours."""
-        return self.call("POST", "/me/messages", body={"recipient": {"id": recipient}, "message": {"text": text}})
+    def send(self, recipient: str, text: str, human_agent: bool = False) -> dict[str, Any]:
+        """POST /me/messages: a text reply to someone who messaged within the last 24 hours, or with human_agent
+        up to 7 days after (messaging_type MESSAGE_TAG and the HUMAN_AGENT tag; only for a reply a person wrote)."""
+        body: dict[str, Any] = {"recipient": {"id": recipient}, "message": {"text": text}}
+        if human_agent:
+            body.update({"messaging_type": "MESSAGE_TAG", "tag": "HUMAN_AGENT"})
+        return self.call("POST", "/me/messages", body=body)
 
     def refresh(self) -> dict[str, Any]:
         """Swaps this long-lived token for a fresh one of 60 days. Needs a token at least a day old that has not

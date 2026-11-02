@@ -65,15 +65,17 @@ export interface ReplyAllState {
  * everyone else it went to, minus your own addresses; both can be edited. A change of conversation,
  * of the message being answered or of who it came from starts the lines again.
  */
-export function useReplyAll(thread: Thread, msgs: Message[], reply: ReplyFrom): ReplyAllState {
+export function useReplyAll(thread: Thread, msgs: Message[], reply: ReplyFrom, leadTo?: string): ReplyAllState {
   const { replyTo } = useApp();
   const target = replyTo[thread.id];
   const available = thread.channel === "email";
-  const defaults = useMemo(() => replyAllRecipients(msgs, reply.options, target), [msgs, reply.options, target]);
+  const lead = available && leadTo ? leadTo : undefined;
+  const defaults = useMemo(() => (lead ? { to: [lead], cc: [] } : replyAllRecipients(msgs, reply.options, target)), [lead, msgs, reply.options, target]);
   const key = `${thread.id}|${target?.id ?? ""}|${defaults.to.join(",")}|${defaults.cc.join(",")}`;
   const [mode, setMode] = useState<string | null>(null); // the conversation Reply All is on for
   const [edit, setEdit] = useState<{ key: string; to: string; cc: string } | null>(null);
-  const all = available && mode === thread.id;
+  // A lead address turns the addressed reply on by itself; switching it off is remembered as "off:<thread>".
+  const all = available && (mode === thread.id || (!!lead && mode !== `off:${thread.id}`));
   const toText = edit?.key === key ? edit.to : defaults.to.join(", ");
   const ccText = edit?.key === key ? edit.cc : defaults.cc.join(", ");
   const parsed = useMemo(() => ({ to: parseAddresses(toText), cc: parseAddresses(ccText) }), [toText, ccText]);
@@ -87,7 +89,7 @@ export function useReplyAll(thread: Thread, msgs: Message[], reply: ReplyFrom): 
   return {
     available,
     all,
-    setAll: (on) => setMode(on ? thread.id : null),
+    setAll: (on) => setMode(on ? thread.id : lead ? `off:${thread.id}` : null),
     toText,
     ccText,
     setToText: (to) => setEdit({ key, to, cc: ccText }),

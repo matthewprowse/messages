@@ -18,6 +18,7 @@ import { createUpdateFilter } from "./update-filter";
 import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "../open-rows";
 import { mapTask } from "../tasks";
 import { track } from "../analytics";
+import { waitReasonOf } from "../outbox-load";
 import { ComposeDraft, ComposeStatus, PendingSend, composeStatusOf } from "./compose";
 import { DraftPhase } from "./context";
 import type { Action, State } from "./reducer";
@@ -144,11 +145,11 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         return;
       }
       const outboxIds = [...pendingRef.current.map((p) => p.id), ...Object.keys(composedRef.current)];
-      const { data } = outboxIds.length ? await supabase.from("outbox").select("id, status, thread_id, error, send_after").in("id", outboxIds) : { data: [] };
+      const { data } = outboxIds.length ? await supabase.from("outbox").select("id, status, thread_id, error, send_after, wait_reason").in("id", outboxIds) : { data: [] };
       const rows = new Map((data ?? []).map((r) => [r.id, r]));
       setComposed((c) => Object.fromEntries(Object.entries(c).map(([id, v]) => [id, rows.has(id) ? composeStatusOf(rows.get(id)!) : v])));
       setPending((p) => p
-        .map((x) => { const r = rows.get(x.id); return r ? { ...x, status: r.status as PendingSend["status"], error: r.error ?? undefined } : x; })
+        .map((x) => { const r = rows.get(x.id); return r ? { ...x, status: r.status as PendingSend["status"], error: r.error ?? undefined, sendAfter: r.send_after ?? x.sendAfter, waitReason: waitReasonOf(r.wait_reason) } : x; })
         .filter((x) => !(x.status === "sent" && sentIn.has(x.threadId))));
     }
 

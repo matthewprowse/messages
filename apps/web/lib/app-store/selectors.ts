@@ -22,6 +22,7 @@ export function withQueuedReplies(byThread: Record<string, Message[]>, pending: 
       attachments: p.attachments,
       sendState: sendStateOf(p.status),
       sendError: p.error,
+      waitReason: p.status === "queued" ? p.waitReason : undefined,
       scheduledFor: p.status === "queued" && isScheduled(p.sendAfter, p.createdAt) ? p.sendAfter : undefined,
       sendRecovery: p.status === "failed" ? sendRecovery(p.error, p.fileCount ?? p.attachments?.length ?? 0) : undefined,
     };

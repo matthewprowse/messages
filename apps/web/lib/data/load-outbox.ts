@@ -14,7 +14,7 @@ import { myId } from "./load-small";
 export async function loadOutbox(): Promise<PendingSend[]> {
   const me = await myId();
   const { data, error } = await supabase.from("outbox")
-    .select("id, thread_id, body, status, error, created_at, from_address, to_addresses, cc_addresses, attachment_count, send_after")
+    .select("id, thread_id, body, status, error, created_at, from_address, to_addresses, cc_addresses, attachment_count, send_after, wait_reason")
     .eq("user_id", me).not("thread_id", "is", null).in("status", ["queued", "sending", "failed"])
     .order("created_at", { ascending: false }).limit(OUTBOX_LOAD_LIMIT);
   if (error) throw error;

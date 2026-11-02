@@ -92,6 +92,15 @@ export function browserExportSource(): ExportSource {
       return rows;
     },
 
+    async automations() {
+      const [autos, runs] = await Promise.all([
+        allRows("Load automations", (from, to) => supabase.from("automations").select("id, template_key, enabled, enabled_at, spec, created_at").order("id").range(from, to)),
+        allRows("Load automation runs", (from, to) => supabase.from("automation_runs").select("id, automation_id, message_id, status, read_by, fields, contact_id, error, created_at").order("id").range(from, to)),
+      ]);
+      await Promise.all([openRows(autos, [["spec", FIELD.automation]] as const), openRows(runs, [["fields", FIELD.automationRun]] as const)]);
+      return [{ automations: autos, runs }];
+    },
+
     async events() {
       const now = Date.now();
       const out = [];

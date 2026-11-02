@@ -137,6 +137,7 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
     ...(contact.company && contact.company !== contact.organization?.name ? [{ label: contact.organization ? "Company You Set" : "Company", value: contact.company }] : []),
     ...(contact.role ? [{ label: "Role", value: contact.role }] : []),
     ...(contact.relationship ? [{ label: "Relationship", value: contact.relationship }] : []),
+    ...(contact.leadSource ? [{ label: "Lead Source", value: contact.leadSource }] : []),
   ];
 
   return (

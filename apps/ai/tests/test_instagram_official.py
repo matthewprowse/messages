@@ -295,8 +295,8 @@ class FakeGraph:
             raise found
         return found or {}
 
-    def send(self, recipient, text):
-        self.sent.append((recipient, text))
+    def send(self, recipient, text, human_agent=False):
+        self.sent.append((recipient, text, True) if human_agent else (recipient, text))
         if isinstance(self.send_result, Exception):
             raise self.send_result
         return self.send_result

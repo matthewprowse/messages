@@ -18,9 +18,12 @@ export type MessageRow = Pick<
   Tables<"messages">,
   "id" | "provider_message_id" | "thread_id" | "direction" | "sender_contact_id" | "sender_address" | "to_addresses" | "sent_at" | "subject" | "body_text" | "body_html" | "provider_meta" | "has_original" | "is_bulk" | "body_marks" | "transcript"
 > & { attachments: AttachmentRow[] };
-export type AccountRow = Pick<Tables<"accounts">, "id" | "provider" | "label" | "nickname" | "address" | "status" | "status_detail" | "last_synced_at" | "send_addresses">;
+export type AccountRow = Pick<Tables<"accounts">, "id" | "provider" | "label" | "nickname" | "address" | "status" | "status_detail" | "last_synced_at" | "send_addresses"> & {
+  // The worker's regular "still syncing" mark lives in its own table (kept off Realtime); one row per account, or none yet.
+  account_heartbeats?: { synced_at: string } | { synced_at: string }[] | null;
+};
 export type ProfileRow = Pick<Tables<"profiles">, "display_name" | "avatar_path" | "about" | "important_people" | "quiet_start" | "quiet_end" | "push_urgent" | "push_important" | "auto_draft_top" | "whatsapp_read_receipts" | "share_usage" | "language">;
-export type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruction" | "decision" | "decision_kind" | "source" | "auto" | "updated_at" | "report" | "audit" | "feedback">;
+export type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruction" | "decision" | "decision_kind" | "source" | "auto" | "updated_at" | "report" | "audit" | "feedback" | "reply_to">;
 export type UnsubscribeRow = Pick<Tables<"unsubscribes">, "id" | "account_id" | "sender_address" | "status" | "manual_url" | "error">;
 
 // With the company, whose logo stands in for the photo of a sender that writes as the company.
@@ -32,9 +35,9 @@ export const THREAD_WITH_PEOPLE = `${THREAD_COLUMNS}, accounts(provider), thread
 // The list: only the ids of who is in each thread. A person in fifty threads is sent once, by loadContacts, not fifty times here.
 export const THREAD_WITH_IDS = `${THREAD_COLUMNS}, accounts(provider), thread_participants(contact_id)` as const;
 // Explicit lists, so a column the app never reads (a WhatsApp QR or pairing code) never reaches every page.
-export const ACCOUNT_COLUMNS = "id, provider, label, nickname, address, status, status_detail, last_synced_at, send_addresses";
+export const ACCOUNT_COLUMNS = "id, provider, label, nickname, address, status, status_detail, last_synced_at, send_addresses, account_heartbeats(synced_at)";
 export const PROFILE_COLUMNS = "display_name, avatar_path, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage, language";
-export const DRAFT_COLUMNS = "id, thread_id, body, tone, instruction, decision, decision_kind, source, auto, updated_at, report, audit, feedback";
+export const DRAFT_COLUMNS = "id, thread_id, body, tone, instruction, decision, decision_kind, source, auto, updated_at, report, audit, feedback, reply_to";
 export const UNSUBSCRIBE_COLUMNS = "id, account_id, sender_address, status, manual_url, error";
 export const ATTACHMENT_COLUMNS = "id, message_id, filename, kind, size_bytes, storage_path, team_path, hidden, sealed, not_kept";
 // Named columns, never select("*"). body_html is only still set on emails stored before the HTML stopped

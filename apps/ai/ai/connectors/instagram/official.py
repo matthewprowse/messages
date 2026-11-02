@@ -2,18 +2,20 @@
 thread of its own like sync.AccountSync, and stored into the same tables through the same mapping.
 
 The app saves an access token (web: /api/connect/instagram/official/callback). This reads the account's
-conversations every minute or so (polling; webhooks need a public address, see "Webhooks" below), sends the
+conversations every minute or so (or at once on a webhook hint, see "Webhooks" below), sends the
 replies you queued, and refreshes the token before its 60 days run out. No instagrapi, no proxy and no
 password are involved. Only IDs, counts and error codes are ever logged.
 
-The 24-hour window: Instagram lets a Business account reply only within 24 hours of the person's last message,
-and only to someone who has written first. A reply outside it is refused here, before anything is sent, with
-"reply in Instagram"; the app shows that on the unsent bubble, like any reply that could not go.
+The reply window (window.py): Instagram lets a Business account reply within 24 hours of the person's last
+message, and only to someone who has written first. With the Human Agent feature granted to the app
+(INSTAGRAM_HUMAN_AGENT), a reply you wrote yourself may go up to 7 days after, with the HUMAN_AGENT tag. Anything
+later is refused here, before it is sent, with "reply in Instagram"; the app shows that on the unsent bubble and a
+notice in the composer (components/instagram-window.tsx).
 
-Webhooks: the seam is poll(). A receiver would verify Meta's signature (X-Hub-Signature-256, with the app
-secret), write the sender and conversation of each `messages` event to a table, and call
-store_conversation() for just those conversations, the way poll does for the ones the inbox says changed. The
-poll then slows to a safety net (official_poll_wait)."""
+Webhooks (INSTAGRAM_WEBHOOKS): the web app's Meta webhook writes a content-free hint per event (hints.py,
+meta_webhook_hints); the loop takes them every few seconds and reads the inbox at once, and the full poll slows to
+a safety net. Without the flag it polls every minute or so, as before.
+"""
 
 from __future__ import annotations
 
@@ -25,17 +27,19 @@ from typing import Any, Callable
 
 from ... import log
 from .backoff import Backoff, official_poll_wait, trouble
+from .hints import has_news, human_agent_on, safety_wait, webhooks_on
 from .graph import Graph, GraphError
 from .mapping import Person, Thread, payload, sent_item
 from .official_mapping import FALLBACK_FIELDS, FIELDS, thread as map_thread, time_us
 from .store import OFFICIAL_SCOPE, Store, fetch
 from .sync import MAY_HAVE_SENT, TEXT_ONLY, Settings
+from .window import CLOSED, TAGGED, reply_mode
 
 LOOP_S = 5.0  # the outbox and actions are checked this often; they are database reads until there is work
 FIRST_PAGES = 2  # the first sync reads the 40 most recent conversations
 PAGE_SIZE = 20
 PAUSE_S = 1.0  # between reading one conversation and the next
-WINDOW = timedelta(hours=24)
+HINT_PRUNE_S = 6 * 3600
 MAX_TEXT_BYTES = 1000  # Meta's limit for one text message
 REFRESH_BELOW_S = 20 * 24 * 3600  # a token with less than this left is refreshed (it must be a day old, and is 40 by now)
 REFRESH_CHECK_S = 6 * 3600
@@ -51,9 +55,9 @@ EXPIRING = "Konva could not renew its access to Instagram. Connect again in Sett
 FATAL = ("login", "permission")
 
 
-def window_open(last_inbound_at: datetime | None, now: datetime) -> bool:
-    """Whether a reply may still go out: they wrote within the last 24 hours."""
-    return last_inbound_at is not None and now - last_inbound_at < WINDOW
+def window_open(last_inbound_at: datetime | None, now: datetime, human_agent: bool = False) -> bool:
+    """Whether a reply may still go out: they wrote within 24 hours, or within 7 days with Human Agent."""
+    return reply_mode(last_inbound_at, now, human_agent) != CLOSED
 
 
 def parse_time(value: Any) -> datetime | None:
@@ -77,6 +81,8 @@ class OfficialSync:
         rand: Callable[[], float] = random.random,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
+        webhooks: bool | None = None,
+        human_agent: bool | None = None,
     ):
         self.store = store
         self.account = account
@@ -88,6 +94,9 @@ class OfficialSync:
         self.rand = rand
         self.clock = clock
         self.wall = wall
+        self.webhooks = webhooks_on() if webhooks is None else webhooks
+        self.human_agent = human_agent_on() if human_agent is None else human_agent
+        self.next_prune = 0.0
         self.backoff = Backoff(rand)
         self.viewer = ""
         self.expires_at = 0.0
@@ -135,6 +144,8 @@ class OfficialSync:
                     self.send_outbox(graph)
                     self.apply_actions()
                 self.refresh_token(graph)
+                if self.webhooks and self.take_hints():
+                    next_poll = self.clock()  # Meta says there is news: read the inbox now
                 if self.clock() >= next_poll:
                     stored = self.poll(graph)
                     if stored:
@@ -147,7 +158,8 @@ class OfficialSync:
                     else:
                         self.store.touch(self.id)
                     self.backoff.reset()
-                    next_poll = self.clock() + official_poll_wait(self.clock() - quiet_since, self.rand)
+                    wait = safety_wait if self.webhooks else official_poll_wait
+                    next_poll = self.clock() + wait(self.clock() - quiet_since, self.rand)
             except Exception as err:
                 t = trouble(err)
                 log.warn("instagram request failed", account=self.id, kind=t.kind, code=log.code_of(err))
@@ -160,6 +172,21 @@ class OfficialSync:
                 self.store.set_detail(self.id, t.detail)
                 log.info("instagram backing off", account=self.id, kind=t.kind, inS=round(wait))
             self.stop.wait(LOOP_S)
+
+    # -- webhook hints ----------------------------------------------------------------------------------
+
+    def take_hints(self) -> bool:
+        """Whether Meta's webhook left news for this account. A failed read only costs the faster path: the safety
+        poll still finds it."""
+        try:
+            hints = self.store.take_hints(self.viewer)
+            if self.clock() >= self.next_prune:
+                self.next_prune = self.clock() + HINT_PRUNE_S
+                self.store.prune_hints()
+        except Exception as err:
+            log.warn("instagram hints failed", account=self.id, code=log.code_of(err))
+            return False
+        return bool(hints) and has_news(hints)
 
     # -- the token --------------------------------------------------------------------------------------
 
@@ -327,7 +354,8 @@ class OfficialSync:
             return
         # The window and the person to answer both come from their last message in this conversation.
         last = self.store.last_inbound(row["thread_id"])
-        if not last or not window_open(parse_time(last.get("sent_at")), datetime.now(timezone.utc)):
+        mode = reply_mode(parse_time(last.get("sent_at")) if last else None, datetime.now(timezone.utc), self.human_agent)
+        if not last or mode == CLOSED:
             self.store.fail(row["id"], OUTSIDE_WINDOW)
             return
         recipient = self.store.address(row["user_id"], last.get("sender_address"))
@@ -336,7 +364,7 @@ class OfficialSync:
             self.store.fail(row["id"], NOT_FOUND)
             return
         try:
-            sent = graph.send(recipient, text)
+            sent = graph.send(recipient, text, human_agent=True) if mode == TAGGED else graph.send(recipient, text)
         except GraphError as err:
             log.warn("instagram reply failed", account=self.id, outbox=row["id"], code=err.code)
             if err.outside_window:

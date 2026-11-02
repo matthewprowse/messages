@@ -1,7 +1,9 @@
 // Gmail through its REST API: Gmail's own conversation IDs, labels for read and Inbox state, and its
-// change history for updates. The history is checked every 5 seconds while the mailbox is active (mail changed, or the app sent or acted
-// on it in the last 10 minutes), every 30 s after that and every 60 s once quiet for an hour (polling.ts),
-// which keeps new mail within the 10-second target in use without Google Cloud Pub/Sub. Read, unread, archive, delete and junk in the app
+// change history for updates. With Google Cloud Pub/Sub set up (GMAIL_PUBSUB_TOPIC and GMAIL_PUBSUB_SUBSCRIPTION) a watch
+// on the mailbox publishes a notification on every change, the worker pulls it (runtime/gmail-push.ts) and this connector
+// reads history from its stored position straight away; the watch is renewed daily and a slow check (every 5 minutes) is
+// the safety net. Without Pub/Sub only that slow check runs. If Pub/Sub is set up but the watch fails, the old cadence
+// returns (every 5 s while the mailbox is active, 30 s, then 60 s once quiet; polling.ts). Read, unread, archive, delete and junk in the app
 // change the labels in Gmail (delete moves mail to the Bin, never deletes it for good). Mail moved to the
 // Bin or Spam in Gmail leaves the app's inbox. Replies are sent through Gmail, which files them in Sent itself.
 
@@ -10,6 +12,9 @@ import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { Json, Tables } from "@messages/db";
 import { Backoff, SerialQueue, Sleeper, supervise } from "../backoff";
 import { accountActivity, GMAIL_POLL } from "../polling";
+import { mailPollDelay, type PushState } from "../runtime/mail-poll";
+import { gmailPush } from "../runtime/gmail-push";
+import { parseWatchReply, shouldWake, watchDue, type WatchState } from "../google/gmail-push";
 import { allRows, db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -41,6 +46,7 @@ const PROGRESS_EVERY = 500;
 const FILES_EVERY_MS = 10 * 60_000;
 const WRITE_AT_ONCE = 6; // row updates in flight together when many messages change at once
 const FILES_AT_ONCE = 200; // attachment rows checked per catch-up
+const WATCH_RETRY_MS = 5 * 60_000; // a failed watch is tried again no sooner than this
 const HISTORY_TYPES = ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"];
 
 // A type, not an interface, so it counts as JSON for the provider_meta column.
@@ -90,6 +96,11 @@ export class GmailConnector {
   private historyId: string | null = null;
   /** Attachment rows with no stored file yet, a page per catch-up. */
   private readonly missingFiles: BackoffMissingFiles;
+  /** Whether Pub/Sub push is off, working or failing for this session; it picks the check cadence (runtime/mail-poll.ts). */
+  private pushState: PushState = "off";
+  private watch: WatchState | null = null;
+  /** Set by a push notification: a notification that lands during a check must not be lost, as an interrupt would be. */
+  private hinted = false;
 
   constructor(private readonly account: AccountRow) {
     this.missingFiles = new BackoffMissingFiles(account.id, FILES_AT_ONCE);
@@ -140,6 +151,9 @@ export class GmailConnector {
     const { client } = await openGoogleClient(this.id, GMAIL_SCOPE);
     this.client = client;
     this.queue.reset();
+    this.pushState = "off";
+    this.watch = null;
+    this.hinted = false;
 
     const [profile, sendAs] = await Promise.all([
       client.request<{ emailAddress: string; historyId: string }>(`${API}/profile`),
@@ -172,15 +186,33 @@ export class GmailConnector {
 
     let lastFiles = Date.now();
     let lastTouch = Date.now();
+    let lastWatchTry = 0;
     let failures = 0;
     accountActivity.mark(this.id); // a new session starts with quick checks
     // Work the app does for this account (a send, an action) ends an idle wait early.
     const wakeOnActivity = accountActivity.onMark(this.id, () => this.sleeper.interrupt());
+    // Push: a notification for this mailbox that is later than the stored position wakes the check at once.
+    const push = gmailPush();
+    const unroute = push
+      ? push.router.register(profile.emailAddress, this.id, (historyId) => {
+          if (!shouldWake(historyId, this.historyId)) return;
+          this.hinted = true;
+          this.sleeper.interrupt();
+        })
+      : () => undefined;
     try {
       while (!this.stopped) {
-        // 5 s while this mailbox has had activity recently, backing off to 30 s then 60 s when quiet (see
-        // polling.ts); a failed check retries quickly.
-        await this.sleeper.wait(failures > 0 ? GMAIL_POLL.activeMs : accountActivity.delay(this.id, GMAIL_POLL));
+        if (push && watchDue(this.watch, Date.now()) && Date.now() - lastWatchTry >= WATCH_RETRY_MS) {
+          lastWatchTry = Date.now();
+          await this.startWatch(push.topic);
+        }
+        // Push on or off: the slow check (5 minutes). Push configured but failing: 5 s while this mailbox has had
+        // activity recently, backing off to 30 s then 60 s when quiet (polling.ts). A failed check retries quickly,
+        // and a push notification skips the wait.
+        if (!this.hinted) {
+          await this.sleeper.wait(failures > 0 ? GMAIL_POLL.activeMs : mailPollDelay(this.pushState, GMAIL_POLL, accountActivity.since(this.id), Date.now()));
+        }
+        this.hinted = false;
         if (this.stopped) break;
         // One failed check (a Gmail rate limit, a database hiccup) is retried at the next one rather than
         // ending the session. A revoked sign-in ends it at once, and a minute of failures in a row ends it
@@ -207,6 +239,21 @@ export class GmailConnector {
       }
     } finally {
       wakeOnActivity();
+      unroute();
+    }
+  }
+
+  /** Starts or renews Gmail's watch on this mailbox. A failure only means the old cadence returns; it never ends the session. */
+  private async startWatch(topicName: string) {
+    try {
+      const reply = await this.need().request<{ historyId?: string; expiration?: string }>(`${API}/watch`, { method: "POST", body: { topicName } });
+      this.watch = parseWatchReply(reply, Date.now());
+      this.pushState = this.watch ? "healthy" : "failing";
+      this.hinted = true; // mail that arrived before the watch began published nothing: check once now
+    } catch (err) {
+      if (signInRevoked(err)) throw err;
+      this.pushState = "failing";
+      log.warn("gmail watch failed", { account: this.id, code: errorCode(err) });
     }
   }
 

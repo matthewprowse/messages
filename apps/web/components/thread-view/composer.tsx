@@ -44,7 +44,8 @@ const AskDialogs = dynamic(() => import("@/components/thread-view/ask-dialogs").
 
 export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { thread: Thread; msgs: Message[]; phase?: DraftPhase; onDraft: (tone?: Draft["tone"], instruction?: string, decision?: Decision, source?: string, audio?: Blob) => void; onDiscardDraft: () => void; onSend: (body: string, from?: string, files?: OutboxUpload[], copies?: { to: string[]; cc: string[] }, sendAt?: string) => Promise<boolean> }) {
   const replyFrom = useReplyFrom(thread, msgs);
-  const replyAll = useReplyAll(thread, msgs, replyFrom);
+  // A lead from a portal enquiry is answered at their own address, never the portal's no-reply one.
+  const replyAll = useReplyAll(thread, msgs, replyFrom, thread.draft?.replyTo);
   const { contactById, profile } = useApp();
   // Variables in templates and snippets come from the person you write to (not a group) and your own name.
   const vars = useMemo(() => varsFor(thread.isGroup ? undefined : contactById(thread.participantIds[0]), profile.name), [thread.isGroup, thread.participantIds, contactById, profile.name]);

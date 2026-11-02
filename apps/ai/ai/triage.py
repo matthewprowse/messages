@@ -82,6 +82,7 @@ from .triage_signals import (  # noqa: F401  re-exported: other modules and test
     superseded_outcome,
 )
 from .vault import Vault
+from .automations.engine import Automations
 
 
 class Triage(BatchTriageMixin, ContextMixin):
@@ -91,6 +92,7 @@ class Triage(BatchTriageMixin, ContextMixin):
         self.model = model
         self.vault = vault or Vault(db)  # without one, plaintext passes through and nothing is encrypted
         self.analytics = Analytics(db)
+        self.automations = Automations(db, gemini, model, self.vault)
         self._backoff = Backoff()
         self._voice_wait: dict[str, float] = {}  # voice notes waiting for their transcript -> monotonic time to look again
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="triage")
@@ -247,6 +249,7 @@ class Triage(BatchTriageMixin, ContextMixin):
         list(self._pool.map(lambda m: self._update_thread_safely(m, final[m["id"]], latest[m["id"]][1]), updates))
         self._label_threads(updates, final, contexts)
         self._report(updates, final, stored)
+        self.automations.after_triage(done)  # lead capture etc. (automations/engine.py); logs its own failures, never raises
         for m in done:
             self._backoff.succeeded(m["id"])
         self._batch_finish([m["id"] for m in done])

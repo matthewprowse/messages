@@ -132,6 +132,8 @@ export interface Commands {
   /** A person's picture, fetched by the helper (through the account's proxy, from LinkedIn's image servers only). */
   picture: { args: { url: string }; result: { data: string; type: string } };
   read: { args: { conversation: string }; result: Record<string, never> };
+  /** Puts your emoji reaction on a message, or takes it off (remove, with an empty emoji). Both IDs are URNs. See linkedin/reactions.ts. */
+  react: { args: { conversation: string; message: string; emoji: string; remove: boolean }; result: Record<string, never> };
   connect: { args: Record<string, never>; result: Record<string, never> };
   cookies: { args: Record<string, never>; result: { cookies: string } };
   stop: { args: Record<string, never>; result: Record<string, never> };

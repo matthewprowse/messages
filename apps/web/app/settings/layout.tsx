@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, ChevronRight, Gauge, Link2, Sparkles, UserRound, Users, type LucideIcon } from "lucide-react";
+import { Bell, ChevronRight, Gauge, Link2, Sparkles, UserRound, Users, Zap, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PaneHeader } from "@/components/pane";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -12,6 +12,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 const SECTIONS: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/settings/accounts", label: "Accounts", icon: Link2 },
   { href: "/settings/ai", label: "AI", icon: Sparkles },
+  { href: "/settings/automations", label: "Automations", icon: Zap },
   { href: "/settings/notifications", label: "Notifications", icon: Bell },
   { href: "/settings/usage", label: "Usage", icon: Gauge },
   { href: "/settings/team", label: "Team", icon: Users },
