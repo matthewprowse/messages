@@ -2,15 +2,13 @@
 // is checked with iCloud here, then stored encrypted exactly as pnpm connect:icloud stores it. It is never
 // logged or sent back.
 
-import { ImapFlow } from "imapflow";
-import { accountsReady, ensureProfile, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
+import { accountsReady } from "@/lib/server/accounts";
+import { checkCalendar, checkMail, saveMailAndCalendar } from "@/lib/server/icloud";
 import { fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ICLOUD_IMAP = { host: "imap.mail.me.com", port: 993, secure: true } as const;
-const CALDAV = "https://caldav.icloud.com/";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Each try is a sign-in to iCloud, so few: 5 every 10 minutes.
@@ -42,37 +40,9 @@ export async function POST(request: Request) {
   const calendar = body.calendar !== false && (await checkCalendar(username, password));
 
   try {
-    await ensureProfile(user.id);
-    await saveCredentials(await saveAccountRow(user.id, "icloud", "iCloud+ Mail", address), { username, password, aliases: [] });
-    if (calendar) await saveCredentials(await saveAccountRow(user.id, "icloud_calendar", "iCloud Calendar", username, { onePerUser: true }), { username, password });
+    await saveMailAndCalendar(user.id, { username, address, password, mail: true, calendar });
   } catch {
     return fail(500, "Signed in, but the account could not be saved. Try again.");
   }
   return Response.json({ mail: true, calendar }, { headers: noStore });
-}
-
-async function checkMail(user: string, pass: string): Promise<"ok" | "rejected" | "unreachable"> {
-  const probe = new ImapFlow({ ...ICLOUD_IMAP, auth: { user, pass }, logger: false });
-  try {
-    await probe.connect();
-    await probe.logout();
-    return "ok";
-  } catch (err) {
-    return (err as { authenticationFailed?: boolean }).authenticationFailed ? "rejected" : "unreachable";
-  }
-}
-
-/** Whether the same sign-in opens iCloud Calendar: one PROPFIND, 207 when it does. */
-async function checkCalendar(user: string, pass: string): Promise<boolean> {
-  try {
-    const response = await fetch(CALDAV, {
-      method: "PROPFIND",
-      headers: { authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`, depth: "0", "content-type": "application/xml" },
-      body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>',
-      signal: AbortSignal.timeout(15_000),
-    });
-    return response.status === 207;
-  } catch {
-    return false;
-  }
 }

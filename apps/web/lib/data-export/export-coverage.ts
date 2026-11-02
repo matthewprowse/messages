@@ -65,6 +65,7 @@ export const EXCLUDED_TABLES: Record<string, string> = {
   event_preps: "Meeting briefs the AI rebuilds before each meeting.",
   feedback: "Messages the person sent to us, kept by us.",
   follow_ups: "Derived from conversations: whether a reply is awaited.",
+  icloud_setups: "A sign-in in progress, deleted once used; the accounts it connects are exported.",
   instagram_sign_ins: "Sign in bookkeeping, never exported.",
   mail_actions: "A queue of writes to the mail provider.",
   meeting_participants: "Not yet: meetings are not in the zip.",

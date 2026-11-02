@@ -1,0 +1,49 @@
+# The workers on the production VM (docs/RUNBOOK.md, "Production VM"). deploy/release.sh copies the repo at a commit to
+# /opt/konva/src and runs this file from there. Secrets live only on the VM, in /opt/konva/env (deploy/push-env.sh).
+# The web app is not here: it runs on Vercel.
+
+name: konva
+
+x-worker: &worker
+  restart: unless-stopped
+  # The worker finishes in-flight sends for up to 10 s after SIGTERM.
+  stop_grace_period: 20s
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  worker:
+    <<: *worker
+    build: { context: .., dockerfile: apps/worker/Dockerfile }
+    image: konva-worker
+    env_file: /opt/konva/env/worker.env
+    # The env file is copied from a laptop, where HEALTH_PORT is blank; the image's health check needs it on.
+    environment: { HEALTH_PORT: "8080" }
+
+  ai:
+    <<: *worker
+    build: { context: .., dockerfile: apps/ai/Dockerfile }
+    image: konva-ai
+    env_file: /opt/konva/env/ai.env
+    environment: { HEALTH_PORT: "8080" }
+
+  # The optional connector processes have no health endpoint, so the image's check is off. Turned on per VM with
+  # /opt/konva/profiles (for example "icloud-reminders,instagram").
+  icloud-reminders:
+    <<: *worker
+    profiles: [icloud-reminders]
+    build: { context: .., dockerfile: apps/ai/Dockerfile, args: { EXTRA_REQUIREMENTS: requirements-icloud-reminders.txt } }
+    image: konva-ai-icloud-reminders
+    command: ["python", "-m", "ai", "icloud-reminders"]
+    env_file: /opt/konva/env/ai.env
+    healthcheck: { disable: true }
+
+  instagram:
+    <<: *worker
+    profiles: [instagram]
+    build: { context: .., dockerfile: apps/ai/Dockerfile, args: { EXTRA_REQUIREMENTS: requirements-instagram.txt } }
+    image: konva-ai-instagram
+    command: ["python", "-m", "ai", "instagram"]
+    env_file: /opt/konva/env/ai.env
+    healthcheck: { disable: true }

@@ -22,6 +22,7 @@ tasks and meetings, with AI triage and drafts in the user's own voice. Product d
 | `packages/mail-servers` | IMAP/SMTP server discovery and probing. | TypeScript |
 | `packages/analytics` | Content-free analytics event types. | TypeScript |
 | `packages/qr` | QR code generation. | TypeScript |
+| `deploy` | Production: Compose file for the workers' VM, and scripts to create it, push env and release. See `docs/RUNBOOK.md`. | Shell |
 | `supabase/migrations` | SQL migrations, named `YYYYMMDDHHMMSS_name.sql`. | SQL |
 | `docs/PLAN.md` | Product plan and every agreed decision. | Markdown |
 

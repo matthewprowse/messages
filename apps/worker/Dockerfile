@@ -1,10 +1,20 @@
 # The sync worker image. Build from the repo root (the worker depends on packages/*):
 #   docker build -f apps/worker/Dockerfile -t konva-worker .
 # Nothing secret is baked in: SUPABASE_*, KEY_WRAPPING_KEY and the rest arrive as environment variables at run time
-# (see apps/worker/.env.example and docs/RUNBOOK.md). The LinkedIn helper (apps/linkedin) is not in this image.
+# (see apps/worker/.env.example and docs/RUNBOOK.md). The LinkedIn helper (apps/linkedin) is built in its own stage and
+# copied in as a static binary, so LinkedIn works without Go in the final image.
 
 # Base images are pinned by digest so a rebuild gives the same bytes (Confidential Space attests the image digest).
 # To move a pin: docker buildx imagetools inspect node:24-bookworm-slim, and record the date in docs/RUNBOOK.md.
+# The LinkedIn helper: pure Go, so a static build runs on the slim Node image. Pinned like the others
+# (docker buildx imagetools inspect golang:1.26-bookworm).
+FROM golang:1.26-bookworm@sha256:23ce71337b726608afb1bc00986e630a05034a87a87ea1fc2cd1ae5cf33387eb AS linkedin
+WORKDIR /src
+COPY apps/linkedin/go.mod apps/linkedin/go.sum ./
+RUN go mod download
+COPY apps/linkedin/*.go ./
+RUN CGO_ENABLED=0 go build -trimpath -o /out/konva-linkedin .
+
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS build
 ENV CI=true
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
@@ -19,7 +29,8 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-ENV NODE_ENV=production HEALTH_PORT=8080
+ENV NODE_ENV=production HEALTH_PORT=8080 LINKEDIN_HELPER=/usr/local/bin/konva-linkedin
+COPY --from=linkedin /out/konva-linkedin /usr/local/bin/konva-linkedin
 WORKDIR /app
 COPY --from=build --chown=node:node /out /app
 USER node

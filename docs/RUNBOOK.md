@@ -8,18 +8,19 @@ AI worker are separate containers that meet in one Supabase database and never c
 
 | Service | Where | Image | Health port |
 | --- | --- | --- | --- |
-| Web app (`apps/web`) | Vercel | none | none |
-| Sync worker (`apps/worker`) | Container, one per shard | `apps/worker/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
-| AI worker (`apps/ai`) | Container, exactly one | `apps/ai/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
+| Web app (`apps/web`) | Vercel project `konva` (team `prowse`), functions in `dub1` | none | none |
+| Sync worker (`apps/worker`) | VM `konva-workers`, container, one per shard | `apps/worker/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
+| AI worker (`apps/ai`) | VM `konva-workers`, container, exactly one | `apps/ai/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
 | Instagram and iCloud Reminders | The AI image, started with `python -m ai instagram` or `icloud-reminders` | `apps/ai/Dockerfile` with `EXTRA_REQUIREMENTS` | none (run with the health check off) |
-| LinkedIn helper (`apps/linkedin`) | Not in the worker image yet | build with `pnpm linkedin:build` | none |
+| LinkedIn helper (`apps/linkedin`) | Inside the worker image at `/usr/local/bin/konva-linkedin` (`LINKEDIN_HELPER`) | built in the worker Dockerfile | none |
 
 After Confidential Space (stage 4, built at the first paying client) the same two images run on Confidential VMs; the image
 digest is what the KMS policy trusts, so a deploy there also means changing the allowed digests (see Rotating And Releasing).
 
 ## Deploy
 
-Images are built from the repo root and are never built or pushed from a laptop for production.
+Images are built from the repo root and are never built or pushed from a laptop for production. Today the production
+images are built on the VM from a pushed commit (see Production VM).
 
 ```
 docker build -f apps/worker/Dockerfile -t konva-worker .
@@ -45,6 +46,43 @@ Order for a release:
 
 Run with a restart policy that restarts on exit (the lease makes crash restarts safe). `STOPSIGNAL` is SIGTERM in both images.
 Start probes must allow 120 seconds before the first readiness success.
+
+## Web App On Vercel
+
+The Vercel project `konva` builds `apps/web` (Node 24) on every push to `main`. Supabase is in AWS Ireland, so functions run
+in Dublin (`dub1`). Vercel Authentication guards every address except custom domains, so the `*.vercel.app` address asks
+for a Vercel sign-in; use the custom domain on the phone.
+
+1. Push the env: `deploy/push-web-env.sh` copies `apps/web/.env.local` into Production (values are never printed). Lines
+   pointing at `localhost` are skipped, and the local KMS key file goes up as `GOOGLE_APPLICATION_CREDENTIALS_JSON`. Set
+   `NEXT_PUBLIC_VAPID_PUBLIC_KEY` and `GRAPH_NOTIFY_SECRET` there too once they exist.
+2. Add the domain in the Vercel project (Settings, Domains) and the DNS record it asks for.
+3. Supabase, Authentication, URL Configuration: Site URL `https://<domain>`, and `https://<domain>/**` in Redirect URLs.
+4. Google, Microsoft and Zoom OAuth clients: add the same callback paths the local `http://localhost:3000` ones use, on
+   `https://<domain>`. Google: also publish the consent screen (Testing mode expires Gmail sign-ins after 7 days).
+5. Redeploy (push, or Redeploy in Vercel): env changes apply to the next build.
+6. On the iPhone: open the domain in Safari, Share, Add to Home Screen. Web push only works from the home screen app.
+
+## Production VM
+
+One Compute Engine VM, `konva-workers` (e2-medium, `africa-south1-a`, project `messages-keys`), runs the workers with Docker
+Compose (`deploy/compose.yaml`). Its service account `konva-workers@messages-keys.iam.gserviceaccount.com` may only encrypt
+and decrypt with `user-data-keys` and write logs, and the workers reach KMS through the metadata server, so no key file is on
+the VM. No ports are open beyond SSH; the workers only connect out.
+
+| Step | Command (from the repo root on the laptop) |
+| --- | --- |
+| Create the VM (once; safe to repeat) | `deploy/create-vm.sh` |
+| Copy the env files (after any change to them) | `deploy/push-env.sh` (reads `apps/worker/.env` and `apps/ai/.env`; `WORKER_ENV`, `AI_ENV` to use others) |
+| Release | `deploy/release.sh [git ref]` (default `origin/main`: push first, the working tree never ships) |
+| Optional connectors | on the VM, `echo icloud-reminders,instagram \| sudo tee /opt/konva/profiles`, then release |
+| Logs | `gcloud compute ssh konva-workers --zone africa-south1-a --project messages-keys --command "sudo docker compose -f /opt/konva/src/deploy/compose.yaml logs -f --tail 100"` |
+| Roll back | `deploy/release.sh <previous commit>` |
+
+`release.sh` copies the commit to `/opt/konva/src` (the previous one stays at `/opt/konva/src.old`, and the commit is in
+`RELEASE`), builds the images there, then rolls the sync worker and the AI worker one at a time, waiting up to 5 minutes for
+each to report ready. The env files' `ENCRYPT_*` must not be `false`; `push-env.sh` refuses, because the workers would not
+start. Containers restart on failure and after a reboot.
 
 ## Environment Variables
 

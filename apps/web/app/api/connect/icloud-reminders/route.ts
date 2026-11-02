@@ -5,7 +5,8 @@
 // earlier sign-in for the same Apple ID is kept, so Apple may not ask for a code again. Nothing typed here is
 // logged or sent back.
 
-import { accountsReady, ensureProfile, openAccountJson, saveAccountRow, sealAccountJson } from "@/lib/server/accounts";
+import { accountsReady } from "@/lib/server/accounts";
+import { startReminders } from "@/lib/server/icloud";
 import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
 
 export const runtime = "nodejs";
@@ -34,35 +35,8 @@ export async function POST(request: Request) {
   if (wait > 0) return fail(429, "Too many tries. Wait a while before connecting again.", { "Retry-After": String(wait) });
 
   try {
-    await ensureProfile(user.id);
-    // One Reminders account per person: signing in with another Apple ID takes over the account they have.
-    const accountId = await saveAccountRow(user.id, "icloud_reminders", "iCloud Reminders", appleId, { onePerUser: true });
-    // A sign-in step left over from an earlier try is cleared, so the app never shows a stale one.
-    await admin.from("instagram_sign_ins").delete().eq("account_id", accountId);
-    const { error: statusError } = await admin.from("accounts").update({ status_detail: "Signing in to iCloud." }).eq("id", accountId);
-    if (statusError) throw statusError;
-    await saveSignIn(accountId, appleId, password);
-    return Response.json({ accountId }, { headers: noStore });
+    return Response.json({ accountId: await startReminders(user.id, appleId, password) }, { headers: noStore });
   } catch {
     return fail(500, "iCloud Reminders could not be connected. Try again.");
   }
-}
-
-/** The sign-in, keeping the connector's saved session (refreshed) when it is for the same Apple ID. */
-async function saveSignIn(accountId: string, appleId: string, password: string) {
-  if (!admin) throw new Error("Supabase is not set up.");
-  const { data: existing } = await admin.from("account_credentials").select("refreshed").eq("account_id", accountId).maybeSingle();
-  let refreshed = existing?.refreshed ?? null;
-  if (refreshed) {
-    try {
-      // A session saved for another Apple ID is no use to this one.
-      if ((await openAccountJson<{ appleId?: string }>(accountId, refreshed)).appleId?.toLowerCase() !== appleId) refreshed = null;
-    } catch {
-      refreshed = null;
-    }
-  }
-  const { error } = await admin
-    .from("account_credentials")
-    .upsert({ account_id: accountId, ciphertext: await sealAccountJson(accountId, { kind: "web", appleId, password }), refreshed, updated_at: new Date().toISOString() }, { onConflict: "account_id" });
-  if (error) throw error;
 }

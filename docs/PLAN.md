@@ -270,6 +270,53 @@ assumes and cannot check: that you can fill 8 qualified demos a month (finding p
 not costed), that a new product closes like established ones, and that businesses accept WhatsApp
 through Baileys. Your first 10 to 20 demos give a real close rate and seats per business.
 
+### Marketing Plan (2 November 2026)
+
+Konva is sold to estate agency offices, not advertised to consumers. One 15 agent office is about R7,500 a month, the
+same as about 20 individual sign-ups from ads, so selling, referrals and proof come before ad spend.
+
+Message:
+
+- To agents: "Reply to every lead in minutes, even during a show day." Drafts in their own voice are how, not the headline.
+- To principals, who buy: "When an agent leaves, the clients stay with the office" and "See which leads are waiting for a reply."
+- Proof over claims: measure each office's average lead reply time before and after Konva and use it in every pitch.
+- No "we can't read your messages" until Confidential Space is live. Until then: encrypted per user, POPIA aligned.
+- Do not make WhatsApp the whole pitch (Baileys can be banned). Sell the one client view across email, WhatsApp and portals.
+
+Channels, in order:
+
+1. Pilot offices, months 1 to 3: 10 franchise offices with 5 to 25 agents (RE/MAX, Seeff, Pam Golding, Chas Everitt,
+   Harcourts franchises, where the principal decides). Reach principals on LinkedIn and WhatsApp. 30 days free with the
+   founder setting the office up, in return for before and after reply times and a usable quote.
+2. 15 minute demos at agencies' weekly sales meetings, using leave days or early slots.
+3. Referrals in the product: a free month for both sides when a referral pays. Agents moving offices carry Konva with them.
+4. Industry presence: SA agent Facebook groups and WhatsApp communities, IEASA, CPD events. Short clips, not pitches.
+5. Founder content 2 to 3 times a week: LinkedIn for principals, Instagram or TikTok reels for agents, built in public.
+6. Paid ads only after the pilots: the R10k to R15k Meta test aimed at agents with the case study figures. Scale only if
+   cost per click, clicks that start a trial and trials that pay beat the middle column above.
+7. Year 2: franchise head office deals, property CRM partnerships, then brokers and financial advisers (compliance archive).
+
+Target: about 15 principal conversations a month, 5 demos, 1 to 2 offices signed. Ten offices by month 6 is about 150
+seats, or R75k a month, which is enough to prove the model and run the ad test properly.
+
+Start Google verification and the CASA assessment before marketing: until it passes, pilot offices count against the
+Gmail test user cap.
+
+### Founder Hours and Support (2 November 2026)
+
+The founder works a 9 to 5 in 2027 and plans to go full time once monthly revenue covers about six months of costs with
+steady growth. Check the employment contract for side business and IP clauses before launch.
+
+- Onboarding is self serve by default (see Onboarding below). Live calls are a perk for teams and anyone stuck, not a step.
+- One group onboarding session a week on a weekday evening, about 30 minutes, for everyone who signed up that week.
+- One to one calls are booked through a link with a cap of about 5 a week.
+- A short recorded walkthrough for people who never join a session.
+- Weekly hours: two weekday mornings 6:30 to 8 (building, one call), two weekday evenings 6 to 8 (outreach, content,
+  support, one is the group session), Saturday (office visits, demos, building). Sunday is off.
+- Clients are told plainly: "Onboarding calls are early mornings, evenings and Saturdays, so they don't eat into your
+  working day" and "We reply within one working day." Support is checked at lunch and in the evening.
+- Track onboarding steps in the content free analytics (connected, first draft seen, first send) to find where people drop.
+
 ## Fair Usage and Storage
 
 Storage: 20 GB per seat approved 27 October 2026. Built so far: the Storage section in Settings, Usage,
@@ -2788,6 +2835,35 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
   It is also what a regulated compliance archive needs.
 - **Billing:** Paystack subscriptions, trials, seats, EFT invoices for firms, VAT, and a plan page in Settings.
 
+
+### Built: One iCloud Sign-In (2 November 2026)
+
+Connect iCloud is now one Apple ID sign-in: the person ticks Mail, Calendar and Reminders, enters the code from an
+Apple device in the page, and Konva makes the app-specific password Mail and Calendar need, labelled "Konva" in their
+Apple Account (removable there). Agreed with the owner on 2 November 2026.
+
+- **How the password is made.** Apple has no public way, so this follows account.apple.com's own calls, read from its
+  JavaScript on 2 November 2026 (unpublished elsewhere): sign in at idmsa.apple.com with the account page's widget
+  key (`af1139…82c3`, from account.apple.com/bootstrap/portal), open the session with GET
+  `appleid.apple.com/account/manage/gs/ws/token`, then POST `/account/manage/security/secondary-password`
+  `{"description": "Konva"}`. A 451 means type the password again (POST `/authenticate/password`); 466 means this
+  Apple ID only makes them on a device. The sign-in reuses pyicloud's, so the code steps are the Reminders ones.
+- **Where it runs.** `icloud_setups` (service role only, sealed under the static key, deleted once used) carries the
+  sign-in, the code step and the made password. The iCloud connector process (`python3 -m ai icloud-reminders`)
+  takes queued rows (`apps/ai/ai/connectors/icloud_reminders/setup.py`, `account_site.py`). The app's
+  `/api/connect/icloud-signin/step` checks the password with iCloud Mail and Calendar and saves them exactly as a
+  pasted one (`apps/web/lib/server/icloud.ts`).
+- **What is kept.** For Mail and Calendar only the app-specific password, as before; the Apple Account session that
+  made it is thrown away. Reminders, when ticked, starts its own iCloud.com sign-in afterwards with the trust token
+  from this one, so Apple may not ask for a second code (not yet confirmed on a real account).
+- **Fallbacks.** Use an App-Specific Password Instead keeps the paste form, for Managed Apple IDs (which cannot have
+  app-specific passwords) and Apple IDs Apple refuses. Changing the Apple ID password revokes every app-specific
+  password; Mail then fails to sign in and the person connects again. Apple allows about 25 per Apple ID.
+- **Not yet checked against a real Apple ID.** The calls are read from Apple's code, not watched working. The first
+  real sign-in should be watched: whether idmsa accepts the account widget key from a server, the exact shape of the
+  make answer (the code takes any field shaped like `abcd-efgh-ijkl-mnop`), and whether the trust token skips the
+  second code for Reminders.
+
 ### Built: Wave 3, Contacts Page (2 November 2026)
 
 - A merge patches the contacts the app already holds (and the Contacts lists) instead of reading the whole contact
@@ -3206,3 +3282,18 @@ all show counts, ages, codes and dollars: never message content, names or addres
   not logged.
 
 Migrations `20261121110000_feature_flags_audit.sql` and `20261121111000_admin_operator_views.sql` are written, not yet applied.
+
+## Hosting For Daily Use (agreed 2 November 2026)
+
+- **Web app on Vercel**, project `konva` in the `prowse` team, built from `apps/web` on every push to `main`. Functions run in
+  Dublin (`dub1`) because the Supabase project is in AWS Ireland, so each request reaches the database without leaving the region.
+- **Workers on one Google Compute Engine VM**, `konva-workers` (e2-medium, `africa-south1-a`), in the `messages-keys` project next
+  to the KMS key. The VM's own service account can only encrypt and decrypt with `user-data-keys`, so the workers need no key file.
+  Docker Compose runs the sync worker, the AI worker and, when switched on, the iCloud Reminders and Instagram processes.
+  About $30 to $35 a month. Chosen over Cloud Run because the workers hold long connections (WhatsApp, IMAP) and poll in a loop,
+  and over a VPS elsewhere because Confidential Space (stage 4) is the same project and region.
+- **The LinkedIn helper is now built into the worker image** as a static Go binary, so LinkedIn works in production.
+- **Releases** build on the VM from a pushed commit (`deploy/release.sh`, default `origin/main`), never from the working tree.
+  Secrets are copied from local env files by `deploy/push-env.sh` and `deploy/push-web-env.sh` and live only on the VM and in Vercel.
+- For one user, the Google OAuth app is published without verification so Gmail sign-ins do not expire after 7 days in Testing
+  mode. Verification (with the security assessment for Gmail scopes) is needed before other people sign in.

@@ -18,6 +18,7 @@ import { supabase } from "@/lib/supabase";
 import type { Account, Provider } from "@/lib/types";
 import { BrandLogo, type Brand } from "@/components/provider-logo";
 import { ICloudConnectForm } from "@/components/icloud-connect";
+import { ICloudSignIn } from "@/components/icloud-signin";
 import { ImapConnectForm } from "@/components/imap-connect";
 import { useWhatsAppLink, WhatsAppLinkPanel } from "@/components/whatsapp-link";
 import { SettingsRow, SettingsRows } from "@/components/settings/primitives";
@@ -164,7 +165,7 @@ type Service = "google" | "whatsapp" | "icloud" | "microsoft" | "other";
 const SERVICES: Record<Service, { label: string; description: string; providers: Provider[]; brand?: Brand }> = {
   google: { label: "Google", description: "Gmail and Google Calendar, with one sign-in.", providers: ["gmail", "google_calendar"], brand: "google" },
   whatsapp: { label: "WhatsApp", description: "Scan a code with your phone, like WhatsApp Web.", providers: ["whatsapp"], brand: "whatsapp" },
-  icloud: { label: "iCloud", description: "iCloud Mail and Calendar, with an app-specific password.", providers: ["icloud", "icloud_calendar"], brand: "icloud" },
+  icloud: { label: "iCloud", description: "iCloud Mail, Calendar and Reminders, with one Apple ID sign-in.", providers: ["icloud", "icloud_calendar"], brand: "icloud" },
   microsoft: { label: "Microsoft", description: "Outlook and Outlook Calendar, work or personal.", providers: ["outlook", "outlook_calendar"], brand: "microsoft" },
   other: { label: "Other Email", description: "Mail on your own domain at Afrihost, xneelo or any IMAP host.", providers: ["imap"] },
 };
@@ -202,6 +203,7 @@ function AccountsStep() {
   const email = session?.user.email ?? "";
   const [guess, setGuess] = useState<Service | null>(() => serviceOf(email));
   const [open, setOpen] = useState<Service | null>(null);
+  const [pasteICloud, setPasteICloud] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   const whatsapp = useWhatsAppLink();
@@ -294,13 +296,24 @@ function AccountsStep() {
                 </SettingsRow>
                 {open === service && service === "icloud" && !live && (
                   <div className="border-t px-4 py-4">
-                    <ICloudConnectForm
-                      defaultEmail={email}
-                      onConnected={({ calendar }) => {
-                        setOpen(null);
-                        toast(calendar ? "iCloud Mail and Calendar are connected." : "iCloud Mail is connected. Calendar did not accept the same sign-in.");
-                      }}
-                    />
+                    {pasteICloud ? (
+                      <ICloudConnectForm
+                        defaultEmail={email}
+                        onConnected={({ calendar }) => {
+                          setOpen(null);
+                          toast(calendar ? "iCloud Mail and Calendar are connected." : "iCloud Mail is connected. Calendar did not accept the same sign-in.");
+                        }}
+                      />
+                    ) : (
+                      <ICloudSignIn
+                        defaultEmail={email}
+                        onConnected={({ message }) => {
+                          setOpen(null);
+                          toast(message);
+                        }}
+                        onUsePassword={() => setPasteICloud(true)}
+                      />
+                    )}
                   </div>
                 )}
                 {open === service && service === "other" && !live && (

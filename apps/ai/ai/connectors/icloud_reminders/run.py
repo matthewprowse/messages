@@ -1,5 +1,6 @@
 """Runs the iCloud Reminders connector: one thread per connected iCloud Reminders account, started and stopped
-as accounts are connected, paused and connected again in the app. Stop with Ctrl+C.
+as accounts are connected, paused and connected again in the app, and the one iCloud sign-in that makes an
+app-specific password for Mail and Calendar (setup). Stop with Ctrl+C.
 
 An account runs while its status is connecting, syncing or connected and a web sign-in (kind "web") is saved
 for it. When the app saves a new sign-in (Connect in Settings), its account_credentials.updated_at moves and
@@ -20,6 +21,7 @@ from ... import log
 from ...config import _load_env_file, check_encryption, flag_on
 from ...supabase import Supabase, missing_relation
 from ...vault import Vault
+from .setup import SetupRunner, Setups
 from .store import Store
 from .sync import AccountSync
 
@@ -149,6 +151,8 @@ def main() -> None:
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     log.info("icloud reminders connector starting", encrypt_content=cfg.encrypt_content)
+    setups = SetupRunner(Setups(db, cfg.encryption_key), stop)
+    threading.Thread(target=setups.run, name="icloud-setups", daemon=True).start()
     try:
         while not stop.is_set():
             try:

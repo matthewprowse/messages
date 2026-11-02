@@ -9,7 +9,7 @@ export const OWNED_TABLES = [
   "attachment_fetch_requests", "attachments", "automation_previews", "automation_runs", "automations", "brief_parts", "brief_requests", "briefs", "bulk_reads",
   "calendar_deletes", "calendar_events", "calendar_outbox", "calendar_updates", "commitments", "compliance_exports", "compliance_opens",
   "contact_identities", "contact_merges", "contact_suggestions", "contacts", "document_reads", "draft_outcomes", "drafts", "email_originals",
-  "feedback", "follow_ups", "instagram_sign_ins", "labels", "mail_actions", "meeting_participants", "meetings", "message_ai",
+  "feedback", "follow_ups", "icloud_setups", "instagram_sign_ins", "labels", "mail_actions", "meeting_participants", "meetings", "message_ai",
   "message_embeddings", "message_versions", "messages", "note_attachments", "note_links", "notes", "organizations", "outbox", "outbox_attachments",
   "priority_rules", "profiles", "push_subscriptions", "saved_views", "share_jobs", "storage_deletions", "style_rules", "task_updates",
   "tasks", "thread_label_removals", "thread_labels", "thread_links", "thread_notes", "thread_participants", "threads", "unsubscribes", "user_keys", "user_templates", "workspace_activity", "workspace_contact_agents",

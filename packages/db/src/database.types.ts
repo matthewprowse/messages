@@ -1980,6 +1980,60 @@ export type Database = {
         }
         Relationships: []
       }
+      icloud_setups: {
+        Row: {
+          attempts: number
+          claimed_at: string | null
+          code: string | null
+          created_at: string
+          detail: string | null
+          error: string | null
+          id: string
+          method: string | null
+          result: string | null
+          services: string[]
+          sign_in: string
+          status: string
+          step: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          claimed_at?: string | null
+          code?: string | null
+          created_at?: string
+          detail?: string | null
+          error?: string | null
+          id?: string
+          method?: string | null
+          result?: string | null
+          services: string[]
+          sign_in: string
+          status?: string
+          step?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          claimed_at?: string | null
+          code?: string | null
+          created_at?: string
+          detail?: string | null
+          error?: string | null
+          id?: string
+          method?: string | null
+          result?: string | null
+          services?: string[]
+          sign_in?: string
+          status?: string
+          step?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       instagram_sign_ins: {
         Row: {
           account_id: string
