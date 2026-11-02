@@ -4,9 +4,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  MAX_TITLE, dateOnly, dueDay, formOfTask, isOverdue, isTempTask, mapTask, taskChanged, taskDetail, taskOfWrite, taskProblem, tasksByDay, tasksForToday, taskWhen, taskWriteFields,
-  tempTaskId, timeChoices, withTicks, type TaskForm, type TaskRowOf,
+  MAX_TASK_TITLE, dateOnly, dueDay, formOfTask, isOverdue, isTempTask, mapTask, taskChanged, taskDetail, taskOfWrite, taskProblem, tasksByDay, tasksForToday, taskWhen, taskWriteFields,
+  tempTaskId, visibleTasks, withTicks, type TaskForm, type TaskRowOf,
 } from "./tasks";
+import { timeChoices } from "./dates";
 import type { Task } from "./types";
 
 // Local noon on Monday 26 October 2026, whatever zone the tests run in.
@@ -121,7 +122,7 @@ test("a form needs a title and a date", () => {
   assert.equal(taskProblem({ ...form, date: "" })?.field, "date");
   assert.equal(taskProblem({ ...form, title: "  " })?.field, "title");
   assert.equal(taskProblem({ ...form, date: "", time: "09:30" })?.field, "date");
-  assert.equal(taskProblem({ ...form, title: "x".repeat(MAX_TITLE + 1) })?.field, "title");
+  assert.equal(taskProblem({ ...form, title: "x".repeat(MAX_TASK_TITLE + 1) })?.field, "title");
 });
 
 test("a task fills the form it is edited in, and the form knows when nothing changed", () => {
@@ -149,4 +150,16 @@ test("the times offered are quarter hours, with an odd one already set kept", ()
   assert.equal(timeChoices("").length, 96);
   assert.equal(timeChoices("")[37], "09:15");
   assert.equal(timeChoices("09:20").includes("09:20"), true);
+});
+
+test("the filter box matches a task's title, notes or list, and an empty box matches all", () => {
+  const list = [
+    { title: "Send Smith the quote", notes: undefined, listName: "Work" },
+    { title: "Buy milk", notes: "Ask Smith's wife", listName: "Home" },
+    { title: "Call the bank", notes: undefined, listName: "Smith Trust" },
+    { title: "Water plants", notes: undefined, listName: "Home" },
+  ];
+  assert.equal(visibleTasks(list, "smith").length, 3);
+  assert.equal(visibleTasks(list, "").length, 4);
+  assert.equal(visibleTasks(list, "nobody").length, 0);
 });

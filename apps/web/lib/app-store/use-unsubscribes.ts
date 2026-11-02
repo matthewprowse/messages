@@ -9,6 +9,10 @@ import { userKeys } from "../vault";
 import { sealAddress } from "../address-refs";
 import type { Action, State } from "./reducer";
 
+// "I've Unsubscribed" is easy to press by mistake, so it shows at once but is only saved once this long has
+// passed without Undo. Closing the page in that time saves nothing, and the sender stays to do.
+const CONFIRM_UNSUBSCRIBE_MS = 6000;
+
 /** The unsubscribe actions of the context. */
 export function useUnsubscribes({ rawDispatch, stateRef }: { rawDispatch: React.Dispatch<Action>; stateRef: React.MutableRefObject<State> }) {
   const unsubscribe = useCallback(async (senders: { accountId: string; sender: string }[]) => {
@@ -35,9 +39,6 @@ export function useUnsubscribes({ rawDispatch, stateRef }: { rawDispatch: React.
     return queued;
   }, []);
 
-  // "I've Unsubscribed" is easy to press by mistake, so it shows at once but is only saved once this long has
-  // passed without Undo. Closing the page in that time saves nothing, and the sender stays to do.
-  const CONFIRM_UNSUBSCRIBE_MS = 6000;
   const confirmUnsubscribe = useCallback((id: string) => {
     const before = stateRef.current.unsubscribes.find((u) => u.id === id);
     if (!before || before.status !== "manual") return;

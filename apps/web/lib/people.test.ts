@@ -7,6 +7,14 @@ import { companyLogo, isCompanySender, isRoleAddress } from "./people";
 
 const contact = (name: string, emails: string[], organizationName: string | null, phones: string[] = []) => ({ name, emails, phones, organizationName });
 
+test("the user's own word on person or company beats the guess", () => {
+  const brand = { ...contact("Anna Studio", ["anna@annastudio.co.za"], "Anna Studio") };
+  assert.equal(isCompanySender(brand), true);
+  assert.equal(isCompanySender({ ...brand, kindOverride: "person" }), false);
+  assert.equal(isCompanySender({ ...contact("Thandi Mokoena", ["thandi@x.com"], null), kindOverride: "company" }), true);
+  assert.equal(isCompanySender({ ...brand, kindOverride: null }), true);
+});
+
 test("recognises role addresses", () => {
   for (const a of ["noreply@emirates.com", "no-reply@x.com", "do-not-reply@x.com", "info@checkers.co.za", "news@x.com", "support+tickets@x.com", "noreply-alerts@x.com"]) {
     assert.equal(isRoleAddress(a), true, a);

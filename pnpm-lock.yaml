@@ -153,6 +153,9 @@ importers:
       '@messages/qr':
         specifier: workspace:*
         version: link:../../packages/qr
+      '@napi-rs/canvas':
+        specifier: 1.0.13
+        version: 1.0.13
       '@supabase/supabase-js':
         specifier: ^2.118.0
         version: 2.118.0
@@ -168,6 +171,9 @@ importers:
       nodemailer:
         specifier: ^10.2.1
         version: 10.2.1
+      pdfjs-dist:
+        specifier: 6.4.299
+        version: 6.4.299
       sharp:
         specifier: 0.35.5
         version: 0.35.5(@types/node@24.19.2)
@@ -4327,7 +4333,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 1.0.13
       '@napi-rs/canvas-win32-arm64-msvc': 1.0.13
       '@napi-rs/canvas-win32-x64-msvc': 1.0.13
-    optional: true
 
   '@next/env@15.5.28': {}
 

@@ -1,16 +1,18 @@
 "use client";
 
-// The week and day views: days across, hours down the side, with drag to make a new event.
+// The week and day views: days across, hours down the side, with drag or double-click to make a new event.
 
 
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { dayKey, type CalendarEvent } from "@/lib/calendar";
+import type { CalendarEvent } from "@/lib/calendar";
+import { dayKey, fromKey, pad } from "@/lib/dates";
 import { type DayTask } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
-import { HOUR, LABELS, chipRange, fromKey, pad } from "./dates";
+import { HOUR, LABELS, MAX_COLUMNS, MAX_COLUMNS_WIDE, chipRange } from "./dates";
 import { TaskSlot, hourLabel, isSlot, layoutDay, taskSlot } from "./day-layout";
 import { EventChip } from "./event-details";
+import { MoreEvents } from "./more-events";
 import { TaskChip } from "./task-parts";
 
 export const SNAP = 15; // minutes a dragged-out new event snaps to
@@ -160,12 +162,13 @@ export function WeekView({
               ...(byDay.get(key) ?? []).filter((e) => !e.allDay),
               ...(dayTasks.get(key) ?? []).filter((t) => t.timed && t.task.dueAt).map(taskSlot),
             ];
-            const { items, more } = layoutDay(key, timed, inline ? firstHour * 60 : 0);
+            // One day has the whole width, so it fits more side by side than a week of narrow columns.
+            const { items, more } = layoutDay(key, timed, inline ? firstHour * 60 : 0, days.length === 1 ? MAX_COLUMNS_WIDE : MAX_COLUMNS);
             return (
               <div
                 key={key}
                 className="relative min-w-0 flex-1 border-l select-none"
-                // In the empty part of a day: drag out a new event, or double-click (or right-click) to start one at
+                // In the empty part of a day: drag out a new event, or double-click to start one at
                 // that half hour. A tap on a touch screen starts one at that hour, as a drag there scrolls.
                 onPointerDown={(e) => {
                   pointerType.current = e.pointerType;
@@ -188,11 +191,6 @@ export function WeekView({
                 onPointerCancel={() => setDrag(null)}
                 onDoubleClick={(e) => {
                   if (e.target === e.currentTarget) onCreateAt(key, minutesLabel(Math.floor(minuteAt(e) / 30) * 30));
-                }}
-                onContextMenu={(e) => {
-                  if (e.target !== e.currentTarget) return;
-                  e.preventDefault();
-                  onCreateAt(key, minutesLabel(Math.floor(minuteAt(e) / 30) * 30));
                 }}
                 onClick={(e) => {
                   if (pointerType.current !== "touch" || e.target !== e.currentTarget) return;
@@ -218,9 +216,7 @@ export function WeekView({
                   );
                 })}
                 {more.map((m) => (
-                  <span key={m.top} className="pointer-events-none absolute right-0.5 z-10 rounded-sm bg-background/90 px-1 text-xs tabular-nums text-muted-foreground" style={{ top: (m.top / 60) * HOUR - offset + 1 }}>
-                    +{m.count}
-                  </span>
+                  <MoreEvents key={m.top} day={key} count={m.count} items={m.events} style={{ top: (m.top / 60) * HOUR - offset + 1 }} />
                 ))}
                 {key === todayKey && nowMinutes >= (inline ? firstHour * 60 : 0) && (
                   <div className="pointer-events-none absolute inset-x-0 z-10 flex items-center" style={{ top: (nowMinutes / 60) * HOUR - offset }}>

@@ -10,19 +10,24 @@ import { eventChanged, type StoredEvent } from "./sync-diff";
 /**
  * Writes new and changed events, and removes stored events in the window that the calendar no longer
  * has (cancelled, moved out or hidden). Returns how many were written and removed.
+ *
+ * Only events that start inside the window are ever removed, so past events that have slid out of the back of it
+ * stay stored: the Calendar page shows last month's meetings long after the worker stopped fetching them.
  */
 export async function storeWindow(
   accountId: string,
   rows: Map<string, TablesInsert<"calendar_events">>,
   window: { timeMin: string; timeMax: string },
 ): Promise<{ written: number; removed: number }> {
-  // The stored copy, every page of it: a window can hold more than the 1,000 rows one request returns.
+  // The stored copy of the window, every page of it: a window can hold more than the 1,000 rows one request returns.
+  // Events that began before the window but are still running are read too, or each poll would write them again.
   const sealedStored: (StoredEvent & { id: string; user_id: string })[] = await allRows(
     (from, to) =>
       db
         .from("calendar_events")
         .select("id, user_id, provider_event_id, calendar_id, title, starts_at, ends_at, all_day, location, attendees, description, calendar_name, conference_url, resource_url, series_id, recurrence")
         .eq("account_id", accountId)
+        .or(`and(starts_at.gte.${window.timeMin},starts_at.lt.${window.timeMax}),ends_at.gt.${window.timeMin}`)
         .order("id")
         .range(from, to),
     "load stored events",

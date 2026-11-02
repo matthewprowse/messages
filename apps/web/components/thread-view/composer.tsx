@@ -2,11 +2,13 @@
 // asks is remembered per conversation (composer-memory.ts); the AI buttons are in draft-bar.tsx and its dialogs in ask-dialogs.tsx.
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import type { DraftPhase } from "@/lib/store";
 import type { Decision, Draft, Message, Thread } from "@/lib/types";
 import { attachProvider, type OutboxUpload } from "@/lib/outbox-files";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,9 +19,12 @@ import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outb
 import { RecordButton, RecordingActions, RecordingStatus, SpeakButton, useVoiceRecorder } from "@/components/voice-recorder";
 import { TemplatePicker } from "@/components/template-picker";
 import { InstagramReplyNotice, useInstagramReplyClosed } from "@/components/instagram-window";
-import { AskDialogs } from "@/components/thread-view/ask-dialogs";
+
 import { DraftBar } from "@/components/thread-view/draft-bar";
 import { beforeAsk, typedText } from "@/components/thread-view/composer-memory";
+
+// The ask dialogs open on a click, so their code loads on its own the first time one is wanted.
+const AskDialogs = dynamic(() => import("@/components/thread-view/ask-dialogs").then((m) => m.AskDialogs), { ssr: false });
 
 export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { thread: Thread; msgs: Message[]; phase?: DraftPhase; onDraft: (tone?: Draft["tone"], instruction?: string, decision?: Decision, source?: string, audio?: Blob) => void; onDiscardDraft: () => void; onSend: (body: string, from?: string, files?: OutboxUpload[], copies?: { to: string[]; cc: string[] }) => Promise<boolean> }) {
   const replyFrom = useReplyFrom(thread, msgs);
@@ -141,6 +146,12 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
     if (threadRef.current === sentFrom) { setText(""); setInstruction(""); files.clear(); replyAll.reset(); }
   };
 
+  // Once opened, the dialogs stay mounted so closing one still animates.
+  const askedOnce = useRef(false);
+  if (asking) askedOnce.current = true;
+  // The box still holds the AI's draft as written: marked, so you know to read it. Editing the text removes the mark.
+  const untouchedDraft = !!draft && !recorder && phase !== "thinking" && text.trim() === draft.body.trim() && text.trim().length > 0;
+
   return (
     <div className="shrink-0 border-t bg-background p-3 md:px-4">
       <div className="mx-auto w-full max-w-2xl">
@@ -165,6 +176,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
         {/* While a draft is written the text box becomes a placeholder line. */}
         <div {...files.dropProps} className={cn("rounded-lg border bg-background/50 p-3 focus-within:ring-3 focus-within:ring-ring/30", files.dragging && "border-ring ring-3 ring-ring/30")}>
           <ReplyHeader thread={thread} msgs={msgs} reply={replyFrom} all={replyAll} />
+          {untouchedDraft && <Badge variant="secondary" className="mb-2">AI Draft</Badge>}
           {recorder ? (
             <RecordingStatus voice={recorder} />
           ) : phase === "thinking" ? (
@@ -201,7 +213,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
           </div>
         </div>
       </div>
-      <AskDialogs
+      {(asking || askedOnce.current) && <AskDialogs
         asking={asking}
         onClose={() => setAsking(null)}
         busy={busy}
@@ -214,7 +226,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
         onStartDraft={startDraft}
         onStartEdit={startEdit}
         onRecordInstead={() => { setAsking(null); speech.start(); }}
-      />
+      />}
     </div>
   );
 }

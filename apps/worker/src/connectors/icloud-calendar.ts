@@ -12,6 +12,7 @@ import { mapLimit } from "../util";
 import { normAddresses } from "../send/from-address";
 import { sealEvent } from "../calendar/sealed";
 import { storeWindow } from "../calendar/store-window";
+import { syncWindow } from "../calendar/sync-window";
 import { basicAuth, calendarHome, deleteEventFile, eventUrl, eventsIn, getEvent, listCalendars, putEvent, replaceEvent, signInRejected, userAddresses, type DavCalendar } from "../caldav/client";
 import { excludeOccurrence } from "../caldav/delete-event";
 import { claimDelete, failDelete, GONE, settleDeleted, storedEventOf, type CalendarDeleteRow } from "../calendar/delete-event";
@@ -26,8 +27,6 @@ import { claimEvent, failEvent, settleCreated } from "./google-calendar";
 import type { ICloudCredentials } from "./icloud";
 
 const POLL_MS = 5 * 60_000;
-const PAST_DAYS = 7;
-const FUTURE_DAYS = 60;
 const CALENDARS_AT_ONCE = 2; // calendars read together
 const SERIES_AT_ONCE = 3; // series files read together for their rules
 const FULL_EVERY_MS = 60 * 60_000; // full fetch at least hourly, even when nothing changed
@@ -101,8 +100,7 @@ export class ICloudCalendarConnector {
   /** Fetches the window from every calendar and replaces the stored copy. */
   private async sync(auth: string, home: string) {
     const now = Date.now();
-    const timeMin = new Date(now - PAST_DAYS * 86_400_000).toISOString();
-    const timeMax = new Date(now + FUTURE_DAYS * 86_400_000).toISOString();
+    const { timeMin, timeMax } = syncWindow(now);
 
     // The default calendar is listed first by iCloud, so a meeting on two calendars is filed under it.
     const calendars: DavCalendar[] = await listCalendars(auth, home);

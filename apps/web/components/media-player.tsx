@@ -168,7 +168,7 @@ export function VideoPlayer({ src, name }: { src: string; name: string }) {
           ref={ref}
           src={src}
           playsInline
-          preload="auto"
+          preload="metadata"
           onClick={toggle}
           aria-label={name}
           className="size-full cursor-pointer bg-transparent object-contain"

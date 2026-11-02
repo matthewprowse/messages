@@ -14,13 +14,24 @@ export const HIDDEN_LABEL: Record<NonNullable<Attachment["hiddenReason"]>, strin
   manual: "Hidden",
 };
 
-/** Where a file came from, for the filter and the icon on a tile. */
-export type Source = "gmail" | "whatsapp" | "icloud" | "imap";
-export const SOURCE_LABEL: Record<Source, string> = { gmail: "Gmail", whatsapp: "WhatsApp", icloud: "iCloud", imap: "Other Email" };
-// Each service shows its own logo; other mail has none, so it gets a plain envelope.
+/** What each badge means, shown as its tooltip. */
+export const HIDDEN_HINT: Record<NonNullable<Attachment["hiddenReason"]>, string> = {
+  inline: "Drawn inside the email itself, such as a logo or signature",
+  tiny: "Too small to be a photo, usually an icon or tracking pixel",
+  junk: "From a conversation marked as junk",
+  manual: "Hidden by you",
+};
 
+/** Where a file came from, for the Source filter. Any connected provider that can carry files has an entry. */
+export type Source = Provider;
+export const SOURCE_LABEL: Partial<Record<Provider, string>> = {
+  gmail: "Gmail", outlook: "Outlook", icloud: "iCloud", imap: "Other Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram",
+  teams: "Microsoft Teams", zoom: "Zoom", google_meet: "Google Meet",
+};
+
+/** The provider a file came through when it can carry files, else undefined (a calendar or task provider never does). */
 export function sourceOf(provider: Provider | undefined): Source | undefined {
-  return provider === "gmail" || provider === "whatsapp" || provider === "icloud" || provider === "imap" ? provider : undefined;
+  return provider && provider in SOURCE_LABEL ? provider : undefined;
 }
 
 /** The private storage bucket attachments live in. */
@@ -58,16 +69,19 @@ export function downloadLink(view: string, name: string) {
 /** What the viewer says when there is no stored copy. A big video and a full seat each say why. */
 export function notKeptMessage(a: Attachment, notStored: boolean): string {
   if (a.notKept === "unavailable") return FETCH_TEXT.gone;
-  if (a.notKept === "deferred") return "Not Downloaded. It Is Fetched From Your Mailbox When You Open It.";
-  if (a.notKept === "video_link") return "Not Kept Here. Large Videos Stay at the Original. Open It in Your Mailbox or Chat.";
-  if (a.notKept === "over_cap") return "Not Kept Here. Your Storage Is Full. The Original Is in Your Mailbox or Chat.";
-  return notStored ? "Not Kept Here. The Original Is in Your Mailbox or Chat." : "Not Downloaded Yet. If It Stays Empty, the Original Is in Your Mailbox or Chat.";
+  if (a.notKept === "deferred") return "Not downloaded. It is fetched from your mailbox when you open it.";
+  if (a.notKept === "video_link") return "Not kept here. Large videos stay at the original. Open it in your mailbox or chat.";
+  if (a.notKept === "over_cap") return "Not kept here. Your storage is full. The original is in your mailbox or chat.";
+  return notStored ? "Not kept here. The original is in your mailbox or chat." : "Not downloaded yet. If it stays empty, the original is in your mailbox or chat.";
 }
 
 export const messageHref = (a: FiledAttachment) => `/inbox/${a.threadId}?message=${a.messageId}`;
 
-/** "2026-10": the month a file is grouped under in the grid. */
-export const monthKey = (iso: string) => iso.slice(0, 7);
+/** "2026-10": the month a file is grouped under in the grid, in the viewer's own time zone so it matches the heading. */
+export function monthKey(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 7) : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 export const monthTitle = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "long", year: "numeric" });
 /** "1 File" or "2,500 Files", the count in the browser's locale. */
 export const filesLabel = (n: number) => `${n.toLocaleString()} ${n === 1 ? "File" : "Files"}`;

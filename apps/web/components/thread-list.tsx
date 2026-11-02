@@ -3,7 +3,7 @@
 // The Inbox conversation list: header, search, rows (or Subscriptions senders) and infinite scrolling. The parts live in
 // components/thread-list/; this file wires them together and re-exports what the Summary list and Notes reuse.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Inbox as InboxIcon, Mail, MailX, RefreshCw } from "lucide-react";
@@ -11,7 +11,7 @@ import { useApp } from "@/lib/store";
 import type { Thread } from "@/lib/types";
 import { PaneHeader, SearchBand } from "@/components/pane";
 import { nextLimit, PAGE_SIZE } from "@/lib/selection";
-import { accountNameMap, EMPTY, matchesSearch } from "@/lib/thread-list";
+import { accountNameMap, emptyFor, matchesSearch } from "@/lib/thread-list";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import { RowButton } from "@/components/thread-list/row-button";
 import { BulkBar, SelectionBar } from "@/components/thread-list/selection-bar";
 import { SubscriptionRow } from "@/components/thread-list/subscription-row";
 import { ThreadRow } from "@/components/thread-list/thread-row";
+import { useInboxKeys } from "@/components/thread-list/use-inbox-keys";
 import { useListState } from "@/components/thread-list/use-list-state";
 import { useRowActions } from "@/components/thread-list/use-row-actions";
 import { useSwipedRow, useToday } from "@/components/thread-list/use-row-state";
@@ -44,7 +45,8 @@ export function ThreadList() {
   const accountNames = useMemo(() => accountNameMap(accounts), [accounts]);
   const importing = useImporting().length > 0;
   const [search, setSearch] = useState("");
-  const term = search.trim().toLowerCase();
+  // Deferred, so typing stays smooth while 1,000 conversations are filtered.
+  const term = useDeferredValue(search.trim().toLowerCase());
   // Already sorted with pinned conversations first. Search matches the row's name, subject and preview.
   const threads = useMemo(() => {
     const all = listThreads(view, filter);
@@ -52,7 +54,8 @@ export function ThreadList() {
     return all.filter((t) => matchesSearch(t, term, (x) => contactOf(x.participantIds[0])?.name));
   }, [listThreads, view, filter, term, contactOf]);
   const order = useMemo(() => threads.map((t) => t.id), [threads]);
-  const { picked, setChecked, check, run, onRowAction } = useThreadSelection(order, query, `${view}:${filter}`);
+  const { picked, setChecked, check, run, onRowAction } = useThreadSelection(order, query, `${view}:${filter}`, "/inbox", true);
+  useInboxKeys({ order, query, picked, setChecked, run });
   const subs = useSubscriptions(view === "subscriptions" ? threads : NO_THREADS, contactOf, `${view}:${filter}:${term}`);
   const subsPicked = useMemo(() => new Set(subs.picked), [subs.picked]);
   const subsPickable = useMemo(() => new Set(subs.pickable), [subs.pickable]);
@@ -103,6 +106,7 @@ export function ThreadList() {
         ) : selectingRows && view !== "subscriptions" ? (
           <SelectionBar
             allPicked={order.length > 0 && picked.length === order.length}
+            count={picked.length}
             anyUnread={threads.some((t) => t.unread && pickedSet.has(t.id))}
             onAll={() => setChecked(order)}
             onClear={() => setChecked([])}
@@ -133,7 +137,7 @@ export function ThreadList() {
               ) : importing ? (
                 <EmptyState icon={RefreshCw} title="Importing Your Messages" description="Conversations appear here as they arrive. The first import can take a few minutes." />
               ) : (
-                <EmptyState icon={InboxIcon} title={EMPTY[view].title} description={EMPTY[view].description} />
+                <EmptyState icon={InboxIcon} title={emptyFor(view, filter).title} description={emptyFor(view, filter).description} />
               )}
             </div>
           )}

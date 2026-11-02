@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { MembersSection } from "@/components/settings/team-members";
 import { SharedChatsSection } from "@/components/settings/team-shared";
 import { TeamOwnerSection } from "@/components/settings/team-owner";
@@ -71,8 +71,11 @@ export default function TeamPage() {
         {!state ? (
           failed ? null : <Skeleton className="h-40 w-full rounded-lg" />
         ) : !workspace || !userId ? (
-          <SettingsSection id="team" title="No Team Yet" description="A team is set up for a business, and its owner invites each person. If you have been invited, open the invite link you were sent to join.">
-            <SettingsEmpty>Nothing is shared with anyone. Your mail and chats are private to you.</SettingsEmpty>
+          <SettingsSection id="team" title="No Team Yet" description="Nothing is shared with anyone. Your mail and chats are private to you.">
+            <SettingsRows>
+              <SettingsRow title="Start a Team" description="Teams are set up for a business by Konva. Ask for one when you request access (choose the team option and give your company name), and once it is approved you get an invite link as its owner, then invite each person." />
+              <SettingsRow title="Join a Team" description="If you have been invited, open the invite link you were sent." />
+            </SettingsRows>
           </SettingsSection>
         ) : (
           <>

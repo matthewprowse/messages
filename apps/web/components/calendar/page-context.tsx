@@ -23,9 +23,14 @@ export function useWide() {
   );
 }
 
+/**
+ * The current time, ticking every minute. Kept apart from the page context so the tick re-renders only what draws the
+ * time line and dims past events, not every row, chip and checkbox.
+ */
+export const Now = createContext<Date>(new Date());
+
 export interface PageContext {
   wide: boolean;
-  now: Date;
   /** Which event's details are open, as "id|day", so an event shown on several days opens once. */
   openKey: string | null;
   setOpenKey: (key: string | null) => void;
@@ -46,7 +51,6 @@ export interface PageContext {
 
 export const Page = createContext<PageContext>({
   wide: true,
-  now: new Date(),
   openKey: null,
   setOpenKey: () => undefined,
   details: new Map(),

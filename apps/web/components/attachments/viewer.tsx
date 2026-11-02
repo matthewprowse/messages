@@ -32,11 +32,6 @@ function viewerStamp(iso: string) {
   return `${fullDate(iso)}, ${CLOCK.format(new Date(iso))}`;
 }
 
-/** Your own photo, from the account you signed in with, beside files you sent. */
-function MeAvatar({ className }: { className?: string }) {
-  return <MyAvatar className={className} />;
-}
-
 function NoPreview({ attachment: a, message }: { attachment: Attachment; message?: string }) {
   return (
     <div className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-lg bg-muted">
@@ -58,6 +53,8 @@ type ViewerProps = {
   items?: Attachment[];
   index?: number;
   onNavigate?: (index: number) => void;
+  /** Given by a list that can hide files (the Attachments page): adds Hide, or Unhide for a hidden file, to the footer. */
+  onToggleHidden?: () => Promise<void>;
 };
 
 // Opens any attachment. PDFs open in the built-in viewer, images zoom and pan, videos play, and other
@@ -71,7 +68,8 @@ export function AttachmentViewer({ attachment, ...rest }: ViewerProps) {
   return last ? <ViewerDialog attachment={last} open={!!attachment} {...rest} /> : null;
 }
 
-function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClose, items, index, onNavigate }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
+function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClose, items, index, onNavigate, onToggleHidden }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
+  const [toggling, setToggling] = useState(false);
   const requested = useRequestedFile(a, open);
   // Once the worker has stored a requested file the viewer opens it like any other.
   const file = useStoredFile(requested.path ? { ...a, path: requested.path, sealed: requested.sealed } : a, open && (requested.status === "none" || requested.status === "ready"));
@@ -150,6 +148,8 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
   else if (!file || file.state === "loading") body = <Skeleton className={cn("w-full rounded-lg", STAGE_HEIGHT)} />;
   else if (file.state === "missing")
     body = <NoPreview attachment={a} message={notKeptMessage(a, notStored)} />;
+  else if (file.state === "too_large")
+    body = <NoPreview attachment={a} message="Too large to open on this device. Open it on a computer." />;
   else if (a.kind === "pdf") body = <PdfViewer key={a.id} url={file.view} name={a.name} />;
   else if (a.kind === "image" && broken !== a.id) body = <ImageViewer key={a.id} url={file.view} name={a.name} preview={preview} onRatio={(ratio) => setHugging({ id: a.id, ratio })} onBroken={() => setBroken(a.id)} onSwipe={canStep ? step : undefined} />;
   else if (a.kind === "video") body = <VideoPlayer key={a.id} src={file.view} name={a.name} />;
@@ -161,11 +161,13 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
       <DialogContent track="attachment_viewer" showCloseButton={false} className={cn("max-h-[calc(100dvh-2rem)] grid-cols-1 gap-3 overflow-y-auto sm:max-w-3xl", wide && "sm:max-w-5xl", a.kind === "image" && hugging?.id === a.id && "w-fit min-w-[min(24rem,calc(100%-2rem))] sm:max-w-3xl")}>
         {/* Who sent it, with their photo, and when. Show in Conversation is on the right; Download and Close are in the footer. */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-          {sender && (sender.me ? <MeAvatar className="size-8" /> : <ContactAvatar contact={sender.contact} className="size-8" />)}
+          {sender && (sender.me ? <MyAvatar className="size-8" /> : <ContactAvatar contact={sender.contact} className="size-8" />)}
           <div className="min-w-32 flex-1 basis-40">
             <DialogTitle className="truncate text-sm font-medium">{sender?.name ?? detail ?? (titled ? a.name : KIND_LABEL[a.kind])}</DialogTitle>
             <DialogDescription className={cn("truncate text-xs", !sentAt && "sr-only")}>{sentAt ? viewerStamp(sentAt) : KIND_LABEL[a.kind]}</DialogDescription>
-            <span className="sr-only">{[a.name, KIND_LABEL[a.kind], place >= 0 ? `${place + 1} of ${count}` : ""].filter(Boolean).join(" · ")}</span>
+            {/* What you are about to download: the file's own name and size, always on show. */}
+            <span className="block truncate text-xs text-muted-foreground">{[a.name, a.size].filter(Boolean).join(", ")}</span>
+            <span className="sr-only">{[KIND_LABEL[a.kind], place >= 0 ? `${place + 1} of ${count}` : ""].filter(Boolean).join(" · ")}</span>
           </div>
           {href && (
             <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -201,6 +203,9 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
             )}
           </div>
           <div className="flex items-center gap-2">
+            {onToggleHidden && (
+              <Button variant="secondary" disabled={toggling} onClick={() => { setToggling(true); void onToggleHidden().finally(() => setToggling(false)); }}>{a.hiddenReason ? "Unhide" : "Hide"}</Button>
+            )}
             <Button variant="secondary" disabled={file?.state !== "ready" || saving} onClick={() => void download()}>Download</Button>
             <DialogClose asChild><Button variant="secondary">Close</Button></DialogClose>
           </div>

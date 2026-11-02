@@ -4,7 +4,8 @@
 import { type CalendarEvent } from "@/lib/calendar";
 import { type DayTask } from "@/lib/tasks";
 
-import { MAX_COLUMNS, MIN_EVENT, fromKey, pad } from "./dates";
+import { fromKey, pad } from "@/lib/dates";
+import { MAX_COLUMNS, MIN_EVENT } from "./dates";
 
 /** A timed task in a day column, laid out with the events so neither covers the other. It takes TASK_MINUTES, room for its checkbox. */
 export type TaskSlot = { id: string; startsAt: string; endsAt: string; item: DayTask };
@@ -20,10 +21,11 @@ export const isSlot = (x: CalendarEvent | TaskSlot): x is TaskSlot => "item" in 
 
 /**
  * Where each timed event sits in a day column: minutes from midnight, and which of how many side by
- * side columns it takes when it overlaps others. Beyond MAX_COLUMNS side by side the rest are left out of the
- * grid (they are still in the list) and counted in `more`. `from` is the first minute drawn.
+ * side columns it takes when it overlaps others. Beyond `maxCols` side by side the rest are left out of the
+ * grid and returned in `more` with the events themselves, so a "+N" button can list them. `from` is the first
+ * minute drawn.
  */
-export function layoutDay<T extends { startsAt: string; endsAt: string | null }>(key: string, events: T[], from = 0) {
+export function layoutDay<T extends { startsAt: string; endsAt: string | null }>(key: string, events: T[], from = 0, maxCols = MAX_COLUMNS) {
   const dayStart = fromKey(key).getTime();
   const all = events
     .map((event) => {
@@ -36,7 +38,7 @@ export function layoutDay<T extends { startsAt: string; endsAt: string | null }>
     .sort((a, b) => a.top - b.top || b.bottom - a.bottom);
 
   // Events that overlap, directly or through each other, share the width of the column.
-  const more: { top: number; count: number }[] = [];
+  const more: { top: number; count: number; events: T[] }[] = [];
   let cluster: typeof all = [];
   let clusterEnd = -1;
   const finish = () => {
@@ -44,7 +46,8 @@ export function layoutDay<T extends { startsAt: string; endsAt: string | null }>
     const cols = Math.max(0, ...shown.map((i) => i.col)) + 1;
     for (const i of shown) i.cols = cols;
     const hiddenCount = cluster.length - shown.length;
-    if (hiddenCount) more.push({ top: Math.min(...cluster.filter((i) => i.hidden).map((i) => i.top)), count: hiddenCount });
+    const left = cluster.filter((i) => i.hidden);
+    if (hiddenCount) more.push({ top: Math.min(...left.map((i) => i.top)), count: hiddenCount, events: left.map((i) => i.event) });
   };
   for (const item of all) {
     if (item.top >= clusterEnd && cluster.length) {
@@ -55,7 +58,7 @@ export function layoutDay<T extends { startsAt: string; endsAt: string | null }>
     let col = 0;
     while (taken.has(col)) col++;
     item.col = col;
-    item.hidden = col >= MAX_COLUMNS;
+    item.hidden = col >= maxCols;
     cluster.push(item);
     clusterEnd = Math.max(clusterEnd, item.bottom);
   }

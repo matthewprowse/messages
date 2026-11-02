@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Check, CheckCheck } from "lucide-react";
 import type { Attachment, Contact, Message } from "@/lib/types";
 import { timeOf } from "@/lib/format";
+import { sendStateLabel } from "@/lib/thread-send-state";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ContactAvatar } from "@/components/primitives";
@@ -85,8 +86,8 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
           {m.sendRecovery === "unsure" && <Button variant="ghost" size="xs" onClick={() => { navigator.clipboard?.writeText(m.body).then(() => toast("Copied")).catch(() => toast("Could not copy")); }}>Copy Text</Button>}
           <Button variant="ghost" size="xs" onClick={() => onDismiss(m)}>Delete</Button>
         </div>
-      ) : m.sendState === "sending" ? (
-        <div className="px-3 text-xs text-muted-foreground">Sending</div>
+      ) : m.sendState ? (
+        <div className="px-3 text-xs text-muted-foreground">{sendStateLabel(m.sendState)}</div>
       ) : (
         (showMeta || m.edited || (me && (whatsapp ? m.receipt : seen))) && (
           <div className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground">

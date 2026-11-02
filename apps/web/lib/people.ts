@@ -41,7 +41,20 @@ function isSoleTraderName(name: string, emails: string[], org: string): boolean 
   });
 }
 
-export function isCompanySender(c: { name: string; emails: string[]; phones: string[]; organizationName: string | null }): boolean {
+/** What isCompanySender and companyLogo read about a contact. */
+export interface SenderFacts {
+  name: string;
+  emails: string[];
+  phones: string[];
+  organizationName: string | null;
+  /** Set by the user ("This Is a Person" or "This Is a Company"); beats every guess below. */
+  kindOverride?: string | null;
+}
+
+export function isCompanySender(c: SenderFacts): boolean {
+  // The user's own word on it wins over the guesses below.
+  if (c.kindOverride === "person") return false;
+  if (c.kindOverride === "company") return true;
   // Anyone with a phone number is a person. Otherwise only contacts filed under a company move there.
   if (c.phones.length > 0) return false;
   if (c.emails.length > 0 && c.emails.every((e) => SYSTEM_LOCAL.test(e.split("@")[0] ?? ""))) return true;
@@ -78,7 +91,7 @@ export function logoAvatar(path: string | null | undefined): string | undefined 
  * company gets none: mail sent through a hiring or mailing service ("Capitec Jobnotification" from
  * jobs2web.com) is not that service's.
  */
-export function companyLogo(c: { name: string; emails: string[]; phones: string[]; organizationName: string | null }, logoPath: string | null | undefined): string | undefined {
+export function companyLogo(c: SenderFacts, logoPath: string | null | undefined): string | undefined {
   if (!logoPath || !c.organizationName || !isCompanySender(c)) return undefined;
   const name = squash(c.name);
   const org = squash(c.organizationName);

@@ -31,6 +31,13 @@ const nextConfig: NextConfig = {
   redirects: async () => [
     { source: "/briefing", destination: "/summary", permanent: true },
     { source: "/briefing/:id", destination: "/summary/:id", permanent: true },
+    // Settings was regrouped into six pages on 2 November 2026; saved links and the ?add= prefill still land in the right place.
+    { source: "/settings/personalisation", destination: "/settings/ai", permanent: true },
+    { source: "/settings/writing", destination: "/settings/ai#writing-style", permanent: true },
+    { source: "/settings/rules", destination: "/settings/ai#priorities", permanent: true },
+    { source: "/settings/general", destination: "/settings/profile", permanent: true },
+    { source: "/settings/appearance", destination: "/settings/profile#appearance", permanent: true },
+    { source: "/settings/data", destination: "/settings/profile#privacy", permanent: true },
   ],
 };
 

@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { postAsUser } from "@/lib/onboarding";
 import type { Account } from "@/lib/types";
-import { SettingsRow, SettingsRows } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows } from "@/components/settings/primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

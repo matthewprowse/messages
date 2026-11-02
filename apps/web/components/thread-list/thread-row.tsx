@@ -3,14 +3,15 @@
 // One conversation row: hover and swipe actions, the checkbox over the avatar, and a right-click menu. Memoised, and
 // shared with the Summary list, which links rows to /summary and adds each conversation's AI summary.
 
-import { memo, useRef } from "react";
+import { memo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Archive, MailCheck, OctagonAlert, Pin, Trash2, type LucideIcon } from "lucide-react";
 import type { Contact, Thread } from "@/lib/types";
 import { niceName, relTime } from "@/lib/format";
-import { withQuery } from "@/lib/thread-list";
+import { rowMarker, withQuery } from "@/lib/thread-list";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { ContactAvatar, GroupAvatar } from "@/components/primitives";
@@ -21,10 +22,10 @@ import { RowButton } from "./row-button";
 import type { RowAction } from "./use-row-actions";
 
 // A row's hover actions, in order from the left.
-const ROW_ACTIONS = (thread: Thread): { action: RowAction; label: string; icon: LucideIcon }[] => [
-  { action: "archive", label: thread.status === "archived" ? "Unarchive" : "Archive", icon: Archive },
-  { action: "trash", label: "Delete", icon: Trash2 },
-  { action: "junk", label: thread.junk ? "Not Junk" : "Move to Junk", icon: thread.junk ? MailCheck : OctagonAlert },
+const ROW_ACTIONS = (thread: Thread): { action: RowAction; label: string; icon: LucideIcon; keys: string; destructive?: boolean }[] => [
+  { action: "archive", label: thread.status === "archived" ? "Unarchive" : "Archive", icon: Archive, keys: "e" },
+  { action: "trash", label: "Delete", icon: Trash2, keys: "#", destructive: true },
+  { action: "junk", label: thread.junk ? "Not Junk" : "Move to Junk", icon: thread.junk ? MailCheck : OctagonAlert, keys: "!" },
 ];
 
 // Memoised with id-based callbacks, so opening or checking one row re-renders only the rows that change.
@@ -91,6 +92,9 @@ export const ThreadRow = memo(function ThreadRow({
   const prefetch = () => router.prefetch(href);
   const act = (action: RowAction) => onAction(thread.id, action);
   const open = swiped && !selecting;
+  // 100+ rows would each mount three tooltip buttons and a checkbox that stay hidden until hover, so they mount when the pointer or focus first reaches the row.
+  const [armed, setArmed] = useState(false);
+  const marker = rowMarker(thread);
 
   // A swipe is a sideways move, clearly more sideways than down, so scrolling the list is never one.
   const touch = useRef<{ x: number; y: number; done: boolean } | null>(null);
@@ -117,7 +121,7 @@ export const ThreadRow = memo(function ThreadRow({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div data-thread-row={thread.id} {...swipe} className={cn("group/row relative touch-pan-y rounded-lg", lit ? "bg-muted [&_[data-unread]]:bg-background" : "hover:bg-muted/50")}>
+        <div data-thread-row={thread.id} {...swipe} onPointerEnter={() => setArmed(true)} onFocus={() => setArmed(true)} className={cn("group/row relative touch-pan-y rounded-lg", !summary && "[contain-intrinsic-size:auto_64px] [content-visibility:auto]", lit ? "bg-muted [&_[data-unread]]:bg-background" : "hover:bg-muted/50")}>
           <Link
             href={href}
             prefetch={false}
@@ -150,6 +154,8 @@ export const ThreadRow = memo(function ThreadRow({
                   <ProviderLogo provider={thread.provider} />
                   {accountName && <span className="min-w-0 shrink-[2] truncate text-xs text-muted-foreground">{accountName}</span>}
                   <WorkTag thread={thread} />
+                  {/* One quiet marker for what the AI found: Urgent, or Needs Reply. */}
+                  {marker && <Badge variant={marker === "urgent" ? "destructive" : "secondary"}>{marker === "urgent" ? "Urgent" : "Needs Reply"}</Badge>}
                   {thread.pinned && <Pin className="size-3 shrink-0 text-muted-foreground" aria-label="Pinned" />}
                 </span>
                 <span data-hover-hide className="shrink-0 text-xs tabular-nums text-muted-foreground">{relTime(thread.lastMessageAt)}</span>
@@ -167,7 +173,7 @@ export const ThreadRow = memo(function ThreadRow({
             </div>
           </Link>
           {/* Over the avatar: shown on hover or when swiped open, and on every row once one is checked. */}
-          <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting || open ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex pointer-fine:group-focus-within/row:flex")}>
+          {(armed || selecting || open || checked) && <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting || open ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex pointer-fine:group-focus-within/row:flex")}>
             <Checkbox
               checked={checked}
               aria-label={`Select ${title}`}
@@ -177,9 +183,9 @@ export const ThreadRow = memo(function ThreadRow({
                 onSwipe?.(null); // checking starts selecting: every row shows its checkbox instead
               }}
             />
-          </div>
+          </div>}
           {/* Shown on hover, or slid out by a swipe, over the faded content. */}
-          {!selecting && (
+          {!selecting && (armed || open) && (
             <div className={cn("absolute top-1/2 right-3 -translate-y-1/2 items-center gap-1", open ? "flex animate-in fade-in-0 slide-in-from-right-4 duration-150" : "hidden group-hover/row:flex pointer-fine:group-focus-within/row:flex")}>
               {ROW_ACTIONS(thread).map((a) => (
                 <RowButton
@@ -187,6 +193,8 @@ export const ThreadRow = memo(function ThreadRow({
                   variant="secondary"
                   label={a.label}
                   icon={a.icon}
+                  keys={a.keys}
+                  destructive={a.destructive}
                   onClick={() => act(a.action)}
                 />
               ))}
@@ -201,7 +209,7 @@ export const ThreadRow = memo(function ThreadRow({
         <ContextMenuItem onSelect={() => act("trash")}>Delete<ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuItem onSelect={() => act("junk")}>{thread.junk ? "Not Junk" : "Move to Junk"}<ContextMenuShortcut>!</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => act("read")}>{thread.unread ? "Mark as Read" : "Mark as Unread"}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => act("read")}>{thread.unread ? "Mark as Read" : "Mark as Unread"}<ContextMenuShortcut>U</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuItem onSelect={() => act("pin")}>{thread.pinned ? "Unpin" : "Pin"}</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

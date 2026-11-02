@@ -11,7 +11,7 @@ import { ATTACHMENT_BUCKET as BUCKET, VIEW_MIN_LEFT_MS, downloadLink } from "@/l
 import type { Attachment } from "@/lib/types";
 
 // sealed: a note file opened in the browser, so view and download are blob links rather than signed ones.
-export type StoredFile = { id: string; state: "loading" } | { id: string; state: "missing" } | { id: string; state: "ready"; path: string; view: string; download: string; sealed: boolean };
+export type StoredFile = { id: string; state: "loading" } | { id: string; state: "missing" } | { id: string; state: "too_large" } | { id: string; state: "ready"; path: string; view: string; download: string; sealed: boolean };
 
 // Asked for again on each open (usually from cache), so a link kept from an earlier open has time left.
 export function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
@@ -39,6 +39,7 @@ export function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
         if (cancelled) release();
         const opened = await handle.promise;
         if (!opened) return { id, state: "missing" };
+        if (opened.tooLarge) return { id, state: "too_large" };
         return { id, state: "ready", path, view: opened.url, download: opened.sealed ? opened.url : downloadLink(opened.url, name), sealed: opened.sealed };
       }
       const view = path ? await signedUrl(BUCKET, path, VIEW_MIN_LEFT_MS) : null;

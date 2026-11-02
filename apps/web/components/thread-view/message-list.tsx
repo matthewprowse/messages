@@ -1,7 +1,7 @@
 // The scrolling list of a conversation: day dividers, runs of bubbles from one sender, photo albums and meeting cards.
 // Layout decisions live in lib/thread-runs.ts; this file only renders them.
 
-import { memo, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Contact, Message } from "@/lib/types";
 import type { Meeting } from "@/lib/meetings";
 import { groupByDay, withAlbums } from "@/lib/thread-runs";
@@ -30,13 +30,23 @@ export const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsa
   // A run keeps the key of any message it already held (see groupByDay), so it is not remounted as messages come and go.
   const runKeys = useRef(new Map<string, string>());
   const groups = useMemo(() => groupByDay(msgs, meetings, runKeys.current), [msgs, meetings]);
+  // Screen readers hear only a new message from someone else, not the whole list: a log region would read out every
+  // earlier page as it is prepended on scroll.
+  const last = msgs[msgs.length - 1];
+  const lastIdRef = useRef(last?.id);
+  const [announce, setAnnounce] = useState("");
+  useEffect(() => {
+    if (last && lastIdRef.current !== last.id && last.from !== "me" && Date.now() - Date.parse(last.sentAt) < 60_000) setAnnounce(`New message from ${senderNames.get(last.from) ?? "them"}`);
+    lastIdRef.current = last?.id;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [last?.id]);
   return (
-    <div className="space-y-6" role="log" aria-live="polite" aria-label="Messages">
+    <div className="space-y-6" role="group" aria-label="Messages">
       {groups.map((g) => (
         <div key={g.key} className="space-y-6">
           <div className="flex items-center gap-3">
             <Separator className="flex-1" />
-            <span className="text-xs text-muted-foreground">{g.day}</span>
+            <h3 className="text-xs font-normal text-muted-foreground">{g.day}</h3>
             <Separator className="flex-1" />
           </div>
           {g.runs.map((run) => {
@@ -63,6 +73,7 @@ export const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsa
           })}
         </div>
       ))}
+      <span className="sr-only" role="status">{announce}</span>
     </div>
   );
 });

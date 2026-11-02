@@ -18,7 +18,7 @@ before(async () => {
 
 const thread = (id: string, patch: Partial<Thread> = {}) => ({ id, lastMessageAt: "2026-01-01", status: "inbox", pinned: false, unread: false, summary: "", preview: "", participantIds: [], ...patch } as Thread);
 const task = (id: string, patch: Partial<Task> = {}) => ({ id, accountId: "a", title: id, dueAt: "2026-10-26T00:00:00Z", dueAllDay: true, completed: false, ...patch } as Task);
-type Loaded = Extract<Parameters<Mod["reducer"]>[1], { type: "loaded" }>["data"];
+type Loaded = Extract<Parameters<Mod["reducer"]>[1], { type: "merged" }>["data"];
 const loaded = (patch: Partial<Loaded> = {}): Loaded => ({
   threads: [], contacts: [], contactsLoaded: true, accounts: [], rules: [], writingExamples: [], profile: EMPTY_PROFILE, unsubscribes: [], tasks: [], ...patch,
 });

@@ -62,7 +62,7 @@ KEEP_DAYS = 2  # audio is rebuilt on request and is the bulk of the storage, so 
 SWEEP_EVERY_S = 300  # stuck briefs are failed and old ones deleted this often, not on every look (STALE_AFTER is 10 minutes)
 STALE_AFTER = timedelta(minutes=10)  # a brief still 'working' this long was cut off (a restart) and is failed
 QUIET_RECHECK_S = 1800  # a user with nothing new since their last brief is looked at again this often, not on every poll
-REPLY_DAYS = 14  # the same windows as the Summary page (apps/web/lib/summary.ts)
+REPLY_DAYS = 14  # the same windows as the Summary page (apps/web/lib/summary.ts); both are tested against apps/web/lib/summary-fixture.json
 PRIORITY_DAYS = 7
 UPDATE_HOURS = 24
 MAX_ITEMS = 8  # conversations per section in the prompt
@@ -210,7 +210,7 @@ def sections(threads: list[dict[str, Any]], now: datetime) -> dict[str, list[dic
         if t["id"] not in taken and t.get("category") in ("fyi", "work") and (t.get("summary") or "").strip() and age_h(t) <= UPDATE_HOURS
     ]
     pressing = lambda t: (rank.get(t.get("priority") or "normal", 2), -datetime.fromisoformat(str(t["last_message_at"]).replace("Z", "+00:00")).timestamp())
-    return {"reply": sorted(reply, key=pressing), "priority": sorted(priority, key=pressing), "updates": updates}
+    return {"reply": sorted(reply, key=pressing), "priority": sorted(priority, key=pressing), "updates": sorted(updates, key=lambda t: age_h(t))}
 
 
 def _when(at: Any) -> datetime:

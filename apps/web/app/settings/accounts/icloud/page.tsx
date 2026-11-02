@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { useAuth } from "@/lib/auth";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsSection } from "@/components/settings/sections";
+import { SettingsSection } from "@/components/settings/primitives";
 import { ICloudConnectForm } from "@/components/icloud-connect";
 import { ICloudRemindersConnect } from "@/components/icloud-reminders-connect";
 

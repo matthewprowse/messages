@@ -35,6 +35,12 @@ export interface ContactSummary {
   conversationCount: number;
   /** Has a WhatsApp chat, even when WhatsApp hides the number. */
   hasWhatsApp: boolean;
+  /** Instagram usernames, without the @. */
+  handles: string[];
+  /** Has a LinkedIn identity (its id is not a name or a link, so only the fact is shown). */
+  hasLinkedIn: boolean;
+  /** The user's own word on person or company, when the guess was wrong. */
+  kindOverride?: "person" | "company";
   /** Left out of the People list; shown under Hidden. */
   hidden: boolean;
 }
@@ -69,7 +75,8 @@ export function identities(rows: Identity[]) {
   const emails = rows.filter((i) => i.kind === "email").map((i) => i.value);
   // WhatsApp privacy IDs ("...@lid") stand in for a hidden number: they are not phone numbers.
   const phones = [...new Set(rows.filter((i) => (i.kind === "phone" || i.kind === "whatsapp") && !i.value.includes("@")).map((i) => i.value))];
-  return { emails, phones, hasWhatsApp: rows.some((i) => i.kind === "whatsapp") };
+  const handles = [...new Set(rows.filter((i) => i.kind === "instagram_username").map((i) => i.value.replace(/^@/, "")))];
+  return { emails, phones, handles, hasWhatsApp: rows.some((i) => i.kind === "whatsapp"), hasLinkedIn: rows.some((i) => i.kind === "linkedin") };
 }
 
 /** The newest of some timestamps, or null when there are none. */
@@ -92,8 +99,13 @@ export async function allRows<T>(label: string, page: (from: number, to: number)
   }
 }
 
+/** The stored person or company override, or undefined for anything else. */
+export function asKind(value: string | null | undefined): "person" | "company" | undefined {
+  return value === "person" || value === "company" ? value : undefined;
+}
+
 export async function listContacts(): Promise<ContactSummary[]> {
-  const select = "id, display_name, company, role, hidden, avatar_path, organizations(name, logo_path), contact_identities(kind, value)";
+  const select = "id, display_name, company, role, hidden, avatar_path, kind_override, organizations(name, logo_path), contact_identities(kind, value)";
   // Last activity and conversation counts come from one database call (one row per contact, deleted
   // conversations left out), so the list no longer loads every conversation of every contact.
   const [rows, summaries] = await Promise.all([
@@ -105,10 +117,12 @@ export async function listContacts(): Promise<ContactSummary[]> {
   return data.map((c) => {
     const summary = byContact.get(c.id);
     const ids = identities(c.contact_identities);
-    const who = { name: c.display_name, ...ids, organizationName: c.organizations?.name ?? null };
+    const kindOverride = asKind(c.kind_override);
+    const who = { name: c.display_name, ...ids, organizationName: c.organizations?.name ?? null, kindOverride };
     return {
       id: c.id,
       name: c.display_name,
+      kindOverride,
       company: c.organizations?.name ?? c.company,
       role: c.role,
       hidden: c.hidden,
@@ -133,7 +147,7 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
   if (!isUuid(id)) return null;
   const { data: base, error } = await supabase
     .from("contacts")
-    .select("id, display_name, company, role, relationship, ai_summary, hidden, avatar_path, organizations(id, name, logo_path), contact_identities(id, kind, value)")
+    .select("id, display_name, company, role, relationship, ai_summary, hidden, avatar_path, kind_override, organizations(id, name, logo_path), contact_identities(id, kind, value)")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(`Load contact failed (${error.code})`);
@@ -164,10 +178,12 @@ export async function getContact(id: string): Promise<ContactDetail | null> {
     .sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? ""));
   const groupIds = new Set(conversations.filter((t) => t.isGroup).map((t) => t.id));
   const ids = identities(c.contact_identities);
-  const who = { name: c.display_name, ...ids, organizationName: c.organizations?.name ?? null };
+  const kindOverride = asKind(c.kind_override);
+  const who = { name: c.display_name, ...ids, organizationName: c.organizations?.name ?? null, kindOverride };
   return {
     id: c.id,
     name: c.display_name,
+    kindOverride,
     company: c.company,
     role: c.role,
     relationship: c.relationship,
@@ -331,6 +347,12 @@ export interface ContactEdit {
 /** Hides a contact from the People list, or brings them back. Their conversations are untouched. */
 export async function setContactHidden(id: string, hidden: boolean): Promise<boolean> {
   const { error } = await supabase.from("contacts").update({ hidden }).eq("id", id);
+  return !error;
+}
+
+/** Files a sender under People ("person") or Companies ("company") whatever the guess says; null goes back to the guess. */
+export async function setContactKind(id: string, kind: "person" | "company" | null): Promise<boolean> {
+  const { error } = await supabase.from("contacts").update({ kind_override: kind }).eq("id", id);
   return !error;
 }
 

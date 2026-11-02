@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FILE_LINE, fileLine, isBlankNote, matchesNote, matchingLine, noteExcerpt, notePreview, referencedFiles, sortNotes, unusedFiles } from "./note-text";
+import { FILE_LINE, checklistProgress, fileLine, isBlankNote, matchesNote, matchingLine, noteExcerpt, referencedFiles, sortNotes, unusedFiles } from "./note-text";
 
 const A = "0a1b2c3d-1111-4222-8333-944445555666";
 const B = "9f8e7d6c-aaaa-4bbb-8ccc-ddddeeeeffff";
@@ -32,16 +32,15 @@ test("referenced and unused files", () => {
   assert.deepEqual(unusedFiles([{ id: A }, { id: B }], md), [{ id: B }]);
 });
 
-test("preview is the first line of text without markdown", () => {
-  assert.equal(notePreview("# Client Call\n\nMore"), "Client Call");
-  assert.equal(notePreview(`${fileLine(A, "a.png", true)}\n\n- [ ] **Book** the _follow-up_`), "Book the follow-up");
-  assert.equal(notePreview("```\ncode\n```"), "code");
-  assert.equal(notePreview("---\n\n> Quoted [link](https://x.co) and `code`"), "Quoted link and code");
-  assert.equal(notePreview("| Item | Price |\n| --- | --- |\n| Deposit | R5 000 |"), "Item Price");
-  assert.equal(notePreview("1. First\\*"), "First*");
-  assert.equal(notePreview("Tom &amp; Jerry"), "Tom & Jerry");
-  assert.equal(notePreview(""), "");
-  assert.equal(notePreview("x".repeat(200), 10), "xxxxxxxxx…");
+test("excerpt is the first lines of text without markdown", () => {
+  assert.equal(noteExcerpt("# Client Call\n\nMore"), "Client Call More");
+  assert.equal(noteExcerpt(`${fileLine(A, "a.png", true)}\n\n- [ ] **Book** the _follow-up_`), "Book the follow-up");
+  assert.equal(noteExcerpt("---\n\n> Quoted [link](https://x.co) and `code`"), "Quoted link and code");
+  assert.equal(noteExcerpt("| Item | Price |\n| --- | --- |\n| Deposit | R5 000 |"), "Item Price Deposit R5 000");
+  assert.equal(noteExcerpt("1. First\\*"), "First*");
+  assert.equal(noteExcerpt("Tom &amp; Jerry"), "Tom & Jerry");
+  assert.equal(noteExcerpt(""), "");
+  assert.equal(noteExcerpt("x".repeat(200), 10), "xxxxxxxxx…");
 });
 
 test("blank notes", () => {
@@ -93,4 +92,10 @@ test("search uses the excerpt until the body is downloaded", () => {
   assert.ok(!matchesNote(unloaded, "monday"));
   assert.ok(!matchesNote({ ...unloaded, excerpt: null }, "friday"));
   assert.ok(matchesNote({ title: "Call", body: "Deposit by Friday", excerpt: "x" }, "friday"));
+});
+
+test("checklist progress counts ticked and total items", () => {
+  assert.deepEqual(checklistProgress("- [x] Call\n- [ ] Quote\n  - [X] Send\nplain"), { done: 2, total: 3 });
+  assert.equal(checklistProgress("- plain\n1. item"), null);
+  assert.equal(checklistProgress(""), null);
 });

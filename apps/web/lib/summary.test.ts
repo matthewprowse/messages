@@ -2,7 +2,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { digest, summarise } from "./summary";
+import { readFileSync } from "node:fs";
+import { attentionCount, digest, olderWaiting, summarise } from "./summary";
 import type { Thread } from "./types";
 
 const now = new Date("2026-10-23T12:00:00Z");
@@ -125,4 +126,38 @@ test("the digest counts what is there and skips what is not", () => {
   assert.equal(digest(s, 1), "2 Need a Reply, 1 Urgent or Important, 1 Event Today");
   assert.equal(digest(summarise([], "none", now), 0), "");
   assert.equal(digest(summarise([], "none", now), 0, 2), "2 Tasks");
+});
+
+test("the rail count is the page's Needs Reply plus Important, so old unanswered threads do not light it", () => {
+  const threads = [
+    thread("reply", { needsReply: true }),
+    thread("urgent", { priority: "urgent" }),
+    thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 20) }),
+    thread("bulk", { priority: "important", category: "newsletter" }),
+    thread("update", { category: "fyi", summary: "FYI." }),
+  ];
+  assert.equal(attentionCount(threads, now), 2);
+  assert.equal(attentionCount([thread("stale", { priority: "urgent", lastMessageAt: hoursAgo(24 * 9) })], now), 0);
+});
+
+test("old unanswered and old urgent conversations are counted as older, not dropped", () => {
+  const threads = [
+    thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 15) }),
+    thread("stale-urgent", { priority: "urgent", lastMessageAt: hoursAgo(24 * 8) }),
+    thread("stale-important", { priority: "important", lastMessageAt: hoursAgo(24 * 8) }),
+    thread("stale-newsletter", { priority: "urgent", category: "newsletter", lastMessageAt: hoursAgo(24 * 8) }),
+    thread("answered", { needsReply: true, lastFromMe: true, lastMessageAt: hoursAgo(24 * 20) }),
+    thread("shown", { needsReply: true }),
+    thread("whatsapp", { needsReply: true, channel: "whatsapp", lastMessageAt: hoursAgo(24 * 20) }),
+  ];
+  assert.deepEqual(ids(olderWaiting(threads, "none", now)), ["stale-reply", "stale-urgent", "whatsapp"]);
+  assert.deepEqual(ids(olderWaiting(threads, "whatsapp", now)), ["whatsapp"]);
+});
+
+// The same file is read by apps/ai/tests/test_brief.py, which pins the Python copy of these rules.
+test("the shared fixture sorts into the expected sections", () => {
+  const fixture = JSON.parse(readFileSync(new URL("./summary-fixture.json", import.meta.url), "utf8"));
+  const threads = fixture.threads.map((r: Record<string, unknown> & { id: string; ageHours: number }) => thread(r.id, { ...r, lastMessageAt: hoursAgo(r.ageHours) } as Partial<Thread>));
+  const s = summarise(threads, "none", now);
+  assert.deepEqual({ reply: ids(s.reply), priority: ids(s.priority), updates: ids(s.updates) }, fixture.expected);
 });

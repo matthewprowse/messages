@@ -11,9 +11,13 @@ import { ArrowLeft, ArrowRight, CalendarDays } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { visibleEvents } from "@/lib/event-filter";
-import { dayKey, daysOf, type CalendarEvent } from "@/lib/calendar";
-import { tasksByDay, type DayTask } from "@/lib/tasks";
+import { applyEdits, type CalendarEvent } from "@/lib/calendar";
+import { daysOf } from "@/lib/calendar-days";
+import { addDays, dayKey, fromKey, parseKey, startOfDay, startOfMonth, startOfWeek } from "@/lib/dates";
+import { syncNotice } from "@/lib/sync-window";
+import { tasksByDay, visibleTasks, type DayTask } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PaneControls, PaneHeader, SearchBand, ViewButtons } from "@/components/pane";
@@ -22,14 +26,14 @@ import { NewEventDialog } from "@/components/new-event-dialog";
 import { NewTaskDialog } from "@/components/new-task-dialog";
 import { DeleteEventDialog } from "@/components/delete-event-dialog";
 
-import { DAY_MIN, LABELS, View, addDays, byTime, fromKey, parseKey, rangeLabel, startOfDay, startOfMonth, startOfWeek } from "@/components/calendar/dates";
+import { DAY_MIN, LABELS, View, byTime, rangeLabel } from "@/components/calendar/dates";
 import { EventDialog } from "@/components/calendar/event-details";
 import { EventList } from "@/components/calendar/event-list";
 import { MonthView } from "@/components/calendar/month-view";
-import { Page, PageContext, useWide } from "@/components/calendar/page-context";
+import { Now, Page, PageContext, useWide } from "@/components/calendar/page-context";
 import { TaskDialog } from "@/components/calendar/task-parts";
 import { useCalendarData } from "@/components/calendar/use-calendar-data";
-import { useCalendarKeys, useWheelNavigation } from "@/components/calendar/use-calendar-input";
+import { useCalendarKeys } from "@/components/calendar/use-calendar-input";
 import { usePendingChanges } from "@/components/calendar/use-pending-changes";
 import { useReload } from "@/components/calendar/use-reload";
 import { WeekView } from "@/components/calendar/week-view";
@@ -87,7 +91,7 @@ function CalendarPageContent() {
   const rangeKey = `${startKey}+${length}`;
   const { version, setVersion, mounted, reload, later } = useReload();
   const pending = usePendingChanges(reload);
-  const { queued, setQueued, hidden, setHidden, edits, setEdits, created, deleted, updated, applyEdits } = pending;
+  const { queued, setQueued, hidden, setHidden, edits, setEdits, created, deleted, updated } = pending;
   const [deleteFor, setDeleteFor] = useState<{ event: CalendarEvent; error?: string } | null>(null);
   // The event being edited stays set while the editor is closed, so a failed change can open it again as it was.
   const [editFor, setEditFor] = useState<CalendarEvent | null>(null);
@@ -101,8 +105,10 @@ function CalendarPageContent() {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // The task being changed in the New Task dialog, or null when it makes a new one.
   const [editTarget, setEditTarget] = useState<Task | null>(null);
-  const { loaded, setLoaded, loadedEvents, openKey, setOpenKey, openId, details, detailsFailed } = useCalendarData({ userId, view, setAnchor, paneWidth, startKey, length, rangeKey, version, mounted, reload, pending });
-  const loadingMore = view === "agenda" && loaded?.key !== rangeKey && !!loadedEvents;
+  const { loaded, setLoaded, refreshFailed, loadedEvents, openKey, setOpenKey, openId, details, detailsFailed } = useCalendarData({ userId, view, setAnchor, sized: view !== "week" || paneWidth > 0, startKey, length, rangeKey, version, mounted, reload, pending });
+  // Other days are loading while the ones already shown stay on screen.
+  const loadingOther = loaded?.key !== rangeKey && !!loadedEvents;
+  const loadingMore = view === "agenda" && loadingOther;
 
   // The time line and today move on while the page is left open.
   useEffect(() => {
@@ -124,7 +130,7 @@ function CalendarPageContent() {
     const waiting = queued.filter((q) => !loadedEvents.some((e) => e.title === q.title && Date.parse(e.startsAt) === Date.parse(q.startsAt))).map((q) => ({ ...q, pending: true, detailed: true }));
     const all = waiting.length ? [...loadedEvents, ...waiting] : loadedEvents;
     const shown = visibleEvents(all, term, hidden);
-    return edits.length ? shown.map(applyEdits) : shown;
+    return edits.length ? shown.map((e) => applyEdits(edits, e)) : shown;
   }, [loadedEvents, queued, hidden, edits, term]);
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
@@ -139,16 +145,18 @@ function CalendarPageContent() {
     return map;
   }, [events, days]);
   // Tasks on the days shown, with open overdue ones on today. Shown once events have loaded, so the grid draws once.
-  const tasksOnDays = useMemo(() => (events ? tasksByDay(tasks, days, now) : new Map<string, DayTask[]>()), [events, tasks, days, now]);
+  const tasksOnDays = useMemo(() => (events ? tasksByDay(visibleTasks(tasks, term), days, now) : new Map<string, DayTask[]>()), [events, tasks, term, days, now]);
   const openTask = openTaskId ? (tasks.find((t) => t.id === openTaskId) ?? null) : null;
 
   const shownDetails = useMemo(() => {
     if (!edits.length) return details;
-    return new Map([...details].map(([id, event]) => [id, applyEdits(event)]));
+    return new Map([...details].map(([id, event]) => [id, applyEdits(edits, event)]));
   }, [details, edits]);
   const openEvent = openId ? (shownDetails.get(openId) ?? events?.find((e) => e.id === openId) ?? null) : null;
   const calendarConnected = accounts.some((a) => a.provider === "google_calendar" || a.provider === "outlook_calendar" || a.provider === "icloud_calendar");
   const timeGrid = view === "week" || view === "day";
+  // Days beyond what the worker has read say so, rather than looking like a free diary. Held back while the days load.
+  const notice = events && !loadingOther ? syncNotice(startKey, days[days.length - 1] ?? startKey, today, (loadedEvents?.length ?? 0) > 0) : null;
 
   // A month away lands on its first day, or on today in today's month.
   const moveMonth = (n: number) => {
@@ -177,8 +185,7 @@ function CalendarPageContent() {
     setNewOpen(true);
   };
 
-  useWheelNavigation(paneRef, view, move);
-  useCalendarKeys({ today, blocked: newOpen || editOpen || !!deleteFor || !!openKey || !!openTask || newTaskOpen, setAnchor, setView });
+  useCalendarKeys({ today, blocked: newOpen || editOpen || !!deleteFor || !!openKey || !!openTask || newTaskOpen, setAnchor, setView, onNewEvent: () => openNew(anchorKey), onNewTask: () => setNewTaskOpen(true) });
 
   // With no account connected at all, the first step is connecting one.
   const noAccounts = !accounts.some((a) => a.status !== "disconnected");
@@ -210,15 +217,20 @@ function CalendarPageContent() {
       });
   const noEvents = events && listed.length === 0 && (
     <div className="py-12">
-      <EmptyState icon={CalendarDays} title="No Events" description={view === "day" ? "Nothing is scheduled this day." : view === "week" ? "Nothing is scheduled in these days." : "Nothing is scheduled this month."} />
+      <EmptyState
+        icon={CalendarDays}
+        title="No Events"
+        description={view === "day" ? "Nothing is scheduled this day." : view === "week" ? "Nothing is scheduled in these days." : "Nothing is scheduled this month."}
+        action={calendarConnected ? <Button variant="secondary" onClick={() => openNew(anchorKey)}>New Event</Button> : undefined}
+      />
     </div>
   );
 
-  const deletedFrom = accounts.find((a) => a.id === deleteFor?.event.accountId)?.provider === "icloud_calendar" ? "iCloud Calendar" : "Google Calendar";
+  const deleteProvider = accounts.find((a) => a.id === deleteFor?.event.accountId)?.provider;
+  const deletedFrom = deleteProvider ? providerLabel[deleteProvider] : "your calendar";
   const context = useMemo<PageContext>(
     () => ({
       wide,
-      now,
       openKey,
       setOpenKey,
       details: shownDetails,
@@ -235,12 +247,13 @@ function CalendarPageContent() {
         return provider ? providerLabel[provider] : undefined;
       },
     }),
-    [wide, now, openKey, shownDetails, detailsFailed, pending.answer, accounts],
+    [wide, openKey, shownDetails, detailsFailed, pending.answer, accounts],
   );
 
   // The same split as Conversations and Summary: the header and the list on the left, what they are about
   // beside it. Phones stack them, the grid between the header and the list.
   return (
+    <Now.Provider value={now}>
     <Page.Provider value={context}>
       <div className="flex h-full min-h-0 flex-col overflow-y-auto md:grid md:grid-cols-[20rem_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)] md:overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         {/* The same two bands as Conversations: title and views, then search. */}
@@ -258,7 +271,7 @@ function CalendarPageContent() {
               <ViewButtons label="View" value={view} onSelect={setView} items={[{ key: "agenda", label: "Agenda" }, { key: "day", label: "Day" }, { key: "week", label: "Week" }]} />
             </PaneControls>
           </PaneHeader>
-          <SearchBand value={search} onChange={setSearch} placeholder="Search Events" />
+          <SearchBand value={search} onChange={setSearch} placeholder="Filter This View" />
         </div>
 
         {/* The month or dates on show, with the arrows on the far right, like the header of every other page. */}
@@ -270,6 +283,26 @@ function CalendarPageContent() {
               <Button variant="ghost" size="icon" aria-label={`Next ${unit}`} onClick={() => move(1)}><ArrowRight /></Button>
             </div>
           </header>
+          {loadingOther && <div className="h-0.5 w-full animate-pulse bg-primary/50" role="progressbar" aria-label="Loading events" />}
+          {(refreshFailed || notice) && (
+            <div className="flex shrink-0 flex-col gap-2 border-b p-3">
+              {refreshFailed && (
+                <Alert>
+                  <AlertTitle>Events Did Not Refresh</AlertTitle>
+                  <AlertDescription>
+                    <p>Check your connection. The events shown may be out of date.</p>
+                    <Button variant="secondary" size="sm" className="mt-2" onClick={() => setVersion((v) => v + 1)}>Try Again</Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {notice && (
+                <Alert>
+                  <AlertTitle>{notice.title}</AlertTitle>
+                  <AlertDescription>{notice.text}</AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
           {/* On phones the page scrolls as one column, so the grid and the list keep their full height (shrink-0):
               allowed to shrink, the column squeezed them and the grid's weeks drew over the list. */}
           <div ref={paneRef} className="min-w-0 shrink-0 md:min-h-0 md:flex-1">
@@ -360,12 +393,20 @@ function CalendarPageContent() {
         />
       </div>
     </Page.Provider>
+    </Now.Provider>
   );
 }
 
 export default function CalendarPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={
+        <div className="flex flex-col gap-3 p-3" aria-label="Loading events">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-96 w-full rounded-lg" />
+        </div>
+      }
+    >
       <CalendarPageContent />
     </Suspense>
   );

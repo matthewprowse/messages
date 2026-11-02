@@ -3,12 +3,11 @@
 // The calendar page's month grid. It only draws the days it is given; the page owns the events, tasks and selected date.
 
 import { Circle, CircleCheck } from "lucide-react";
-import { dayKey, type CalendarEvent } from "@/lib/calendar";
+import type { CalendarEvent } from "@/lib/calendar";
+import { dayKey, fromKey } from "@/lib/dates";
 import { timeOf } from "@/lib/format";
 import { type DayTask } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
-
-import { fromKey } from "./dates";
 
 /** The month as a grid of dates. The selected date's events are in the list beside it. */
 export function MonthView({
@@ -29,7 +28,7 @@ export function MonthView({
   /** Whose month the grid shows, which follows the agenda list as it scrolls. */
   monthOf: Date;
   onSelect: (d: Date) => void;
-  /** A new event on that day, from a double-click or right-click on it. */
+  /** A new event on that day, from a double-click on it. */
   onCreate: (key: string) => void;
 }) {
   const todayKey = dayKey(today);
@@ -42,7 +41,8 @@ export function MonthView({
       <div className="grid shrink-0 grid-cols-7 border-b">
         {weekdays.map((w) => <span key={w} className="px-2 py-2 text-right text-xs text-muted-foreground">{w}</span>)}
       </div>
-      <div className="grid grid-cols-7 grid-rows-6 md:min-h-0 md:flex-1">
+      {/* A container query, not the screen width: the grid is narrower beside the list, and titles fit once a cell does. */}
+      <div className="@container grid grid-cols-7 grid-rows-6 md:min-h-0 md:flex-1">
         {days.map((key, i) => {
           const d = fromKey(key);
           const events = byDay.get(key) ?? [];
@@ -64,7 +64,6 @@ export function MonthView({
               type="button"
               onClick={() => onSelect(d)}
               onDoubleClick={() => onCreate(key)}
-              onContextMenu={(e) => { e.preventDefault(); onSelect(d); onCreate(key); }}
               aria-label={counted ? `${date}, ${counted}` : date}
               aria-pressed={isSelected}
               className={cn(
@@ -82,9 +81,13 @@ export function MonthView({
               >
                 {d.getDate()}
               </span>
-              {/* Titles on wide screens, a dot on narrower ones. */}
-              {total > 0 && <span className="mx-auto size-1.5 shrink-0 rounded-full bg-foreground/60 xl:hidden" />}
-              <span className="hidden min-w-0 flex-col gap-0.5 xl:flex">
+              {/* Titles when the grid is wide enough, otherwise one dot for each of the first three items. */}
+              {total > 0 && (
+                <span className="mx-auto flex shrink-0 gap-0.5 @2xl:hidden">
+                  {Array.from({ length: Math.min(3, total) }, (_, n) => <span key={n} className="size-1.5 rounded-full bg-foreground/60" />)}
+                </span>
+              )}
+              <span className="hidden min-w-0 flex-col gap-0.5 @2xl:flex">
                 {shown.map((e) => (
                   <span key={e.id} className={cn("flex min-w-0 items-center gap-1 rounded-sm px-1 text-xs", e.allDay && "bg-secondary", outside && "text-muted-foreground")}>
                     <span className="min-w-0 flex-1 truncate">{e.title}</span>

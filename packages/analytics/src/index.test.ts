@@ -67,10 +67,18 @@ test("a task tick is recorded as code words and flags, never its title", () => {
   assert.deepEqual(out, { action: "complete", provider: "google_tasks", overdue: true, timed: false, via: "calendar" });
 });
 
-test("dotted values (local parts, domains, file names) are dropped unless allow-listed", () => {
+test("dotted values (local parts, domains, file names) are dropped", () => {
   assert.equal(isWord("jane.doe"), false);
   assert.equal(isWord("acme.co"), false);
   assert.equal(wordOf("Jane.Doe"), undefined);
   assert.deepEqual(cleanProps({ detail: "jane.doe", where: "acme.co", list: ["ok_one", "sam.lee"] }), { list: ["ok_one"] });
   assert.equal(isWord("settings_accounts"), true);
+});
+
+test("a dot is allowed only between two digits, as in a model name or a version", () => {
+  assert.equal(isWord("gemini-2.5-flash"), true);
+  assert.equal(isWord("v0.0.12"), true);
+  for (const bad of ["jane.doe", "acme.co", "a.b", "v1.", "v1.x", "x".repeat(41)]) assert.equal(isWord(bad), false, bad);
+  assert.equal(wordOf("Jane.Doe"), undefined);
+  assert.deepEqual(cleanProps({ model: "gemini-2.5-flash", where: "acme.co" }), { model: "gemini-2.5-flash" });
 });

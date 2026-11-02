@@ -17,7 +17,8 @@ export function mapContact(row: ContactRow, identities: IdentityRow[]): Contact 
   const handles = identities.filter((i) => i.kind === "instagram_username").map((i) => i.value);
   const lids = identities.filter((i) => i.value.endsWith("@lid")).map((i) => i.value);
   const org = row.organizations ?? null;
-  const who = { name: row.display_name, emails, phones, organizationName: org?.name ?? null };
+  const kindOverride = row.kind_override === "person" || row.kind_override === "company" ? row.kind_override : undefined;
+  const who = { name: row.display_name, emails, phones, organizationName: org?.name ?? null, kindOverride };
   return {
     id: row.id,
     name: row.display_name,
@@ -31,6 +32,8 @@ export function mapContact(row: ContactRow, identities: IdentityRow[]): Contact 
     role: row.role ?? undefined,
     avatarPath: row.avatar_path ?? companyLogo(who, logoAvatar(org?.logo_path)),
     isCompany: isCompanySender(who),
+    kindOverride,
+    hasLinkedIn: identities.some((i) => i.kind === "linkedin") || undefined,
     organization: org ? { id: org.id, name: org.name, logoPath: org.logo_path ?? undefined } : undefined,
   };
 }

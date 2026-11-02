@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const PROVIDER: Record<string, string> = { gmail: "Gmail", outlook: "Outlook", imap: "Email", icloud: "iCloud+ Mail", whatsapp: "WhatsApp" };
 

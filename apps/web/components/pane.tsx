@@ -49,11 +49,17 @@ export function useMoreToRight<T extends HTMLElement>() {
   return { ref, more, onScroll: update };
 }
 
+/** A quiet unread count (count) or a dot (dot: something new) after a view's label. Read aloud as part of the link. */
+function ViewMark({ count, dot }: { count?: number; dot?: boolean }) {
+  if (count) return <span className="text-xs tabular-nums text-muted-foreground">{count > 99 ? "99+" : count}</span>;
+  return dot ? <span role="img" aria-label="New" className="size-1.5 rounded-full bg-primary" /> : null;
+}
+
 /**
  * The views of a page as text buttons: the open one filled, the rest quiet. They scroll sideways when the column is narrow,
  * fading out beside the filter until the end. With `hrefFor` each is a link (the Inbox's views live in the address).
  */
-export function ViewButtons<T extends string>({ items, value, onSelect, hrefFor, label }: { items: { key: T; label: string }[]; value: T; onSelect?: (key: T) => void; hrefFor?: (key: T) => string; label: string }) {
+export function ViewButtons<T extends string>({ items, value, onSelect, hrefFor, label }: { items: { key: T; label: string; count?: number; dot?: boolean }[]; value: T; onSelect?: (key: T) => void; hrefFor?: (key: T) => string; label: string }) {
   const scroller = useMoreToRight<HTMLElement>();
   return (
     <div className="relative min-w-0 flex-1">
@@ -63,11 +69,11 @@ export function ViewButtons<T extends string>({ items, value, onSelect, hrefFor,
           const className = cn("shrink-0 px-2", !active && "text-muted-foreground");
           return hrefFor ? (
             <Button key={v.key} asChild variant={active ? "secondary" : "ghost"} className={className}>
-              <Link href={hrefFor(v.key)} replace aria-current={active ? "page" : undefined}>{v.label}</Link>
+              <Link href={hrefFor(v.key)} replace aria-current={active ? "page" : undefined}>{v.label}<ViewMark count={v.count} dot={v.dot} /></Link>
             </Button>
           ) : (
             <Button key={v.key} type="button" variant={active ? "secondary" : "ghost"} aria-current={active ? "page" : undefined} className={className} onClick={() => onSelect?.(v.key)}>
-              {v.label}
+              {v.label}<ViewMark count={v.count} dot={v.dot} />
             </Button>
           );
         })}

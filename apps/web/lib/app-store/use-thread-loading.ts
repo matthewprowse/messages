@@ -19,10 +19,15 @@ export interface ThreadLoadingDeps {
   heldRef: React.MutableRefObject<string[]>;
   openRef: React.MutableRefObject<string | null>;
   setLoadedThreadIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  /** Conversations whose first load failed, so the view can show an error with Retry instead of a skeleton for good. */
+  setFailedThreadIds: React.Dispatch<React.SetStateAction<Set<string>>>;
 }
 
 /** Message loading for the store: evictHeld is also handed to Realtime. */
-export function useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRef, loadingRef, moreRef, olderRef, heldRef, openRef, setLoadedThreadIds }: ThreadLoadingDeps) {
+export function useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRef, loadingRef, moreRef, olderRef, heldRef, openRef, setLoadedThreadIds, setFailedThreadIds }: ThreadLoadingDeps) {
+  const markFailed = useCallback((threadId: string, failed: boolean) => {
+    setFailedThreadIds((prev) => (prev.has(threadId) === failed ? prev : failed ? new Set(prev).add(threadId) : new Set([...prev].filter((id) => id !== threadId))));
+  }, []);
   const evictHeld = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
     const gone = new Set(ids);
@@ -39,6 +44,7 @@ export function useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRe
     const running = loadingRef.current.get(key);
     if (running) return running;
     const task = (async () => {
+      markFailed(threadId, false); // a retry shows the skeleton again
       try {
         const from = aroundMessageId ? await messageSentAt(threadId, aroundMessageId) : null;
         if (aroundMessageId && !from) return;
@@ -53,14 +59,16 @@ export function useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRe
         evictHeld(evict);
         setLoadedThreadIds((prev) => (prev.has(threadId) ? prev : new Set(prev).add(threadId)));
       } catch {
-        toast("Could not load this conversation.");
+        // Only a conversation with nothing on screen shows the error state; one already loaded just toasts.
+        if (loadedRef.current.has(threadId)) toast("Could not load this conversation.");
+        else markFailed(threadId, true);
       } finally {
         loadingRef.current.delete(key);
       }
     })();
     loadingRef.current.set(key, task);
     return task;
-  }, [evictHeld]);
+  }, [evictHeld, markFailed]);
   const loadMessages = useCallback((threadId: string, aroundMessageId?: string) => loadThreadInto(threadId, aroundMessageId, true), [loadThreadInto]);
 
   const loadOlderMessages = useCallback(async (threadId: string) => {

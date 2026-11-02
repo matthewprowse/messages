@@ -4,9 +4,11 @@ Also defines FakeDb and FakeGemini, reused by test_brief_tasks."""
 
 import base64
 import io
+import json
 import unittest
 import wave
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
 
@@ -62,6 +64,18 @@ class Sections(unittest.TestCase):
         self.assertEqual([t["id"] for t in got["reply"]], ["2", "1"])
         self.assertEqual([t["id"] for t in got["priority"]], ["3"])
         self.assertEqual([t["id"] for t in got["updates"]], ["4"])
+
+    def test_shared_fixture_matches_the_web_page(self):
+        # apps/web/lib/summary.test.ts sorts the same file, so the page and this spoken brief cannot drift apart.
+        fixture = json.loads((Path(__file__).resolve().parents[2] / "web" / "lib" / "summary-fixture.json").read_text())
+        threads = [
+            {"id": r["id"], "status": r.get("status", "inbox"), "junk": r.get("junk", False), "last_from_me": r.get("lastFromMe", False),
+             "last_message_at": (NOW - timedelta(hours=r["ageHours"])).isoformat(), "priority": r.get("priority", "normal"),
+             "category": r.get("category", "personal"), "needs_reply": r.get("needsReply", False), "summary": r.get("summary", "")}
+            for r in fixture["threads"]
+        ]
+        got = sections(threads, NOW)
+        self.assertEqual({k: [t["id"] for t in v] for k, v in got.items()}, fixture["expected"])
 
     def test_answered_conversations_are_left_out(self):
         threads = [

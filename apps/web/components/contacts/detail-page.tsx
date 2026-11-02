@@ -17,7 +17,7 @@ export function DetailSkeleton({ backHref }: { backHref: string }) {
     <DetailPage
       backHref={backHref}
       header={
-        <div className="flex min-w-0 flex-1 items-center gap-3" aria-label="Loading">
+        <div className="flex min-w-0 flex-1 items-center gap-3" role="status" aria-busy="true" aria-label="Loading">
           <Skeleton className="size-8 shrink-0 rounded-full" />
           <Skeleton className="h-5 w-40" />
         </div>

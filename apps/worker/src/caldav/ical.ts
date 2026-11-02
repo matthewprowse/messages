@@ -2,6 +2,7 @@
 // the same way as a Google event. Pure, so it can be unit tested.
 
 import type { Json, TablesInsert } from "@messages/db";
+import { findMeetingLink } from "../calendar/meeting-link";
 
 interface Property {
   name: string;
@@ -169,14 +170,9 @@ function emailOf(prop: Property | null): string | null {
 }
 
 const MAX_NOTES = 5000; // an event's notes are kept up to here, as a long invitation can be pages
-const MEETING_LINK = /https:\/\/(?:[\w-]+\.)?(?:zoom\.us|zoom\.com|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|webex\.com)\/[^\s<>"')]+/i;
-
 /** A Zoom, Meet, Teams or Webex link: the event's own, else the first in its notes or location. Only https links. */
 export function meetingLink(event: Pick<IcsEvent, "conference" | "url" | "description" | "location">): string | null {
-  const own = [event.conference, event.url].find((u) => u && /^https:\/\//i.test(u) && MEETING_LINK.test(u));
-  if (own) return own.trim();
-  const found = MEETING_LINK.exec(`${event.description ?? ""}\n${event.location ?? ""}`)?.[0];
-  return found ? found.replace(/[.,;]+$/, "") : null;
+  return findMeetingLink([event.conference, event.url], [event.description, event.location]);
 }
 
 /** One expanded event as it is stored in calendar_events. Null for cancelled events or ones without a start. */

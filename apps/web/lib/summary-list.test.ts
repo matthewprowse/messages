@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filterOf, listHref, nextRowIndex, unfinishedEvents } from "./summary-list";
+import { filterOf, listHref, nextAfterDone, nextRowIndex, unfinishedEvents } from "./summary-list";
 import type { CalendarEvent } from "./calendar";
 
 const event = (id: string, startsAt: string, endsAt: string | null, allDay = false) => ({ id, startsAt, endsAt, allDay }) as CalendarEvent;
@@ -39,4 +39,18 @@ test("J and K start from the focused row, else the open one, else the top, and s
   assert.equal(nextRowIndex(5, 1, 3, -1), 0);
   assert.equal(nextRowIndex(5, 4, -1, 1), 4);
   assert.equal(nextRowIndex(5, 0, -1, -1), 0);
+});
+
+test("changing the filter keeps the open conversation in the path", () => {
+  assert.equal(listHref("email", "abc"), "/summary/abc?filter=email");
+  assert.equal(listHref("none", "abc"), "/summary/abc");
+  assert.equal(listHref("none", "a b/c"), "/summary/a%20b%2Fc");
+});
+
+test("after a conversation is done the next row down opens, else the one above, else nothing", () => {
+  assert.equal(nextAfterDone(["a", "b", "c"], ["a", "c"], "b"), "c");
+  assert.equal(nextAfterDone(["a", "b", "c"], ["a", "b"], "c"), "b");
+  assert.equal(nextAfterDone(["a", "b", "c"], ["a", "c"], "a"), "c");
+  assert.equal(nextAfterDone(["a"], [], "a"), undefined);
+  assert.equal(nextAfterDone(["a", "b"], ["a", "b"], "z"), undefined);
 });

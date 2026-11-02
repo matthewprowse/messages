@@ -7,6 +7,7 @@
 // event. An open task due before today is overdue and shows on today, not on the day it was due.
 
 import type { Tables } from "@messages/db";
+import { dayKey, pad } from "./dates";
 import type { Task } from "./types";
 
 export const TASK_COLUMNS = "id, account_id, list_name, title, notes, due_at, due_all_day, status, completed_at, priority, contact_id";
@@ -29,21 +30,21 @@ export function mapTask(row: TaskRowOf): Task {
   };
 }
 
-/** A local calendar day as "YYYY-MM-DD", as lib/calendar.ts's dayKey. */
-function localKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** The tasks matching the filter box (already trimmed and lowercased; empty matches all): by title, notes or list name. */
+export function visibleTasks<T extends Pick<Task, "title" | "notes" | "listName">>(all: T[], term: string): T[] {
+  return term ? all.filter((t) => [t.title, t.notes, t.listName].some((s) => s?.toLowerCase().includes(term))) : all;
 }
 
 /** The local day a task is due on, or null when it has no date. */
 export function dueDay(task: Pick<Task, "dueAt" | "dueAllDay">): string | null {
   if (!task.dueAt) return null;
-  return task.dueAllDay ? task.dueAt.slice(0, 10) : localKey(new Date(task.dueAt));
+  return task.dueAllDay ? task.dueAt.slice(0, 10) : dayKey(new Date(task.dueAt));
 }
 
 /** Open and due on a day before today. A timed task due earlier today is late, but still today's. */
 export function isOverdue(task: Pick<Task, "dueAt" | "dueAllDay" | "completed">, now: Date = new Date()): boolean {
   const day = dueDay(task);
-  return !task.completed && !!day && day < localKey(now);
+  return !task.completed && !!day && day < dayKey(now);
 }
 
 /** A task as a day shows it: overdue ones sit in the all-day row of today, whatever time they had. */
@@ -59,7 +60,7 @@ export interface DayTask {
  * is one of the days). Overdue first, then all-day ones, then by time and title.
  */
 export function tasksByDay(tasks: Task[], days: string[], now: Date = new Date()): Map<string, DayTask[]> {
-  const today = localKey(now);
+  const today = dayKey(now);
   const shown = new Set(days);
   const map = new Map<string, DayTask[]>();
   for (const task of tasks) {
@@ -104,7 +105,7 @@ export function withTicks(tasks: Task[], pending: Record<string, PendingTick | u
 
 /** Today's tasks for the Summary and the brief: open overdue ones first, then open ones due today. */
 export function tasksForToday(tasks: Task[], now: Date = new Date()): DayTask[] {
-  const today = localKey(now);
+  const today = dayKey(now);
   return (tasksByDay(tasks.filter((t) => !t.completed || t.pending), [today], now).get(today) ?? []);
 }
 
@@ -131,7 +132,7 @@ export const TASK_PROVIDER_NAMES: Record<string, string> = { microsoft_todo: "Mi
 /** Google Tasks keeps only a task's date, so there is no time to set and no priority. */
 export const dateOnly = (provider: string | undefined) => provider === "google_tasks";
 
-export const MAX_TITLE = 500;
+export const MAX_TASK_TITLE = 500;
 export const MAX_NOTES = 8000;
 
 /** A task being made or changed, as the form holds it. date is "YYYY-MM-DD" and time "HH:MM", both "" when not set. */
@@ -154,8 +155,6 @@ export interface TaskWriteFields {
   priority: 1 | 2 | 3 | null;
 }
 
-const pad = (n: number) => String(n).padStart(2, "0");
-
 /** The form as the day the task is due on and its time, read from a task as the screens hold it (see dueDay). */
 export function formOfTask(task: Task): TaskForm {
   const day = dueDay(task) ?? "";
@@ -173,7 +172,7 @@ export function formOfTask(task: Task): TaskForm {
 /** Why a form cannot be saved, or null. The calendar draws tasks on their due day, so every task needs a date. */
 export function taskProblem(form: TaskForm): { field: "title" | "notes" | "date"; text: string } | null {
   if (!form.title.trim()) return { field: "title", text: "Enter a title." };
-  if (form.title.trim().length > MAX_TITLE) return { field: "title", text: `Keep the title under ${MAX_TITLE} characters.` };
+  if (form.title.trim().length > MAX_TASK_TITLE) return { field: "title", text: `Keep the title under ${MAX_TASK_TITLE} characters.` };
   if (form.notes.length > MAX_NOTES) return { field: "notes", text: `Keep the notes under ${MAX_NOTES} characters.` };
   if (!form.date) return { field: "date", text: "Pick a due date so the task shows in the calendar." };
   return null;
@@ -224,8 +223,3 @@ export function taskChanged(form: TaskForm, task: Task): boolean {
   return (["title", "notes", "date", "time", "priority"] as const).some((k) => (k === "title" || k === "notes" ? form[k].trim() !== before[k].trim() : form[k] !== before[k]));
 }
 
-/** The time choices offered: every quarter hour, plus one already set that falls between them. */
-export function timeChoices(current: string, step = 15): string[] {
-  const times = Array.from({ length: 1440 / step }, (_, i) => `${pad(Math.floor((i * step) / 60))}:${pad((i * step) % 60)}`);
-  return current && !times.includes(current) ? [...times, current].sort() : times;
-}

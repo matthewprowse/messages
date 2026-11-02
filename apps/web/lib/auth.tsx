@@ -7,6 +7,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import { clearSignedUrls } from "./signed-urls";
+import { clearTodaysEvents } from "./todays-events-cache";
 import { needsSecondFactor } from "./mfa";
 
 interface AuthState {
@@ -39,7 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
     supabase.auth.getSession().then(({ data }) => { if (latest === 0) void settle(data.session); });
     const { data } = supabase.auth.onAuthStateChange((_event, next) => {
-      if (!next) clearSignedUrls(); // also when the session ends elsewhere (another tab, an expired refresh)
+      if (!next) { clearSignedUrls(); clearTodaysEvents(); } // also when the session ends elsewhere (another tab, an expired refresh)
       // Not awaited here: Supabase warns against calling its own methods inside this callback.
       setTimeout(() => void settle(next), 0);
     });
@@ -65,5 +66,6 @@ export function useIsOwner() {
 
 export async function signOut() {
   clearSignedUrls();
+  clearTodaysEvents();
   await supabase.auth.signOut();
 }

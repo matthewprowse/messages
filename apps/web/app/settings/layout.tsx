@@ -4,18 +4,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, ChevronRight, Gauge, Link2, SlidersHorizontal, Sparkles, Users, type LucideIcon } from "lucide-react";
+import { Bell, ChevronRight, Gauge, Link2, Sparkles, UserRound, Users, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PaneHeader } from "@/components/pane";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const SECTIONS: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: "/settings/accounts", label: "Connected Accounts", icon: Link2 },
-  { href: "/settings/personalisation", label: "Personalisation", icon: Sparkles },
+  { href: "/settings/accounts", label: "Accounts", icon: Link2 },
+  { href: "/settings/ai", label: "AI", icon: Sparkles },
   { href: "/settings/notifications", label: "Notifications", icon: Bell },
   { href: "/settings/usage", label: "Usage", icon: Gauge },
   { href: "/settings/team", label: "Team", icon: Users },
-  { href: "/settings/general", label: "General", icon: SlidersHorizontal },
+  { href: "/settings/profile", label: "Profile and Privacy", icon: UserRound },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
@@ -28,7 +28,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
         <ScrollArea className="min-h-0 flex-1">
           <nav aria-label="Settings" className="flex flex-col gap-1 p-3">
             {SECTIONS.map((s) => {
-              const selected = pathname.startsWith(s.href);
+              const selected = pathname === s.href || pathname.startsWith(`${s.href}/`);
               return (
                 <Link
                   key={s.href}

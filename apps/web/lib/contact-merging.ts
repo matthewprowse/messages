@@ -37,15 +37,17 @@ export function mergeSide(c: ContactSummary): MergeSide {
   return { id: c.id, name: c.name, emails: c.emails, phones: c.phones, hasWhatsApp: c.hasWhatsApp, conversations: c.conversationCount };
 }
 
-export async function listSuggestions(): Promise<MergeSuggestion[]> {
-  const { data, error } = await supabase
+/** The first 200 pending suggestions, best first, and how many there are in all. */
+export async function listSuggestions(): Promise<{ rows: MergeSuggestion[]; total: number }> {
+  const { data, error, count } = await supabase
     .from("contact_suggestions")
-    .select("id, contact_a, contact_b, reason, score")
+    .select("id, contact_a, contact_b, reason, score", { count: "exact" })
     .eq("status", "pending")
     .order("score", { ascending: false })
     .limit(200);
   if (error) throw new Error(`Load suggestions failed (${error.code})`);
-  return data.map((s) => ({ id: s.id, contactA: s.contact_a, contactB: s.contact_b, reason: s.reason, score: s.score }));
+  const rows = data.map((s) => ({ id: s.id, contactA: s.contact_a, contactB: s.contact_b, reason: s.reason, score: s.score }));
+  return { rows, total: count ?? rows.length };
 }
 
 export async function dismissSuggestion(id: string): Promise<boolean> {

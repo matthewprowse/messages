@@ -5,7 +5,7 @@
 
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/lib/store";
-import { filesLabel, messageHref, monthKey, monthTitle, sourceOf, type Source } from "@/lib/attachment-view";
+import { filesLabel, messageHref, monthKey, monthTitle } from "@/lib/attachment-view";
 import type { FiledAttachment } from "@/lib/types";
 import { fullDate, stampOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -28,25 +28,28 @@ function MoreSentinel({ onSeen }: { onSeen: () => void }) {
 }
 
 /** One tile in the grid. Memoized with a stable onView, so loading more files or a store change does not redraw every tile. */
-const GridTile = memo(function GridTile({ attachment: a, source, sender, onView }: { attachment: FiledAttachment; source?: Source; sender: string; onView: (a: FiledAttachment) => void }) {
+const GridTile = memo(function GridTile({ attachment: a, sender, onView }: { attachment: FiledAttachment; sender: string; onView: (a: FiledAttachment) => void }) {
   return (
-    <AttachmentTile
-      attachment={a}
-      onOpen={() => onView(a)}
-      showName={false}
-      source={source}
-      overlay={<><span className="truncate">{sender}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
-      className="aspect-square size-auto w-full"
-    />
+    <>
+      <AttachmentTile
+        attachment={a}
+        onOpen={() => onView(a)}
+        showName={false}
+        overlay={<><span className="truncate">{sender}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
+        className="aspect-square size-auto w-full"
+      />
+      {/* A document is told apart by its name, so it is written under the tile; a photo or video needs no caption. */}
+      {a.kind !== "image" && a.kind !== "video" && <span className="line-clamp-2 break-words text-xs text-muted-foreground">{a.name}</span>}
+    </>
   );
 });
 
 /**
- * Files gathered from many messages, newest first, each captioned with its name, who sent it and when,
- * with the account it came through as a small icon. With byMonth, a header with a count starts each month.
+ * Files gathered from many messages, newest first; a document shows its name, and everything shows who sent it and when
+ * on hover. With byMonth, a header with a count starts each month. Given onToggleHidden, the viewer offers Hide and Unhide.
  */
-export function AttachmentGrid({ items, hrefFor = messageHref, className, byMonth = false }: { items: FiledAttachment[]; hrefFor?: (a: FiledAttachment) => string; className?: string; byMonth?: boolean }) {
-  const { contactById, threadById } = useApp();
+export function AttachmentGrid({ items, hrefFor = messageHref, className, byMonth = false, onToggleHidden, onEnd }: { items: FiledAttachment[]; hrefFor?: (a: FiledAttachment) => string; className?: string; byMonth?: boolean; /** Hides or unhides a file; resolves true when it was saved. */ onToggleHidden?: (a: FiledAttachment) => Promise<boolean>; /** Called when the end of the files scrolls near, to load the next page. */ onEnd?: () => void }) {
+  const { contactById } = useApp();
   const [viewing, setViewing] = useState<FiledAttachment | null>(null);
   const [limit, setLimit] = useState(GRID_PAGE);
   const who = (from: string) => (from === "me" ? "You" : contactById(from)?.name ?? "Unknown");
@@ -56,6 +59,13 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
     return counts;
   }, [items, byMonth]);
   const at = viewing ? items.findIndex((a) => a.id === viewing.id) : -1;
+  // A file that is hidden or unhidden leaves this list: the viewer moves to its neighbour, or closes on the last one.
+  const toggleHidden = onToggleHidden && viewing
+    ? async () => {
+        const index = items.findIndex((x) => x.id === viewing.id);
+        if (await onToggleHidden(viewing)) setViewing(items[index + 1] ?? items[index - 1] ?? null);
+      }
+    : undefined;
   let month = "";
   return (
     <>
@@ -73,12 +83,14 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
                 </h2>
               )}
               <div className="flex min-w-0 flex-col gap-1">
-                <GridTile attachment={a} source={sourceOf(threadById(a.threadId)?.provider)} sender={who(a.from)} onView={setViewing} />
+                <GridTile attachment={a} sender={who(a.from)} onView={setViewing} />
               </div>
             </Fragment>
           );
         })}
         {items.length > limit && <MoreSentinel key={limit} onSeen={() => setLimit((n) => n + GRID_PAGE)} />}
+        {/* Every loaded tile is on screen and the server has more: asking again when the end scrolls near. */}
+        {items.length <= limit && onEnd && <MoreSentinel key={`end-${items.length}`} onSeen={onEnd} />}
       </div>
       <AttachmentViewer
         attachment={viewing}
@@ -90,6 +102,7 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
         index={at}
         onNavigate={(i) => { if (items[i]) setViewing(items[i]); }}
         onClose={() => setViewing(null)}
+        onToggleHidden={toggleHidden}
       />
     </>
   );

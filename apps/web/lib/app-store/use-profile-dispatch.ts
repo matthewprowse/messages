@@ -2,25 +2,29 @@
 // (rules, writing examples, profile and account settings). Anything else goes straight to the reducer.
 
 import { useCallback } from "react";
-import { toast } from "sonner";
 import { FIELD } from "@messages/crypto/fields";
 import { ruleTargetIndex } from "@messages/crypto/addresses";
 import { wordOf } from "@messages/analytics";
 import { supabase } from "../supabase";
 import { profilePatch } from "../data";
+import { sealProfileColumns } from "../data/profile-seal";
 import { seal, userKeys } from "../vault";
 import { sealAddress } from "../address-refs";
 import { track } from "../analytics";
-import type { Action } from "./reducer";
+import type { Action, State } from "./reducer";
+import { savedAccountPatch, undoFor } from "./save-undo";
 
 /** The dispatch the context exposes. Does nothing when signed out. */
-export function useProfileDispatch({ userId, rawDispatch, saveFailed }: { userId: string | null; rawDispatch: React.Dispatch<Action>; saveFailed: () => void }) {
+export function useProfileDispatch({ userId, rawDispatch, stateRef, saveFailed }: { userId: string | null; rawDispatch: React.Dispatch<Action>; stateRef: React.RefObject<State>; saveFailed: () => void }) {
   /**
    * Applies a change on screen straight away, then saves it. Components call dispatch as before;
    * the database writes live here.
    */
   const dispatch = useCallback((action: Action) => {
     if (!userId) return;
+    // A save that fails puts the screen back as it was and says so, so a switch never shows a state the database lacks.
+    const undo = undoFor(stateRef.current, action);
+    const failed = () => { if (undo) rawDispatch(undo); saveFailed(); };
     switch (action.type) {
       case "addRule": {
         const rule = { ...action.rule, id: crypto.randomUUID() };
@@ -35,7 +39,7 @@ export function useProfileDispatch({ userId, rawDispatch, saveFailed }: { userId
       }
       case "removeRule":
         rawDispatch(action);
-        supabase.from("priority_rules").delete().eq("id", action.id).then(({ error }) => { if (error) saveFailed(); });
+        supabase.from("priority_rules").delete().eq("id", action.id).then(({ error }) => { if (error) failed(); }, failed);
         return;
       case "addExample": {
         const example = { ...action.example, id: crypto.randomUUID() };
@@ -48,7 +52,7 @@ export function useProfileDispatch({ userId, rawDispatch, saveFailed }: { userId
       }
       case "removeExample":
         rawDispatch(action);
-        supabase.from("writing_examples").delete().eq("id", action.id).then(({ error }) => { if (error) saveFailed(); });
+        supabase.from("writing_examples").delete().eq("id", action.id).then(({ error }) => { if (error) failed(); }, failed);
         return;
       case "patchProfile":
         // Which settings changed, never their values.
@@ -57,26 +61,25 @@ export function useProfileDispatch({ userId, rawDispatch, saveFailed }: { userId
           if (setting) track("setting_changed", { setting });
         }
         rawDispatch(action);
-        supabase.from("profiles").upsert({ user_id: userId, ...profilePatch(action.patch) }, { onConflict: "user_id" })
-          .then(({ error }) => { if (error) saveFailed(); });
+        // About and Important People are sealed in the browser before they are stored.
+        void sealProfileColumns(profilePatch(action.patch))
+          .then((columns) => supabase.from("profiles").upsert({ user_id: userId, ...columns }, { onConflict: "user_id" }))
+          .then(({ error }) => { if (error) failed(); }, failed);
         return;
-      case "patchAccount":
-        rawDispatch(action);
-        if (action.patch.nickname !== undefined) {
-          supabase.from("accounts").update({ nickname: action.patch.nickname || null }).eq("id", action.id).then(({ error }) => { if (error) saveFailed(); });
-        }
-        if (action.patch.status === "disconnected") {
-          // The sync worker notices within 30 seconds and stops that account.
-          supabase.from("accounts").update({ status: "disconnected" }).eq("id", action.id).then(({ error }) => { if (error) saveFailed(); });
-        }
+      case "patchAccount": {
+        // Only what is really stored is applied, so nothing shows that a refresh would lose. Pausing is noticed by
+        // the sync worker within 30 seconds; resuming sets "connecting", which the worker restarts on.
+        const patch = savedAccountPatch(action.patch);
+        if (Object.keys(patch).length === 0) return;
+        rawDispatch({ ...action, patch });
+        const row = { ...(patch.nickname !== undefined && { nickname: patch.nickname || null }), ...(patch.status && { status: patch.status }) };
+        supabase.from("accounts").update(row).eq("id", action.id).then(({ error }) => { if (error) failed(); }, failed);
         return;
-      case "reset":
-        toast("Not available yet.");
-        return;
+      }
       default:
         rawDispatch(action);
     }
-  }, [userId, saveFailed]);
+  }, [userId, stateRef, saveFailed]);
 
   return { dispatch };
 }

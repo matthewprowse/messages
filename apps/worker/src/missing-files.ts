@@ -8,7 +8,8 @@ import { db, must } from "./db";
 import { MissingFiles } from "./ingest/attachment-files";
 import { errorCode, log } from "./log";
 import { fileRetryDelay } from "./polling";
-import { makeThumbnail, thumbPathFor } from "./photos/thumbnail";
+import { makeTilePicture } from "./photos/tile-picture";
+import { thumbPathFor } from "./photos/thumbnail";
 import { ATTACHMENTS_BUCKET, storageError, storageStatus, uploadObject } from "./storage";
 import { keysFor } from "./vault";
 
@@ -62,7 +63,7 @@ export class BackoffMissingFiles {
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnails for photos saved before thumbnails existed
+// Thumbnails for photos and PDFs saved before thumbnails existed
 // ---------------------------------------------------------------------------
 
 /** A photo bigger than this is left for later: downloading and decoding it costs more than one pass should. */
@@ -73,12 +74,14 @@ export const NO_THUMB = "";
 export interface ThumbJob {
   id: string;
   user_id: string;
+  /** "image" or "pdf": how the picture is made. */
+  kind: string;
   storage_path: string;
 }
 
 /** What backfillThumbnails needs from the outside; replaced in tests. */
 export interface ThumbDeps {
-  /** Sealed photos with no thumbnail yet, newest first. */
+  /** Sealed photos and PDFs with no thumbnail yet, newest first. */
   list(limit: number): Promise<ThumbJob[]>;
   keys(userId: string): Promise<UserKeys>;
   /** The stored (sealed) bytes, or null when the object is gone. */
@@ -95,8 +98,8 @@ const liveThumbDeps: ThumbDeps = {
   async list(limit) {
     const { data, error } = await loose()
       .from("attachments")
-      .select("id, user_id, storage_path")
-      .eq("kind", "image")
+      .select("id, user_id, kind, storage_path")
+      .in("kind", ["image", "pdf"])
       .eq("sealed", true)
       .eq("is_sticker", false)
       .not("storage_path", "is", null)
@@ -142,7 +145,7 @@ export async function backfillThumbnails(limit: number, deps: ThumbDeps = liveTh
     try {
       const stored = await deps.download(job.storage_path);
       const plain = stored && isSealedBytes(stored) ? await decryptBytes(await deps.keys(job.user_id), FIELD.attachmentData, stored).catch(() => null) : null;
-      const thumb = plain ? await makeThumbnail(Buffer.from(plain.buffer, plain.byteOffset, plain.byteLength)) : null;
+      const thumb = plain ? await makeTilePicture(job.kind, Buffer.from(plain.buffer, plain.byteOffset, plain.byteLength)) : null;
       if (!thumb) {
         await deps.setThumb(job.id, NO_THUMB);
         continue;

@@ -12,13 +12,27 @@ export interface ContactsData {
   contacts: ContactSummary[] | null | undefined;
   /** Pending suggestions whose two people are both still listed. */
   suggestions: MergeSuggestion[] | null | undefined;
+  /** How many more pending suggestions there are than the page loaded. */
+  suggestionsMore: number;
   /** Takes a suggestion off the list straight away, after Merge or Not the Same. */
   removeSuggestion: (id: string) => void;
+  /** Puts a suggestion back, when dismissing it could not be saved. */
+  restoreSuggestion: (suggestion: MergeSuggestion) => void;
+  /** Asks the layout to load the companies, which it does not until something needs them. */
+  needCompanies: () => void;
   /** Loads the contacts, companies and suggestions again, after one of them failed to load. */
   reload: () => void;
 }
 
-export const ContactsDataContext = createContext<ContactsData>({ contacts: undefined, suggestions: undefined, removeSuggestion: () => {}, reload: () => {} });
+export const ContactsDataContext = createContext<ContactsData>({
+  contacts: undefined,
+  suggestions: undefined,
+  suggestionsMore: 0,
+  removeSuggestion: () => {},
+  restoreSuggestion: () => {},
+  needCompanies: () => {},
+  reload: () => {},
+});
 
 export function useContactsData() {
   return useContext(ContactsDataContext);

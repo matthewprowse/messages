@@ -12,6 +12,9 @@ class Words(unittest.TestCase):
     def test_only_code_words_pass(self):
         self.assertEqual(word("newsletter"), "newsletter")
         self.assertEqual(word("gemini-3-flash"), "gemini-3-flash")
+        self.assertEqual(word("gemini-2.5-flash"), "gemini-2.5-flash")
+        for dotted in ["jane.doe", "acme.co", "a.b", "x" * 41]:
+            self.assertIsNone(word(dotted))
         for text in ["Alice Smith", "alice smith", "a@b.com", "27821234567", "", None, 5]:
             self.assertIsNone(word(text))
 

@@ -13,7 +13,9 @@ import { EmptyState } from "@/components/primitives";
 /** The placeholder rows shown while conversations load. */
 export function LoadingSummary() {
   return (
-    <div role="status" aria-busy="true" className="flex flex-col gap-2 py-3" aria-label="Loading summary">
+    <div role="status" aria-busy="true" className="flex flex-col gap-2 pb-3" aria-label="Loading summary">
+      {/* A band, like the real sections, so the page does not jump when they arrive. */}
+      <div className="-mx-3 flex items-center border-b p-3"><Skeleton className="h-8 w-32" /></div>
       {Array.from({ length: 8 }, (_, i) => (
         <div key={i} className="flex items-center gap-3 p-3">
           <Skeleton className="size-8 shrink-0 rounded-full" />

@@ -6,7 +6,8 @@ import { test } from "node:test";
 import { parseSummary, type Summary, type SummaryGroup } from "../../lib/analytics-data";
 import { build } from "./derive";
 
-const TO = "2026-10-25T12:00:00.000Z";
+// The summary ends at the start of the day after the last one shown.
+const TO = "2026-10-26T00:00:00.000Z";
 const n = (sum: number, count = 1) => ({ n: count, sum, p50: 0, p95: 0 });
 const g = (name: string, props: SummaryGroup["props"], count: number, nums: SummaryGroup["nums"] = {}, extra: Partial<SummaryGroup> = {}): SummaryGroup => ({
   period: "now",
@@ -65,21 +66,53 @@ test("dialogs add up their groups and count fields by how often they were touche
   assert.deepEqual(d.fields, [{ key: "to", n: 5 }, { key: "body", n: 3 }]);
 });
 
-test("search averages use the summed numbers; a pick is a search with a rank", () => {
+test("a pick is a search that carries a rank", () => {
   const s = summary({ groups: [g("search", {}, 4, { len: n(20, 4), results: n(8, 4), picked_rank: n(5, 2) })] });
   const r = build(s, 7).usage;
-  assert.deepEqual(r.search, { count: 4, avgLen: 5, avgResults: 2, avgRank: 2.5 });
+  assert.equal(r.searches, 4);
   assert.deepEqual(r.picked, { part: 2, whole: 4 });
 });
 
-test("retries are attempts beyond the first", () => {
+test("reliability counts sends sent and failed, and has no retry count because sends are never retried", () => {
   const s = summary({
     groups: [
-      g("send_result", { outcome: "sent" }, 3, { attempts: n(5, 3) }),
-      g("send_result", { outcome: "failed" }, 1, { attempts: n(3, 1) }),
+      g("send_result", { outcome: "sent" }, 3),
+      g("send_result", { outcome: "failed" }, 1),
+      g("wa_reconnect", { reason: "connection_lost" }, 2),
     ],
   });
-  assert.deepEqual(build(s, 7).usage.reliability, { syncErrors: [], sent: 3, failed: 1, retries: 4, reconnects: 0 });
+  assert.deepEqual(build(s, 7).usage.reliability, { syncErrors: [], sent: 3, failed: 1, reconnects: 2 });
+});
+
+test("people per feature, screen and error come from the database, not the largest group", () => {
+  const s = summary({
+    groups: [
+      g("feature_used", { feature: "merge_contacts", detail: "a" }, 4, {}, { users: 2 }),
+      g("feature_used", { feature: "merge_contacts", detail: "b" }, 3, {}, { users: 2 }),
+      g("screen_view", {}, 5, {}, { screen: "inbox", users: 3 }),
+      g("error", { code: "typeerror", where: "inbox" }, 2, {}, { users: 1 }),
+    ],
+    distinct_users: [
+      { period: "now", metric: "feature_used.feature", key: "merge_contacts", users: 3 },
+      { period: "now", metric: "screen_view.screen", key: "inbox", users: 4 },
+      { period: "now", metric: "error.code_where", key: "typeerror|inbox", users: 2 },
+      { period: "before", metric: "feature_used.feature", key: "merge_contacts", users: 9 },
+    ],
+  });
+  const r = build(s, 7).usage;
+  assert.deepEqual(r.features, [{ feature: "merge_contacts", uses: 7, users: 3 }]);
+  assert.equal(r.screens[0].users, 4);
+  assert.equal(r.errors[0].users, 2);
+});
+
+test("events dropped by the rate limit are passed on so the page can say counts are low", () => {
+  assert.equal(build(summary({ dropped: 12 }), 7).usage.dropped, 12);
+  assert.equal(build(summary(), 7).usage.dropped, 0);
+});
+
+test("the last day shown is the day before the summary's end, which is a day boundary", () => {
+  const r = build(summary({ daily: [{ day: "2026-10-25", users: 3, sessions: 4 }] }), 2).usage;
+  assert.deepEqual(r.series, [{ day: "2026-10-24", users: 0 }, { day: "2026-10-25", users: 3 }]);
 });
 
 test("drafts: shares of the edited drafts, as written by tone, medians from the percentiles", () => {
@@ -132,6 +165,7 @@ test("cost: spend, failures, retries, timings and the daily series", () => {
       { day: "2026-10-25", name: "ai_call", n: 5, users: 1, sums: { cost_micro: 2_500_000 } },
       { day: "2026-10-24", name: "app_open", n: 5, users: 1, sums: {} },
     ],
+    cost_users: { users: 2, total_micro: 2_500_000, p50_micro: 500_000, p90_micro: 2_000_000, top: [{ user: "ab12cd34", micro: 2_000_000 }] },
     percentiles: [
       { period: "now", metric: "ai_call.ms", key: "triage", n: 5, p50: 800, p95: 2000 },
       { period: "now", metric: "ai_call.ms_prompt", key: "triage|gemini|v2", n: 5, p50: 700, p95: 1900 },
@@ -141,15 +175,21 @@ test("cost: spend, failures, retries, timings and the daily series", () => {
   assert.equal(c.calls, 5);
   assert.equal(c.failed, 1);
   assert.deepEqual(c.usd, { value: 2.5, prev: 1 });
-  assert.equal(c.perActiveUserDayUsd, 0.3125);
   assert.deepEqual(c.series, [{ day: "2026-10-24", usd: 0 }, { day: "2026-10-25", usd: 2.5 }]);
   assert.equal(c.inTok, 1000);
   assert.equal(c.cachedTok, 500);
   assert.deepEqual({ ...c.byFeature[0] }, { feature: "triage", calls: 5, failed: 1, retries: 1, p50: 800, p95: 2000, usd: 2.5, inTok: 1000, cachedTok: 500 });
   assert.equal(c.byPrompt[0].p50, 700);
+  // Cost per person is scaled to a 30 day month: 2 days shown, so 15 times the period figure.
+  assert.deepEqual(c.perUserMonth, { users: 2, avgUsd: 18.75, p90Usd: 30, top: [{ user: "ab12cd34", usd: 30 }] });
 });
 
 test("summaries: enough is the opened ones that did not lead to the original", () => {
   const r = build(summary({ summaries: { opened: 10, original_after: 3 } }), 7).ai.summaries;
   assert.deepEqual(r, { enough: { part: 7, whole: 10 }, originalAfter: 3 });
+});
+
+test("only labels that can be corrected by hand are split: priority and junk, not category", () => {
+  const r = build(summary(), 7).ai;
+  assert.deepEqual(Object.keys(r.splits).sort(), ["junk", "priority"]);
 });

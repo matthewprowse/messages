@@ -1,25 +1,21 @@
 "use client";
 
-// Settings page for connecting Microsoft (Outlook, Calendar, To Do, Teams): in-app sign-in, per-part status from the worker,.
+// Settings page for connecting Microsoft (Outlook, Calendar, To Do, Teams): in-app sign-in, an admin-approval link when a
+// work account needs one, then the per-part status from the worker. The form and the status list are shared with Google
+// (connect-family.tsx).
 
 import { Suspense, useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { connectMicrosoft, microsoftErrorText } from "@/lib/onboarding";
-import { useApp } from "@/lib/store";
-import type { Provider } from "@/lib/types";
 import { BrandLogo } from "@/components/provider-logo";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Field, FieldContent, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows } from "@/components/settings/primitives";
+import { ConnectForm, PartsStatus, type Part } from "@/components/settings/connect-family";
 
-const PARTS: { provider: Provider; label: string; detail: string }[] = [
+const PARTS: Part[] = [
   { provider: "outlook", label: "Outlook", detail: "Mail from the last 30 days, then new mail within seconds." },
   { provider: "outlook_calendar", label: "Outlook Calendar", detail: "Your calendars and their events." },
   { provider: "microsoft_todo", label: "Microsoft To Do", detail: "Lists and tasks, synced every few minutes." },
@@ -36,7 +32,7 @@ export default function MicrosoftSetup() {
         back="/settings/accounts"
       />
       <div className="mb-3"><Suspense><ConnectMicrosoft /></Suspense></div>
-      <Status />
+      <PartsStatus parts={PARTS} goToInbox="outlook" />
     </>
   );
 }
@@ -95,22 +91,19 @@ function ConnectMicrosoft() {
   };
 
   return (
-    <div className="space-y-3">
-      <Field orientation="horizontal">
-        <Checkbox id="microsoft-teams" checked={teams} disabled={busy} onCheckedChange={(on) => setTeams(on === true)} />
-        <FieldContent>
-          <FieldLabel htmlFor="microsoft-teams">Also Connect Teams (Work or School Accounts)</FieldLabel>
-          <FieldDescription>
-            Brings in your Teams chats and meeting transcripts. Personal Microsoft accounts have neither, and Microsoft turns the whole sign-in away
-            if you tick this for one. Your IT admin may need to approve it.
-          </FieldDescription>
-        </FieldContent>
-      </Field>
-      <div className="space-y-2">
-        <Button variant="secondary" disabled={busy} onClick={start}><BrandLogo brand="microsoft" /> Connect Microsoft</Button>
-        {error && <FieldError>{error}</FieldError>}
-        {notice && <FieldDescription>{notice}</FieldDescription>}
-      </div>
+    <ConnectForm
+      optionId="microsoft-teams"
+      optionLabel="Also Connect Teams (Work or School Accounts)"
+      optionHint="Brings in your Teams chats and meeting transcripts. Personal Microsoft accounts have neither, and Microsoft turns the whole sign-in away if you tick this for one. Your IT admin may need to approve it."
+      checked={teams}
+      onChecked={setTeams}
+      busy={busy}
+      onStart={start}
+      logo={<BrandLogo brand="microsoft" />}
+      buttonLabel="Connect Microsoft"
+      error={error}
+      notice={notice}
+    >
       {adminLink && (
         <SettingsRows>
           <SettingsRow
@@ -122,42 +115,6 @@ function ConnectMicrosoft() {
           <div className="p-3"><code className="block break-all text-xs text-muted-foreground">{adminLink}</code></div>
         </SettingsRows>
       )}
-    </div>
-  );
-}
-
-/** Each part, as the worker reports it. A part that is not connected shows as Not Connected. */
-function Status() {
-  const { accounts } = useApp();
-  return (
-    <section className="space-y-3" aria-live="polite">
-      <SettingsHeading title="Status" />
-      <SettingsRows>
-        {PARTS.map((part) => {
-          const found = accounts.filter((a) => a.provider === part.provider);
-          const live = found.some((a) => a.status === "connected" || a.status === "syncing");
-          const problem = !live && found.some((a) => a.status === "error");
-          const connecting = !live && !problem && found.length > 0;
-          const first = found.find((a) => a.statusDetail);
-          return (
-            <SettingsRow
-              key={part.provider}
-              title={
-                <>
-                  {part.label}{" "}
-                  {live ? <Badge variant="secondary">Connected</Badge>
-                    : problem ? <Badge variant="destructive">Needs Attention</Badge>
-                    : connecting ? <Badge variant="outline" className="gap-1"><RefreshCw className="size-3 animate-spin" /> Connecting</Badge>
-                    : <Badge variant="outline">Not Connected</Badge>}
-                </>
-              }
-              description={problem && first?.statusDetail ? first.statusDetail : part.detail}
-            >
-              {live && part.provider === "outlook" && <Button variant="secondary" asChild><Link href="/inbox">Go to Inbox</Link></Button>}
-            </SettingsRow>
-          );
-        })}
-      </SettingsRows>
-    </section>
+    </ConnectForm>
   );
 }

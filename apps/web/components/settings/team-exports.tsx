@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { relTime } from "@/lib/format";
 import { useExportLog } from "@/lib/compliance-export";
 import type { TeamState } from "@/lib/team";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 

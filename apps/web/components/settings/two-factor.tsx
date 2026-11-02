@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 interface Enrolment { id: string; qr: string; secret: string }
 

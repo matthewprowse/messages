@@ -2,7 +2,20 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { byRecent, bySort, firstReach, haystack, matchesQuery, plural, queryOf, sortAndView } from "./contact-list-helpers";
+import { byName, byRecent, bySort, firstReach, fold, haystack, matchesQuery, plural, queryOf, sortAndView } from "./contact-list-helpers";
+
+test("search finds words in any order and ignores accents", () => {
+  const hay = haystack(["John Smith", "Zoë Müller"], []);
+  assert.equal(matchesQuery("smith john", hay, ""), true);
+  assert.equal(matchesQuery("zoe muller", hay, ""), true);
+  assert.equal(matchesQuery(fold("ZOË"), hay, ""), true);
+  assert.equal(matchesQuery("smith jane", hay, ""), false);
+});
+
+test("name sort ignores case and accents, reads numbers by value and puts bare numbers last", () => {
+  const names = ["+27 82 123 4567", "émile", "Zed", "adam", "Item 10", "Item 2"].map((name) => ({ name }));
+  assert.deepEqual([...names].sort(byName).map((x) => x.name), ["adam", "émile", "Item 2", "Item 10", "Zed", "+27 82 123 4567"]);
+});
 
 test("plural counts with the right word", () => {
   assert.equal(plural(1, "pair"), "1 pair");

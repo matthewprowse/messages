@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupAccounts, groupProblem, groupStatus, partsOf } from "./account-groups";
+import { attentionFirst, groupAccounts, groupProblem, groupStatus, partsOf, setupHrefOf, summariseGroups } from "./account-groups";
 import type { Account } from "./types";
 
 const acct = (id: string, provider: Account["provider"], status: Account["status"] = "connected", statusDetail?: string): Account =>
@@ -25,4 +25,16 @@ test("a part needing attention shows for the whole sign-in, with what it said", 
   assert.equal(groupStatus(g), "error");
   assert.equal(groupProblem(g), "Tasks: Turn on the API.");
   assert.equal(groupStatus({ ...g, accounts: [acct("1", "gmail", "disconnected")] }), "disconnected");
+});
+
+test("sign-ins that need attention come first, and the summary counts working ones", () => {
+  const groups = groupAccounts([acct("1", "whatsapp"), acct("2", "imap", "error", "Wrong password."), acct("3", "linkedin", "disconnected")]);
+  assert.deepEqual(attentionFirst(groups).map((g) => g.accounts[0].id), ["2", "1", "3"]);
+  assert.deepEqual(summariseGroups(groups), { working: 1, total: 3, attention: 1 });
+});
+
+test("each sign-in has one connect page", () => {
+  const [google, wa] = groupAccounts([acct("1", "gmail"), acct("2", "whatsapp")]);
+  assert.equal(setupHrefOf(google), "/settings/accounts/google");
+  assert.equal(setupHrefOf(wa), "/settings/accounts/whatsapp");
 });

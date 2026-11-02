@@ -10,7 +10,7 @@ import { STORAGE_CAP_BYTES, bytesLabel, storageLevel } from "@/lib/storage";
 import { KIND_LABEL } from "@/components/attachments";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 type Kind = { kind: string; files: number; bytes: number };
 type Pool = { seats: number; members: number; bytes: number };

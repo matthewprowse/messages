@@ -3,6 +3,8 @@
 // come back in UTC without a zone suffix.
 
 import type { Json, TablesInsert } from "@messages/db";
+import { eventNotes } from "@messages/email-text/event-notes";
+import { findMeetingLink, providerLink } from "../calendar/meeting-link";
 
 export interface GraphDateTime {
   dateTime?: string;
@@ -25,6 +27,10 @@ export interface GraphEvent {
   location?: { displayName?: string | null } | null;
   attendees?: { type?: string; status?: { response?: string } | null; emailAddress?: GraphEmail | null }[];
   organizer?: { emailAddress?: GraphEmail | null } | null;
+  /** Read as text (Prefer: outlook.body-content-type="text"), which is where Teams and Zoom put the join link. */
+  body?: { content?: string | null } | null;
+  onlineMeeting?: { joinUrl?: string | null } | null;
+  onlineMeetingUrl?: string | null;
 }
 
 /** Outlook's answers in Google's words, so every calendar's attendees read the same. */
@@ -53,7 +59,7 @@ export function graphTimestamp(time: GraphDateTime | undefined, allDay: boolean)
 /** An Outlook event as it is stored in calendar_events. Null for cancelled events or ones without a start. */
 export function storedOutlookEvent(
   event: GraphEvent,
-  owner: { userId: string; accountId: string; calendarId: string; selfAddresses: Set<string> },
+  owner: { userId: string; accountId: string; calendarId: string; calendarName?: string | null; selfAddresses: Set<string> },
 ): TablesInsert<"calendar_events"> | null {
   const allDay = !!event.isAllDay;
   const startsAt = graphTimestamp(event.start, allDay);
@@ -95,5 +101,14 @@ export function storedOutlookEvent(
     all_day: allDay,
     location: event.location?.displayName || null,
     attendees: attendees satisfies Json,
+    description: eventNotes(event.body?.content),
+    calendar_name: owner.calendarName ?? null,
+    conference_url: outlookMeetingUrl(event),
   };
+}
+
+/** The join link: Outlook's own (a Teams meeting's joinUrl), else a Zoom, Meet, Teams or Webex address in the location or body. Only https. */
+export function outlookMeetingUrl(event: GraphEvent): string | null {
+  const own = providerLink(event.onlineMeeting?.joinUrl) ?? providerLink(event.onlineMeetingUrl);
+  return own ?? findMeetingLink([], [event.location?.displayName, event.body?.content]);
 }

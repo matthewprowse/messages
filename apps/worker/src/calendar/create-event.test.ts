@@ -297,3 +297,21 @@ test("a repeating event is created with its rule, and a series' own event is sto
   );
   assert.equal(stored?.recurrence, "FREQ=WEEKLY;BYDAY=TU");
 });
+
+test("a Google event's notes arrive as HTML and are stored as text", () => {
+  const row = storedEvent(
+    { id: "g1", start: { dateTime: "2026-10-24T08:00:00Z" }, end: { dateTime: "2026-10-24T09:00:00Z" }, description: "Agenda<br><b>Budget</b> &amp; plans" },
+    { userId: "u", accountId: "a", calendarId: "c" },
+  );
+  assert.ok(row?.description?.includes("Budget & plans"));
+  assert.ok(!row?.description?.includes("<"));
+});
+
+test("a Zoom or Teams link in Google's location or notes becomes the join link, and Meet's own link wins", () => {
+  const owner = { userId: "u", accountId: "a", calendarId: "c" };
+  const at = { start: { dateTime: "2026-10-24T08:00:00Z" }, end: { dateTime: "2026-10-24T09:00:00Z" } };
+  assert.equal(storedEvent({ id: "g2", ...at, location: "https://acme.zoom.us/j/99" }, owner)?.conference_url, "https://acme.zoom.us/j/99");
+  assert.equal(storedEvent({ id: "g3", ...at, description: 'Join: <a href="https://teams.microsoft.com/l/meetup-join/x">here</a>' }, owner)?.conference_url, "https://teams.microsoft.com/l/meetup-join/x");
+  assert.equal(storedEvent({ id: "g4", ...at, hangoutLink: "https://meet.google.com/abc-defg-hij", location: "https://acme.zoom.us/j/99" }, owner)?.conference_url, "https://meet.google.com/abc-defg-hij");
+  assert.equal(storedEvent({ id: "g5", ...at, description: "http://zoom.us/j/1" }, owner)?.conference_url, null);
+});

@@ -5,14 +5,16 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useIsOwner } from "@/lib/auth";
 import { NewMenu } from "@/components/new-menu";
-import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Megaphone, Ellipsis, type LucideIcon } from "lucide-react";
+import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Ellipsis, type LucideIcon } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { useOnboardingMeta } from "@/lib/onboarding";
 import { useMyTeam } from "@/lib/share";
+import { attentionCount } from "@/lib/summary";
+import { useNow } from "@/components/summary/use-now";
 import { SyncBar } from "@/components/sync-bar";
 import { UsageRing } from "@/components/usage-ring";
 import { Button } from "@/components/ui/button";
@@ -51,16 +53,20 @@ function useIsDetailRoute() {
   return DETAIL_ROUTES.some((r) => r.test(pathname));
 }
 
-/** True when any inbox thread is unread. */
+/** How often the Summary dot re-checks the time windows (a conversation ages out of them, not into them). */
+const ATTENTION_REFRESH_MS = 5 * 60_000;
+
+/** True when any inbox thread is unread. Junk and Subscriptions do not count, or the dot would almost always be lit. */
 function useHasUnread() {
   const { threads } = useApp();
-  return threads.some((t) => t.unread && t.status === "inbox");
+  return threads.some((t) => t.unread && t.status === "inbox" && !t.junk);
 }
 
-/** How many conversations need you: urgent or waiting on your reply, and not already answered. */
+/** How many conversations the Summary lists as needing you. It is the page's own count (lib/summary.ts), so the dot never disagrees with the page. */
 function useAttentionCount() {
   const { threads } = useApp();
-  return threads.filter((t) => t.status === "inbox" && !t.junk && !t.lastFromMe && (t.priority === "urgent" || t.needsReply)).length;
+  const now = useNow(ATTENTION_REFRESH_MS);
+  return useMemo(() => attentionCount(threads, now), [threads, now]);
 }
 
 function UnreadDot() {
@@ -113,8 +119,7 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
       </div>
       <div className="mt-auto flex flex-col gap-1">
         {isOwner && <RailButton href="/analytics" label="Analytics" icon={ChartColumn} active={pathname.startsWith("/analytics")} />}
-        {isOwner && <RailButton href="/updates" label="Updates" icon={Megaphone} active={pathname.startsWith("/updates")} />}
-        {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin")} />}
+        {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin") || pathname.startsWith("/updates")} />}
         <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings") && !pathname.startsWith("/settings/usage")} />
         <UsageRing />
       </div>

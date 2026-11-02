@@ -5,8 +5,8 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { ChevronDownIcon } from "lucide-react";
 import type { Account } from "@/lib/types";
-import { dateKey } from "@/lib/new-items";
-import { fromDateKey, NO_REPEAT, timesWith, UNKNOWN_REPEAT } from "@/lib/event-form";
+import { dayKey, fromDateKey, timeChoices } from "@/lib/dates";
+import { NO_REPEAT, STEP, UNKNOWN_REPEAT } from "@/lib/event-form";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -16,7 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export function TimeSelect({ id, value, onChange, invalid, disabled }: { id: string; value: string; onChange: (v: string) => void; invalid: boolean; disabled: boolean }) {
-  const times = useMemo(() => timesWith(value), [value]);
+  const times = useMemo(() => timeChoices(value, STEP), [value]);
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
       <SelectTrigger id={id} className="w-full tabular-nums" aria-invalid={invalid}>
@@ -30,8 +30,9 @@ export function TimeSelect({ id, value, onChange, invalid, disabled }: { id: str
 }
 
 export function Reconnect({ provider, change = false }: { provider?: Account["provider"]; change?: boolean }) {
-  const verb = change ? "changing" : "creating";
-  const title = !provider ? `Connect a calendar to ${change ? "change" : "create"} events` : provider === "icloud_calendar" ? `Reconnect iCloud Calendar to allow ${verb} events` : `Reconnect Google to allow ${verb} events`;
+  const action = change ? "Change" : "Create";
+  const gerund = change ? "Changing" : "Creating";
+  const title = !provider ? `Connect a Calendar to ${action} Events` : provider === "icloud_calendar" ? `Reconnect iCloud Calendar to Allow ${gerund} Events` : `Reconnect Google to Allow ${gerund} Events`;
   return (
     <Alert>
       <AlertTitle>{title}</AlertTitle>
@@ -73,7 +74,7 @@ export function DateField({ date, onChange, open, onOpenChange, error, disabled 
             weekStartsOn={1}
             captionLayout="dropdown"
             onSelect={(d) => {
-              if (d) onChange(dateKey(d));
+              if (d) onChange(dayKey(d));
               onOpenChange(false);
             }}
           />

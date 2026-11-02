@@ -29,12 +29,13 @@ export async function listContactsFromStore(stored: Contact[]): Promise<ContactS
   const [rows, activity, whatsapp] = await Promise.all([
     allRows("Load contacts", (from, to) => supabase.from("contacts").select("id, hidden").order("id").range(from, to)),
     allRows("Load contact summaries", (from, to) => supabase.rpc("contact_summaries").order("contact_id").range(from, to)),
-    allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("id, contact_id").eq("kind", "whatsapp").order("id").range(from, to)),
+    allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("id, contact_id, kind").in("kind", ["whatsapp", "linkedin"]).order("id").range(from, to)),
   ]);
   return summariseStored(
     rows,
     new Map(stored.map((c) => [c.id, c])),
     new Map(activity.map((a) => [a.contact_id, a as Activity])),
-    new Set(whatsapp.map((w) => w.contact_id)),
+    new Set(whatsapp.filter((w) => w.kind === "whatsapp").map((w) => w.contact_id)),
+    new Set(whatsapp.filter((w) => w.kind === "linkedin").map((w) => w.contact_id)),
   );
 }

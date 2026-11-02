@@ -29,6 +29,13 @@ export const EMPTY: Record<View, { title: string; description: string }> = {
   subscriptions: { title: "No Subscriptions", description: "Newsletters, promotions and alerts you can unsubscribe from land here." },
 };
 
+/** The empty-state copy for a view, or for a filter that explains itself (Waiting has a two day rule people cannot guess). */
+export function emptyFor(view: View, filter: ListFilter) {
+  if (filter === "waiting") return { title: "Nothing Waiting", description: "A conversation appears here when you wrote last, expected an answer, and none has come for 2 days." };
+  if (filter === "unread") return { title: "Nothing Unread", description: "Every conversation here has been read." };
+  return EMPTY[view];
+}
+
 /** A path with its query string, or the bare path when the query is empty. */
 export function withQuery(path: string, query: string) {
   return query ? `${path}?${query}` : path;
@@ -63,4 +70,45 @@ export function accountNameMap(accounts: Pick<Account, "id" | "provider" | "nick
   const count = new Map<string, number>();
   for (const a of accounts) count.set(a.provider, (count.get(a.provider) ?? 0) + 1);
   return new Map(accounts.filter((a) => (count.get(a.provider) ?? 0) > 1).map((a) => [a.id, a.nickname || a.label]));
+}
+
+/** The one marker a row carries for the AI's triage: Urgent beats Needs Reply, and neither shows once you have answered. */
+export type RowMarker = "urgent" | "needs_reply" | null;
+export function rowMarker(t: Pick<Thread, "priority" | "needsReply" | "lastFromMe" | "junk" | "status">): RowMarker {
+  if (t.lastFromMe || t.junk || t.status === "archived" || t.status === "trash") return null;
+  if (t.priority === "urgent") return "urgent";
+  return t.needsReply ? "needs_reply" : null;
+}
+
+/**
+ * The conversation to open once `gone` have left the list: the first one after the open conversation that stays,
+ * else the nearest before it, else null (nothing left, show the list). `order` is the list top to bottom.
+ */
+export function advanceTarget(order: string[], gone: Iterable<string>, openId: string): string | null {
+  const away = new Set(gone);
+  const at = order.indexOf(openId);
+  if (at === -1) return null;
+  for (let i = at + 1; i < order.length; i++) if (!away.has(order[i])) return order[i];
+  for (let i = at - 1; i >= 0; i--) if (!away.has(order[i])) return order[i];
+  return null;
+}
+
+/** The row J (1) or K (-1) moves to from the open or focused one; with none open, J takes the first and K the last. Stays put at either end. */
+export function stepTarget(order: string[], currentId: string | null, step: 1 | -1): string | null {
+  if (order.length === 0) return null;
+  const at = currentId ? order.indexOf(currentId) : -1;
+  if (at === -1) return step === 1 ? order[0] : order[order.length - 1];
+  return order[Math.min(order.length - 1, Math.max(0, at + step))];
+}
+
+/** Counts for the empty pane and the view buttons: unread conversations, and those the AI marked as needing you. */
+export function inboxCounts(threads: Pick<Thread, "unread" | "priority" | "needsReply" | "lastFromMe" | "junk" | "status">[]) {
+  let unread = 0;
+  let attention = 0;
+  for (const t of threads) {
+    if (t.junk || t.status !== "inbox") continue;
+    if (t.unread) unread++;
+    if (rowMarker(t)) attention++;
+  }
+  return { unread, attention };
 }

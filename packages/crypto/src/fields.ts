@@ -73,6 +73,10 @@ export const FIELD = {
   writingSituation: "writing_situation",
   /** writing_examples.body */
   writingBody: "writing_body",
+  /** profiles.about: your role and goals, read by the AI worker */
+  profileAbout: "profile_about",
+  /** profiles.important_people: who matters to you, read by the AI worker */
+  profilePeople: "profile_people",
   /** style_rules.rule */
   styleRule: "style_rule",
   /** style_rules.relationship */

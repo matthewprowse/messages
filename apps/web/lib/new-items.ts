@@ -2,8 +2,12 @@
 // a Google Calendar event. The dialogs use these; the database and the worker check the same limits.
 
 import type { CalendarEvent } from "./calendar";
+import { dayKey, pad, timeKey } from "./dates";
 import type { Account, Contact, Thread } from "./types";
 import { isEmail } from "./send-from";
+
+/** The old name of dayKey, still imported by the Updates page. */
+export { dayKey as dateKey } from "./dates";
 
 // ---------------------------------------------------------------------------
 // Phone numbers
@@ -127,7 +131,7 @@ export function searchEmailContacts(contacts: Contact[], query: string, taken: s
 // ---------------------------------------------------------------------------
 
 export const MAX_GUESTS = 50;
-export const MAX_TITLE = 300;
+export const MAX_EVENT_TITLE = 300;
 export const MAX_LOCATION = 500;
 export const MAX_DESCRIPTION = 8000;
 
@@ -163,23 +167,11 @@ export interface CalendarOutboxInsert {
   recurrence: string | null;
 }
 
-function pad(n: number) {
-  return String(n).padStart(2, "0");
-}
-
-export function dateKey(d: Date) {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-export function timeKey(d: Date) {
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 function parseDate(date: string) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!m) return null;
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return dateKey(d) === date ? d : null;
+  return dayKey(d) === date ? d : null;
 }
 
 function parseTime(time: string) {
@@ -197,7 +189,7 @@ function parseTime(time: string) {
 export function defaultEventTimes(now: Date, day?: string): { date: string; startTime: string; endTime: string } {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1);
   const end = new Date(start.getFullYear(), start.getMonth(), start.getDate(), start.getHours() + 1);
-  const date = day && parseDate(day) && day !== dateKey(now) ? day : dateKey(start);
+  const date = day && parseDate(day) && day !== dayKey(now) ? day : dayKey(start);
   return { date, startTime: timeKey(start), endTime: timeKey(end) };
 }
 
@@ -247,7 +239,7 @@ export function buildEventRow(
 ): { ok: true; row: CalendarOutboxInsert } | { ok: false; field: EventField; error: string } {
   const title = form.title.trim();
   if (!title) return { ok: false, field: "title", error: "Add a title." };
-  if (title.length > MAX_TITLE) return { ok: false, field: "title", error: `Keep the title to ${MAX_TITLE} characters or fewer.` };
+  if (title.length > MAX_EVENT_TITLE) return { ok: false, field: "title", error: `Keep the title to ${MAX_EVENT_TITLE} characters or fewer.` };
   const day = parseDate(form.date);
   if (!day) return { ok: false, field: "date", error: "Choose a date." };
 
@@ -301,7 +293,7 @@ export function buildEventRow(
  */
 export function pendingEvent(id: string, row: CalendarOutboxInsert, date: string, contacts: Contact[]): CalendarEvent {
   const day = parseDate(date);
-  const nextDay = day ? dateKey(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) : date;
+  const nextDay = day ? dayKey(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) : date;
   return {
     id,
     title: row.title,
@@ -316,9 +308,9 @@ export function pendingEvent(id: string, row: CalendarOutboxInsert, date: string
   };
 }
 
-/** True when a failed event needs Google or iCloud to be connected again. */
+/** True when a failed event needs Google or iCloud to be connected again. Connecting is a web page only, so only the Settings wording is matched. */
 export function needsReconnect(error: string | null | undefined) {
-  return !!error && /reconnect google|reconnect icloud calendar in settings|pnpm connect:icloud-calendar/i.test(error);
+  return !!error && /reconnect google|reconnect icloud calendar in settings/i.test(error);
 }
 
 /** The linked WhatsApp account that can send, if any. */

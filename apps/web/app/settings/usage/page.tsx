@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { StorageSection } from "@/components/settings/storage-section";
 import { FEATURE_LABEL, type Allowance } from "@/lib/usage";
 

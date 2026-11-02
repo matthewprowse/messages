@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import log
-from .fields import ADDRESS, BODY, CHOICES, HTML, SUBJECT, SUMMARY, TRANSCRIPT
+from .fields import ADDRESS, BODY, CHOICES, HTML, PROFILE_ABOUT, PROFILE_PEOPLE, SUBJECT, SUMMARY, TRANSCRIPT
 from .supabase import in_list
 from .text import clean
 from .triage_signals import CONTEXT_CHARS, CONTEXT_MESSAGES, CONTEXT_TTL_S, LATEST_ROWS, SENDER_KEEP, UserContext, latest_incoming, sender_outcome
@@ -44,8 +44,8 @@ class ContextMixin:
         return UserContext(
             name=profile.get("display_name") or "",
             own_addresses=sorted({a for a in ((self.vault.open(user_id, ADDRESS, r.get("address")) or "").lower() for r in accounts) if "@" in a}),
-            about=profile.get("about") or "",
-            important_people=profile.get("important_people") or "",
+            about=self.vault.open(user_id, PROFILE_ABOUT, profile.get("about")) or "",  # sealed or plain
+            important_people=self.vault.open(user_id, PROFILE_PEOPLE, profile.get("important_people")) or "",
             always=[self.vault.open(user_id, ADDRESS, r["target"]) or "" for r in rules if r["kind"] == "always_important"],
             never=[self.vault.open(user_id, ADDRESS, r["target"]) or "" for r in rules if r["kind"] == "never_important"],
             unsubscribed={(self.vault.open(user_id, ADDRESS, u["sender_address"]) or "").lower() for u in unsubs},

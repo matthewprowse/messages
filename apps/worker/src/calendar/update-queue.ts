@@ -4,6 +4,7 @@ import type { TablesUpdate } from "@messages/db";
 import { db, must, retryWrite } from "../db";
 import { readQueued } from "../in-chunks";
 import { errorCode, log } from "../log";
+import { mapLimit } from "../util";
 import type { StoredCalendarEvent } from "./delete-event";
 import { openEvent, sealEvent } from "./sealed";
 import { exactTimes, shiftedTimes, storedPatch, type CalendarUpdateRow, type Change, type SeriesShift } from "./update-event";
@@ -59,10 +60,11 @@ export async function failInterruptedUpdates() {
 
 /** Writes the change to the stored copy, so the app shows it before the next sync. A failed write is left to the sync. */
 export async function saveStored(userId: string, ids: { id: string; patch: TablesUpdate<"calendar_events"> }[]) {
-  for (const { id, patch } of ids) {
+  // A daily series is up to a year of occurrences, each with its own time: a few at once, not one after another.
+  await mapLimit(ids, 8, async ({ id, patch }) => {
     const saved = await db.from("calendar_events").update(await sealEvent(userId, patch)).eq("id", id);
     if (saved.error) log.warn("changed event not stored", { code: saved.error.code });
-  }
+  });
 }
 
 

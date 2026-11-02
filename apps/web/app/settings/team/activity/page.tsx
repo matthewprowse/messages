@@ -6,7 +6,7 @@ import { useTeam } from "@/lib/team";
 import { useResponseStats } from "@/lib/team-work";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsEmpty } from "@/components/settings/sections";
+import { SettingsEmpty } from "@/components/settings/primitives";
 import { MovedBackSection, ResponseSection } from "@/components/settings/team-activity";
 
 export default function ActivityPage() {

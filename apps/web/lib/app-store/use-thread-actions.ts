@@ -4,9 +4,10 @@
 import { useCallback } from "react";
 import { supabase } from "../supabase";
 import type { Message, Thread, ThreadStatus } from "../types";
-import { recordAction, recordCorrection } from "./telemetry";
+import { recordAction, recordCorrection, recordCorrections } from "./telemetry";
 import { MailAction, emailIds, threadsIn } from "./thread-filters";
 import type { Action, State } from "./reducer";
+import { watchMailActions } from "./watch-mail-actions";
 
 export interface ThreadActionDeps {
   userId: string | null;
@@ -24,8 +25,10 @@ export function useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, 
   const queueMailAction = useCallback(async (threadId: string | string[], action: MailAction) => {
     const ids = Array.isArray(threadId) ? threadId : [threadId];
     if (ids.length === 0) return;
-    const { error } = await supabase.from("mail_actions").insert(ids.map((thread_id) => ({ thread_id, action })));
+    const { data, error } = await supabase.from("mail_actions").insert(ids.map((thread_id) => ({ thread_id, action }))).select("id");
     if (error) saveFailed();
+    // The worker may refuse it later (the provider said no): watch the rows so the user hears, rather than believe it worked.
+    else watchMailActions((data ?? []).map((r) => r.id));
   }, [saveFailed]);
 
   // Read state is saved here and sent back to the mail server.
@@ -139,7 +142,7 @@ export function useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, 
     if (before.length === 0) return;
     const ids = before.map((t) => t.id);
     recordAction(before, junk ? "junk" : "not_junk");
-    for (const t of before.slice(0, 3)) recordCorrection(t.id, "junk", t.junk ? "junk" : "not_junk", junk ? "junk" : "not_junk");
+    recordCorrections(before, "junk", (t) => (t.junk ? "junk" : "not_junk"), junk ? "junk" : "not_junk");
     const feedbackIds = ids.map(() => crypto.randomUUID());
     const save = (value: boolean) => {
       rawDispatch({ type: "patchThreads", ids, patch: { junk: value } });

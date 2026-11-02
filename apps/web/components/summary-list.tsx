@@ -2,9 +2,9 @@
 
 // The Summary list looks and behaves like the Conversations list: same header, rows (ThreadRow itself),
 // hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /summary. The sections and rows
-// are in components/summary/; this file wires them to the store.
+// are in components/summary/; this file wires them to the store. The section rules are in lib/summary.ts.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { track } from "@/lib/analytics";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/store";
@@ -12,12 +12,16 @@ import { dayKey } from "@/lib/calendar";
 import type { ListFilter, Thread } from "@/lib/types";
 import { longDate } from "@/lib/format";
 import { shortcutAction } from "@/lib/selection";
-import { digest, summarise } from "@/lib/summary";
+import { digest, olderWaiting, summarise } from "@/lib/summary";
 import { FILTER_OPTIONS, filterOf, listHref, SUMMARY_BASE as BASE } from "@/lib/summary-list";
 import { tasksForToday } from "@/lib/tasks";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { providerLabel } from "@/components/primitives";
+import { AccountsNotice } from "@/components/summary/accounts-notice";
+import { OlderRow } from "@/components/summary/older-row";
+import { useAdvanceAfterDone } from "@/components/summary/use-advance-after-done";
+import { useNow } from "@/components/summary/use-now";
 import { useImporting } from "@/components/sync-bar";
 import { SelectionBar, ThreadRow, useSwipedRow, useThreadSelection } from "@/components/thread-list";
 import { BriefPlayer } from "@/components/brief-player";
@@ -25,10 +29,14 @@ import { CalendarBody } from "@/components/summary/calendar-body";
 import { Section, Separated } from "@/components/summary/section";
 import { LoadingSummary, SummaryEmpty } from "@/components/summary/summary-empty";
 import { TaskRow } from "@/components/summary/task-row";
-import { useHeaderHeight } from "@/components/summary/use-header-height";
+import { useBandHeight, useHeaderHeight } from "@/components/summary/use-header-height";
 import { useRowNavigation } from "@/components/summary/use-row-navigation";
-import { useStuckBands } from "@/components/summary/use-stuck-bands";
 import { useTodaysEvents } from "@/components/summary/use-todays-events";
+
+/** The sections' time windows are days and hours wide, so they are re-derived this often, not every minute. */
+const SECTIONS_REFRESH_MS = 5 * 60_000;
+/** Finished events leave the list, so the calendar keeps closer time. */
+const EVENTS_CLOCK_MS = 60_000;
 
 function useListState() {
   const params = useSearchParams();
@@ -45,19 +53,18 @@ export function SummaryList() {
   const { filter, query } = useListState();
   const params = useParams<{ id?: string }>();
   const router = useRouter();
-  const { threads, accounts, tasks, loading, contactById: contactOf, prefetchMessages } = useApp();
+  const { threads, accounts, tasks, loading, contactById: contactOf, threadById, prefetchMessages } = useApp();
   const rowsRef = useRowNavigation<HTMLDivElement>();
   const { headerRef, headerHeight } = useHeaderHeight();
 
-  // Today, the sections' time windows and finished events move on while the page is left open.
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  // Today, the sections' time windows and finished events move on while the page is left open. The sections tick
+  // slowly (a window is hours wide); only the events list needs the minute.
+  const now = useNow(SECTIONS_REFRESH_MS);
+  const eventsNow = useNow(EVENTS_CLOCK_MS);
 
   const sections = useMemo(() => summarise(threads, filter, now), [threads, filter, now]);
-  const { events: loadedEvents, failed: calendarFailed, retry: retryCalendar } = useTodaysEvents(now);
+  const older = useMemo(() => olderWaiting(threads, filter, now), [threads, filter, now]);
+  const { events: loadedEvents, failed: calendarFailed, retry: retryCalendar } = useTodaysEvents(eventsNow);
   // The calendar is not filtered: events are neither email nor WhatsApp nor unread, but they are still today.
   const events = loadedEvents ?? [];
   // Nor are tasks: open ones due today, and overdue ones, from Microsoft To Do, Google Tasks and iCloud Reminders.
@@ -75,13 +82,25 @@ export function SummaryList() {
   // The calendar section stands in for events still loading or failed to load, so neither reads as "nothing today".
   const calendarPending = !noAccounts && !calendarFailed && loadedEvents === undefined;
   const calendarShown = events.length > 0 || calendarFailed || calendarPending;
-  const empty = !digest(sections, events.length, todaysTasks.length) && !calendarShown;
+  const headline = digest(sections, events.length, todaysTasks.length);
+  const empty = !headline && !calendarShown && older.length === 0;
+  const stalled = noAccounts ? 0 : accounts.filter((a) => a.status === "disconnected" || a.status === "error").length;
 
   const { picked, setChecked, check, run, onRowAction } = useThreadSelection(order, query, filter, BASE);
-  // A section's band shows its separator only once it has left its place at the top of the section.
-  useStuckBands(rowsRef, [sections, events.length, todaysTasks.length, busy, calendarShown]);
-
   const today = dayKey(now);
+  const bandHeight = useBandHeight(rowsRef, `${busy}${empty}${calendarShown}${todaysTasks.length > 0}${sections.reply.length > 0}`);
+
+  // Archiving, deleting or answering the open conversation opens the next row, so triage can run down the list.
+  const open = params.id ? threadById(params.id) : undefined;
+  useAdvanceAfterDone(order, params.id, !!params.id && (!open || open.status !== "inbox" || open.junk || open.lastFromMe), filter);
+
+  // One event a visit, once everything has loaded, so "do summaries save reading" can be answered from thread_opened.
+  const shown = useRef(false);
+  useEffect(() => {
+    if (busy || calendarPending || shown.current) return;
+    shown.current = true;
+    track("summary_shown", { reply: sections.reply.length, priority: sections.priority.length, updates: sections.updates.length, older: older.length, events: events.length, tasks: todaysTasks.length });
+  }, [busy, calendarPending, sections, older, events.length, todaysTasks.length]);
 
   // An event row has nothing to archive or delete, so with one focused the shortcuts do nothing at all,
   // rather than falling through to the open conversation.
@@ -89,7 +108,8 @@ export function SummaryList() {
   useEffect(() => {
     if (!nothingPicked) return;
     function onKey(e: KeyboardEvent) {
-      if (!(e.target as HTMLElement | null)?.matches("[data-event-row]:focus-visible") || !shortcutAction(e)) return;
+      // :focus, not :focus-visible, so a row focused by a click blocks them too.
+      if (!(e.target as HTMLElement | null)?.matches("[data-event-row]:focus") || !shortcutAction(e)) return;
       e.preventDefault();
       e.stopPropagation();
     }
@@ -97,7 +117,7 @@ export function SummaryList() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [nothingPicked]);
 
-  const pickedIds = new Set(picked);
+  const pickedIds = useMemo(() => new Set(picked), [picked]);
   const rowSwipe = useSwipedRow();
   const rows = (items: Thread[]) => (
     <Separated>
@@ -129,7 +149,7 @@ export function SummaryList() {
     // scroll past it so none of them hides it.
     <ScrollArea
       className="h-full"
-      style={{ "--summary-header": `${headerHeight}px`, "--summary-band": "57px" } as React.CSSProperties}
+      style={{ "--summary-header": `${headerHeight}px`, "--summary-band": `${bandHeight}px` } as React.CSSProperties}
       scrollbarClassName="z-20 data-vertical:top-[calc(var(--summary-header)+var(--summary-band))]! data-vertical:h-auto!"
     >
       {/* Plain white like the Conversations header, so the rows scrolling under it do not show through. */}
@@ -148,8 +168,9 @@ export function SummaryList() {
           />
         ) : (
           <div className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate text-sm text-muted-foreground">{longDate(now.toISOString())}</span>
-            <Select value={filter} onValueChange={(v) => router.push(listHref(v as ListFilter))}>
+            <time dateTime={today} className="min-w-0 truncate text-sm text-muted-foreground">{longDate(now.toISOString())}</time>
+            {/* Replace, not push, and keep the open conversation: a filter is a view of the list, not a place to go back to. */}
+            <Select value={filter} onValueChange={(v) => router.replace(listHref(v as ListFilter, params.id))}>
               <SelectTrigger aria-label="Filter" className="w-36 data-[size=default]:h-8">
                 <SelectValue />
               </SelectTrigger>
@@ -164,22 +185,35 @@ export function SummaryList() {
       </div>
       <div ref={rowsRef} className="px-3">
         {busy && <LoadingSummary />}
-        {!busy && empty && <SummaryEmpty noAccounts={noAccounts} importing={importing} filter={filter} onClearFilter={() => router.push(BASE)} />}
+        {!busy && stalled > 0 && <AccountsNotice count={stalled} />}
+        {!busy && empty && <SummaryEmpty noAccounts={noAccounts} importing={importing} filter={filter} onClearFilter={() => router.replace(listHref("none", params.id))} />}
         {!busy && !empty && (
           <div>
+            {(headline || filter !== "none") && (
+              <p className="pt-3 text-xs text-muted-foreground">
+                {headline}
+                {headline && filter !== "none" && ". "}
+                {filter !== "none" && "The filter applies to conversations; the calendar and tasks always show."}
+              </p>
+            )}
             {calendarShown && (
-              <Section title="Today's Calendar" count={calendarFailed || calendarPending ? undefined : events.length} separated>
+              <Section title="Today's Calendar" count={calendarFailed || calendarPending ? undefined : events.length} headerHeight={headerHeight} action={{ label: "Open", href: "/calendar" }} separated>
                 <CalendarBody failed={calendarFailed} pending={calendarPending} events={events} today={today} onRetry={retryCalendar} />
               </Section>
             )}
             {todaysTasks.length > 0 && (
-              <Section title="Tasks" count={todaysTasks.length} separated={!calendarShown}>
+              <Section title="Tasks" count={todaysTasks.length} headerHeight={headerHeight} action={{ label: "Open", href: "/calendar" }} separated={!calendarShown}>
                 <Separated>{todaysTasks.map((t) => <TaskRow key={t.task.id} item={t} today={today} source={sourceOf(t.task.accountId)} />)}</Separated>
               </Section>
             )}
-            {sections.reply.length > 0 && <Section title="Needs Reply" count={sections.reply.length} separated={!calendarShown && todaysTasks.length === 0}>{rows(sections.reply)}</Section>}
-            {sections.priority.length > 0 && <Section title="Important" count={sections.priority.length}>{rows(sections.priority)}</Section>}
-            {sections.updates.length > 0 && <Section title="Updates" count={sections.updates.length}>{rows(sections.updates)}</Section>}
+            {sections.reply.length > 0 && <Section title="Needs Reply" count={sections.reply.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0}>{rows(sections.reply)}</Section>}
+            {sections.priority.length > 0 && <Section title="Important" count={sections.priority.length} headerHeight={headerHeight}>{rows(sections.priority)}</Section>}
+            {sections.updates.length > 0 && <Section title="Updates" count={sections.updates.length} headerHeight={headerHeight}>{rows(sections.updates)}</Section>}
+            {older.length > 0 && (
+              <Section title="Older" count={older.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0 && sections.reply.length + sections.priority.length + sections.updates.length === 0}>
+                <OlderRow count={older.length} />
+              </Section>
+            )}
           </div>
         )}
       </div>

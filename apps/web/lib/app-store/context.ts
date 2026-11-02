@@ -6,6 +6,7 @@ import type { Contact, Decision, Draft, ListFilter, Message, Task, Thread, View 
 import { type OutboxUpload } from "../outbox-files";
 import { type TaskForm } from "../tasks";
 import { ComposeDraft, ComposeDraftRequest, ComposeStatus, NewEmail } from "./compose";
+import type { ContactChange, ContactPatch } from "./contact-patch";
 import { Action, State } from "./reducer";
 
 export type DraftPhase = "thinking" | "streaming";
@@ -20,6 +21,8 @@ export interface Ctx extends Omit<State, "byThread"> {
   messagesByThread: Map<string, Message[]>;
   messagesFor: (threadId: string) => Message[];
   messagesLoaded: (threadId: string) => boolean;
+  /** The conversation's first load failed: show an error with Retry (call loadMessages again) instead of a skeleton. */
+  messagesFailed: (threadId: string) => boolean;
   /** Loads a conversation's newest messages, or with aroundMessageId every message from that one on. */
   loadMessages: (threadId: string, aroundMessageId?: string) => Promise<void>;
   /** Loads the page before the oldest loaded message. Resolves true when it added any. */
@@ -86,10 +89,19 @@ export interface Ctx extends Omit<State, "byThread"> {
   hydrated: boolean;
   giveFeedback: (id: string, value: "important" | "not_important") => void;
   /** Merges mergeId into keepId, with an Undo toast. Resolves to the merge id, or null when it failed. */
-  mergeContacts: (keepId: string, mergeId: string, reason: "suggestion" | "manual", name?: string) => Promise<string | null>;
+  mergeContacts: (keepId: string, mergeId: string, reason: "suggestion" | "manual", name?: string, opts?: { quiet?: boolean }) => Promise<string | null>;
   /** Moves some of a contact's addresses and numbers to a new person. Resolves to their id, or null. */
   splitContact: (contactId: string, identityIds: string[], name: string) => Promise<string | null>;
-  undoMerge: (mergeId: string) => Promise<boolean>;
+  /** Undoes a merge. refresh: false skips the reload and the message, for a batch that reloads once itself. */
+  undoMerge: (mergeId: string, opts?: { refresh?: boolean }) => Promise<boolean>;
+  /** Hides a contact or sets person/company on screen at once; the caller saves it and calls this again to put it back. */
+  patchContact: (id: string, patch: ContactPatch) => void;
+  /** Takes a deleted contact out of the store and the Contacts lists. */
+  removeContact: (id: string) => void;
+  /** Every change to a contact since the app opened, oldest first, for the Contacts page to apply to its lists. */
+  contactChanges: ContactChange[];
+  /** Goes up when the whole contact graph was read again. */
+  contactsRefreshed: number;
   /** Reloads every contact after one is added or deleted, and the open conversations that involve these ids. */
   refreshContacts: (affected: string[]) => Promise<Contact[]>;
   /** Goes up after every merge, split or undo, so pages that load contacts themselves reload. */

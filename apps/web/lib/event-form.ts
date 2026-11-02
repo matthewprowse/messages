@@ -1,6 +1,6 @@
-// Pure helpers for the New Event dialog's form: the times offered, reading a "YYYY-MM-DD" field, and the Repeat
-// list. Kept out of the component so they can be tested.
+// Pure helpers for the New Event dialog's form: the minutes between the times offered and the Repeat list. Kept out of the component so they can be tested.
 
+import { fromDateKey } from "@/lib/dates";
 import { describeRule, repeatChoices, sameRepeat } from "@/lib/recurrence";
 
 /** Minutes between the times offered. */
@@ -9,18 +9,6 @@ export const STEP = 15;
 // The Repeat list's values for no repeat, and for a series whose rule is not known yet: a Select item needs a value.
 export const NO_REPEAT = "none";
 export const UNKNOWN_REPEAT = "unknown";
-
-/** Every time of day STEP minutes apart, plus the one already chosen when it falls between them. */
-export function timesWith(value: string) {
-  const times = Array.from({ length: 1440 / STEP }, (_, i) => `${String(Math.floor((i * STEP) / 60)).padStart(2, "0")}:${String((i * STEP) % 60).padStart(2, "0")}`);
-  return value && !times.includes(value) ? [...times, value].sort() : times;
-}
-
-/** A "YYYY-MM-DD" form value as a local date, or undefined when it is not in that shape. */
-export function fromDateKey(key: string) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
-}
 
 /**
  * The Repeat list for the chosen date, with the event's own rule added when it is none of the choices. A series whose

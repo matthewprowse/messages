@@ -15,7 +15,7 @@ test("a queued reply follows the stored messages and a failed one is marked fail
   ];
   const out = withQueuedReplies(stored, pending);
   assert.deepEqual(out.get("a")?.map((m) => m.id), ["m1", "outbox:o1"]);
-  assert.equal(out.get("a")?.[1].sendState, "sending");
+  assert.equal(out.get("a")?.[1].sendState, "queued"); // each outbox status keeps its own state, so a sent reply says Sent
   assert.equal(out.get("b"), stored.b);
   assert.equal(out.get("c")?.[0].sendState, "failed");
   assert.equal(out.get("c")?.[0].sendError, "no");

@@ -8,7 +8,7 @@ import { usePathname } from "next/navigation";
 import { wordOf } from "@messages/analytics";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
-import { currentScreen, flush, screenOf, setScreen, setSharing, track } from "@/lib/analytics";
+import { currentScreen, flush, screenOf, setScreen, setSharing, takeFreshSession, track } from "@/lib/analytics";
 
 const RAGE_CLICKS = 3;
 const RAGE_MS = 1500;
@@ -60,7 +60,8 @@ export function AnalyticsTracker() {
       } catch {
         // Private windows: counted as new each time.
       }
-      track("app_open", { returning });
+      // One open per session, not per page load: a reload inside 30 minutes is the same visit.
+      if (takeFreshSession()) track("app_open", { returning });
     }
     const next = screenOf(pathname);
     if (next === entered.current.screen) return;
@@ -87,7 +88,7 @@ export function AnalyticsTracker() {
         e.since = null;
         trackTime(e.screen, e.visible);
         e.visible = 0;
-        void flush();
+        void flush(true);
       } else if (e.screen) {
         e.since = performance.now();
       }

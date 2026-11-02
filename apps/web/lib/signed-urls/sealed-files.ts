@@ -8,6 +8,7 @@ import { teamKeyRing, userKeys } from "../vault";
 import { BUCKET } from "../outbox-files";
 import { signedUrl } from "./links";
 import { headOf, joinChunks } from "./chunks";
+import { currentOpenLimit, exceedsOpenLimit } from "./open-limits";
 import { isTeamFilePath, sealedField } from "./sealed-paths";
 import { thumbCache } from "./thumb-store";
 
@@ -32,8 +33,11 @@ export function rememberNoteMime(path: string, mime: string) {
   noteMimes.set(path, mime);
 }
 
-/** An opened note file: the link to show or save it, and whether it is a blob made here (and so revoked when done). */
-export type OpenedNoteFile = { url: string; sealed: boolean };
+/**
+ * An opened note file: the link to show or save it, and whether it is a blob made here (and so revoked when done).
+ * tooLarge means a sealed file over this device's limit (open-limits.ts) was not downloaded, and there is no link.
+ */
+export type OpenedNoteFile = { url: string; sealed: boolean; tooLarge?: true };
 
 const OPEN_PARALLEL = 4;
 let opening = 0;
@@ -60,13 +64,26 @@ async function openNoteFile(path: string): Promise<OpenedNoteFile | null> {
     await reader.cancel().catch(() => {});
     return { url: link, sealed: false };
   }
+  // A sealed file is opened whole, so one too big for this device is refused before (or while) it is downloaded.
+  const limit = currentOpenLimit();
+  const declared = Number(res.headers.get("content-length"));
+  if (exceedsOpenLimit(declared > 0 ? declared : null, limit)) {
+    await reader.cancel().catch(() => {});
+    return { url: "", sealed: false, tooLarge: true };
+  }
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value as Uint8Array<ArrayBuffer>);
     length += value.length;
+    if (length > limit) {
+      await reader.cancel().catch(() => {});
+      return { url: "", sealed: false, tooLarge: true };
+    }
   }
-  const plain = await openSealed(path, joinChunks(chunks, length));
+  const joined = joinChunks(chunks, length);
+  chunks.length = 0; // the pieces are not needed once joined; dropping them keeps the peak at two copies, not three
+  const plain = await openSealed(path, joined);
   return { url: URL.createObjectURL(new Blob([plain], { type: noteMimes.get(path) || "application/octet-stream" })), sealed: true };
 }
 

@@ -8,6 +8,7 @@ import {
 } from "../data";
 import { mergeById, mergeLoaded } from "./merge-loaded";
 import { isTempTask } from "../tasks";
+import { mergeContactInto, patchContactIn, repointIds } from "./contact-patch";
 
 export interface State {
   loading: boolean;
@@ -25,14 +26,13 @@ export interface State {
 }
 
 export type Action =
-  | { type: "loaded"; data: Loaded }
   /** A fetch applied on top of the state now; base is the state when the fetch began (see merge-loaded.ts). */
   | { type: "merged"; base: State; data: Loaded }
   | { type: "clear" }
   | { type: "upsertThread"; thread: Thread }
-  /** Several conversations and their people in one render, for a burst of new ones. */
   /** Tasks fetched again, applied on top of the ones held now; base is the list when the fetch began. */
   | { type: "tasksLoaded"; base: Task[]; tasks: Task[] }
+  /** Several conversations and their people in one render, for a burst of new ones. */
   | { type: "upsertThreads"; threads: Thread[]; contacts: Contact[] }
   /** Drops loaded messages for conversations not held any more (see recent-threads.ts). */
   | { type: "evictMessages"; ids: string[] }
@@ -59,10 +59,12 @@ export type Action =
   | { type: "removeExample"; id: string }
   | { type: "patchProfile"; patch: Partial<Profile> }
   | { type: "setContactGraph"; contacts: Contact[]; participants: Map<string, string[]> }
+  | { type: "mergeContactLocal"; keepId: string; mergeId: string; name?: string }
+  | { type: "patchContact"; id: string; patch: Partial<Contact> }
+  | { type: "removeContact"; id: string }
   | { type: "upsertTask"; task: Task }
   | { type: "removeTask"; id: string }
-  | { type: "patchTask"; id: string; patch: Partial<Task> }
-  | { type: "reset" };
+  | { type: "patchTask"; id: string; patch: Partial<Task> };
 
 export const initial: State = {
   loading: true,
@@ -91,11 +93,6 @@ export const sameContact = (a: Contact, b: Contact) =>
   a.organization?.id === b.organization?.id && a.organization?.name === b.organization?.name &&
   a.organization?.logoPath === b.organization?.logoPath &&
   a.emails.join() === b.emails.join() && a.phones.join() === b.phones.join();
-
-/** Loaded data as state: its contactsLoaded flag is for the store, not part of what is kept. */
-function withoutFlag({ contactsLoaded: _flag, ...rest }: Loaded): Omit<Loaded, "contactsLoaded"> {
-  return rest;
-}
 
 /** The list with these conversations replaced in place (keeping their draft and feedback) or added at the front. */
 export function withThreads(list: Thread[], incoming: Thread[]): Thread[] {
@@ -136,9 +133,6 @@ export function editFiles(s: State, messageId: string | null, edit: (files: Atta
 
 export function reducer(s: State, a: Action): State {
   switch (a.type) {
-    case "loaded":
-      // Contacts are merged, as a resync after a reconnect brings only the people in the listed threads.
-      return { ...s, ...withoutFlag(a.data), contacts: withContacts(s.contacts, a.data.contacts), loading: false };
     case "merged": {
       const { contactsLoaded: _flag, contacts, ...rest } = a.data;
       return { ...s, ...mergeLoaded(a.base, s, rest), contacts: withContacts(s.contacts, contacts), loading: false };
@@ -238,6 +232,21 @@ export function reducer(s: State, a: Action): State {
       return { ...s, profile: { ...s.profile, ...a.patch } };
     case "setContactGraph":
       return { ...s, contacts: a.contacts, threads: s.threads.map((t) => ({ ...t, participantIds: leadParticipant(a.participants.get(t.id) ?? [], t.lastSenderId) })) };
+    // A merge, patched in: the kept contact gains the other's details, and conversations name the kept one.
+    case "mergeContactLocal":
+      return {
+        ...s,
+        contacts: mergeContactInto(s.contacts, a.keepId, a.mergeId, a.name),
+        threads: s.threads.map((t) => (t.participantIds.includes(a.mergeId) || t.lastSenderId === a.mergeId
+          ? { ...t, participantIds: repointIds(t.participantIds, a.keepId, a.mergeId), lastSenderId: t.lastSenderId === a.mergeId ? a.keepId : t.lastSenderId }
+          : t)),
+      };
+    case "patchContact": {
+      const contacts = patchContactIn(s.contacts, a.id, a.patch);
+      return contacts === s.contacts ? s : { ...s, contacts };
+    }
+    case "removeContact":
+      return s.contacts.some((c) => c.id === a.id) ? { ...s, contacts: s.contacts.filter((c) => c.id !== a.id) } : s;
     case "upsertTask": {
       // A task that lost its date has no day to show on.
       const others = s.tasks.filter((t) => t.id !== a.task.id);
@@ -247,7 +256,5 @@ export function reducer(s: State, a: Action): State {
       return s.tasks.some((t) => t.id === a.id) ? { ...s, tasks: s.tasks.filter((t) => t.id !== a.id) } : s;
     case "patchTask":
       return { ...s, tasks: s.tasks.map((t) => (t.id === a.id ? { ...t, ...a.patch } : t)) };
-    case "reset":
-      return s; // not available on real data yet
   }
 }

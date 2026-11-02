@@ -7,6 +7,7 @@ import { Fragment, useContext, useRef } from "react";
 import Link from "next/link";
 import { useApp } from "@/lib/store";
 import { canChangeEvents, googleEventUrl, type CalendarEvent, type EventResponse } from "@/lib/calendar";
+import { allDaySpanText } from "@/lib/calendar-days";
 import { describeRule } from "@/lib/recurrence";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,7 @@ import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { EventMeetings } from "@/components/meeting-card";
 
 import { isDimmed, timeRange } from "./dates";
-import { Page } from "./page-context";
+import { Now, Page } from "./page-context";
 
 export function Attendees({ event }: { event: CalendarEvent }) {
   if (event.attendees.length === 0) return null;
@@ -82,6 +83,9 @@ export function useEventState(event: CalendarEvent) {
 
 /** When an event is, as the dialog's description: its day, then its times. */
 export function eventWhen(e: CalendarEvent) {
+  // A conference over several days reads as its span; the days are in the text, so there is no separate time.
+  const span = allDaySpanText(e);
+  if (span) return span;
   const day = (e.allDay ? new Date(`${e.startsAt.slice(0, 10)}T12:00:00`) : new Date(e.startsAt)).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   return `${day}, ${timeRange(e)}`;
 }
@@ -188,36 +192,19 @@ export function EventDialogBody({ event, onClose }: { event: CalendarEvent; onCl
   );
 }
 
-/** Gives the element it renders a click that opens the event's details. */
-export function EventSurface({ event, day, render }: { event: CalendarEvent; day: string; render: (onClick: () => void) => React.ReactNode }) {
-  const { setOpenKey } = useContext(Page);
-  return <>{render(() => setOpenKey(`${event.id}|${day}`))}</>;
-}
-
 /** An event in the week grid; clicking it shows everything about it. */
 export function EventChip({ event, day, className, style, children }: { event: CalendarEvent; day: string; className?: string; style?: React.CSSProperties; children: React.ReactNode }) {
-  const { now } = useContext(Page);
+  const { setOpenKey } = useContext(Page);
+  const now = useContext(Now);
   const faded = event.pending || isDimmed(event, now);
   return (
-    <EventSurface
-      event={event}
-      day={day}
-      render={(onClick) => (
-        <button
-          type="button"
-          onClick={onClick}
-          style={style}
-          className={cn("min-w-0 overflow-hidden rounded-md bg-secondary text-left text-xs text-secondary-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50", faded && "opacity-60", className)}
-        >
-          {children}
-        </button>
-      )}
-    />
+    <button
+      type="button"
+      onClick={() => setOpenKey(`${event.id}|${day}`)}
+      style={style}
+      className={cn("min-w-0 overflow-hidden rounded-md bg-secondary text-left text-xs text-secondary-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50", faded && "opacity-60", className)}
+    >
+      {children}
+    </button>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Tasks: a checkbox and the title, outlined rather than filled so they read apart from events. Ticking one
-// shows at once while the worker makes it at the provider; the list and source are on hover and in details.
-// ---------------------------------------------------------------------------
-

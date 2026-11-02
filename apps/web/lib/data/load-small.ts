@@ -6,6 +6,7 @@ import { supabase } from "../supabase";
 import type { Rule, Task } from "../types";
 import { allRows } from "../contacts";
 import { mapTask, TASK_COLUMNS } from "../tasks";
+import { openProfileRow } from "./profile-seal";
 import { ACCOUNT_COLUMNS, DRAFT_COLUMNS, PROFILE_COLUMNS, UNSUBSCRIBE_COLUMNS } from "./columns";
 import { mapAccount, mapDraft, mapProfile, mapUnsubscribe } from "./map-small";
 
@@ -48,6 +49,7 @@ export async function loadSmall() {
     openDrafts(drafts),
     openAddresses([accounts.data ?? [], rules, unsubscribes]),
     openExamples(examples),
+    openProfileRow(profile.data),
   ]);
   const draftOf = new Map(drafts.map((d) => [d.thread_id, mapDraft(d)]));
   const waiting = new Set(followUps.map((f) => f.thread_id));

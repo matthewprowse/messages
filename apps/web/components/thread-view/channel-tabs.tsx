@@ -1,4 +1,4 @@
-// The Email and WhatsApp tabs beside the More menu in a conversation header: other threads with this person, and New Email.
+// The Email, WhatsApp, Instagram and LinkedIn tabs beside the More menu in a conversation header: other threads with this person, and New Email.
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { useApp } from "@/lib/store";
 import type { Contact, Thread } from "@/lib/types";
 import { relTime } from "@/lib/format";
+import { CHAT_TABS, theirThreads } from "@/lib/thread-channels";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -16,22 +17,17 @@ const ComposeDialog = dynamic(() => import("@/components/compose-dialog").then((
 /**
  * The places you talk to this person, beside the More menu. Email opens a menu of your email threads with
  * them, newest first with the open one ticked, and New Email to start a fresh one, since a new topic does
- * not belong in an old thread. WhatsApp opens your chat with them. Shown when there is somewhere to go.
+ * not belong in an old thread. Each chat tab (WhatsApp, Instagram, LinkedIn) opens your newest chat with them. Shown when there is somewhere to go.
  */
 export function ChannelTabs({ thread, person, hrefFor }: { thread: Thread; person?: Contact; hrefFor: (threadId: string) => string }) {
   const { threads } = useApp();
   const [composing, setComposing] = useState(false);
-  const { emails, chat } = useMemo(() => {
-    const theirs = person ? threads.filter((t) => !t.isGroup && t.status !== "trash" && t.participantIds.includes(person.id)) : [];
-    const newest = (a: Thread, b: Thread) => b.lastMessageAt.localeCompare(a.lastMessageAt);
-    return { emails: theirs.filter((t) => t.channel === "email").sort(newest), chat: theirs.filter((t) => t.channel === "whatsapp").sort(newest)[0] };
-  }, [threads, person]);
+  const { emails, chats } = useMemo(() => (person ? theirThreads(threads, person.id) : { emails: [] as Thread[], chats: new Map<Thread["channel"], Thread>() }), [threads, person]);
   const address = person?.emails[0];
   const canEmail = emails.length > 0 || !!address;
   const onEmail = thread.channel === "email";
-  const onChat = thread.channel === "whatsapp";
   // In an email: another thread, a new email or their chat. In a chat: any way to email them.
-  const somewhere = onEmail ? !!chat || !!address || emails.length > 1 : canEmail;
+  const somewhere = onEmail ? chats.size > 0 || !!address || emails.length > 1 : canEmail || chats.size > 1;
   if (!person || !somewhere) return null;
   return (
     <nav aria-label="Channels" className="flex shrink-0 items-center gap-1">
@@ -56,11 +52,15 @@ export function ChannelTabs({ thread, person, hrefFor }: { thread: Thread; perso
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      {chat && (
-        <Button asChild variant={onChat ? "secondary" : "ghost"} className={cn("px-2", !onChat && "text-muted-foreground")}>
-          <Link href={hrefFor(chat.id)} aria-current={onChat ? "page" : undefined}>WhatsApp</Link>
-        </Button>
-      )}
+      {CHAT_TABS.map(({ channel, label }) => {
+        const chat = chats.get(channel);
+        const on = thread.channel === channel;
+        return chat && (
+          <Button key={channel} asChild variant={on ? "secondary" : "ghost"} className={cn("px-2", !on && "text-muted-foreground")}>
+            <Link href={hrefFor(chat.id)} aria-current={on ? "page" : undefined}>{label}</Link>
+          </Button>
+        );
+      })}
       {address && <ComposeDialog open={composing} onOpenChange={setComposing} to={[address]} />}
     </nav>
   );

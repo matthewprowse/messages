@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const snip = (text: string, n = 110) => (text.length > n ? `${text.slice(0, n).trimEnd()}...` : text);
 

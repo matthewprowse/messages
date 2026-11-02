@@ -20,7 +20,7 @@ import { BrandLogo, type Brand } from "@/components/provider-logo";
 import { ICloudConnectForm } from "@/components/icloud-connect";
 import { ImapConnectForm } from "@/components/imap-connect";
 import { useWhatsAppLink, WhatsAppLinkPanel } from "@/components/whatsapp-link";
-import { SettingsRow, SettingsRows } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows } from "@/components/settings/primitives";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";

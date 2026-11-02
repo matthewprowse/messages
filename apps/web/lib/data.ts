@@ -12,4 +12,4 @@ export { loadChanges, loadEverything, loadThread, type Loaded } from "./data/loa
 export { loadOutbox } from "./data/load-outbox";
 export { listContactsFromStore, loadContacts } from "./data/load-contacts";
 export { loadMessage, loadMessageAttachments, loadMessagesAfter, loadThreadMessages, MESSAGE_PAGE, messageSentAt, type MessagePage } from "./data/load-messages";
-export { loadAttachments } from "./data/load-attachments";
+export { countAttachments, loadAttachmentPage, setAttachmentsHidden, type AttachmentPage, type HiddenMode } from "./data/load-attachments";

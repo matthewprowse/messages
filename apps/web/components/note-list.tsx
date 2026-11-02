@@ -6,9 +6,11 @@ import { PaneHeader, SearchBand } from "@/components/pane";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { NotebookPen, Pin, PinOff, Trash2, type LucideIcon } from "lucide-react";
+import { ListChecks, NotebookPen, Pin, PinOff, Trash2, type LucideIcon } from "lucide-react";
 import type { Note } from "@/lib/notes";
-import { matchesNote, matchingLine, noteExcerpt, searchWords } from "@/lib/note-text";
+import { checklistProgress, matchesNote, matchingLine, noteExcerpt, searchWords } from "@/lib/note-text";
+import { factStatus } from "@/lib/note-facts";
+import { DraftsBadge, DraftsSummary, useDraftFacts, type DraftsStatus } from "@/components/note-drafts-badge";
 import { relTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useNewNote, useNotes } from "@/components/notes-data";
@@ -19,7 +21,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -27,8 +29,11 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 // Laid out like the Conversations list: the title, then the search where the views are and New Note
 // where the filter is, then the notes, pinned first and then the most recently edited.
 
-/** A note's title, or New Note while it is blank. */
-export const noteTitle = (n: Pick<Note, "title">) => n.title.trim() || "New Note";
+/** A note's title, or Untitled Note while it is blank (the open note's header says the same). */
+export const noteTitle = (n: Pick<Note, "title">) => n.title.trim() || "Untitled Note";
+
+/** How long the pointer rests on a row (ms) before its note is fetched ahead of a click. */
+const WARM_HOVER_MS = 150;
 
 // The row's text fades out under its two hover buttons, as on conversation rows.
 const FADE = "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible";
@@ -46,8 +51,8 @@ function RowButton({ label, icon: Icon, onClick }: { label: string; icon: Lucide
 
 /** The text with each search word marked. */
 function Highlight({ text, words }: { text: string; words: string[] }) {
-  if (words.length === 0) return <>{text}</>;
-  const pattern = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+  const pattern = useMemo(() => (words.length === 0 ? null : new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi")), [words]);
+  if (!pattern) return <>{text}</>;
   return (
     <>
       {text.split(pattern).map((part, i) => (i % 2 === 1 ? <mark key={i} className="rounded-sm bg-primary/15 text-foreground">{part}</mark> : part))}
@@ -55,8 +60,10 @@ function Highlight({ text, words }: { text: string; words: string[] }) {
   );
 }
 
-const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDelete, onWarm }: {
+const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onPin, onDelete, onDraft, onWarm }: {
   note: Note;
+  /** How the note stands for drafts, passed as plain text so the row only redraws when it changes. */
+  drafts: DraftsStatus;
   /** The search, when there is one: the row shows the line that matched. */
   term: string;
   /** Only read through relTime: a new day redraws the row. */
@@ -64,9 +71,14 @@ const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDe
   selected: boolean;
   onPin: (note: Note) => void;
   onDelete: (note: Note) => void;
-  /** Called when the row is pointed at or focused, to have the note ready. */
+  onDraft: (note: Note) => void;
+  /** Called when the row is pointed at (after a short pause) or focused, to have the note ready. */
   onWarm: (id: string) => void;
 }) {
+  // Sweeping the pointer across the list must not start a download per row.
+  const hover = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(hover.current), []);
+  const progress = useMemo(() => (note.unloaded ? null : checklistProgress(note.body)), [note.unloaded, note.body]);
   const words = useMemo(() => searchWords(term), [term]);
   // Until the text is downloaded the stored excerpt stands in for it.
   const text = note.unloaded ? note.excerpt ?? "" : note.body;
@@ -78,7 +90,8 @@ const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDe
           <Link
             href={`/notes/${note.id}`}
             data-row-link
-            onPointerEnter={() => onWarm(note.id)}
+            onPointerEnter={() => { clearTimeout(hover.current); hover.current = setTimeout(() => onWarm(note.id), WARM_HOVER_MS); }}
+            onPointerLeave={() => clearTimeout(hover.current)}
             onFocus={() => onWarm(note.id)}
             aria-current={selected ? "page" : undefined}
             className={cn("flex flex-col gap-1 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", FADE)}
@@ -89,9 +102,15 @@ const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDe
                 {note.pinned && <Pin className="size-3 shrink-0 text-muted-foreground" aria-label="Pinned" />}
                 <span className="truncate"><Highlight text={noteTitle(note)} words={note.title.trim() ? words : []} /></span>
               </span>
-              <span data-hover-hide className="shrink-0 text-xs tabular-nums text-muted-foreground">{relTime(note.updatedAt)}</span>
+              <span data-hover-hide className="flex shrink-0 items-center gap-2 text-xs tabular-nums text-muted-foreground">
+                {progress && <span className="flex items-center gap-1" aria-label={`${progress.done} of ${progress.total} done`}><ListChecks className="size-3" />{progress.done}/{progress.total}</span>}
+                {relTime(note.updatedAt)}
+              </span>
             </div>
-            <span className={cn("h-4 truncate text-xs", !preview && "text-muted-foreground")}>{preview ? <Highlight text={preview} words={words} /> : note.unloaded && note.excerpt === null ? "" : "No Text"}</span>
+            <div className="flex h-4 items-center gap-2">
+              <span className={cn("min-w-0 flex-1 truncate text-xs", !preview && "text-muted-foreground")}>{preview ? <Highlight text={preview} words={words} /> : note.unloaded && note.excerpt === null ? "" : "No Text"}</span>
+              <DraftsBadge status={drafts} />
+            </div>
           </Link>
           <div className="absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex group-focus-within/row:flex pointer-coarse:flex">
             <RowButton label={note.pinned ? "Unpin" : "Pin"} icon={note.pinned ? PinOff : Pin} onClick={() => onPin(note)} />
@@ -101,6 +120,7 @@ const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDe
       </ContextMenuTrigger>
       <ContextMenuContent className="w-max">
         <ContextMenuItem onSelect={() => onPin(note)}>{note.pinned ? "Unpin" : "Pin"}</ContextMenuItem>
+        <ContextMenuCheckboxItem checked={note.useInDrafts} onCheckedChange={() => onDraft(note)}>Use in Drafts</ContextMenuCheckboxItem>
         <ContextMenuItem variant="destructive" onSelect={() => onDelete(note)}>Delete</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -197,7 +217,8 @@ function useRowNavigation<T extends HTMLElement>() {
 }
 
 export function NoteList() {
-  const { notes, loading, error, reload, opening, ensureAllBodies, pin, warm } = useNotes();
+  const { notes, loading, error, reload, opening, ensureAllBodies, pin, draftWith, warm } = useNotes();
+  const facts = useDraftFacts(notes);
   const params = useParams<{ id?: string }>();
   const router = useRouter();
   const [search, setSearch] = useState("");
@@ -212,6 +233,7 @@ export function NoteList() {
   const rowsRef = useRowNavigation<HTMLDivElement>();
   const today = useToday();
   const onPin = useCallback((note: Note) => pin(note.id, !note.pinned), [pin]);
+  const onDraft = useCallback((note: Note) => draftWith(note.id, !note.useInDrafts), [draftWith]);
   const clearSearch = useCallback(() => setSearch(""), []);
   const { creating, newNote } = useNewNote(clearSearch);
   useListShortcuts(searchRef, () => void newNote());
@@ -224,7 +246,7 @@ export function NoteList() {
       {list.map((n, i) => (
         <Fragment key={n.id}>
           {i > 0 && <div className="px-3"><Separator /></div>}
-          <NoteRow note={n} term={term} today={today} selected={params.id === n.id} onPin={onPin} onDelete={setDeleting} onWarm={warm} />
+          <NoteRow note={n} drafts={factStatus(facts, n)} term={term} today={today} selected={params.id === n.id} onPin={onPin} onDelete={setDeleting} onDraft={onDraft} onWarm={warm} />
         </Fragment>
       ))}
     </section>
@@ -246,6 +268,7 @@ export function NoteList() {
           }
         />
         <SearchBand inputRef={searchRef} value={search} onChange={setSearch} placeholder="Search Notes" keyShortcut="/" hint={<>Search Notes <Kbd>/</Kbd></>} />
+        <DraftsSummary report={facts} />
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div ref={rowsRef} className="p-3">
@@ -269,6 +292,7 @@ export function NoteList() {
               </>
             ) : section(null, rest)}
           </div>
+          {searching && shown.length > 0 && <p className="px-3 pt-3 text-xs text-muted-foreground" role="status">Still searching the text of your notes.</p>}
         </div>
       </ScrollArea>
       <DeleteNoteDialog note={deleting} onClose={() => setDeleting(null)} onDeleted={() => { if (deleting && params.id === deleting.id) router.push("/notes"); }} />

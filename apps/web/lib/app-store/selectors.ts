@@ -4,6 +4,7 @@
 import type { ListFilter, Message, Thread, View } from "../types";
 import type { PendingSend } from "./compose";
 import { sendRecovery } from "../send-safety";
+import { sendStateOf } from "../thread-send-state";
 import { inFilter, inView, isPriority, rank } from "./thread-filters";
 
 /** Queued replies follow the stored messages. A conversation without any queued keeps its stored list as is. */
@@ -17,7 +18,7 @@ export function withQueuedReplies(byThread: Record<string, Message[]>, pending: 
       sentAt: p.createdAt,
       body: p.body,
       attachments: p.attachments,
-      sendState: p.status === "failed" ? "failed" : "sending",
+      sendState: sendStateOf(p.status),
       sendError: p.error,
       sendRecovery: p.status === "failed" ? sendRecovery(p.error, p.fileCount ?? p.attachments?.length ?? 0) : undefined,
     };

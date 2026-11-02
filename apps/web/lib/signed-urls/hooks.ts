@@ -33,7 +33,8 @@ function useNoteFile(path: string | undefined): OpenedNoteFile | null | undefine
     if (!path) return;
     let live = true;
     const handle = acquireNoteFile(path);
-    void handle.promise.then((file) => { if (live) setGot({ path, file }); });
+    // A file too big to open here has no link, which a tile treats like a file that cannot be opened.
+    void handle.promise.then((file) => { if (live) setGot({ path, file: file?.tooLarge ? null : file }); });
     return () => { live = false; handle.release(); };
   }, [path]);
   if (!path) return null;

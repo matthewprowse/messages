@@ -24,10 +24,16 @@ test("groupMembers includes people who wrote but are not listed, and skips you a
   assert.equal(groupMembers(["c1"], [msg("c2"), msg("me"), msg("unknown")], byId), "Sarah and Tom");
 });
 
-test("an email header shows the address their latest message came from", () => {
-  const h = headerOf(thread({}), [msg("c1", { address: "old@x.co" }), msg("me"), msg("c1", { address: "new@x.co" })], byId);
-  assert.equal(h.subtitle, "new@x.co");
+test("an email header shows the subject, with the address their latest message came from kept for the link", () => {
+  const h = headerOf(thread({ subject: " Quote for May " }), [msg("c1", { address: "old@x.co" }), msg("me"), msg("c1", { address: "new@x.co" })], byId);
+  assert.equal(h.subtitle, "Quote for May");
+  assert.equal(h.address, "new@x.co");
   assert.equal(h.primary?.name, "Sarah");
+});
+
+test("an email with no subject falls back to the address", () => {
+  const h = headerOf(thread({}), [msg("c1", { address: "new@x.co" })], byId);
+  assert.equal(h.subtitle, "new@x.co");
 });
 
 test("an instagram header shows the handle, a group shows its name and members", () => {

@@ -12,6 +12,7 @@ export function summariseStored(
   stored: Map<string, Contact>,
   activity: Map<string, Activity>,
   whatsapp: Set<string>,
+  linkedin: Set<string> = new Set(),
 ): ContactSummary[] | null {
   const out: ContactSummary[] = [];
   for (const row of rows) {
@@ -24,9 +25,12 @@ export function summariseStored(
       company: c.organization?.name ?? c.company ?? null,
       role: c.role ?? null,
       hidden: row.hidden,
-      emails: c.emails,
+      emails: [...new Set(c.emails)],
       phones: [...new Set(c.phones)],
       hasWhatsApp: whatsapp.has(row.id),
+      handles: c.handles ?? [],
+      hasLinkedIn: linkedin.has(row.id) || !!c.hasLinkedIn,
+      kindOverride: c.kindOverride,
       lastAt: a?.last_at ?? null,
       avatarPath: c.avatarPath,
       isCompany: c.isCompany,

@@ -1,20 +1,25 @@
-// Loads what the Calendar page shows: the events for the days on screen (reloaded when `version` goes up or the
-// worker creates an event), and the details of the event that is open (guests, notes, link), including opening one
-// from a ?event= link. The page decides which days; this fetches them and keeps the opened events current.
+// Loads what the Calendar page shows: the events for the days on screen (reloaded when `version` goes up, when the
+// worker stores or creates an event, or when the tab comes back), and the details of the event that is open (guests,
+// notes, link), including opening one from a ?event= link. The page decides which days; this fetches them and keeps
+// the opened events current.
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { dayKey, loadEventDetail, loadEvents, type CalendarEvent } from "@/lib/calendar";
 import { supabase } from "@/lib/supabase";
-import { addDays, fromKey, type View } from "@/components/calendar/dates";
+import { addDays, fromKey } from "@/lib/dates";
+import type { View } from "@/components/calendar/dates";
 import type { PendingChanges } from "@/components/calendar/use-pending-changes";
 
-export function useCalendarData({ userId, view, setAnchor, paneWidth, startKey, length, rangeKey, version, mounted, reload, pending }: {
+const STALE_MS = 60_000; // events older than this are loaded again when the tab is shown
+
+export function useCalendarData({ userId, view, setAnchor, sized, startKey, length, rangeKey, version, mounted, reload, pending }: {
   userId: string | undefined;
   view: View;
   setAnchor: (day: Date) => void;
-  paneWidth: number;
+  /** False while the week view does not yet know how many days fit, so it does not load twice. */
+  sized: boolean;
   startKey: string;
   length: number;
   rangeKey: string;
@@ -32,8 +37,11 @@ export function useCalendarData({ userId, view, setAnchor, paneWidth, startKey, 
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [details, setDetails] = useState<Map<string, CalendarEvent>>(() => new Map());
   const [detailsFailed, setDetailsFailed] = useState<Set<string>>(() => new Set());
+  // True when the last refresh failed but earlier events are still shown, so the page can offer Try Again.
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const requested = useRef(new Set<string>());
   const loadedVersion = useRef(0);
+  const loadedAt = useRef(0);
 
   // ?event=<id> opens that event on its day, such as from the Summary.
   const handledEvent = useRef<string | null>(null);
@@ -64,22 +72,23 @@ export function useCalendarData({ userId, view, setAnchor, paneWidth, startKey, 
   }, [eventParam, userId, pathname, router, view]);
 
   useEffect(() => {
-    // The week view waits to know how many days fit.
-    if (!userId || (view === "week" && paneWidth === 0)) return;
+    if (!userId || !sized) return;
     let cancelled = false;
     const from = fromKey(startKey);
     loadEvents(from, addDays(from, length), { details: false })
       .then((events) => {
         if (cancelled) return;
         setLoaded({ key: rangeKey, events });
+        setRefreshFailed(false);
+        loadedAt.current = Date.now();
         if (created.current.size) setQueued((list) => list.filter((e) => !created.current.has(e.id)));
         if (deleted.current.size) setHidden((list) => list.filter((h) => !deleted.current.has(h.token)));
         if (updated.current.size) setEdits((list) => list.filter((e) => !updated.current.has(e.token)));
-        // Opened events are fetched again after a reload, as they may have changed.
+        // Opened events are fetched again after a reload, as they may have changed. What is held stays on screen until
+        // the new copy arrives, so an open event does not fall back to its skeleton.
         if (loadedVersion.current !== version) {
           loadedVersion.current = version;
           requested.current.clear();
-          setDetails(new Map());
         }
       })
       .catch((err) => {
@@ -87,18 +96,20 @@ export function useCalendarData({ userId, view, setAnchor, paneWidth, startKey, 
         if (cancelled) return;
         // A failed refresh keeps the events already shown; only a first load with nothing to show reports the error.
         setLoaded((prev) => ({ key: rangeKey, events: prev?.events ?? null }));
-        toast.error("Events did not load. Try again in a moment.");
+        setRefreshFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [rangeKey, startKey, length, userId, version, view, paneWidth]);
+  }, [rangeKey, startKey, length, userId, version, sized]);
 
-  // The worker stores a new event in calendar_events before it marks the queued row created.
+  // The sync worker stores events in calendar_events (a new invite, a moved meeting, a cancellation) and marks a queued
+  // event created after it has stored it. Both reload the days; a burst of changes loads once (see useReload).
   useEffect(() => {
     if (!userId) return;
     const channel = supabase
       .channel(`calendar-page-${userId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "calendar_events", filter: `user_id=eq.${userId}` }, () => reload())
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "calendar_outbox", filter: `user_id=eq.${userId}` }, (payload) => {
         const row = payload.new as { id?: string; status?: string };
         if (row.status !== "created") return;
@@ -108,6 +119,20 @@ export function useCalendarData({ userId, view, setAnchor, paneWidth, startKey, 
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [userId, reload]);
+
+  // Coming back to the tab loads the days again when they are more than a minute old, as Realtime may have missed a
+  // change while the laptop slept.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && Date.now() - loadedAt.current > STALE_MS) reload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [reload]);
 
   // Guests, notes and the link are fetched for an event once it is opened.
   const openId = openKey ? openKey.split("|")[0] : null;
@@ -140,5 +165,5 @@ export function useCalendarData({ userId, view, setAnchor, paneWidth, startKey, 
       });
   }, [openId, loadedEvents, queued]);
 
-  return { loaded, setLoaded, loadedEvents, openKey, setOpenKey, openId, details, detailsFailed };
+  return { loaded, setLoaded, refreshFailed, loadedEvents, openKey, setOpenKey, openId, details, detailsFailed };
 }

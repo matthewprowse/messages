@@ -11,6 +11,7 @@ import { useApp } from "@/lib/store";
 import { MAX_RECIPIENTS, parseAddresses, sendAddressesOf } from "@/lib/send-from";
 import { attachProvider } from "@/lib/outbox-files";
 import { enterSubmitsByAccident } from "@/lib/send-safety";
+import { composeIsDirty } from "@/lib/compose-dirty";
 import { cn } from "@/lib/utils";
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
 import { ComposeAi, type Composed } from "@/components/compose-ai";
@@ -190,9 +191,14 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
     });
   };
 
+  const keepWork = (e: Event) => {
+    if (composeIsDirty({ to: toText, cc: ccText, bcc: bccText, subject, body }, { to, subject: initialSubject, body: initialBody })) e.preventDefault();
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} track="compose" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      {/* A click outside (or Escape) must not throw away an email you have started: Cancel closes it on purpose. */}
+      <DialogContent showCloseButton={false} track="compose" onInteractOutside={keepWork} onEscapeKeyDown={keepWork} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Email</DialogTitle>
           <DialogDescription>Sent from your own account, then filed in the Inbox.</DialogDescription>

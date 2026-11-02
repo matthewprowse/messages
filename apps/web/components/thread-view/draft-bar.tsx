@@ -1,4 +1,4 @@
-// The row of AI buttons above the reply box: Draft, Fix Typos and Grammar, Edit Text, Adjust, Undo and Discard Draft.
+// The row of AI buttons above the reply box: Draft, one Edit With AI menu (fix, edit, shorter, formal, casual), Undo and Discard Draft.
 // Presentational: the composer owns the state and passes the actions in.
 
 import { ChevronDown, X } from "lucide-react";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-// Adjust changes the text in the reply box (yours or a draft you changed), keeping what it says.
+// These change the text in the reply box (yours or a draft you changed), keeping what it says.
 const TONES: { key: Draft["tone"]; label: string }[] = [
   { key: "shorter", label: "Shorter" },
   { key: "formal", label: "More Formal" },
@@ -43,27 +43,19 @@ interface DraftBarProps {
 
 export function DraftBar({ busy, hasText, editable, undoable, hasDraft, draftLabel, onAskDraft, onFix, onAskEdit, onAdjust, onUndo, onDiscard }: DraftBarProps) {
   return (
-    // Draft writes a whole new reply and replaces the box. Fix Typos and Grammar and Edit Text work on what is
-    // already there. Tooltips are one short line; Draft, discard, attach and voice notes have none (their labels and icons say enough).
+    // Draft writes a whole new reply and replaces the box. Edit With AI works on what is already there. Tooltips are one short line; Draft, discard, attach and voice notes have none (their labels and icons say enough).
     <div className="mb-3 flex flex-wrap items-center gap-2">
       <Button type="button" variant="secondary" disabled={busy} onClick={onAskDraft}>{draftLabel}</Button>
-      {editable && hasText && (
-        <Hint text="Fixes typos, keeps your words">
-          <Button type="button" variant="secondary" disabled={busy} onClick={onFix}>Fix Typos and Grammar</Button>
-        </Hint>
-      )}
-      {editable && (
-        <Hint text="Changes your text as you ask">
-          <Button type="button" variant="secondary" disabled={busy} onClick={onAskEdit}>Edit Text</Button>
-        </Hint>
-      )}
-      {hasText && (
+      {(hasText || editable) && (
+        // One menu for everything that works on the text in the box, so the bar stays one short row (and fits a phone).
         <DropdownMenu>
-          <Hint text="Shorter, formal or casual">
-            <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Adjust <ChevronDown /></Button></DropdownMenuTrigger>
+          <Hint text="Fix, change or reshape your text">
+            <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Edit With AI <ChevronDown /></Button></DropdownMenuTrigger>
           </Hint>
           <DropdownMenuContent align="start">
-            {TONES.map((t) => (
+            {editable && hasText && <DropdownMenuItem onSelect={onFix}>Fix Typos and Grammar</DropdownMenuItem>}
+            {editable && <DropdownMenuItem onSelect={onAskEdit}>Edit Text</DropdownMenuItem>}
+            {hasText && TONES.map((t) => (
               <DropdownMenuItem key={t.key} onSelect={() => onAdjust(t.key)}>{t.label}</DropdownMenuItem>
             ))}
           </DropdownMenuContent>

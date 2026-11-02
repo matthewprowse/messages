@@ -1,12 +1,13 @@
 "use client";
 
-// The dialog for writing or editing a changelog release, used on the Updates page.
+// The dialog for writing or editing a changelog release, used on the Updates page. Closing with unsaved text asks first, a
+// save from a stale copy is refused (lib/updates.ts), and Enter in a change adds the next change instead of saving.
 
 import { useEffect, useState } from "react";
 import { ChevronDownIcon, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { dateKey } from "@/lib/new-items";
-import { CHANGE_KINDS, deleteUpdate, saveUpdate, updateProblem, type Change, type Update, type UpdateDraft } from "@/lib/updates";
+import { CHANGE_KINDS, StaleUpdateError, dayLabel, deleteUpdate, draftSnapshot, fromDateKey, publishWarning, saveUpdate, updateProblem, type Change, type Update, type UpdateDraft } from "@/lib/updates";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -18,47 +19,71 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
-function fromDateKey(key: string) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
-}
-
-const blank = (): UpdateDraft => ({ version: "", title: "", summary: "", changes: [{ kind: "new", text: "" }], releasedOn: dateKey(new Date()), published: false });
+const blank = (version: string): UpdateDraft => ({ version, title: "", summary: "", changes: [{ kind: "new", text: "" }], releasedOn: dateKey(new Date()), published: false });
+const fromUpdate = (u: Update): UpdateDraft => ({ ...u, changes: u.changes.length ? u.changes : [{ kind: "new", text: "" }] });
 
 /** A release in the changelog: its version, date, title, a line about it, and what changed, each marked New, Improved or Fixed. */
-export function UpdateDialog({ open, onOpenChange, editing, onSaved, onDeleted }: {
+export function UpdateDialog({ open, onOpenChange, editing, suggestedVersion, onSaved, onDeleted, onStale }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editing?: Update;
+  /** The version a new release starts with: the next patch after the latest one. */
+  suggestedVersion: string;
+  /** Called when a save was refused because the release changed elsewhere, so the list can reload. */
+  onStale: () => void;
   onSaved: (update: Update) => void;
   onDeleted: (id: string) => void;
 }) {
-  const [draft, setDraft] = useState<UpdateDraft>(blank);
+  const [draft, setDraft] = useState<UpdateDraft>(() => blank(suggestedVersion));
+  const [start, setStart] = useState("");
+  const [confirmClose, setConfirmClose] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Only when the dialog opens or a different release is chosen, so a refreshed list cannot wipe what is being typed.
+  const editingId = editing?.id;
   useEffect(() => {
     if (!open) return;
-    setDraft(editing ? { ...editing, changes: editing.changes.length ? editing.changes : [{ kind: "new", text: "" }] } : blank());
+    const next = editing ? fromUpdate(editing) : blank(suggestedVersion);
+    setDraft(next);
+    setStart(draftSnapshot(next));
     setError(null);
-  }, [open, editing]);
+  }, [open, editingId]);
+
+  // Closing with unsaved text asks first.
+  const requestClose = (next: boolean) => {
+    if (next || draftSnapshot(draft) === start) return onOpenChange(next);
+    setConfirmClose(true);
+  };
 
   const set = (patch: Partial<UpdateDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const setChange = (i: number, patch: Partial<Change>) => set({ changes: draft.changes.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
+
+  // Enter in a change starts the next one; saving is the Save button's job.
+  const addOnEnter = (e: React.KeyboardEvent, i: number) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (i === draft.changes.length - 1 && draft.changes[i].text.trim()) set({ changes: [...draft.changes, { kind: draft.changes[i].kind, text: "" }] });
+  };
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     const problem = updateProblem(draft);
     if (problem) { setError(problem); return; }
+    const warning = publishWarning(draft);
+    if (warning) { setError(`${warning} Add a change or switch Published off.`); return; }
     setSaving(true);
     try {
       const saved = await saveUpdate(draft);
       onSaved(saved);
       onOpenChange(false);
-    } catch {
-      setError("The update could not be saved. Try again.");
+    } catch (err) {
+      if (err instanceof StaleUpdateError) {
+        setError("This update was saved elsewhere since you opened it. Close this and open it again to see the newer text.");
+        onStale();
+      } else setError("The update could not be saved. Try again.");
     } finally {
       setSaving(false);
     }
@@ -77,24 +102,24 @@ export function UpdateDialog({ open, onOpenChange, editing, onSaved, onDeleted }
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={requestClose}>
         <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Update" : "New Update"}</DialogTitle>
-            <DialogDescription>What changed in a release. It stays private to you until updates are made public.</DialogDescription>
+            <DialogDescription>What changed in a release. Only you can see updates for now.</DialogDescription>
           </DialogHeader>
           <form id="update-form" onSubmit={save} className="grid gap-3">
             <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
               <div className="grid gap-1.5">
                 <Label htmlFor="update-version">Version</Label>
-                <Input id="update-version" value={draft.version} onChange={(e) => set({ version: e.target.value })} maxLength={20} placeholder="0.0.4" />
+                <Input id="update-version" value={draft.version} onChange={(e) => set({ version: e.target.value })} maxLength={20} placeholder="0.0.13" />
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="update-date">Date</Label>
                 <Popover open={dateOpen} onOpenChange={setDateOpen}>
                   <PopoverTrigger asChild>
                     <Button id="update-date" type="button" variant="outline" className="h-8 min-w-0 justify-between font-normal">
-                      <span className="truncate">{fromDateKey(draft.releasedOn)?.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</span>
+                      <span className="truncate">{dayLabel(draft.releasedOn)}</span>
                       <ChevronDownIcon className="text-muted-foreground" />
                     </Button>
                   </PopoverTrigger>
@@ -127,7 +152,7 @@ export function UpdateDialog({ open, onOpenChange, editing, onSaved, onDeleted }
                     <SelectTrigger aria-label="Kind" className="w-28 shrink-0 data-[size=default]:h-8"><SelectValue /></SelectTrigger>
                     <SelectContent>{CHANGE_KINDS.map((k) => <SelectItem key={k.key} value={k.key}>{k.label}</SelectItem>)}</SelectContent>
                   </Select>
-                  <Input value={c.text} onChange={(e) => setChange(i, { text: e.target.value })} maxLength={300} aria-label="Change" placeholder="What changed" className="min-w-0 flex-1" />
+                  <Input value={c.text} onChange={(e) => setChange(i, { text: e.target.value })} onKeyDown={(e) => addOnEnter(e, i)} maxLength={300} aria-label="Change" placeholder="What changed" className="min-w-0 flex-1" />
                   {draft.changes.length > 1 && (
                     <Button type="button" variant="ghost" size="icon" aria-label="Remove Change" onClick={() => set({ changes: draft.changes.filter((_, j) => j !== i) })}><X /></Button>
                   )}
@@ -148,11 +173,23 @@ export function UpdateDialog({ open, onOpenChange, editing, onSaved, onDeleted }
           </form>
           <DialogFooter>
             {editing && <Button type="button" variant="ghost" className="sm:mr-auto" onClick={() => setConfirmDelete(true)}>Delete</Button>}
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="button" variant="ghost" onClick={() => requestClose(false)}>Cancel</Button>
             <Button type="submit" form="update-form" variant="secondary" disabled={saving}>{saving ? "Saving" : "Save"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard Changes?</AlertDialogTitle>
+            <AlertDialogDescription>What you wrote in this update has not been saved.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Writing</AlertDialogCancel>
+            <AlertDialogAction variant="secondary" onClick={() => { setConfirmClose(false); onOpenChange(false); }}>Discard</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>

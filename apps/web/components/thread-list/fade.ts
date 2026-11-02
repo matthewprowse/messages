@@ -3,10 +3,9 @@
 
 // On hover a row's content fades out over the 32px before its action buttons and is gone beneath them.
 // Each button is 32px with 4px between, 12px from the right edge. Keyed by the number of buttons.
-export const FADE: Record<1 | 2 | 3, string> = {
+export const FADE: Record<1 | 2, string> = {
   1: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-76px),transparent_calc(100%-44px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-76px),transparent_calc(100%-44px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-76px),transparent_calc(100%-44px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible",
   2: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible",
-  3: "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible",
 };
 
 // Conversation rows (here and on Summary) fade for their actions only with a mouse, or on a phone once

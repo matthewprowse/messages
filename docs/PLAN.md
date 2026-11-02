@@ -306,7 +306,7 @@ resumes on its own.
 
 **Limits that stay on.**
 - 50 MB a file stays (Supabase's default upload limit).
-- Same file, same account: store once, by content hash, so forwarding the same PDF costs one copy. (Not built: uploads are by message and attachment path, with no hash.)
+- Same file, same account: store once, by content hash, so forwarding the same PDF costs one copy. (Built: `file-store.ts` keeps a keyed `content_hash` and points a repeat at the stored object, so several attachment rows can share one `storage_path`. Any delete feature must count references by `storage_path` before removing an object.)
 - Not built yet: Videos over a size to be set (suggest 25 MB) are kept as a link to the original, not copied, since
   video is where almost all the bytes go.
 
@@ -471,6 +471,14 @@ still reads it). A landing page and a signup form can come back when there is so
 by status (Pending, Approved, Rejected), filters teams and individuals, and approves or rejects with
 Undo. The database lets only the owner read or change requests. Approving a team request also makes its
 team (see Teams) and shows an invite link for its owner, and Teams lists each team with its seats.
+
+Admin tabs (wave 3, 17 November 2026): AI Usage (the default), AI Budget, Teams and Updates. Requests are
+folded into Teams, above the team list. The changelog moved from the main rail into Admin (`/updates` still
+works). AI Usage opens with the Gemini billing state, written to `ai_status` by the AI worker when its
+breaker trips or recovers, the month total with a projection, and who is flagged or paused. A team's percent
+and flag use its pooled spend over seats times the budget, as the pause does. AI Budget keeps edits across
+tabs, saves only if nobody else saved first, keeps share keys it has no row for, and asks before a share of 0%
+pauses a feature for everyone. Changelog saves also check `updated_at`.
 
 ## MVP
 
@@ -1013,6 +1021,28 @@ Agreed 25 October 2026.
   is dropped when closed, and deleting a note deletes its files.
 - **Privacy:** title, text and file names are encrypted per user like messages (fields `note_title`,
   `note` and `note_file`). Search runs in the browser.
+- **Safe saving (Wave 3, 17 November 2026):**
+  - A save only applies if the note still has the edited time this tab last read. If another tab or
+    device changed it, the note stops as a conflict and nothing is overwritten: the bar over the note
+    offers Keep Both (the other version becomes a new note named "... (Other Version)"), Use Other
+    Version, or Keep Mine Only. A note deleted elsewhere offers Save Again. The edited time now moves
+    only when the title or text change (migration 20261117120000), so pinning does not cause conflicts.
+  - Notes are in Realtime and the list refreshes when the tab comes back or the device is online again.
+  - A failed save retries on its own (2, 5, 15, 30 then every 60 seconds) and at once when back online.
+    The header says "Offline, Will Save When Back Online" or "Not Saved, Retrying".
+  - Leaving the page sends unsaved text with a keepalive request (also when the tab is hidden). The
+    "leave this page?" prompt appears only when text could really be lost: a failing or conflicting
+    save, offline, or a note too long for that request (about 40,000 characters).
+  - Text that cannot be decrypted is never shown as empty and never saved over: the note says it
+    could not be opened. Closing never deletes a note whose text or files did not load.
+  - A note that could not be made keeps its text and is written again with the next save.
+- **Use in Drafts:** a checked item in the note menu and the row's right-click menu, a badge on the
+  row and in the note header, and a line over the list ("3 of 3 Notes Used in Drafts"). The badge and
+  the line warn when the limits (15 notes in id order, 1,500 characters each, 6,000 in all) cut a note
+  short or leave it out (`lib/note-facts.ts` repeats the AI worker's numbers).
+- **List details:** rows show checklist progress ("3/5"); the open note keeps its place in the list
+  until it is closed; a blank title reads "Untitled Note" everywhere; with no notes the pane says
+  "Write Your First Note". Esc or Cmd+Enter in a note returns to the list, Cmd+Shift+P pins it.
 - **Analytics:** `note_created`, `note_file_attached` (with the file kind) and `note_deleted`, as
   `feature_used`, with no content.
 - Markdown formatting is for notes only; the message composer is unchanged.
@@ -1606,9 +1636,13 @@ Build Status in the Security and Cost Review section below. Nothing is live unti
   `similar_replies` compares vectors inside SQL. A vector leaks the meaning of the message. It is
   service role only, but anyone who can read the database can read it. Options: search in the
   Confidential Space worker instead of SQL, or stop using vectors and rely on the encrypted browser cache.
-- **Files are not encrypted.** Email attachments are uploaded as raw bytes (`attachment-files.ts` calls
-  `uploadObject` on `file.content`). Instagram media and Zoom recordings are also raw. Only brief audio,
-  note files and draft voice instructions are sealed. Storage RLS keeps users apart, but the operator can read them.
+- **Files are sealed on the way in.** Attachments saved through `apps/worker/src/file-store.ts` (email, WhatsApp, the
+  catch-up passes) are sealed with the user's data key before upload when `ENCRYPT_CONTENT` is on, as are note files,
+  brief audio and draft voice instructions. A sealed photo or PDF gets a small sealed thumbnail beside it (the first page
+  for a PDF), so tiles never download the whole file, and the worker backfills thumbnails for older files. Files stored
+  before sealing began stay raw until re-sealed, and Instagram media and Zoom recordings may still be raw; Storage RLS
+  keeps users apart, but the operator can read those. A sealed file is one encrypted block, so the browser opens it whole:
+  on an iPhone or any device with little memory a sealed file over 20 MB is not opened (it says so) rather than risk the tab.
 - **Connector sign-ins use one static key.** WhatsApp, iCloud, IMAP, Instagram and LinkedIn credentials are
   sealed with `ENCRYPTION_KEY` directly: no per-user key, no extra context binding, and the same value in the web
   app, sync worker and AI worker. One leaked variable opens every user's connected accounts. This is
@@ -1669,8 +1703,9 @@ What gets an index and is encrypted:
 - `organizations.domain`, plus the user's own addresses in `accounts`, which are used to leave their
   own domains out of companies.
 - Encrypted with no index, because nothing matches on them: contact and company names,
-  `calendar_events.attendees`, `calendar_outbox.attendees`, outbox recipients, and the emails and
-  numbers on address book cards.
+  `calendar_outbox.attendees`, outbox recipients, and the emails and numbers on address book cards.
+  `calendar_events.attendees` is planned for this list but is stored readable today (only the title and location are
+  sealed): the worker, the page and the update trigger read it as plain JSON. Sealing it is a stage of its own.
 
 Code check (27 October 2026): no readable column was dropped. The index columns were added beside the
 readable ones, and the backfill script re-encrypts values in place and only runs when someone runs it with the
@@ -1794,11 +1829,12 @@ below, and the Analytics page in the rail (above Settings) shows them to mattpro
   third-party script.
 - Stored in our own table, `analytics_events`. The web app writes through `track()` (a database function
   that checks the Share Usage Data switch); the workers write through `analytics_record`, service role only.
-  Only the owner account can read the table (policy on the email in the sign-in token), and no signed-in
+  Only the owner account can read the table (policy on the stored owner user ID, with a confirmed email), and no signed-in
   user can insert directly. Tested with a second account.
 - Settings, General has a "Share Usage Data" switch (on by default). Off means nothing is recorded, in the
   browser and again in the database.
-- Events older than 13 months are rolled into daily counts and deleted, nightly (pg_cron, `analytics_prune`).
+- Raw events older than 200 days are deleted, nightly (pg_cron, `analytics_prune`), after the complete days are rolled up
+  into per user per day rows (`analytics_user_day`, `analytics_user_first`) that are kept. `analytics_daily` is no longer written.
   `analytics_forget(user)` removes one person's events.
 
 ### Part 1: How Well The AI Works
@@ -1884,12 +1920,24 @@ limited to the list for that name. About 40 event names cover everything above.
 
 ### The Analytics Page
 
-`/analytics`, two tabs in the usual Settings style: Usage and AI, for the last 7, 14 or 30
-days, each number with its change on the period before. The AI tab leads with the pairs and the
-splits ("Where It Goes Wrong": pick Junk, Priority or Category, then split by kind of sender, channel,
-unsubscribe header, attachment, length, time of day, known sender, what decided it, or prompt version).
-The page loads up to the newest 60,000 events and works the numbers out in the browser
-(`packages/analytics/src/stats.ts`, tested). When volume grows, move that into database views.
+`/analytics`, three tabs (November 2026), the choice of tab, period and "Exclude Owner And Test Accounts" kept in the address:
+
+- **Health** (the founder's screen, from `analytics_health`, not tied to the period): active people this week and this
+  month, stickiness, activation funnel from signup (connected an account, first sync, first label seen, first draft shown,
+  first draft sent, first reply sent, with the median time from signup), time to first draft sent by signup week, weekly
+  retention from signup week (counting "used the app" or "sent a draft or reply"), the gone quiet list (active the week
+  before last, nothing since, with accounts in error flagged), value delivered per active person, channel mix, signups per week.
+- **Usage**: reach, screens, features, dialogs, search found something, errors, slow loads, reliability. Under Advanced:
+  fields touched, repeated clicks, empty screens. Removed: devices, search detail, settings changed, send retries
+  (sends are never retried), sync lag (nothing emits it), time to reply (rounded to whole hours, so it read 0).
+- **AI**: the pairs and splits ("Where It Goes Wrong", Junk or Priority: Category and Needs Reply have no correction
+  control, so they are not offered), drafts, replies, cost per person per month and the dearest five people. Under Advanced:
+  edit details, tone and channel tables, pre-drafts, brief and voice, per prompt cost.
+
+Numbers come from the database. Retention and activation use the signup date and all history, never only the events inside
+the period. Totals come from the per user per day rollups; only the groupings by event property read raw events, capped at
+200 groups per event name. Days and weeks are UTC. A session ends after 30 idle minutes (kept across reloads and tabs),
+and there is one app open per session.
 
 ### Limits
 
@@ -1898,15 +1946,21 @@ The page loads up to the newest 60,000 events and works the numbers out in the b
 - Tone moved, greeting and sign-off changes are worked out with simple rules, so they are good for trends,
   not exact.
 - Message time of day uses the person's saved time zone; if there is none it is UTC.
-- Sync lag (message arrival to shown) is defined but not recorded yet.
-- `triaged` is one row per label shown, the biggest table; it rolls into daily counts after 13 months.
+- Sync lag (message arrival to shown) is not recorded, so it was removed from the page.
+- `triaged` is one row per label shown, the biggest table; raw rows go after 200 days and the rollups keep the counts.
+- Correction rates are approximate: corrections made in the period are set against labels made in the period. Bulk actions
+  record up to 25 conversations each.
+- A lone lowercase word cannot be told from a code word by shape, so the free-form values (dialog names, field names, empty
+  screen titles) are allow-listed in `packages/analytics/src/allowed.ts` and read "other" when not listed. Add a name there when a dialog or empty screen is added. A dot is only allowed between digits.
+- Events over the rate limit (50 a call, 120 a minute) are counted in `analytics_dropped` and shown on the Usage tab.
+- Not built: waitlist conversion, comparison by app version, copy as CSV, a custom date range, billing money metrics (billing is deferred). The storage flags table still sits on the Usage tab and belongs under Admin.
 - Your own text (corrected labels, edited drafts) is not shown on the page yet. See Order Of Work.
 
 ### Order Of Work
 
 1. Done: table, `track()`, owner-only policy, opt-out and retention, prompt code and traits on `message_ai`.
 2. Done: tracker, dialogs, features, labels, drafts, brief, both workers.
-3. Done: the Analytics page with Usage and AI. The funnel was taken out for now and comes back later.
+3. Done: the Analytics page with Health, Usage and AI (the funnel is the Health tab's activation table).
 4. Next: a list on the Analytics page of your own corrections and edited drafts with their real text,
    decrypted in your browser with your own key, for working out what to change in the prompts.
 5. Later: "Send This Example", shown to the user each time, if you ever want text from other users.
@@ -2335,7 +2389,7 @@ Decisions made while building the screens, so later work follows them:
 - **One header pattern.** Every list or page screen is built from `components/pane.tsx`, copied from the Inbox: a title row
   (h-8, at most one action on the right), one row of controls (views as text buttons, a small select), then the search in its
   own band. Buttons, selects and inputs are h-8. No outline buttons (date pickers are the one exception); the main action is
-  secondary, quiet actions are ghost. Dialogs have an X, Cancel is ghost, the main action is secondary.
+  secondary, quiet actions are ghost. Dialogs have no X (`showCloseButton={false}`), Cancel is ghost, the main action is secondary.
 - **Mobile bottom bar.** Summary, Calendar, Inbox, Contacts and More. More is its own screen (`/more`): New Email, WhatsApp,
   LinkedIn and Instagram messages, New Event and New Task, then Notes and Attachments, then Analytics, Updates and Admin for the
   owner, then Settings.
@@ -2612,6 +2666,26 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
   It is also what a regulated compliance archive needs.
 - **Billing:** Paystack subscriptions, trials, seats, EFT invoices for firms, VAT, and a plan page in Settings.
 
+### Built: Wave 3, Contacts Page (2 November 2026)
+
+- A merge patches the contacts the app already holds (and the Contacts lists) instead of reading the whole contact
+  graph again. Merge All shows one message with one Undo, reports pairs that failed, and has Merge Very Likely
+  (score 0.85 or more). A split or an undo still reads the graph once. The list reads once per refresh, not twice,
+  and Companies load only when the Companies tab or a search could need them.
+- Last contacted ignores group chats, junk, newsletters and notifications (`contact_summaries()` rewritten).
+  Companies are counted in the database (`company_summaries()`) instead of embedding every contact and thread.
+- A person can say "This Is a Person" or "This Is a Company" (`contacts.kind_override`); it beats the guess. Hidden
+  shows every hidden contact, company senders included.
+- Edit lists every number whichever way it is stored (WhatsApp-only too) and removes it whole. Instagram handles and a
+  LinkedIn link show on the contact, in search and in Message. Hide, person/company and Dismiss show at once and are
+  put back on failure. A suggestion shows why (shared number, same name), whether it is very likely or possible, and
+  who is kept.
+- Search folds accents and takes words in any order; name order uses the South African collator and puts bare
+  numbers last; no matches in People points at Companies and Hidden.
+- Not done (decided to wait): relationship status, nudges, notes, VIP, pickers, import and export (Wave 4);
+  `hidden` and `name_locked` in `merge_contacts`; passing the chosen name into `merge_contacts`; one shared role
+  address list for web and worker; virtualising the list rows.
+
 ### Built: Wave 1, Fix First and Security (2 November 2026)
 
 - The LinkedIn helper gets an allow-listed environment, not every secret.
@@ -2625,6 +2699,12 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
 - Enter never sends from a single-line field. A failure that may have gone out shows May Have Been Sent with no
   Retry. A retry reuses the same outbox id, so it cannot send twice, and keeps Reply All and the From address.
   Queued and failed replies come back after a reload.
+- Inbox keyboard: J and K (or [ and ]) open the next or previous conversation, Enter opens the first, E archives, # or
+  Delete deletes, ! moves to or out of Junk, U toggles read, R replies, / searches, Escape closes. After archive,
+  delete or junk the next conversation opens beside the list (the list on a phone). Rows show one marker, Urgent or
+  Needs Reply; the open conversation shows the AI summary and, for email, its subject. A failed message load shows
+  Retry. An archive, read or delete the provider refused is toasted with the worker's reason. A reply bubble says
+  Waiting to Send, Sending or Sent as the outbox row moves. New Email ignores a click outside once you have typed.
 - Merging contacts carries tasks, meeting participants, drafts and last senders along, and Undo brings them back
   (`20261116100000_merge_repoints_links.sql`, written, not applied yet). Local numbers ("082 ...") find contacts
   stored as "27...", and a sole trader writing from their own domain stays a person.
@@ -2637,3 +2717,31 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
   has a factor but has not passed it. The owner must turn on TOTP in Supabase, Authentication, MFA. The CSP keeps
   `img-src https:` because email images load straight from senders; closing it needs an image proxy.
 
+- Summary page, wave 3: the rail dot is the page's own Needs Reply plus Important count (`attentionCount` in
+  `lib/summary.ts`), and `apps/web/lib/summary-fixture.json` is sorted by both the page and `brief.py` in tests so the
+  spoken brief cannot drift. Conversations that aged out of the windows (unanswered over 14 days, urgent over 7) show
+  as an "Older" row linking to Inbox, Priority. The filter replaces the address and keeps the open conversation;
+  archiving, deleting or answering the open one opens the next row on wide screens. `summary_shown` is emitted once a
+  visit with section counts. Not built yet: snooze, draft chips, Waiting On Others.
+- Settings is six pages: Accounts (with WhatsApp Read Receipts and Resume Sync, no sign-in needed), AI (What Drafts
+  Use, About, Writing Style, Priorities, Auto-Draft, Language, Daily Brief), Notifications, Usage, Team, and Profile
+  and Privacy. Old addresses redirect from `next.config.ts`. Push, Urgent, Important and Quiet Hours are shown
+  disabled and marked Coming Soon until push is built. A failed Settings save puts the screen back. About and
+  Important People are sealed (`profile_about`, `profile_people`); older plain rows are sealed the next time the
+  profile loads, and the AI worker reads both. Display name is still plain.
+
+## Calendar page, Wave 3 (2 November 2026)
+
+- **Sync window:** every calendar connector keeps 90 days back and 365 days ahead (`apps/worker/src/calendar/sync-window.ts`).
+  Outlook has no cheap change check, so it polls only the near part (7 days back, 60 ahead) every five minutes and the whole
+  window hourly. Past events that slide out of the back of the window are never deleted. Beyond a year ahead the page says
+  Not Synced (`apps/web/lib/sync-window.ts` keeps the same numbers). Nothing is fetched on demand beyond the window.
+- **Live page:** the Calendar page subscribes to `calendar_events` (Realtime; `20261117100000_calendar_events_realtime_and_range_index.sql`,
+  written, not applied yet) and reloads when the tab comes back after a minute away. The search box is now Filter This View:
+  it filters the events and tasks loaded for the days shown, not every synced event.
+- **Join Meeting for every provider:** Google (location and notes as well as Meet) and Outlook (onlineMeeting and the body)
+  find Zoom, Meet, Teams and Webex links the way iCloud does. Google's HTML notes are stored as text.
+- **Removed:** scroll to change day or week, and right click to create an event. Drag, double click, the New Event button
+  and N remain. N is a new event and Shift N a new task.
+- **Not done:** sealing `calendar_events.attendees` (see the encryption section), choosing which calendar a new event goes in,
+  Outlook creating and changing events (the sign-in is read only).

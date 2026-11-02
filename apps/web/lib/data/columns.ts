@@ -4,6 +4,7 @@
 import type { Tables } from "@messages/db";
 
 export type ContactRow = Pick<Tables<"contacts">, "id" | "display_name" | "company" | "role" | "avatar_path"> & {
+  kind_override?: string | null;
   organizations?: Pick<Tables<"organizations">, "id" | "name" | "logo_path"> | null;
 };
 export type IdentityRow = Pick<Tables<"contact_identities">, "kind" | "value">;
@@ -23,7 +24,7 @@ export type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruct
 export type UnsubscribeRow = Pick<Tables<"unsubscribes">, "id" | "account_id" | "sender_address" | "status" | "manual_url" | "error">;
 
 // With the company, whose logo stands in for the photo of a sender that writes as the company.
-export const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path, organizations(id, name, logo_path)";
+export const CONTACT_COLUMNS = "id, display_name, company, role, avatar_path, kind_override, organizations(id, name, logo_path)";
 export const THREAD_COLUMNS =
   "id, account_id, channel, subject, is_group, group_name, avatar_path, provider_thread_id, last_message_at, created_at, last_message_preview, junk, subscription, last_sender_contact_id, unread_count, pinned, status, priority, category, summary, needs_reply, last_from_me, workspace_id, shared_by, share_match, share_suggestion";
 // One thread with its account's provider and its people in full, for a single conversation that has only just appeared.

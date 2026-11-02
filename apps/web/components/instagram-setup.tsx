@@ -7,7 +7,7 @@ import { useApp } from "@/lib/store";
 import { InstagramConnect } from "@/components/instagram-connect";
 import { InstagramOfficial } from "@/components/instagram-official";
 import { isOfficialInstagram } from "@/components/instagram-window";
-import { SettingsHeading, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsHeading, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { Button } from "@/components/ui/button";
 
 type Choice = "professional" | "personal" | "unsure";

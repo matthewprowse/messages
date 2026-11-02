@@ -31,6 +31,11 @@ function MessageButton({ contact }: { contact: ContactDetail }) {
   const { accounts } = useApp();
   const [open, setOpen] = useState<"email" | "whatsapp" | "event" | null>(null);
   const chat = contact.conversations.find((c) => c.channel === "whatsapp" && !c.isGroup);
+  // The newest one-to-one chat on each of the other channels.
+  const social = (["instagram", "linkedin"] as const).flatMap((channel) => {
+    const c = contact.conversations.find((x) => (x.channel as string) === channel && !x.isGroup);
+    return c ? [{ id: c.id, channel }] : [];
+  });
   const phone = phonesOf(contact)[0];
   const linked = whatsappLinked(accounts);
   const set = (item: "email" | "whatsapp" | "event") => (value: boolean) => setOpen(value ? item : null);
@@ -50,6 +55,10 @@ function MessageButton({ contact }: { contact: ContactDetail }) {
               <span className="text-xs text-muted-foreground">Available once WhatsApp is linked</span>
             </DropdownMenuItem>
           ) : null}
+          {/* Instagram and LinkedIn chats open where they are; starting one is done from the Inbox. */}
+          {social.map((c) => (
+            <DropdownMenuItem key={c.id} asChild><Link href={`/inbox/${c.id}`}>{c.channel === "instagram" ? "Open Instagram Chat" : "Open LinkedIn Chat"}</Link></DropdownMenuItem>
+          ))}
           <DropdownMenuItem onSelect={() => setOpen("event")}>New Event</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -89,14 +98,19 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
     );
   };
 
+  // Under the name, as on a company's page: their role and where they work.
+  const work = [contact.role, contact.organization?.name ?? contact.company].filter(Boolean).join(", ");
+
   const details: { label: string; value: string; href?: string; onSelect?: () => void }[] = [
     ...contact.emails.map((value) => ({ label: "Email", value, onSelect: () => setEmail({ open: true, to: value }) })),
     ...contact.phones.map((value) => ({ label: "Phone", value: formatPhone(value), onSelect: () => copy(formatPhone(value)) })),
-    ...(contact.organization
-      ? [{ label: "Company", value: contact.organization.name, href: `/contacts/companies/${contact.organization.id}` }]
-      : contact.company
-        ? [{ label: "Company", value: contact.company }]
-        : []),
+    ...contact.handles.map((handle) => ({ label: "Instagram", value: `@${handle}`, onSelect: () => copy(`@${handle}`) })),
+    // LinkedIn gives an id, not a name or a link, so only the fact is shown.
+    ...(contact.hasLinkedIn ? [{ label: "LinkedIn", value: "Connected" }] : []),
+    // The company filed for their email domain, and the one set in Edit when it is another: both are shown, so what
+    // Edit saves is always on the page.
+    ...(contact.organization ? [{ label: "Company", value: contact.organization.name, href: `/contacts/companies/${contact.organization.id}` }] : []),
+    ...(contact.company && contact.company !== contact.organization?.name ? [{ label: contact.organization ? "Company You Set" : "Company", value: contact.company }] : []),
     ...(contact.role ? [{ label: "Role", value: contact.role }] : []),
     ...(contact.relationship ? [{ label: "Relationship", value: contact.relationship }] : []),
   ];
@@ -109,7 +123,10 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
         <>
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <ContactAvatar contact={contact} className="size-8" />
-            <h1 className="truncate text-sm font-medium">{niceName(contact.name)}</h1>
+            <div className="flex min-w-0 flex-col">
+              <h1 className="truncate text-sm font-medium">{niceName(contact.name)}</h1>
+              {work && <span className="truncate text-xs text-muted-foreground">{work}</span>}
+            </div>
           </div>
           {/* On phones Edit moves into the More menu to leave room for the name. */}
           <Button variant="secondary" className="max-sm:hidden" onClick={() => setEditing(true)}>Edit</Button>

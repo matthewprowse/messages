@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./company": "./src/company.ts"
+    "./company": "./src/company.ts",
+    "./event-notes": "./src/event-notes.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

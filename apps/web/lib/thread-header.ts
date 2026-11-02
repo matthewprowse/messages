@@ -24,21 +24,23 @@ export function forwardDraft(thread: Thread, msgs: Message[]) {
 
 const phoneOf = (n: string | undefined) => (n ? formatPhone(n) : undefined);
 
-/** The name, subtitle and contact shown at the top of a conversation. */
+/** The name, subtitle and contact shown at the top of a conversation. An email's subtitle is its subject; the address it came from is `address`. */
 export function headerOf(thread: Thread, msgs: Message[], contactById: (id: string) => Contact | undefined) {
   const primary = thread.isGroup ? undefined : contactById(thread.participantIds[0]);
   const title = niceName((thread.isGroup ? thread.groupName : primary?.name ?? thread.fallbackName) ?? "Unknown");
   // Who you are really talking to: the address their latest message came from, or their number.
   let lastAddress: string | undefined;
   for (let i = msgs.length - 1; i >= 0 && !lastAddress; i--) if (msgs[i].from !== "me") lastAddress = msgs[i].address;
-  const subtitle = thread.isGroup
+  const address = thread.channel === "email" && !thread.isGroup ? lastAddress ?? primary?.emails[0] : undefined;
+  const subject = thread.channel === "email" && !thread.isGroup ? thread.subject?.trim() : undefined;
+  const subtitle = subject || (thread.isGroup
     ? groupMembers(thread.participantIds, msgs, contactById)
     : thread.channel === "email"
       ? lastAddress ?? primary?.emails[0]
       : thread.channel === "instagram"
         ? primary?.handles?.[0] && `@${primary.handles[0]}`
-        : phoneOf(primary?.phones[0] ?? (lastAddress?.includes("@") ? undefined : lastAddress));
-  return { primary, title, subtitle };
+        : phoneOf(primary?.phones[0] ?? (lastAddress?.includes("@") ? undefined : lastAddress)));
+  return { primary, title, subtitle, address };
 }
 
 /** "Sarah, Tom and Lee": every person in a group, from its members and everyone who has written in it. */

@@ -76,3 +76,28 @@ export function groupProblem(group: AccountGroup): string | undefined {
   const bad = group.accounts.find((a) => a.status === "error" && a.statusDetail) ?? group.accounts.find((a) => a.status !== "connected" && a.statusDetail);
   return bad?.statusDetail ? `${PART_NAME[bad.provider] ?? bad.label}: ${bad.statusDetail}` : undefined;
 }
+
+/** Where to connect or reconnect each provider. Google, Microsoft and iCloud parts share one page per sign-in. */
+const SETUP_HREF: Record<Provider, string> = {
+  icloud: "/settings/accounts/icloud", icloud_calendar: "/settings/accounts/icloud", icloud_reminders: "/settings/accounts/icloud-reminders",
+  gmail: "/settings/accounts/google", google_calendar: "/settings/accounts/google", google_tasks: "/settings/accounts/google", google_meet: "/settings/accounts/google",
+  outlook: "/settings/accounts/microsoft", outlook_calendar: "/settings/accounts/microsoft", microsoft_todo: "/settings/accounts/microsoft", teams: "/settings/accounts/microsoft",
+  whatsapp: "/settings/accounts/whatsapp", imap: "/settings/accounts/imap", zoom: "/settings/accounts/zoom",
+  linkedin: "/settings/accounts/linkedin", instagram: "/settings/accounts/instagram",
+};
+
+const FAMILY_SETUP: Record<string, string> = { google: "/settings/accounts/google", microsoft: "/settings/accounts/microsoft", apple: "/settings/accounts/icloud" };
+
+/** The connect page for a sign-in: its family's page, else its first part's own. */
+export const setupHrefOf = (group: AccountGroup): string => FAMILY_SETUP[group.family] ?? SETUP_HREF[group.accounts[0].provider];
+
+/** Sign-ins that need attention first, then the rest in the order they were connected. */
+export function attentionFirst(groups: AccountGroup[]): AccountGroup[] {
+  return [...groups].sort((a, b) => Number(groupStatus(b) === "error") - Number(groupStatus(a) === "error"));
+}
+
+/** How many sign-ins are working out of all of them, and how many need attention. A paused one is neither working nor a problem. */
+export function summariseGroups(groups: AccountGroup[]): { working: number; total: number; attention: number } {
+  const status = groups.map(groupStatus);
+  return { working: status.filter((s) => s === "connected" || s === "syncing").length, total: groups.length, attention: status.filter((s) => s === "error").length };
+}

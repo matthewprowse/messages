@@ -41,7 +41,8 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
-const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+// navigator.platform is deprecated: the client hints platform is used where the browser has it, else the user agent.
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.userAgent);
 const MOD = isMac ? "⌘" : "Ctrl+";
 // Links a note may hold; any other scheme (javascript:, data:) is refused.
 const SAFE_LINK = /^(https?|mailto|tel):/i;

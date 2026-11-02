@@ -5,12 +5,13 @@
 // for now.
 
 import type { TablesInsert } from "@messages/db";
-import { Backoff, Sleeper } from "../backoff";
+import { Backoff, Sleeper, supervise } from "../backoff";
 import { setAccountStatus, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { mapLimit } from "../util";
 import { normAddresses } from "../send/from-address";
 import { storeWindow } from "../calendar/store-window";
+import { fullFetchDue, syncWindow } from "../calendar/sync-window";
 import { GraphApiError, signInRevoked, type GraphClient } from "../microsoft/client";
 import { claimUpdate, failUpdate, settleUpdated, storeChange, storedEventOfUpdate } from "../calendar/update-queue";
 import { GONE, GRAPH_RESPONSE, graphBody, graphUpdateFailure, readChange, type CalendarUpdateRow, type GraphGuest } from "../calendar/update-event";
@@ -19,18 +20,17 @@ import { microsoftFatalDetail, openGraphClient } from "../microsoft/session";
 import { storedOutlookEvent, type GraphEvent } from "../microsoft/calendar-event";
 
 const POLL_MS = 5 * 60_000;
-const PAST_DAYS = 7;
-const FUTURE_DAYS = 60;
 const PAGE_SIZE = 200;
 const CALENDARS_AT_ONCE = 2; // calendars read together (Graph allows four requests at once per mailbox)
 /** The scope that lets the app change events. The sign-in asks only for Calendars.Read today, so until that is raised changes are refused. */
 const WRITE_SCOPE = "Calendars.ReadWrite";
 export const READ_ONLY = "Outlook Calendar is read only for now, so this event cannot be changed from here.";
 
-const SELECT = "id,iCalUId,subject,isAllDay,isCancelled,start,end,location,attendees,organizer";
+const SELECT = "id,iCalUId,subject,isAllDay,isCancelled,start,end,location,attendees,organizer,body,onlineMeeting,onlineMeetingUrl";
 
 interface GraphCalendar {
   id: string;
+  name?: string;
   isDefaultCalendar?: boolean;
 }
 
@@ -39,6 +39,8 @@ export class OutlookCalendarConnector {
   private readonly sleeper = new Sleeper();
   private readonly backoff = new Backoff();
   private selfAddresses = new Set<string>();
+  /** When the whole window was last fetched. Between those the near part alone is polled, as Graph has no cheap change check. */
+  private lastFullAt: number | null = null;
   /** The signed-in client while a session is running; queued changes wait until there is one. */
   private client: GraphClient | null = null;
   private canWrite = false;
@@ -52,7 +54,7 @@ export class OutlookCalendarConnector {
   }
 
   start() {
-    void this.run();
+    void supervise(() => this.run(), () => this.stopped, (err) => log.error("outlook calendar run loop failed", { account: this.id, code: errorCode(err) }));
   }
 
   async stop() {
@@ -97,15 +99,18 @@ export class OutlookCalendarConnector {
     }
   }
 
-  /** Fetches the window from every calendar and replaces the stored copy. */
+  /**
+   * Fetches the window from every calendar and replaces the stored copy. The whole window (90 days back, a year ahead)
+   * is read hourly; the polls between read only the near part, so a five minute refresh stays small.
+   */
   private async sync(client: GraphClient) {
     const now = Date.now();
-    const timeMin = new Date(now - PAST_DAYS * 86_400_000).toISOString();
-    const timeMax = new Date(now + FUTURE_DAYS * 86_400_000).toISOString();
+    const full = fullFetchDue(now, this.lastFullAt);
+    const { timeMin, timeMax } = syncWindow(now, full ? "full" : "near");
 
     const calendars: GraphCalendar[] = [];
     let next: string | undefined = "/me/calendars";
-    let query: Record<string, string> | undefined = { $select: "id,isDefaultCalendar" };
+    let query: Record<string, string> | undefined = { $select: "id,name,isDefaultCalendar" };
     while (next) {
       const page: { value?: GraphCalendar[]; "@odata.nextLink"?: string } = await client.request(next, { query });
       calendars.push(...(page.value ?? []));
@@ -123,7 +128,7 @@ export class OutlookCalendarConnector {
       while (url) {
         const page: { value?: GraphEvent[]; "@odata.nextLink"?: string } = await client.request(url, {
           query: params,
-          prefer: ['outlook.timezone="UTC"', `odata.maxpagesize=${PAGE_SIZE}`],
+          prefer: ['outlook.timezone="UTC"', 'outlook.body-content-type="text"', `odata.maxpagesize=${PAGE_SIZE}`],
         });
         events.push(...(page.value ?? []));
         url = page["@odata.nextLink"];
@@ -137,7 +142,7 @@ export class OutlookCalendarConnector {
     for (const [i, events] of perCalendar.entries()) {
       for (const event of events) {
         if (event.iCalUId && seen.has(event.iCalUId)) continue;
-        const row = storedOutlookEvent(event, { userId: this.account.user_id, accountId: this.id, calendarId: calendars[i].id, selfAddresses: this.selfAddresses });
+        const row = storedOutlookEvent(event, { userId: this.account.user_id, accountId: this.id, calendarId: calendars[i].id, calendarName: calendars[i].name ?? null, selfAddresses: this.selfAddresses });
         if (!row || rows.has(row.provider_event_id)) continue;
         rows.set(row.provider_event_id, row);
         if (event.iCalUId) seen.add(event.iCalUId);
@@ -146,7 +151,8 @@ export class OutlookCalendarConnector {
 
     // Anything stored for this window that Outlook no longer has was cancelled or moved out.
     const { written, removed } = await storeWindow(this.id, rows, { timeMin, timeMax });
-    log.info("outlook calendar synced", { account: this.id, calendars: calendars.length, events: rows.size, written, removed });
+    if (full) this.lastFullAt = now;
+    log.info("outlook calendar synced", { account: this.id, calendars: calendars.length, events: rows.size, written, removed, full });
   }
 
   /** Changes an event, or answers an invitation, as queued in calendar_updates. One at a time, in the order they arrive. */

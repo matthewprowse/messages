@@ -1,12 +1,11 @@
 "use client";
 
-// On a phone this is the list of sections (drawn by the layout). From tablet width up the list is always beside a
-// section, so the first one opens straight away.
+// On a phone this is the list of sections (drawn by the layout, which hides this page's own content). From tablet
+// width up the list is always beside a section, so the first one opens straight away. It draws nothing itself, so
+// there is no empty screen to flash before the redirect.
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Settings2 } from "lucide-react";
-import { EmptyState } from "@/components/primitives";
 
 export default function SettingsIndex() {
   const router = useRouter();
@@ -17,9 +16,5 @@ export default function SettingsIndex() {
     wide.addEventListener("change", go);
     return () => wide.removeEventListener("change", go);
   }, [router]);
-  return (
-    <div className="hidden h-[70vh] items-center justify-center md:flex">
-      <EmptyState icon={Settings2} title="Pick a Section" description="Accounts, personalisation, notifications and general settings." />
-    </div>
-  );
+  return null;
 }

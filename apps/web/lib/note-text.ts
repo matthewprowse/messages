@@ -37,18 +37,6 @@ export function decodeEntities(text: string): string {
 }
 
 /**
- * The first line of text in a note, without its markdown, for the list. File references, rules and code
- * fences are passed over, and a backslash before a character is dropped.
- */
-export function notePreview(markdown: string, max = 140): string {
-  for (const raw of markdown.split("\n")) {
-    const text = plainLine(raw);
-    if (text) return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
-  }
-  return "";
-}
-
-/**
  * The start of a note as plain text, for the list and for search before the body is downloaded: the first
  * lines of text joined with spaces, about max characters. Stored with the note, so it is kept short.
  */
@@ -129,4 +117,15 @@ export function matchesNote(note: { title: string; body: string; excerpt?: strin
   const text = note.unloaded ? note.excerpt ?? "" : decodeEntities(note.body);
   const hay = `${note.title}\n${text}`.toLowerCase();
   return words.every((w) => hay.includes(w));
+}
+
+/** Ticked and total checklist items in a note's markdown, or null when it has no checklist. */
+export function checklistProgress(markdown: string): { done: number; total: number } | null {
+  let done = 0;
+  let total = 0;
+  for (const m of markdown.matchAll(/^[ \t]*(?:[-*+]|\d+[.)])\s+\[([ xX])\]/gm)) {
+    total += 1;
+    if (m[1] !== " ") done += 1;
+  }
+  return total > 0 ? { done, total } : null;
 }

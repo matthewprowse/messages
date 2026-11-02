@@ -47,6 +47,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const draftAskRef = useRef<Record<string, number | undefined>>({});
   const [hydrated, setHydrated] = useState(false);
   const [loadedThreadIds, setLoadedThreadIds] = useState<Set<string>>(new Set());
+  const [failedThreadIds, setFailedThreadIds] = useState<Set<string>>(new Set());
   // Replies queued in the outbox, shown in the conversation until the sent email is imported.
   const [pending, setPending] = useState<PendingSend[]>([]);
   const [composed, setComposed] = useState<Record<string, ComposeStatus | undefined>>({});
@@ -146,11 +147,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [state.loading, userId, contactsTries]);
 
-  const { evictHeld, loadMessages, loadOlderMessages, hasOlder, prefetchMessages, ensureThread } = useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRef, loadingRef, moreRef, olderRef, heldRef, openRef, setLoadedThreadIds });
+  const { evictHeld, loadMessages, loadOlderMessages, hasOlder, prefetchMessages, ensureThread } = useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRef, loadingRef, moreRef, olderRef, heldRef, openRef, setLoadedThreadIds, setFailedThreadIds });
   // Live updates: see app-store/use-realtime.ts.
   useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, heldRef, openRef, evictHeld, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending });
 
-  const { dispatch } = useProfileDispatch({ userId, rawDispatch, saveFailed });
+  const { dispatch } = useProfileDispatch({ userId, rawDispatch, stateRef, saveFailed });
 
   // Map lookups, as rows and bubbles call these many times per render. A contact merged away this
   // session still resolves, to the contact it was merged into.
@@ -166,6 +167,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const messagesByThread = useMemo(() => withQueuedReplies(state.byThread, pending), [state.byThread, pending]);
   const messagesFor = useCallback((threadId: string) => messagesByThread.get(threadId) ?? NO_MESSAGES, [messagesByThread]);
   const messagesLoaded = useCallback((threadId: string) => loadedThreadIds.has(threadId), [loadedThreadIds]);
+  const messagesFailed = useCallback((threadId: string) => failedThreadIds.has(threadId), [failedThreadIds]);
 
   // Filtered and sorted once per (view, filter) until the threads change. "Waiting" depends on the clock, so it is not cached.
   const listCache = useMemo(() => perSource((threads: Thread[], key: string) => listThreadsFor(threads, key)), []);
@@ -178,19 +180,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const { removePending, replyTo, setReplyTo, send, retryPending, composeEmail, composeWhatsApp, refreshCompose, saveSendAddresses } = useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, draftAskRef, setPending, setComposed, saveFailed });
   const { generateDraft, generateComposeDraft, discardComposeDraft, discardDraft } = useDrafts({ userId, rawDispatch, threadMapRef, draftAskRef, draftWaitRef, composeWaitRef, setDrafting, setComposeDrafts, saveFailed });
   const { unsubscribe, confirmUnsubscribe } = useUnsubscribes({ rawDispatch, stateRef });
-  const { refreshContacts, undoMerge, mergeContacts, splitContact } = useContactMerging({ rawDispatch, stateRef, loadedRef, notify, setContactsReady, setContactsVersion, setMergedInto });
+  const { refreshContacts, undoMerge, mergeContacts, splitContact, patchContact, removeContact, contactChanges, contactsRefreshed } = useContactMerging({ rawDispatch, stateRef, loadedRef, notify, setContactsReady, setContactsVersion, setMergedInto });
   const { tasks, tickTask, createTask, editTask, deleteTask } = useTasks({ userId, stored: state.tasks, rawDispatch, stateRef, saveFailed });
 
   // One value per change, so components that read the store redraw only when something changed.
   const value = useMemo<Ctx>(() => ({
-    ...listState(state), dispatch, contactById, threadById, get messages() { return flatMessages(state.byThread); }, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
+    ...listState(state), dispatch, contactById, threadById, get messages() { return flatMessages(state.byThread); }, messagesByThread, messagesFor, messagesLoaded, messagesFailed,loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
     listThreads, notify, markRead, archive, unarchive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
-    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
+    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   }), [
-    state, dispatch, contactById, threadById, flatMessages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
+    state, dispatch, contactById, threadById, flatMessages, messagesByThread, messagesFor, messagesLoaded, messagesFailed, loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
     listThreads, notify, markRead, archive, unarchive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
-    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
+    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   ]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -8,7 +8,7 @@ import { markSubmitted } from "@/lib/analytics";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
-import { deleteContact, setContactHidden, type ContactDetail, type ContactSummary } from "@/lib/contacts";
+import { deleteContact, setContactHidden, setContactKind, type ContactDetail, type ContactSummary } from "@/lib/contacts";
 import { listAutomaticMerges, mergeSide, type MergeRecord } from "@/lib/contact-merging";
 import { identityGroups, mergeReasonText, planMerge } from "@/lib/merging";
 import { relTime } from "@/lib/format";
@@ -33,6 +33,11 @@ import { ContactAvatar } from "@/components/primitives";
 import { DIALOG_BUTTONS, MergeDialog, useCloseOnOverlay } from "@/components/merge-dialog";
 import { useContactsData } from "@/components/contacts-data";
 import { byRecent, Divided, firstReach, Section } from "@/components/contact-list";
+import { fold, haystack, matchesQuery } from "@/lib/contact-list-helpers";
+import { searchDigits } from "@/lib/phone-search";
+
+// The most people the Merge With list draws at once.
+const MERGE_RESULTS = 50;
 import { withQuery } from "@/lib/utils";
 
 function useContactHref() {
@@ -48,10 +53,18 @@ function MergeWithDialog({ contact, open, onOpenChange }: { contact: ContactDeta
   const hrefOf = useContactHref();
   const [target, setTarget] = useState<ContactSummary | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [search, setSearch] = useState("");
+  // Everyone else once, with the text searched prepared; only the first matches are drawn, so a long list stays quick to type in.
   const others = useMemo(
-    () => (contacts ?? []).filter((c) => c.id !== contact.id).sort(byRecent),
+    () => (contacts ?? []).filter((c) => c.id !== contact.id).sort(byRecent).map((c) => ({
+      c,
+      hay: haystack([c.name, c.company, c.organizationName, ...c.emails, ...c.handles], c.phones),
+      digits: c.phones.map(searchDigits).join(" "),
+    })),
     [contacts, contact.id],
   );
+  const q = fold(search.trim());
+  const shown = useMemo(() => others.filter((o) => matchesQuery(q, o.hay, o.digits)).slice(0, MERGE_RESULTS).map((o) => o.c), [others, q]);
 
   const merge = async (name?: string) => {
     if (!target) return;
@@ -62,17 +75,17 @@ function MergeWithDialog({ contact, open, onOpenChange }: { contact: ContactDeta
 
   return (
     <>
-      <CommandDialog open={open} onOpenChange={onOpenChange} title="Merge With" description="Search for the person to merge with">
-        {/* The search box and list need a Command around them to talk to each other. */}
-        <Command>
-        <CommandInput placeholder="Search People" />
+      <CommandDialog open={open} onOpenChange={(next) => { if (!next) setSearch(""); onOpenChange(next); }} title="Merge With" description="Search for the person to merge with">
+        {/* The search box and list need a Command around them to talk to each other. The matching is done above, not by the list. */}
+        <Command shouldFilter={false}>
+        <CommandInput placeholder="Search People" value={search} onValueChange={setSearch} />
         <CommandList>
           <CommandEmpty>{contacts === undefined ? "Loading people" : "No people found."}</CommandEmpty>
-          <CommandGroup heading="People">
-            {others.map((c) => (
+          <CommandGroup heading={others.length > shown.length && !q ? `Recent People (type to search ${others.length})` : "People"}>
+            {shown.map((c) => (
               <CommandItem
                 key={c.id}
-                value={`${c.name} ${c.emails.join(" ")} ${c.phones.join(" ")} ${c.id}`}
+                value={c.id}
                 onSelect={() => {
                   setTarget(c);
                   onOpenChange(false);
@@ -98,7 +111,7 @@ function SplitForm({ contact, onDone }: { contact: ContactDetail; onDone: () => 
   const { splitContact } = useApp();
   const router = useRouter();
   const hrefOf = useContactHref();
-  const groups = useMemo(() => identityGroups(contact.identityRows), [contact.identityRows]);
+  const groups = useMemo(() => identityGroups(contact.identityRows).filter((g) => !g.social), [contact.identityRows]);
   const [chosen, setChosen] = useState<Set<number>>(new Set());
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -170,7 +183,7 @@ function SplitDialog({ contact, open, onOpenChange }: { contact: ContactDetail; 
 
 /** Deletes the person, then goes back to the list. Their conversations and messages stay. */
 function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: ContactDetail; backHref: string; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { refreshContacts } = useApp();
+  const { removeContact } = useApp();
   const router = useRouter();
   const [deleting, setDeleting] = useState(false);
   useCloseOnOverlay(open && !deleting, onOpenChange);
@@ -187,7 +200,8 @@ function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: Cont
     onOpenChange(false);
     router.push(backHref);
     toast(`Deleted ${contact.name}`);
-    void refreshContacts([contact.id]);
+    // Taken out of what the store and the lists hold, not read again.
+    removeContact(contact.id);
   };
 
   return (
@@ -196,7 +210,7 @@ function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: Cont
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {contact.name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Your conversations and messages with them stay, but show no name for them. Only the person and their saved details go, such as their addresses, numbers and company. New mail from their addresses will create a contact again.
+            Your conversations and messages with them stay, but show no name for them. Only the person and their saved details go, such as their addresses, numbers and company. New mail from their addresses will create a contact again. To stop seeing them in People, hide them instead.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className={DIALOG_BUTTONS}>
@@ -222,11 +236,35 @@ function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: Cont
 export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDetail; backHref: string; onEdit?: () => void }) {
   const [open, setOpen] = useState<"merge" | "split" | "delete" | null>(null);
   const set = (item: "merge" | "split" | "delete") => (value: boolean) => setOpen(value ? item : null);
-  const canSplit = useMemo(() => identityGroups(contact.identityRows).length > 1, [contact.identityRows]);
-  const { refreshContacts, notify } = useApp();
+  const canSplit = useMemo(() => identityGroups(contact.identityRows).filter((g) => !g.social).length > 1, [contact.identityRows]);
+  const { patchContact, notify } = useApp();
+  // What the menu says right away, until the page loads the contact again and says it for itself.
+  const [local, setLocal] = useState<{ hidden?: boolean; isCompany?: boolean }>({});
+  useEffect(() => setLocal({}), [contact]);
+  const hidden = local.hidden ?? contact.hidden;
+  const isCompany = local.isCompany ?? contact.isCompany;
+  // Shown at once; put back if it could not be saved.
   const toggleHidden = async () => {
-    if (await setContactHidden(contact.id, !contact.hidden)) void refreshContacts([contact.id]);
-    else notify("Could not save that. Try again.");
+    const next = !hidden;
+    setLocal((l) => ({ ...l, hidden: next }));
+    patchContact(contact.id, { hidden: next });
+    if (!(await setContactHidden(contact.id, next))) {
+      setLocal((l) => ({ ...l, hidden: !next }));
+      patchContact(contact.id, { hidden: !next });
+      notify("Could not save that. Try again.");
+    }
+  };
+  // "This Is a Person" or "This Is a Company" when the guess was wrong.
+  const setKind = async (kind: "person" | "company") => {
+    const previous = contact.kindOverride ?? null;
+    const wasCompany = isCompany;
+    setLocal((l) => ({ ...l, isCompany: kind === "company" }));
+    patchContact(contact.id, { kindOverride: kind });
+    if (!(await setContactKind(contact.id, kind))) {
+      setLocal((l) => ({ ...l, isCompany: wasCompany }));
+      patchContact(contact.id, { kindOverride: previous });
+      notify("Could not save that. Try again.");
+    }
   };
   return (
     <>
@@ -238,7 +276,8 @@ export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDet
           {onEdit && <DropdownMenuItem className="sm:hidden" onSelect={onEdit}>Edit</DropdownMenuItem>}
           <DropdownMenuItem onSelect={() => setOpen("merge")}>Merge With...</DropdownMenuItem>
           <DropdownMenuItem disabled={!canSplit} onSelect={() => setOpen("split")}>Split</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void toggleHidden()}>{contact.hidden ? "Show Contact" : "Hide Contact"}</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void toggleHidden()}>{hidden ? "Show Contact" : "Hide Contact"}</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void setKind(isCompany ? "person" : "company")}>{isCompany ? "This Is a Person" : "This Is a Company"}</DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onSelect={() => setOpen("delete")}>Delete Contact</DropdownMenuItem>
         </DropdownMenuContent>

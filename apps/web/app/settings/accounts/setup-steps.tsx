@@ -6,14 +6,14 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
-import { RefreshCw } from "lucide-react";
 import { track } from "@/lib/analytics";
 import { useApp } from "@/lib/store";
 import type { Account, Provider } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/sections";
+import { AccountStatusBadge } from "@/components/settings/connect-family";
+import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/primitives";
 
 /** Waiting until the worker has the account, then Connected with a way on to the Inbox. */
 function ConnectionStatus({ label, providers }: { label: string; providers: Provider[] }) {
@@ -26,7 +26,7 @@ function ConnectionStatus({ label, providers }: { label: string; providers: Prov
       <SettingsHeading title="Status" />
       <SettingsRows>
         <SettingsRow
-          title={<>{label} {live ? <Badge variant="secondary">Connected</Badge> : <Badge variant="outline" className="gap-1"><RefreshCw className="size-3 animate-spin" /> {connecting ? "Connecting" : "Waiting"}</Badge>}</>}
+          title={<>{label} {live ? <AccountStatusBadge status="connected" /> : connecting ? <AccountStatusBadge status="connecting" /> : <Badge variant="outline">Waiting</Badge>}</>}
           description={live ? "New messages appear in the Inbox within seconds." : "This updates by itself once the worker has connected the account."}
         >
           {live && <Button variant="secondary" asChild><Link href="/inbox">Go to Inbox</Link></Button>}

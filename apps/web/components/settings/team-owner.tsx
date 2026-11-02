@@ -4,7 +4,7 @@
 
 import { ChevronRight } from "lucide-react";
 import type { TeamState } from "@/lib/team";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { SharedInboxesSection } from "@/components/settings/team-inboxes";
 
 /**

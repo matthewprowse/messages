@@ -10,7 +10,8 @@ import { toast } from "sonner";
 import { markSubmitted } from "@/lib/analytics";
 import type { ContactSummary } from "@/lib/contacts";
 import { dismissSuggestion, mergeSide, type MergeSuggestion } from "@/lib/contact-merging";
-import { namesDiffer, planMerge, suggestionReasonText } from "@/lib/merging";
+import { CERTAIN_SCORE, namesDiffer, planMerge, suggestionEvidence, suggestionReasonText } from "@/lib/merging";
+import { Badge } from "@/components/ui/badge";
 import { useApp } from "@/lib/store";
 import { formatPhone } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -30,8 +31,8 @@ import { useContactsData } from "@/components/contacts-data";
 import { DetailPage, plural } from "@/components/contact-list";
 import { withQuery } from "@/lib/utils";
 
-function Person({ contact, query }: { contact: ContactSummary; query: string }) {
-  const reach = [...contact.emails, ...contact.phones.map(formatPhone)];
+function Person({ contact, query, keeping }: { contact: ContactSummary; query: string; keeping?: boolean }) {
+  const reach = [...contact.emails, ...contact.phones.map(formatPhone), ...contact.handles.map((h) => `@${h}`)];
   return (
     <Link
       href={withQuery(`/contacts/${contact.id}`, query)}
@@ -39,7 +40,10 @@ function Person({ contact, query }: { contact: ContactSummary; query: string }) 
     >
       <ContactAvatar contact={contact} className="size-10 shrink-0" />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-sm font-medium">{contact.name}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{contact.name}</span>
+          {keeping && <Badge variant="secondary">Keeping</Badge>}
+        </span>
         {reach.map((r) => (
           <span key={r} className="truncate text-xs text-muted-foreground">{r}</span>
         ))}
@@ -52,14 +56,18 @@ function Person({ contact, query }: { contact: ContactSummary; query: string }) 
 
 function SuggestionCard({ suggestion, a, b, query, locked }: { suggestion: MergeSuggestion; a: ContactSummary; b: ContactSummary; query: string; locked: boolean }) {
   const { mergeContacts } = useApp();
-  const { removeSuggestion } = useContactsData();
+  const { removeSuggestion, restoreSuggestion } = useContactsData();
   const [busy, setBusy] = useState<"merging" | "dismissing" | null>(null);
   const [asking, setAsking] = useState(false);
   const organization = a.organizationName && a.organizationName === b.organizationName ? a.organizationName : null;
+  const sides = [mergeSide(a), mergeSide(b)] as const;
+  // Who survives, so the person sees what a merge does before pressing it. Where the names differ the dialog asks.
+  const keepId = planMerge(...sides).keepId;
+  const evidence = suggestionEvidence(suggestion.reason, ...sides, formatPhone);
 
   const merge = async (name?: string) => {
     setBusy("merging");
-    const plan = planMerge(mergeSide(a), mergeSide(b), name);
+    const plan = planMerge(...sides, name);
     const id = await mergeContacts(plan.keepId, plan.mergeId, "suggestion", plan.name);
     setBusy(null);
     if (id) removeSuggestion(suggestion.id);
@@ -68,16 +76,23 @@ function SuggestionCard({ suggestion, a, b, query, locked }: { suggestion: Merge
   const notSame = async () => {
     setBusy("dismissing");
     removeSuggestion(suggestion.id);
-    if (!(await dismissSuggestion(suggestion.id))) toast("Could not save that change. Check your connection and try again.");
+    // Put it back if the dismissal was not saved, so it does not seem gone and then return on the next load.
+    if (!(await dismissSuggestion(suggestion.id))) {
+      restoreSuggestion(suggestion);
+      toast("Could not save that change. Check your connection and try again.");
+    }
     setBusy(null);
   };
 
   return (
     <div className="rounded-lg border">
-      <p className="px-4 pt-3 text-xs text-muted-foreground">{suggestionReasonText(suggestion.reason, mergeSide(a), mergeSide(b), organization)}</p>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-3">
+        <p className="text-xs text-muted-foreground">{[suggestionReasonText(suggestion.reason, ...sides, organization), ...evidence].join(". ")}</p>
+        <Badge variant="secondary">{suggestion.score >= CERTAIN_SCORE ? "Very Likely" : "Possible"}</Badge>
+      </div>
       <div className="flex flex-col gap-1 p-1 sm:flex-row">
-        <Person contact={a} query={query} />
-        <Person contact={b} query={query} />
+        <Person contact={a} query={query} keeping={!namesDiffer(a.name, b.name) && keepId === a.id} />
+        <Person contact={b} query={query} keeping={!namesDiffer(a.name, b.name) && keepId === b.id} />
       </div>
       <div className="flex justify-end gap-2 px-4 pb-3">
         <Button variant="secondary" className="max-sm:h-10" disabled={busy !== null || locked} onClick={notSame}>Not the Same</Button>
@@ -89,13 +104,13 @@ function SuggestionCard({ suggestion, a, b, query, locked }: { suggestion: Merge
 }
 
 /** Merges every pair on the page after one confirmation. Where two names differ, the person with more conversations keeps theirs. */
-function MergeAllDialog({ count, open, merging, onOpenChange, onConfirm }: { count: number; open: boolean; merging: boolean; onOpenChange: (open: boolean) => void; onConfirm: () => void }) {
+function MergeAllDialog({ count, certainOnly, open, merging, onOpenChange, onConfirm }: { count: number; certainOnly: boolean; open: boolean; merging: boolean; onOpenChange: (open: boolean) => void; onConfirm: () => void }) {
   useCloseOnOverlay(open && !merging, onOpenChange);
   return (
     <AlertDialog open={open} onOpenChange={(next) => !merging && onOpenChange(next)}>
       <AlertDialogContent track="merge_all_contacts">
         <AlertDialogHeader>
-          <AlertDialogTitle>Merge All {plural(count, "Pair")}?</AlertDialogTitle>
+          <AlertDialogTitle>{certainOnly ? "Merge Very Likely" : "Merge All"} {plural(count, "Pair")}?</AlertDialogTitle>
           <AlertDialogDescription>
             Each pair becomes one contact with all their addresses, numbers and conversations. Where the two names differ, the person with more conversations keeps their name. You can undo each merge.
           </AlertDialogDescription>
@@ -111,7 +126,7 @@ function MergeAllDialog({ count, open, merging, onOpenChange, onConfirm }: { cou
               onConfirm();
             }}
           >
-            {merging ? "Merging" : "Merge All"}
+            {merging ? "Merging" : certainOnly ? "Merge Very Likely" : "Merge All"}
           </AlertDialogAction>
         </div>
       </AlertDialogContent>
@@ -120,10 +135,11 @@ function MergeAllDialog({ count, open, merging, onOpenChange, onConfirm }: { cou
 }
 
 export function MergeSuggestions() {
-  const { contacts, suggestions, removeSuggestion, reload } = useContactsData();
-  const { mergeContacts } = useApp();
+  const { contacts, suggestions, suggestionsMore, removeSuggestion, reload } = useContactsData();
+  const { mergeContacts, undoMerge, refreshContacts, notify } = useApp();
   const query = useSearchParams().toString();
-  const [confirmingAll, setConfirmingAll] = useState(false);
+  // Which pairs the confirmation is about: every pair, or only those the linker is sure of.
+  const [confirmingAll, setConfirmingAll] = useState<"all" | "certain" | null>(null);
   const [mergingAll, setMergingAll] = useState(false);
   const rows = useMemo(() => {
     const byId = new Map((contacts ?? []).map((c) => [c.id, c]));
@@ -135,23 +151,41 @@ export function MergeSuggestions() {
   }, [contacts, suggestions]);
   const loading = contacts === undefined || suggestions === undefined;
 
+  const certain = useMemo(() => rows.filter((r) => r.s.score >= CERTAIN_SCORE), [rows]);
+
   const mergeAll = async () => {
+    const batch = confirmingAll === "certain" ? certain : rows;
     setMergingAll(true);
     // Someone merged away earlier in the run is skipped in any later pair they appear in.
     const gone = new Set<string>();
-    let merged = 0;
-    for (const { s, a, b } of rows) {
+    const done: string[] = [];
+    let failed = 0;
+    for (const { s, a, b } of batch) {
       if (gone.has(a.id) || gone.has(b.id)) continue;
       const plan = planMerge(mergeSide(a), mergeSide(b));
-      const id = await mergeContacts(plan.keepId, plan.mergeId, "suggestion", plan.name);
-      if (!id) break;
+      // One message for the whole run, below, instead of a toast and an Undo for every pair.
+      const id = await mergeContacts(plan.keepId, plan.mergeId, "suggestion", plan.name, { quiet: true });
+      if (!id) {
+        failed += 1;
+        continue;
+      }
+      done.push(id);
       gone.add(plan.mergeId);
       removeSuggestion(s.id);
-      merged += 1;
     }
     setMergingAll(false);
-    setConfirmingAll(false);
-    if (merged > 0) toast(`Merged ${plural(merged, "pair")}`);
+    setConfirmingAll(null);
+    if (done.length === 0) return;
+    const text = `Merged ${plural(done.length, "pair")}${failed ? `. ${plural(failed, "pair")} could not be merged.` : ""}`;
+    notify(text, () => {
+      // Each merge is undone, then the contacts are read once for all of them.
+      void (async () => {
+        let undone = 0;
+        for (const id of done) if (await undoMerge(id, { refresh: false })) undone += 1;
+        if (undone > 0) await refreshContacts([]);
+        toast(undone === done.length ? "Merges undone" : `Undid ${undone} of ${done.length} merges`);
+      })();
+    });
   };
 
   return (
@@ -164,8 +198,11 @@ export function MergeSuggestions() {
             <h1 className="truncate text-base font-medium">Suggested Merges</h1>
             {!loading && rows.length > 0 && <span className="truncate text-xs text-muted-foreground">People who may be the same person</span>}
           </div>
+          {!loading && certain.length > 0 && certain.length < rows.length && (
+            <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll("certain")}>Merge Very Likely</Button>
+          )}
           {!loading && rows.length > 1 && (
-            <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll(true)}>{mergingAll ? "Merging" : "Merge All"}</Button>
+            <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll("all")}>{mergingAll ? "Merging" : "Merge All"}</Button>
           )}
         </>
       }
@@ -183,7 +220,15 @@ export function MergeSuggestions() {
       {rows.map(({ s, a, b }) => (
         <SuggestionCard key={s.id} suggestion={s} a={a} b={b} query={query} locked={mergingAll} />
       ))}
-      <MergeAllDialog count={rows.length} open={confirmingAll} merging={mergingAll} onOpenChange={setConfirmingAll} onConfirm={mergeAll} />
+      {suggestionsMore > 0 && <p className="text-xs text-muted-foreground">{plural(suggestionsMore, "more pair")} will show as you work through these.</p>}
+      <MergeAllDialog
+        count={confirmingAll === "certain" ? certain.length : rows.length}
+        certainOnly={confirmingAll === "certain"}
+        open={confirmingAll !== null}
+        merging={mergingAll}
+        onOpenChange={(open) => !open && setConfirmingAll(null)}
+        onConfirm={mergeAll}
+      />
     </DetailPage>
   );
 }

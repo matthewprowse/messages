@@ -1,57 +1,24 @@
 "use client";
 
-// Settings, Accounts: connected accounts grouped by provider family, with rename and pause for each group.
+// Settings, Accounts: how many accounts are working, then each sign-in with Pause or Resume, Reconnect and Rename; the
+// ways to add one; WhatsApp read receipts; and send addresses.
 
 import Link from "next/link";
 import { useState } from "react";
-import { Mail, Calendar, ListChecks, MessageCircle, RefreshCw, Video } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { relTime } from "@/lib/format";
-import type { Account } from "@/lib/types";
-import { FAMILY_NAME, groupAccounts, groupProblem, groupStatus, partsOf, type AccountGroup } from "@/lib/account-groups";
+import { attentionFirst, groupAccounts, groupProblem, groupStatus, partsOf, setupHrefOf, summariseGroups, type AccountGroup } from "@/lib/account-groups";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { AccountStatusBadge } from "@/components/settings/connect-family";
+import { PauseDialog, RenameDialog, groupName } from "@/components/settings/account-dialogs";
+import { ReadReceiptsSection } from "@/components/settings/read-receipts-section";
 import { SendAddressesSection } from "@/components/settings/send-addresses";
-
-const ICON = { icloud: Mail, gmail: Mail, outlook: Mail, google_calendar: Calendar, outlook_calendar: Calendar, icloud_calendar: Calendar, whatsapp: MessageCircle,
-  imap: Mail, teams: Video, zoom: Video, google_meet: Video, linkedin: MessageCircle, instagram: MessageCircle,
-  microsoft_todo: ListChecks, google_tasks: ListChecks, icloud_reminders: ListChecks,
-} as const;
-const SETUP = {
-  icloud: "/settings/accounts/icloud",
-  gmail: "/settings/accounts/google",
-  google_calendar: "/settings/accounts/google",
-  outlook: "/settings/accounts/microsoft",
-  outlook_calendar: "/settings/accounts/microsoft",
-  icloud_calendar: "/settings/accounts/icloud",
-  whatsapp: "/settings/accounts/whatsapp",
-  imap: "/settings/accounts/imap",
-  teams: "/settings/accounts/microsoft",
-  zoom: "/settings/accounts/zoom",
-  google_meet: "/settings/accounts/google",
-  linkedin: "/settings/accounts/linkedin",
-  instagram: "/settings/accounts/instagram",
-  microsoft_todo: "/settings/accounts/microsoft",
-  google_tasks: "/settings/accounts/google",
-  icloud_reminders: "/settings/accounts/icloud-reminders",
-} as const;
-
-const FAMILY_SETUP = { google: "/settings/accounts/google", microsoft: "/settings/accounts/microsoft", apple: "/settings/accounts/icloud" } as const;
-const setupOf = (g: AccountGroup) => (g.family in FAMILY_SETUP ? FAMILY_SETUP[g.family as keyof typeof FAMILY_SETUP] : SETUP[g.accounts[0].provider]);
-
-function StatusBadge({ status }: { status: Account["status"] }) {
-  if (status === "connected") return <Badge variant="secondary">Connected</Badge>;
-  if (status === "syncing") return <Badge variant="outline" className="gap-1"><RefreshCw className="size-3 animate-spin" /> Syncing</Badge>;
-  if (status === "connecting") return <Badge variant="outline" className="gap-1"><RefreshCw className="size-3 animate-spin" /> Connecting</Badge>;
-  if (status === "error") return <Badge variant="destructive">Needs Attention</Badge>;
-  return <Badge variant="outline">Sync Paused</Badge>;
-}
+import { ADD_ACCOUNTS, PROVIDER_ICON } from "./providers";
 
 function RowIcon({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
   return <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted"><Icon className="size-4" /></div>;
@@ -61,72 +28,78 @@ export default function AccountsPage() {
   const { accounts, loading, dispatch, notify } = useApp();
   const [pausing, setPausing] = useState<AccountGroup | null>(null);
   const [renaming, setRenaming] = useState<AccountGroup | null>(null);
-  const [name, setName] = useState("");
-  const rename = () => {
-    if (!renaming) return;
-    for (const a of renaming.accounts) dispatch({ type: "patchAccount", id: a.id, patch: { nickname: name.trim() } });
+  const groups = attentionFirst(groupAccounts(accounts));
+  const summary = summariseGroups(groups);
+
+  const rename = (g: AccountGroup, name: string) => {
+    for (const a of g.accounts) dispatch({ type: "patchAccount", id: a.id, patch: { nickname: name } });
     setRenaming(null);
   };
-  const pause = () => {
-    if (!pausing) return;
-    for (const a of pausing.accounts) dispatch({ type: "patchAccount", id: a.id, patch: { status: "disconnected" } });
-    notify(`Sync paused for ${nameOf(pausing)}`);
+  const pause = (g: AccountGroup) => {
+    for (const a of g.accounts) dispatch({ type: "patchAccount", id: a.id, patch: { status: "disconnected" } });
+    notify(`Sync paused for ${groupName(g)}`);
     setPausing(null);
   };
-  const groups = groupAccounts(accounts);
-  const nameOf = (g: AccountGroup) => g.accounts.find((a) => a.nickname)?.nickname || FAMILY_NAME[g.family] || g.accounts[0].label;
+  // No sign-in needed: the stored credentials are still there, and "connecting" is what the sync worker restarts on.
+  const resume = (g: AccountGroup) => {
+    for (const a of g.accounts) dispatch({ type: "patchAccount", id: a.id, patch: { status: "connecting" } });
+    notify(`Resuming ${groupName(g)}`);
+  };
+
   return (
     <>
       <SettingsHeader
-        title="Connected Accounts"
-        description={<>
-          <p>Your email, calendars and WhatsApp in one place. Nothing is ever sent without you.</p>
-          <p className="mt-1 text-xs">Read over IMAP, CalDAV, the Gmail API, Microsoft Graph and a linked WhatsApp device.</p>
-        </>}
+        title="Accounts"
+        description={<p>Your email, calendars and WhatsApp in one place. Nothing is ever sent without you.</p>}
       />
       <div className="space-y-3">
-        {groups.length === 0 ? (loading ? <Skeleton className="h-40 w-full rounded-lg" /> : <SettingsEmpty>No accounts connected yet.</SettingsEmpty>) : (
-          <SettingsRows>
-            {groups.map((g) => {
-              const status = groupStatus(g);
-              const problem = groupProblem(g);
-              const first = g.accounts[0];
-              return (
-                <SettingsRow
-                  key={g.key}
-                  leading={<RowIcon icon={ICON[first.provider]} />}
-                  title={<>{nameOf(g)} <StatusBadge status={status} /></>}
-                  description={
-                    <>
-                      <span className="block truncate">{[g.accounts.length > 1 ? partsOf(g) : "", g.accounts.map((a) => a.detail).find((d) => d && !d.startsWith("urn:"))].filter(Boolean).join(" · ")}{first.lastSync && status === "connected" ? ` · Last synced ${relTime(first.lastSync)}` : ""}</span>
-                      {problem && status !== "connected" && <span className="block">{problem}</span>}
-                    </>
-                  }
-                >
-                  <Button variant="ghost" onClick={() => { setName(g.accounts.find((a) => a.nickname)?.nickname ?? ""); setRenaming(g); }}>Rename</Button>
-                  {status === "disconnected" || status === "error" ? (
-                    <Button variant="secondary" asChild><Link href={setupOf(g)}>Reconnect</Link></Button>
-                  ) : (
-                    <Button variant="secondary" onClick={() => setPausing(g)}>Pause Sync</Button>
-                  )}
-                </SettingsRow>
-              );
-            })}
-          </SettingsRows>
+        {summary.attention > 0 && (
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertTitle>{summary.attention === 1 ? "1 Account Needs Attention" : `${summary.attention} Accounts Need Attention`}</AlertTitle>
+            <AlertDescription>Reconnect {summary.attention === 1 ? "it" : "them"} below so new messages keep arriving.</AlertDescription>
+          </Alert>
         )}
+        {groups.length === 0 ? (loading ? <Skeleton className="h-40 w-full rounded-lg" /> : <SettingsEmpty>No accounts connected yet. Add one below.</SettingsEmpty>) : (
+          <SettingsSection id="connected" title="Connected" description={`${summary.working} of ${summary.total} ${summary.total === 1 ? "account" : "accounts"} working.`}>
+            <SettingsRows>
+              {groups.map((g) => {
+                const status = groupStatus(g);
+                const problem = groupProblem(g);
+                const first = g.accounts[0];
+                return (
+                  <SettingsRow
+                    key={g.key}
+                    leading={<RowIcon icon={PROVIDER_ICON[first.provider]} />}
+                    title={<>{groupName(g)} <AccountStatusBadge status={status} /></>}
+                    description={
+                      <>
+                        <span className="block truncate">{[g.accounts.length > 1 ? partsOf(g) : "", g.accounts.map((a) => a.detail).find((d) => d && !d.startsWith("urn:"))].filter(Boolean).join(" · ")}{first.lastSync && status === "connected" ? ` · Last synced ${relTime(first.lastSync)}` : ""}</span>
+                        {problem && status !== "connected" && <span className="block">{problem}</span>}
+                      </>
+                    }
+                  >
+                    <Button variant="ghost" onClick={() => setRenaming(g)}>Rename</Button>
+                    {status === "error" ? (
+                      <Button variant="secondary" asChild><Link href={setupHrefOf(g)}>Reconnect</Link></Button>
+                    ) : status === "disconnected" ? (
+                      <Button variant="secondary" onClick={() => resume(g)}>Resume Sync</Button>
+                    ) : (
+                      <Button variant="secondary" onClick={() => setPausing(g)}>Pause Sync</Button>
+                    )}
+                  </SettingsRow>
+                );
+              })}
+            </SettingsRows>
+          </SettingsSection>
+        )}
+
+        <ReadReceiptsSection />
 
         <SettingsSection id="add-account" title="Add an Account">
           <SettingsRows>
-            {[
-              { href: "/settings/accounts/google", label: "Google", sub: "Gmail, Calendar and Tasks, with one sign-in", icon: ICON.gmail },
-              { href: "/settings/accounts/microsoft", label: "Microsoft", sub: "Outlook, Calendar and To Do, with one sign-in", icon: ICON.outlook },
-              { href: "/settings/accounts/icloud", label: "iCloud", sub: "Mail, Calendar and Reminders", icon: ICON.icloud },
-              { href: "/settings/accounts/whatsapp", label: "WhatsApp", sub: "Scan a QR code", icon: ICON.whatsapp },
-              { href: "/settings/accounts/instagram", label: "Instagram", sub: "Direct messages, Business, Creator or Personal", icon: ICON.instagram },
-              { href: "/settings/accounts/linkedin", label: "LinkedIn", sub: "Messages, signed in with your LinkedIn account", icon: ICON.linkedin },
-              { href: "/settings/accounts/imap", label: "Other Email", sub: "Any IMAP mailbox, like Afrihost, xneelo or cPanel", icon: ICON.imap },
-            ].map((x) => (
-              <SettingsRow key={x.href} href={x.href} leading={<RowIcon icon={x.icon} />} title={x.label} description={x.sub} />
+            {ADD_ACCOUNTS.map((x) => (
+              <SettingsRow key={x.href} href={x.href} leading={<RowIcon icon={PROVIDER_ICON[x.provider]} />} title={x.label} description={x.sub} />
             ))}
           </SettingsRows>
         </SettingsSection>
@@ -134,38 +107,8 @@ export default function AccountsPage() {
         <div className="empty:hidden"><SendAddressesSection /></div>
       </div>
 
-      <AlertDialog open={pausing !== null} onOpenChange={(open) => { if (!open) setPausing(null); }}>
-        <AlertDialogContent track="pause_sync">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Pause Sync?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {pausing && nameOf(pausing)} stops syncing and new messages stop arriving. Nothing is deleted, and you can reconnect it at any time.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={pause}>Pause Sync</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <Dialog open={renaming !== null} onOpenChange={(open) => { if (!open) setRenaming(null); }}>
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Rename Account</DialogTitle>
-            <DialogDescription>
-              Shown next to the logo in your inbox, and only once you have more than one {renaming ? FAMILY_NAME[renaming.family] ?? renaming.accounts[0].label : "account"} connected. Leave it empty to use the default name.
-            </DialogDescription>
-          </DialogHeader>
-          <form id="rename-account" onSubmit={(e) => { e.preventDefault(); rename(); }}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={renaming ? FAMILY_NAME[renaming.family] ?? renaming.accounts[0].label : undefined} aria-label="Account Name" autoFocus />
-          </form>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setRenaming(null)}>Cancel</Button>
-            <Button variant="secondary" type="submit" form="rename-account">Save</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PauseDialog group={pausing} onClose={() => setPausing(null)} onPause={pause} />
+      <RenameDialog group={renaming} onClose={() => setRenaming(null)} onSave={rename} />
     </>
   );
 }

@@ -3,7 +3,25 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { followMerges, identityGroups, isPlaceholderName, mergeReasonText, nameWords, namesDiffer, planMerge, preferredName, suggestionReasonText } from "./merging";
+import { followMerges, identityGroups, isPlaceholderName, mergeReasonText, nameWords, namesDiffer, planMerge, preferredName, suggestionEvidence, suggestionReasonText } from "./merging";
+
+test("social identities are listed by what they are and flagged so Split leaves them", () => {
+  const groups = identityGroups([
+    { id: "1", kind: "instagram_username", value: "thandi.m" },
+    { id: "2", kind: "instagram", value: "178414" },
+    { id: "3", kind: "linkedin", value: "ACoAAB" },
+    { id: "4", kind: "phone", value: "+27821234567" },
+  ]);
+  assert.deepEqual(groups.map((g) => [g.label, g.detail, !!g.social]), [["@thandi.m", "Instagram", true], ["Instagram", "Account", true], ["LinkedIn", "Account", true], ["+27821234567", "Phone", false]]);
+});
+
+test("a suggestion shows the shared number and the names behind it", () => {
+  const a = side("a", "Sam Jones", [], ["+27821234567"]);
+  const b = side("b", "Sam Jones", ["sam@x.com"], ["+27821234567"]);
+  assert.deepEqual(suggestionEvidence("shared_phone", a, b), ["Both have +27821234567", "Both are called Sam Jones"]);
+  assert.deepEqual(suggestionEvidence("same_name", side("a", "Sam"), side("b", "Samantha Jones")), ["Named Sam and Samantha Jones"]);
+  assert.deepEqual(suggestionEvidence("same_name", side("a", "+27821234567"), side("b", "Sam")), []);
+});
 
 const side = (id: string, name: string, emails: string[] = [], phones: string[] = [], conversations = 0, hasWhatsApp = false) => ({ id, name, emails, phones, conversations, hasWhatsApp });
 

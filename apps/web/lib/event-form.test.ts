@@ -1,11 +1,12 @@
-// Tests for event-form.ts: the times offered, reading a date field, and the Repeat list's options and value.
+// Tests for event-form.ts: the step between times and the Repeat list's options and value.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fromDateKey, NO_REPEAT, repeatOptionsFor, repeatSelectValue, timesWith, UNKNOWN_REPEAT } from "./event-form";
+import { timeChoices } from "./dates";
+import { NO_REPEAT, repeatOptionsFor, repeatSelectValue, STEP, UNKNOWN_REPEAT } from "./event-form";
 
 test("times run every quarter hour through the day", () => {
-  const times = timesWith("");
+  const times = timeChoices("", STEP);
   assert.equal(times.length, 96);
   assert.equal(times[0], "00:00");
   assert.equal(times[1], "00:15");
@@ -13,20 +14,11 @@ test("times run every quarter hour through the day", () => {
 });
 
 test("a time between the steps is kept in the list, in order", () => {
-  const times = timesWith("09:10");
+  const times = timeChoices("09:10", STEP);
   assert.equal(times.length, 97);
   assert.equal(times[times.indexOf("09:10") - 1], "09:00");
   assert.equal(times[times.indexOf("09:10") + 1], "09:15");
-  assert.equal(timesWith("09:15").length, 96);
-});
-
-test("a date field reads as a local date, and anything else as nothing", () => {
-  const d = fromDateKey("2026-03-09");
-  assert.ok(d);
-  assert.deepEqual([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours()], [2026, 2, 9, 0]);
-  assert.equal(fromDateKey(""), undefined);
-  assert.equal(fromDateKey("9 March"), undefined);
-  assert.equal(fromDateKey("2026-3-9"), undefined);
+  assert.equal(timeChoices("09:15", STEP).length, 96);
 });
 
 test("no rule leaves the plain choices, and none is selected", () => {

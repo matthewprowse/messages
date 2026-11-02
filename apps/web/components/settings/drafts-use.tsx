@@ -3,6 +3,7 @@
 // Settings, What Drafts Use: a live overview of everything the AI reads to write a draft, so it is clear what it knows.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Trash2 } from "lucide-react";
 import type { Tables } from "@messages/db";
 import { useApp } from "@/lib/store";
@@ -11,7 +12,7 @@ import { fullStamp } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { openAddresses, openRules } from "@/lib/open-rows";
 
 type StyleRule = Pick<Tables<"style_rules">, "id" | "rule" | "scope" | "contact_id" | "source" | "support_count" | "enabled" | "disabled_reason">;
@@ -34,7 +35,7 @@ function Source({ title, blurb, value, href }: { title: string; blurb: string; v
   return (
     <SettingsRow title={title} description={blurb}>
       <Badge variant="secondary">{value}</Badge>
-      {href && <Button variant="ghost" asChild><a href={href}>Edit</a></Button>}
+      {href && <Button variant="ghost" asChild><Link href={href}>Edit</Link></Button>}
     </SettingsRow>
   );
 }
@@ -56,6 +57,8 @@ function Expandable<T>({ items, render }: { items: T[]; render: (item: T) => Rea
 export function DraftsUseSection() {
   const { profile, writingExamples, accounts, contactById, notify, loading } = useApp();
   const [rules, setRules] = useState<StyleRule[] | null>(null);
+  const [rulesFailed, setRulesFailed] = useState(false);
+  const [rulesTry, setRulesTry] = useState(0);
   const [sentCount, setSentCount] = useState<number | null>(null);
   const [learning, setLearning] = useState<Learning | null>(null);
   const emailAccountIds = accounts.filter((a) => a.provider === "icloud" || a.provider === "gmail" || a.provider === "outlook" || a.provider === "imap").map((a) => a.id).join(",");
@@ -63,10 +66,15 @@ export function DraftsUseSection() {
   useEffect(() => {
     if (loading) return; // wait for the session, or row-level security returns nothing
     let cancelled = false;
+    setRulesFailed(false);
     supabase.from("style_rules").select("id, rule, scope, contact_id, source, support_count, enabled, disabled_reason").order("support_count", { ascending: false }).limit(200)
-      .then(async ({ data, error }) => { const opened = error ? [] : await openRules(data); if (!cancelled) setRules(opened); });
+      .then(async ({ data, error }) => {
+        if (error) { if (!cancelled) { setRulesFailed(true); setRules([]); } return; }
+        const opened = await openRules(data);
+        if (!cancelled) setRules(opened);
+      }, () => { if (!cancelled) { setRulesFailed(true); setRules([]); } });
     return () => { cancelled = true; };
-  }, [loading]);
+  }, [loading, rulesTry]);
 
   useEffect(() => {
     if (loading) return;
@@ -159,7 +167,7 @@ export function DraftsUseSection() {
     >
       <SettingsRows>
         <Source title="Your Profile" blurb={profile.name ? `Drafts are written as ${profile.name}.` : "Add your name and a line about you so drafts know who is writing."} value={loading ? "Loading" : profileParts.length ? profileParts.join(" and ") : "Not Set"} href="#about" />
-        <Source title="Learned Style Rules" blurb="How you write, learned from your sent mail, your edits and your choices. Up to 20 are used per draft." value={rules === null ? "Loading" : `${on} On${rules.length > on ? `, ${rules.length - on} Off` : ""}`} />
+        <Source title="Learned Style Rules" blurb="How you write, learned from your sent mail, your edits and your choices. Up to 20 are used per draft." value={rules === null ? "Loading" : rulesFailed ? "Unavailable" : `${on} On${rules.length > on ? `, ${rules.length - on} Off` : ""}`} />
         <Source title="People You Write To" blurb="For everyone you have written to 3 or more times: how you write to them and who they are. Refreshed as new mail arrives." value={learning === null ? "Loading" : String(learning.notes.length)} />
         <Source title="Companies" blurb="What each company sends you, so drafts and summaries know who is writing." value={learning === null ? "Loading" : String(learning.orgs.length)} />
         <Source title="Similar Past Replies" blurb="How you answered the emails most like the one you are replying to, found by meaning. Up to 3 are used per draft." value={learning === null ? "Loading" : `${learning.indexed} Indexed`} />
@@ -169,7 +177,13 @@ export function DraftsUseSection() {
       </SettingsRows>
 
       <SettingsSection level={3} title="Learned Style Rules" description="Turn a rule off to stop drafts following it, or remove it. Rules your mail no longer shows are turned off for you and come back if they return.">
-        {rules === null ? null : rules.length === 0 ? (
+        {rules === null ? null : rulesFailed ? (
+          <SettingsRows>
+            <SettingsRow title="Could not load your style rules." description="Check your connection and try again.">
+              <Button variant="secondary" onClick={() => { setRules(null); setRulesTry((n) => n + 1); }}>Retry</Button>
+            </SettingsRow>
+          </SettingsRows>
+        ) : rules.length === 0 ? (
           <SettingsEmpty>Nothing learned yet. Rules appear after the AI reads your sent mail, or after you edit a draft before sending.</SettingsEmpty>
         ) : (
           GROUPS.map((g) => {

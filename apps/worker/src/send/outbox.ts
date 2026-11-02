@@ -85,7 +85,7 @@ function reportSend(id: string, outcome: "sent" | "failed", reason?: string) {
   void Promise.resolve(db.from("outbox").select("user_id, accounts(provider)").eq("id", id).maybeSingle()).then(
     ({ data }) => {
       const provider = data?.accounts?.provider;
-      if (data && provider) recordEvent(data.user_id, "send_result", { provider, outcome, attempts: 1, ...(reason ? { code: failureCode(reason) } : {}) });
+      if (data && provider) recordEvent(data.user_id, "send_result", { provider, outcome,...(reason ? { code: failureCode(reason) } : {}) });
     },
     () => undefined,
   );

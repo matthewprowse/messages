@@ -6,6 +6,7 @@
 import { Fragment, useContext, useEffect, useRef } from "react";
 import { CalendarDays } from "lucide-react";
 import { dayKey, eventDetail, type CalendarEvent } from "@/lib/calendar";
+import { allDayPosition } from "@/lib/calendar-days";
 import { timeOf } from "@/lib/format";
 import { type DayTask } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -15,42 +16,37 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { dayTitle, isDimmed } from "./dates";
-import { EventSurface } from "./event-details";
-import { Page } from "./page-context";
+import { Now, Page } from "./page-context";
+import { dayRows } from "./day-rows";
 import { TaskRow } from "./task-parts";
 
 // Laid out like a Summary row: an avatar-sized icon, a title line and a detail line. Clicking one shows
 // everything about the event, including who is invited.
 export function EventRow({ event, day }: { event: CalendarEvent; day: string }) {
-  const { now } = useContext(Page);
-  // A timed event that began on an earlier day is already under way.
-  const when = event.pending ? "Saving" : event.allDay ? "All Day" : dayKey(new Date(event.startsAt)) < day ? "Ongoing" : timeOf(event.startsAt);
+  const { setOpenKey } = useContext(Page);
+  const now = useContext(Now);
+  // A timed event that began on an earlier day is already under way; a multi-day all-day event says which day it is on.
+  const when = event.pending ? "Saving" : event.allDay ? (allDayPosition(event, day) ?? "All Day") : dayKey(new Date(event.startsAt)) < day ? "Ongoing" : timeOf(event.startsAt);
   const faded = event.pending || isDimmed(event, now);
   return (
-    <EventSurface
-      event={event}
-      day={day}
-      render={(onClick) => (
-        <button
-          type="button"
-          onClick={onClick}
-          className={cn("flex w-full items-center gap-3 rounded-lg p-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", faded && "opacity-60")}
-        >
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
-            <CalendarDays className="size-4" />
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <div className="flex h-5 items-center justify-between gap-3">
-              <span className="min-w-0 truncate text-sm font-medium">{event.title}</span>
-              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{when}</span>
-            </div>
-            <div className="flex h-4 items-center">
-              <span className="min-w-0 truncate text-xs">{eventDetail(event)}</span>
-            </div>
-          </div>
-        </button>
-      )}
-    />
+    <button
+      type="button"
+      onClick={() => setOpenKey(`${event.id}|${day}`)}
+      className={cn("flex w-full items-center gap-3 rounded-lg p-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", faded && "opacity-60")}
+    >
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+        <CalendarDays className="size-4" />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex h-5 items-center justify-between gap-3">
+          <span className="min-w-0 truncate text-sm font-medium">{event.title}</span>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{when}</span>
+        </div>
+        <div className="flex h-4 items-center">
+          <span className="min-w-0 truncate text-xs">{eventDetail(event)}</span>
+        </div>
+      </div>
+    </button>
   );
 }
 
@@ -67,14 +63,6 @@ export function DaySection({ day, title, count, children }: { day: string; title
       <div className="pt-3">{children}</div>
     </section>
   );
-}
-
-/** A day's events and tasks in one list: all-day events, then overdue and all-day tasks, then the rest by time. */
-export function dayRows(events: CalendarEvent[], tasks: DayTask[]): { id: string; event?: CalendarEvent; task?: DayTask }[] {
-  const rank = (row: { event?: CalendarEvent; task?: DayTask }) => (row.event ? (row.event.allDay ? 0 : 3) : row.task!.overdue ? 1 : row.task!.timed ? 3 : 2);
-  const at = (row: { event?: CalendarEvent; task?: DayTask }) => row.event?.startsAt ?? row.task!.task.dueAt ?? "";
-  const rows = [...events.map((event) => ({ id: event.id, event })), ...tasks.map((task) => ({ id: task.task.id, task }))];
-  return rows.sort((a, b) => rank(a) - rank(b) || Date.parse(at(a)) - Date.parse(at(b)));
 }
 
 /** The days' events as rows, a section for each day. In the month view the list follows the date picked in the grid. */

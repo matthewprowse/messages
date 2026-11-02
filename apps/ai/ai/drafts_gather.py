@@ -28,6 +28,7 @@ from .fields import (
     CONTACT_RELATIONSHIP,
     CONTACT_STYLE_NOTE,
     CONTACT_SUMMARY,
+    PROFILE_ABOUT,
     HTML,
     NAME,
     NOTE,
@@ -194,7 +195,7 @@ class GatherMixin:
         rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in first["rules"]]
         return {
             "me": profile.get("display_name") or "",
-            "about": profile.get("about") or "",
+            "about": opened(PROFILE_ABOUT, profile.get("about")),
             "rules": [r["rule"] for r in rules if r["scope"] == "global" and r["rule"]][:20],
             "examples": [(opened(WRITING_SITUATION, e.get("situation")), opened(WRITING_BODY, e.get("body"))) for e in first["examples"]],
             "recent": recent,

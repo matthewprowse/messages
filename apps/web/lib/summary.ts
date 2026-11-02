@@ -33,6 +33,9 @@ function matches(t: Thread, filter: ListFilter) {
 const byPressing = (a: Thread, b: Thread) => rank[a.priority] - rank[b.priority] || Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt);
 const byNewest = (a: Thread, b: Thread) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt);
 
+const isPriorityCategory = (t: Thread) => t.category !== "newsletter" && t.category !== "notification";
+const isPressing = (t: Thread) => t.priority === "urgent" || t.priority === "important";
+
 /** Sorts inbox conversations into the Summary's sections. Each conversation appears once, in the first that fits. */
 export function summarise(threads: Thread[], filter: ListFilter, now: Date = new Date()): SummarySections {
   // Junk, archived and deleted conversations never need you, and nor does one you answered last: it waits
@@ -46,15 +49,35 @@ export function summarise(threads: Thread[], filter: ListFilter, now: Date = new
   const priority = open.filter(
     (t) =>
       !taken.has(t.id) &&
-      (t.priority === "urgent" || t.priority === "important") &&
-      t.category !== "newsletter" &&
-      t.category !== "notification" &&
+      isPressing(t) &&
+      isPriorityCategory(t) &&
       within(t, PRIORITY_DAYS * 24),
   );
   for (const t of priority) taken.add(t.id);
   const updates = open.filter((t) => !taken.has(t.id) && (t.category === "fyi" || t.category === "work") && t.summary.trim() && within(t, UPDATE_HOURS));
 
   return { reply: reply.sort(byPressing), priority: priority.sort(byPressing), updates: updates.sort(byNewest) };
+}
+
+/** How many conversations the page asks you to deal with: Needs Reply plus Important. The rail dot reads this, so it always agrees with the page. */
+export function attentionCount(threads: Thread[], now: Date = new Date()): number {
+  const { reply, priority } = summarise(threads, "none", now);
+  return reply.length + priority.length;
+}
+
+/**
+ * Conversations that still wait on you but have aged out of the page's windows: unanswered for longer than REPLY_DAYS,
+ * or urgent and quieter than PRIORITY_DAYS. They are not listed (that is the point of the windows) but the page counts
+ * them, so a lost client does not vanish without a trace. Important ones are left out: that would be noise.
+ */
+export function olderWaiting(threads: Thread[], filter: ListFilter, now: Date = new Date()): Thread[] {
+  const { reply, priority } = summarise(threads, filter, now);
+  const shown = new Set([...reply, ...priority].map((t) => t.id));
+  return threads.filter(
+    (t) =>
+      t.status === "inbox" && !t.junk && !t.lastFromMe && matches(t, filter) && !shown.has(t.id) &&
+      (t.needsReply || (t.priority === "urgent" && isPriorityCategory(t))),
+  );
 }
 
 /** One line for the top of the page, such as "3 Need a Reply, 2 Urgent or Important, 4 Events Today, 1 Task". Empty when there is nothing. */

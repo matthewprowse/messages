@@ -16,9 +16,10 @@ export function TaskRow({ item, today, source }: { item: DayTask; today: string;
   const { task, overdue } = item;
   return (
     <div className={cn("flex items-center gap-3 rounded-lg p-3 hover:bg-muted/50", task.pending && "opacity-60")}>
-      <div className="flex size-8 shrink-0 items-center justify-center">
+      {/* The whole 32px box is the target, not just the 16px checkbox, for a thumb. */}
+      <label className="flex size-8 shrink-0 cursor-pointer items-center justify-center">
         <Checkbox checked={task.completed} onCheckedChange={(checked) => tickTask(task, checked === true, "summary")} aria-label={task.title} />
-      </div>
+      </label>
       <Link
         href={`/calendar?date=${today}&task=${encodeURIComponent(task.id)}`}
         data-row-link

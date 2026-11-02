@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { downloadLink, extensionOf, filesLabel, isSticker, messageHref, monthKey, notKeptMessage, sourceOf, swipeOf } from "./attachment-view";
+import { downloadLink, extensionOf, filesLabel, isSticker, messageHref, monthKey, notKeptMessage, SOURCE_LABEL, sourceOf, swipeOf } from "./attachment-view";
 import { FETCH_TEXT } from "./attachment-fetch";
 import type { Attachment, FiledAttachment } from "./types";
 
@@ -38,17 +38,24 @@ test("a download link keeps the viewing link and adds the file name", () => {
 
 test("the not-kept message says why a file has no copy", () => {
   assert.equal(notKeptMessage(file({ notKept: "unavailable" }), true), FETCH_TEXT.gone);
-  assert.match(notKeptMessage(file({ notKept: "deferred" }), true), /^Not Downloaded\./);
-  assert.match(notKeptMessage(file({ notKept: "video_link" }), true), /Large Videos/);
-  assert.match(notKeptMessage(file({ notKept: "over_cap" }), true), /Storage Is Full/);
-  assert.match(notKeptMessage(file({}), true), /^Not Kept Here\./);
-  assert.match(notKeptMessage(file({}), false), /^Not Downloaded Yet\./);
+  assert.match(notKeptMessage(file({ notKept: "deferred" }), true), /^Not downloaded\./);
+  assert.match(notKeptMessage(file({ notKept: "video_link" }), true), /Large videos/);
+  assert.match(notKeptMessage(file({ notKept: "over_cap" }), true), /storage is full/);
+  assert.match(notKeptMessage(file({}), true), /^Not kept here\./);
+  assert.match(notKeptMessage(file({}), false), /^Not downloaded yet\./);
+});
+
+test("every connected provider that carries files is a source, and a calendar is not", () => {
+  for (const p of ["outlook", "linkedin", "instagram", "imap", "icloud", "whatsapp"] as const) assert.equal(sourceOf(p), p);
+  assert.equal(SOURCE_LABEL.outlook, "Outlook");
+  assert.equal(sourceOf("google_calendar"), undefined);
 });
 
 test("sources, months, counts and message links read as the grid shows them", () => {
   assert.equal(sourceOf("gmail"), "gmail");
   assert.equal(sourceOf(undefined), undefined);
-  assert.equal(monthKey("2026-10-14T09:00:00Z"), "2026-10");
+  assert.equal(monthKey("2026-10-14T12:00:00Z"), "2026-10");
+  assert.equal(monthKey(new Date(2026, 9, 1, 0, 30).toISOString()), "2026-10"); // local midnight on the 1st is October everywhere
   assert.equal(filesLabel(1), "1 File");
   assert.equal(filesLabel(2), "2 Files");
   assert.equal(messageHref({ threadId: "t1", messageId: "m1" } as FiledAttachment), "/inbox/t1?message=m1");

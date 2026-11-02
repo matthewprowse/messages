@@ -20,6 +20,12 @@ export type Database = {
         Update: { id?: boolean; monthly_usd?: number; shares?: Json; weekly_pct?: number; weekly_features?: string[]; setup_usd?: number; setup_days?: number; regen_per_hour?: number; auto_drafts_per_day?: number; summaries_per_day?: number; flag_multiple?: number; flag_day_usd?: number; updated_at?: string }
         Relationships: []
       }
+      ai_status: {
+        Row: { id: boolean; billing_paused_since: string | null; billing_checked_at: string | null; updated_at: string }
+        Insert: { id?: boolean; billing_paused_since?: string | null; billing_checked_at?: string | null; updated_at?: string }
+        Update: { id?: boolean; billing_paused_since?: string | null; billing_checked_at?: string | null; updated_at?: string }
+        Relationships: []
+      }
       analytics_daily: {
         Row: {
           day: string
@@ -39,6 +45,12 @@ export type Database = {
           name?: string
           users?: number
         }
+        Relationships: []
+      }
+      analytics_dropped: {
+        Row: { day: string; n: number }
+        Insert: { day: string; n: number }
+        Update: { day?: string; n?: number }
         Relationships: []
       }
       analytics_events: {
@@ -75,6 +87,18 @@ export type Database = {
           size?: string | null
           user_hash?: string
         }
+        Relationships: []
+      }
+      analytics_user_day: {
+        Row: { user_hash: string; day: string; events: number; active_events: number; sessions: number; opens: number; valued: number; drafts_sent: number; replies: number; triaged: number; junk_cleared: number; errors: number; ai_calls: number; ai_cost_micro: number; size: string | null }
+        Insert: { user_hash: string; day: string; events: number; active_events: number; sessions: number; opens: number; valued: number; drafts_sent: number; replies: number; triaged: number; junk_cleared: number; errors: number; ai_calls: number; ai_cost_micro: number; size?: string | null }
+        Update: { user_hash?: string; day?: string; events?: number; active_events?: number; sessions?: number; opens?: number; valued?: number; drafts_sent?: number; replies?: number; triaged?: number; junk_cleared?: number; errors?: number; ai_calls?: number; ai_cost_micro?: number; size?: string | null }
+        Relationships: []
+      }
+      analytics_user_first: {
+        Row: { user_hash: string; name: string; first_at: string }
+        Insert: { user_hash: string; name: string; first_at: string }
+        Update: { user_hash?: string; name?: string; first_at?: string }
         Relationships: []
       }
       analytics_rate: {
@@ -357,6 +381,7 @@ export type Database = {
           not_kept: string | null
           provider_attachment_id: string | null
           sealed: boolean
+          sent_at: string | null
           size_bytes: number | null
           storage_path: string | null
           team_key_version: number | null
@@ -381,6 +406,7 @@ export type Database = {
           not_kept?: string | null
           provider_attachment_id?: string | null
           sealed?: boolean
+          sent_at?: string | null
           size_bytes?: number | null
           storage_path?: string | null
           team_key_version?: number | null
@@ -405,6 +431,7 @@ export type Database = {
           not_kept?: string | null
           provider_attachment_id?: string | null
           sealed?: boolean
+          sent_at?: string | null
           size_bytes?: number | null
           storage_path?: string | null
           team_key_version?: number | null
@@ -1175,6 +1202,7 @@ export type Database = {
         Row: {
           ai_summary: string | null
           hidden: boolean
+          kind_override: string | null
           avatar_path: string | null
           avatar_source: string | null
           avatar_updated_at: string | null
@@ -1194,6 +1222,7 @@ export type Database = {
         Insert: {
           ai_summary?: string | null
           hidden?: boolean
+          kind_override?: string | null
           avatar_path?: string | null
           avatar_source?: string | null
           avatar_updated_at?: string | null
@@ -1213,6 +1242,7 @@ export type Database = {
         Update: {
           ai_summary?: string | null
           hidden?: boolean
+          kind_override?: string | null
           avatar_path?: string | null
           avatar_source?: string | null
           avatar_updated_at?: string | null
@@ -3637,6 +3667,7 @@ export type Database = {
       }
     }
     Functions: {
+      set_attachment_hidden: { Args: { p_ids: string[]; p_hidden: boolean }; Returns: number }
       my_ai_allowance: { Args: never; Returns: Json }
       my_workspace_id: { Args: never; Returns: string }
       my_workspace_role: { Args: never; Returns: string }
@@ -3997,6 +4028,9 @@ export type Database = {
           month_pct: number
           by_feature: Json
           flag: string | null
+          team_name: string | null
+          team_seats: number
+          paused: string[]
         }[]
       }
       ai_allowance_for: { Args: { p_user: string }; Returns: Json }
@@ -4012,7 +4046,11 @@ export type Database = {
         }[]
       }
       analytics_summary: {
-        Args: { p_from: string; p_to: string }
+        Args: { p_exclude?: boolean; p_from: string; p_to: string }
+        Returns: Json
+      }
+      analytics_health: {
+        Args: { p_exclude?: boolean; p_to: string }
         Returns: Json
       }
       analytics_owner_id: { Args: never; Returns: string }
@@ -4060,6 +4098,20 @@ export type Database = {
           contact_id: string
           conversation_count: number
           last_at: string
+        }[]
+      }
+      company_summaries: {
+        Args: never
+        Returns: {
+          addresses: number
+          conversations: number
+          domain: string
+          id: string
+          last_at: string
+          logo_path: string
+          name: string
+          people: number
+          summary: string
         }[]
       }
       company_logo_choose: {

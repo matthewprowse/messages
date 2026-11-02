@@ -112,6 +112,19 @@ export function suggestionReasonText(reason: string, a: MergeSide, b: MergeSide,
   }
 }
 
+/** How sure the linker was: a score from 0.85 up is shown as very likely, anything lower as possible. */
+export const CERTAIN_SCORE = 0.85;
+
+/** The facts behind a suggestion, one short line each, so the person can see why before pressing Merge. */
+export function suggestionEvidence(reason: string, a: MergeSide, b: MergeSide, format: (phone: string) => string = (p) => p): string[] {
+  const out: string[] = [];
+  const sharedPhones = a.phones.filter((p) => b.phones.includes(p));
+  if (reason === "shared_phone" || sharedPhones.length) out.push(...sharedPhones.slice(0, 2).map((p) => `Both have ${format(p)}`));
+  if (!isPlaceholderName(a.name) && nameWords(a.name).join(" ") === nameWords(b.name).join(" ")) out.push(`Both are called ${a.name.trim()}`);
+  else if (!isPlaceholderName(a.name) && !isPlaceholderName(b.name)) out.push(`Named ${a.name.trim()} and ${b.name.trim()}`);
+  return out;
+}
+
 /** Where an address book match came from, by the provider of the account whose cards matched. */
 export function addressBookLabel(providers: string[]): string {
   const icloud = providers.includes("icloud");
@@ -148,21 +161,29 @@ export interface IdentityGroup {
   ids: string[];
   label: string;
   detail: string;
+  /** An Instagram or LinkedIn identity: shown, but not moved by Split (its chats cannot be worked out from the value). */
+  social?: boolean;
 }
 
-/** A contact's addresses and numbers as the Split dialog lists them, one row per address or number. */
+/** A contact's addresses and numbers as the Split and Edit dialogs list them, one row per address or number. */
 export function identityGroups(rows: IdentityRow[]): IdentityGroup[] {
   const groups = new Map<string, { ids: string[]; kinds: Set<string>; value: string }>();
   for (const r of rows) {
     const lid = r.kind === "whatsapp" && r.value.endsWith("@lid");
-    // WhatsApp privacy IDs are not numbers, so they never join a number's row.
-    const key = r.kind === "email" ? `email:${r.value.toLowerCase()}` : lid ? `lid:${r.value}` : `number:${r.value}`;
+    const social = r.kind === "instagram" || r.kind === "instagram_username" || r.kind === "linkedin";
+    // WhatsApp privacy IDs are not numbers, so they never join a number's row; nor does a social identity.
+    const key = social ? `social:${r.kind}:${r.value}` : r.kind === "email" ? `email:${r.value.toLowerCase()}` : lid ? `lid:${r.value}` : `number:${r.value}`;
     const g = groups.get(key) ?? { ids: [], kinds: new Set<string>(), value: r.value };
     g.ids.push(r.id);
     g.kinds.add(r.kind);
     groups.set(key, g);
   }
   return [...groups.entries()].map(([key, g]) => {
+    if (key.startsWith("social:")) {
+      const kind = [...g.kinds][0];
+      if (kind === "instagram_username") return { ids: g.ids, label: `@${g.value.replace(/^@/, "")}`, detail: "Instagram", social: true };
+      return { ids: g.ids, label: kind === "linkedin" ? "LinkedIn" : "Instagram", detail: "Account", social: true };
+    }
     if (key.startsWith("email:")) return { ids: g.ids, label: g.value, detail: "Email" };
     if (key.startsWith("lid:")) return { ids: g.ids, label: "WhatsApp", detail: "Number hidden by WhatsApp" };
     const detail = g.kinds.has("whatsapp") && g.kinds.has("phone") ? "Phone and WhatsApp" : g.kinds.has("whatsapp") ? "WhatsApp" : "Phone";

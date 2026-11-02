@@ -7,16 +7,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowDown, Loader2, Inbox } from "lucide-react";
+import { ArrowDown, Loader2, Inbox, TriangleAlert } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
 import type { Contact, Message } from "@/lib/types";
 import { seenLabelId } from "@/lib/seen";
+import { leaveHref, sideBySide } from "@/lib/thread-nav";
+import { filterOf, viewOf } from "@/lib/thread-list";
+import { filtersForView } from "@/lib/selection";
+import { readKey, shouldAutoRead } from "@/lib/thread-read";
 import { forwardDraft, headerOf } from "@/lib/thread-header";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmptyState } from "@/components/primitives";
-import { AttachmentViewer } from "@/components/attachments";
 import { useReactorName } from "@/components/message-extras";
 import { isTypingKey } from "@/components/new-menu";
 import { takeVia, track } from "@/lib/analytics";
@@ -24,6 +27,7 @@ import { MESSAGE_PAGE } from "@/lib/data";
 import { meetingsAmong } from "@/lib/meetings";
 import { useMeetings } from "@/components/meetings-data";
 import { ShareNotice } from "@/components/share-notice";
+import { SummaryStrip } from "@/components/thread-view/summary-strip";
 import { ThreadHeader } from "@/components/thread-view/header";
 import { Messages } from "@/components/thread-view/message-list";
 import { Composer } from "@/components/thread-view/composer";
@@ -35,6 +39,8 @@ import { useConversationFiles } from "@/components/thread-view/use-conversation-
 
 export { ConversationSkeleton };
 
+// The viewer opens on a click on a file, so its code loads on its own the first time (as the Forward dialog does).
+const AttachmentViewer = dynamic(() => import("@/components/attachments").then((m) => m.AttachmentViewer), { ssr: false });
 // Forward dialog is rarely opened, so its code loads on its own (as in new-menu.tsx).
 const ComposeDialog = dynamic(() => import("@/components/compose-dialog").then((m) => m.ComposeDialog), { ssr: false });
 
@@ -52,7 +58,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const withQuery = (path: string) => (listQuery.size ? `${path}?${listQuery.toString()}` : path);
   const backHref = withQuery(basePath);
   const {
-    threadById, contactById, contacts, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, loading, markRead,
+    threadById, contactById, contacts, messagesFor, messagesLoaded, messagesFailed, listThreads, loadMessages, loadOlderMessages, loading, markRead,
     send, generateDraft, discardDraft, requestAutoDraft, drafting, hydrated, setReplyTo, react, hasOlder, removePending, retryPending,
   } = useApp();
   const thread = threadById(threadId);
@@ -65,6 +71,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const msgs = useMemo(() => (dismissed.size ? stored.filter((m) => !dismissed.has(m.id)) : stored), [stored, dismissed]);
   const loaded = messagesLoaded(threadId);
+  const failed = messagesFailed(threadId);
   const phase = drafting[threadId];
   const rootRef = useRef<HTMLDivElement>(null);
   const threadExists = !!thread;
@@ -82,6 +89,9 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     for (const m of msgs) if (m.from !== "me" && !out.has(m.from)) out.set(m.from, contactById(m.from));
     return out;
   }, [msgs, contactById]);
+  // Once opened, the viewer stays mounted so closing it still animates.
+  const viewerUsed = useRef(false);
+  if (viewing) viewerUsed.current = true;
   const header = useMemo(() => (thread ? headerOf(thread, msgs, contactById) : null), [thread, msgs, contactById]);
   // Meetings that someone in this conversation was in, placed among its messages by when they started.
   const participantIds = thread?.participantIds;
@@ -105,13 +115,22 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, threadExists]);
 
+  // Marked read once per arrival (opening it, or a new message landing while it is open) after two seconds in a tab you
+  // can see. Not whenever the unread flag flips: "Mark as Unread" on the open conversation has to stick (lib/thread-read.ts).
+  const markedRef = useRef<string | null>(null);
+  const unreadRef = useRef(false);
+  unreadRef.current = !!thread?.unread;
+  const arrival = thread ? readKey(threadId, thread.lastMessageAt) : null;
   useEffect(() => {
-    if (!hydrated || !thread?.unread) return;
-    // Read only once it has been open for two seconds in a tab you can see: not while it sits in the background.
+    if (!hydrated || !arrival || !shouldAutoRead(unreadRef.current, arrival, markedRef.current)) return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(t);
-      if (document.visibilityState === "visible") t = setTimeout(() => markRead(threadId, true, true), READ_AFTER_MS);
+      if (document.visibilityState === "visible") t = setTimeout(() => {
+        if (!unreadRef.current) return;
+        markedRef.current = arrival;
+        markRead(threadId, true, true);
+      }, READ_AFTER_MS);
     };
     arm();
     document.addEventListener("visibilitychange", arm);
@@ -119,9 +138,17 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       clearTimeout(t);
       document.removeEventListener("visibilitychange", arm);
     };
-    // Re-checked once the conversation has loaded, and when a new message makes it unread again while open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, hydrated, threadExists, thread?.unread, thread?.lastMessageAt]);
+  }, [threadId, hydrated, arrival]);
+
+  // Archive or Delete from the menu: the next conversation opens beside the list (else the list), replacing this address.
+  const onLeave = useCallback(() => {
+    const view = viewOf(params.get("view"));
+    const rawFilter = filterOf(params.get("filter"));
+    const order = listThreads(view, filtersForView(view).includes(rawFilter) ? rawFilter : "none").map((t) => t.id);
+    router.replace(leaveHref(order, [threadId], threadId, basePath, listQuery.toString(), sideBySide(), basePath === "/inbox"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listThreads, params, router, threadId, basePath]);
 
   const { scrollRef, newBelow, scrollToBottom, loadingOlder } = useThreadScroll({ threadId, threadExists, msgs, loaded, phase, hasOlder, loadOlderMessages });
 
@@ -175,7 +202,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       // Keys typed in a field, menu, dialog or select (which jumps by letter) belong to that control.
       if (e.metaKey || e.ctrlKey || !thread || isTypingKey(e)) return;
       if (e.key === "r" && !e.altKey && !e.shiftKey) {
-        // R starts a reply: the cursor goes to the message box.
+        // R starts a reply: the cursor goes to the message box. (E, #, !, U, J and K live in the list: thread-list/use-inbox-keys.ts.)
         e.preventDefault();
         rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
       }
@@ -188,7 +215,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     if (loading) return <ConversationSkeleton />;
     return <EmptyState icon={Inbox} title="Conversation Not Found" description="It may have been archived or deleted." action={<Button variant="secondary" asChild><Link href={basePath}>{basePath === "/inbox" ? "Back to Inbox" : "Go Back"}</Link></Button>} />;
   }
-  const { primary, title, subtitle } = header;
+  const { primary, title, subtitle, address } = header;
   // Forward opens a new email with the latest stored message quoted. Files are not carried over.
   const forwardable = thread.channel === "email" && stored.some((m) => !m.sendState && !m.deleted);
   const forwardOf = forwardable ? forwardDraft(thread, stored) : undefined;
@@ -202,13 +229,16 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
         primary={primary}
         title={title}
         subtitle={subtitle}
+        address={address}
         backHref={backHref}
         hrefFor={(id) => withQuery(`${basePath}/${id}`)}
         forwardable={forwardable}
+        onLeave={onLeave}
         onAttachments={() => setFilesOpen(true)}
         onForward={() => setForwarding(true)}
       />
       <ShareNotice thread={thread} />
+      <SummaryStrip summary={thread.summary} />
 
       {/* Padding sits outside the 672px column, as in the composer, so bubbles line up with the message box. */}
       <div className="relative min-h-0 flex-1">
@@ -216,7 +246,16 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
         <div className="p-3 md:px-4">
           <div className="mx-auto w-full max-w-2xl">
             {!loaded && msgs.length === 0 ? (
-              <BubblesSkeleton />
+              failed ? (
+                <div className="h-72">
+                  <EmptyState
+                    icon={TriangleAlert}
+                    title="Could Not Load Messages"
+                    description="Check your connection and try again."
+                    action={<Button variant="secondary" onClick={() => loadMessages(threadId)}>Retry</Button>}
+                  />
+                </div>
+              ) : <BubblesSkeleton />
             ) : (
               <Messages
                 msgs={msgs}
@@ -264,7 +303,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
         onSend={(body, from, files, copies) => send(thread.id, body, from, files, false, copies)}
       />
 
-      <AttachmentViewer
+      {(viewing || viewerUsed.current) && <AttachmentViewer
         attachment={viewing}
         detail={viewerDetail}
         sender={viewerFile ? { name: viewerFile.from === "me" ? "You" : contactById(viewerFile.from)?.name ?? "Unknown", contact: viewerFile.from === "me" ? undefined : contactById(viewerFile.from), me: viewerFile.from === "me" } : undefined}
@@ -273,7 +312,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
         index={viewerAt}
         onNavigate={(i) => { if (viewerItems[i]) setViewing(viewerItems[i]); }}
         onClose={() => setViewing(null)}
-      />
+      />}
 
       {forwardOf && <ComposeDialog open={forwarding} onOpenChange={setForwarding} subject={forwardOf.subject} body={forwardOf.body} />}
 

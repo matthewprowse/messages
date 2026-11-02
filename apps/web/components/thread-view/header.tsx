@@ -1,7 +1,6 @@
 // The top bar of a conversation: Back, the person (linking to their contact page), channel tabs, sharing and the More menu.
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { ArrowLeft, MoreHorizontal } from "lucide-react";
 import { useApp } from "@/lib/store";
 import type { Contact, Thread } from "@/lib/types";
@@ -18,18 +17,21 @@ interface ThreadHeaderProps {
   primary?: Contact;
   title: string;
   subtitle?: string;
+  /** The address an email came from, shown on hover over the subject. */
+  address?: string;
   /** Where Back, Archive and Delete return to. */
   backHref: string;
   /** The link to another thread of this person, keeping the list's filters. */
   hrefFor: (threadId: string) => string;
   forwardable: boolean;
+  /** Called after Archive or Delete from the menu: opens the next conversation or the list (replacing the address). */
+  onLeave: () => void;
   onAttachments: () => void;
   onForward: () => void;
 }
 
-export function ThreadHeader({ thread, primary, title, subtitle, backHref, hrefFor, forwardable, onAttachments, onForward }: ThreadHeaderProps) {
-  const router = useRouter();
-  const { contactById, pin, archive, trash, giveFeedback, setJunk } = useApp();
+export function ThreadHeader({ thread, primary, title, subtitle, address, backHref, hrefFor, forwardable, onLeave, onAttachments, onForward }: ThreadHeaderProps) {
+  const { contactById, pin, markRead, archive, trash, giveFeedback, setJunk } = useApp();
   return (
       <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
         <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
@@ -46,7 +48,7 @@ export function ThreadHeader({ thread, primary, title, subtitle, backHref, hrefF
                     <span className="truncate text-sm font-medium">{title}</span>
                     <ProviderLogo provider={thread.provider} />
                   </div>
-                  {subtitle && <div className="truncate text-xs text-muted-foreground">{subtitle}</div>}
+                  {subtitle && <div className="truncate text-xs text-muted-foreground" title={address}>{subtitle}</div>}
                 </div>
               </>
             );
@@ -62,13 +64,14 @@ export function ThreadHeader({ thread, primary, title, subtitle, backHref, hrefF
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-max">
             <DropdownMenuItem onClick={() => pin(thread.id, !thread.pinned)}>{thread.pinned ? "Unpin" : "Pin"}</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => { archive(thread.id); router.push(backHref); }}>Archive</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => { trash(thread.id); router.push(backHref); }}>Delete</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => markRead(thread.id, thread.unread)}>{thread.unread ? "Mark as Read" : "Mark as Unread"}</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => { archive(thread.id); onLeave(); }}>Archive</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => { trash(thread.id); onLeave(); }}>Delete</DropdownMenuItem>
             <DropdownMenuItem onClick={() => onAttachments()}>Attachments</DropdownMenuItem>
             {forwardable && <DropdownMenuItem onClick={() => onForward()}>Forward</DropdownMenuItem>}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => giveFeedback(thread.id, "important")}>Important</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => giveFeedback(thread.id, "not_important")}>Not Important</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => giveFeedback(thread.id, "important")}>Mark as Important</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => giveFeedback(thread.id, "not_important")}>Mark as Not Important</DropdownMenuItem>
             <DropdownMenuItem onClick={() => setJunk(thread.id, !thread.junk)}>{thread.junk ? "Not Junk" : "Move to Junk"}</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>

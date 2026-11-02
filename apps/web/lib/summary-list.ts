@@ -13,9 +13,24 @@ export const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
   { key: "whatsapp", label: "WhatsApp" },
 ];
 
-/** The Summary link for a filter; no filter is the bare path. */
-export function listHref(filter: ListFilter) {
-  return filter === "none" ? SUMMARY_BASE : `${SUMMARY_BASE}?filter=${filter}`;
+/** The Summary link for a filter; no filter is the bare path. With `openId` it keeps that conversation open beside the list. */
+export function listHref(filter: ListFilter, openId?: string) {
+  const path = openId ? `${SUMMARY_BASE}/${encodeURIComponent(openId)}` : SUMMARY_BASE;
+  return filter === "none" ? path : `${path}?filter=${filter}`;
+}
+
+/** Where the Older row leads: the Inbox's Priority view, which holds the urgent and important conversations still waiting on you. */
+export const OLDER_HREF = "/inbox?view=priority";
+
+/**
+ * The conversation to open once the open one is done (archived, deleted, answered). `before` is the list as it was
+ * with the open one still in it: the next row down takes its place, else the one above. Undefined when nothing is left.
+ */
+export function nextAfterDone(before: string[], after: string[], openId: string): string | undefined {
+  const at = before.indexOf(openId);
+  if (at === -1) return undefined;
+  const left = new Set(after);
+  return before.slice(at + 1).find((id) => left.has(id)) ?? before.slice(0, at).reverse().find((id) => left.has(id));
 }
 
 /** A filter from the address, "none" when it is missing or unknown. */

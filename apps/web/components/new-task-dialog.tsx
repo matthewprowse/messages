@@ -7,8 +7,8 @@ import Link from "next/link";
 import { ChevronDownIcon } from "lucide-react";
 import { markSubmitted } from "@/lib/analytics";
 import { useApp } from "@/lib/store";
-import { dateKey } from "@/lib/new-items";
-import { dateOnly, formOfTask, MAX_NOTES, MAX_TITLE, taskChanged, taskProblem, TASK_PROVIDERS, TASK_PROVIDER_NAMES, timeChoices, type TaskForm } from "@/lib/tasks";
+import { dayKey, fromDateKey, timeChoices } from "@/lib/dates";
+import { dateOnly, formOfTask, MAX_NOTES, MAX_TASK_TITLE, taskChanged, taskProblem, TASK_PROVIDERS, TASK_PROVIDER_NAMES, type TaskForm } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -22,11 +22,6 @@ import { Textarea } from "@/components/ui/textarea";
 
 const NO_TIME = "none";
 const PRIORITIES = [{ value: "0", label: "None" }, { value: "1", label: "High" }, { value: "2", label: "Medium" }, { value: "3", label: "Low" }];
-
-function fromDateKey(key: string) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
-}
 
 const EMPTY: TaskForm = { title: "", notes: "", accountId: "", date: "", time: "", priority: 0 };
 
@@ -48,7 +43,7 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
     if (!open) return;
     setChecked(false);
     setDateOpen(false);
-    setForm(editing ? formOfTask(editing) : { ...EMPTY, accountId: choices[0]?.id ?? "", date: dateKey(new Date()) });
+    setForm(editing ? formOfTask(editing) : { ...EMPTY, accountId: choices[0]?.id ?? "", date: dayKey(new Date()) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing?.id]);
 
@@ -84,7 +79,7 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
         </DialogHeader>
         {!edit && choices.length === 0 ? (
           <Alert>
-            <AlertTitle>Connect a task list to add tasks</AlertTitle>
+            <AlertTitle>Connect a Task List to Add Tasks</AlertTitle>
             <AlertDescription>
               <p>
                 Open <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Settings, Connected Accounts</Link>, connect Microsoft To Do, Google Tasks or iCloud Reminders, then try again.
@@ -95,7 +90,7 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
           <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
             <div className="grid gap-2">
               <Label htmlFor="task-title">Title</Label>
-              <Input id="task-title" value={form.title} maxLength={MAX_TITLE + 1} onChange={(e) => set({ title: e.target.value })} aria-invalid={!!errorFor("title")} autoFocus />
+              <Input id="task-title" value={form.title} maxLength={MAX_TASK_TITLE + 1} onChange={(e) => set({ title: e.target.value })} aria-invalid={!!errorFor("title")} autoFocus />
               {errorFor("title") && <p className="text-xs text-destructive">{errorFor("title")}</p>}
             </div>
             <div className="grid gap-2">
@@ -134,7 +129,7 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
                       weekStartsOn={1}
                       captionLayout="dropdown"
                       onSelect={(d) => {
-                        if (d) set({ date: dateKey(d) });
+                        if (d) set({ date: dayKey(d) });
                         setDateOpen(false);
                       }}
                     />

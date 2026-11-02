@@ -3,9 +3,7 @@
 // An open note, laid out like a conversation: a header, then the toolbar, then the note in the same 672px
 // column as chat bubbles. Files picked, dropped or pasted show in the note at once and fill in as they upload.
 
-import { notePdf, pdfName } from "@/lib/note-pdf";
-import { jpegPicture } from "@/lib/note-pdf-images";
-import { acquireNoteFile } from "@/lib/signed-urls";
+import { exportNotePdf } from "@/components/note-export";
 import { loadPdfJs } from "@/lib/pdf";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -18,7 +16,10 @@ import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/format";
 import { displayName, mimeOf, pastedName, UploadError } from "@/lib/outbox-files";
 import { noteAttachment, noteFileError, removeNoteFiles, takeNoteFiles, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
-import { noteReady, useNotes } from "@/components/notes-data";
+import { noteReady, useNotes, useSaveState } from "@/components/notes-data";
+import { NoteConflictBar } from "@/components/note-conflict";
+import { DraftsBadge, useDraftFacts } from "@/components/note-drafts-badge";
+import { factStatus } from "@/lib/note-facts";
 import { NoteToolbar, useKeyboardInset, useNoteEditor } from "@/components/note-editor";
 import { NoteFilesContext, type NoteFilesValue } from "@/components/note-file-node";
 import { DeleteNoteDialog } from "@/components/note-list";
@@ -27,7 +28,7 @@ import { EmptyState } from "@/components/primitives";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 const MAX_FILES_AT_ONCE = 20;
 // Kinds of image every browser draws, shown in the note itself; others (HEIC) show as a file.
@@ -47,16 +48,22 @@ export function NoteView({ noteId }: { noteId: string }) {
     if (loading || note) return <NoteSkeleton />;
     return <EmptyState icon={NotebookPen} title="Note Not Found" description="It may have been deleted." action={<Button variant="secondary" asChild><Link href="/notes">Back to Notes</Link></Button>} />;
   }
-  return <OpenNote key={noteId} note={note} />;
+  // A new revision means the text was replaced from outside the editor (the other version was taken): it opens afresh.
+  return <OpenNote key={`${noteId}:${note.revision ?? 0}`} note={note} />;
 }
 
 function OpenNote({ note }: { note: Note }) {
-  const { edit, flush, close, pin, draftWith, saveState, upgrade } = useNotes();
+  const { edit, flush, close, pin, draftWith, upgrade, notes } = useNotes();
+  const state = useSaveState(note.id);
+  const facts = useDraftFacts(notes);
   const router = useRouter();
   const params = useSearchParams();
   const id = note.id;
   const [files, setFiles] = useState<Map<string, NoteFile>>(new Map());
   const [loaded, setLoaded] = useState(false);
+  // Settles with the note's files once listed, or null if they could not be: closing waits for it, so a note is
+  // never judged empty or its files judged unused before they are known.
+  const filesKnown = useRef<Promise<NoteFile[] | null>>(Promise.resolve(null));
   const [uploads, setUploads] = useState<Map<string, number>>(new Map());
   const [viewing, setViewing] = useState<NoteFile | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -83,15 +90,17 @@ function OpenNote({ note }: { note: Note }) {
 
   useEffect(() => {
     let cancelled = false;
-    takeNoteFiles(id)
-      .then((list) => {
-        if (cancelled) return;
+    const listed = takeNoteFiles(id).then((list): NoteFile[] | null => list).catch(() => null);
+    filesKnown.current = listed;
+    void listed.then((list) => {
+      if (cancelled) return;
+      if (list) {
         setFiles(new Map(list.map((f) => [f.id, f])));
         // pdf.js and its worker load while the file downloads, so a PDF in the note draws as soon as it arrives.
         if (list.some((f) => f.mimeType === "application/pdf")) void loadPdfJs().catch(() => {});
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoaded(true); });
+      }
+      setLoaded(true);
+    });
     return () => { cancelled = true; };
   }, [id]);
 
@@ -104,8 +113,13 @@ function OpenNote({ note }: { note: Note }) {
       void flush(id);
       closing.set(id, setTimeout(() => {
         closing.delete(id);
-        // A file still uploading is not in the markdown yet, so the note would look empty: leave it be.
-        if (uploadsRef.current.size === 0) close(id, [...filesRef.current.values()]);
+        // A file still uploading is not in the markdown yet, so the note would look empty: leave it be. Files not
+        // listed yet are waited for, and a list that failed means nothing is judged (null).
+        void filesKnown.current.then((list) => {
+          if (uploadsRef.current.size > 0) return;
+          const fresh = list ? [...new Map([...list, ...filesRef.current.values()].map((f) => [f.id, f])).values()] : null;
+          close(id, fresh);
+        });
       }, 0));
     };
   }, [id, flush, close]);
@@ -169,59 +183,48 @@ function OpenNote({ note }: { note: Note }) {
     canRetry: (key) => stopped.current.has(key),
     retry: (key) => { const item = stopped.current.get(key); if (item) startUpload(item); },
   }), [files, loaded, uploads, startUpload]);
-  const state = saveState(id);
-  const status = state === "saving" ? "Saving" : state === "failed" ? "Not Saved" : state === "saved" ? "Saved" : `Edited ${relTime(note.updatedAt)}`;
+  const offline = useOffline();
+  const status = state === "conflict" ? "Changed Elsewhere"
+    : state === "failed" ? (offline ? "Offline, Will Save When Back Online" : "Not Saved, Retrying")
+    : state === "saving" ? "Saving" : state === "saved" ? "Saved" : `Edited ${relTime(note.updatedAt)}`;
+  const drafts = factStatus(facts, note);
   const attach = () => pickerRef.current?.click();
-  // The note as a PDF: made here in the browser and downloaded. It is not put back into the note.
-  // Pictures in the note are shrunk to what a page can show, so a note full of photos stays quick.
-  const exportPdf = async () => {
-    const current = editorRef.current;
-    if (!current) return;
-    const toastId = toast.loading("Making PDF");
-    try {
-      const bytes = await notePdf(note.title, current.getJSON(), async (fileId) => {
-        const stored = filesRef.current.get(fileId);
-        if (!stored?.path) return null;
-        const handle = acquireNoteFile(stored.path);
-        try {
-          const opened = await handle.promise;
-          return opened ? await jpegPicture(opened.url) : null;
-        } finally {
-          handle.release();
-        }
-      });
-      const name = pdfName(note.title);
-      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = name;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      toast.success(`${name} is downloaded`, { id: toastId });
-      track("feature_used", { feature: "note_exported", detail: "pdf" });
-    } catch {
-      toast.error("The PDF could not be made. Try again.", { id: toastId });
+  const exportPdf = () => void exportNotePdf(editorRef.current, note.title, () => filesRef.current);
+
+  // Esc and Cmd+Enter leave the note for the list (saving it), and Cmd+Shift+P pins it, without reaching for the mouse.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const mod = e.metaKey || e.ctrlKey;
+    // Menus and dialogs opened from here bubble their keys through React too: only the title and the text count.
+    if (!(e.target as HTMLElement).closest("input, [contenteditable=true]")) return;
+    if ((e.key === "Escape" && !e.defaultPrevented) || (mod && e.key === "Enter")) {
+      e.preventDefault();
+      (document.activeElement as HTMLElement | null)?.blur();
+      void flush(id);
+      document.querySelector<HTMLElement>("[data-row-link][aria-current=page]")?.focus({ preventScroll: true });
+    } else if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      pin(id, !note.pinned);
     }
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown}>
       <header className="flex h-[57px] shrink-0 items-center gap-2 border-b bg-background px-3 md:px-4">
         <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
           <Link href="/notes"><ArrowLeft /></Link>
         </Button>
-        <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
+        {/* The title field below carries the name for screen readers, so this copy is hidden from them. */}
+        <h1 aria-hidden className="min-w-0 flex-1 truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
+        <DraftsBadge status={drafts} />
         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
-          <span className={state === "failed" ? "text-destructive" : undefined}>{status}</span>
+          <span className={state === "failed" || state === "conflict" ? "text-destructive" : undefined}>{status}</span>
           {state === "failed" && <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => void flush(id)}>Try Again</Button>}
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-max">
             <DropdownMenuItem onClick={() => pin(id, !note.pinned)}>{note.pinned ? "Unpin" : "Pin"}</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => draftWith(id, !note.useInDrafts)}>{note.useInDrafts ? "Stop Using in Drafts" : "Use in Drafts"}</DropdownMenuItem>
+            <DropdownMenuCheckboxItem checked={note.useInDrafts} onCheckedChange={(on) => draftWith(id, on)}>Use in Drafts</DropdownMenuCheckboxItem>
             <DropdownMenuItem onClick={attach}>Attach Files</DropdownMenuItem>
             <DropdownMenuItem onClick={() => void exportPdf()}>Export as PDF</DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -229,6 +232,8 @@ function OpenNote({ note }: { note: Note }) {
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+
+      {state === "conflict" && <NoteConflictBar id={id} />}
 
       {/* Padding sits outside the 672px column, as in a conversation, so the note lines up with the bubbles. */}
       {/* On phones the toolbar is pinned just above the on-screen keyboard (or the screen's bottom edge). */}
@@ -308,6 +313,19 @@ function replaceUpload(editor: Editor | null, key: string, fileId: string | null
   const node = state.doc.nodeAt(at)!;
   const tr = fileId ? state.tr.setNodeMarkup(at, undefined, { ...node.attrs, id: fileId, upload: null }) : state.tr.delete(at, at + node.nodeSize);
   editor.view.dispatch(tr.setMeta("addToHistory", false));
+}
+
+/** Whether the browser says the device is offline. */
+function useOffline(): boolean {
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    const update = () => setOffline(navigator.onLine === false);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); };
+  }, []);
+  return offline;
 }
 
 function NoteSkeleton() {

@@ -4,7 +4,9 @@
 
 import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Table as UiTable, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import type { Stat } from "@messages/analytics/stats";
 
@@ -72,10 +74,8 @@ export function shortDay(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
-/** The count first: "42 of 118", or "No Data" when there was nothing to count against. */
 /** "3 of 10", or "No Data" when the whole is zero. */
 export const of = (part: number, whole: number, fmt: (n: number) => string = num) => (whole === 0 ? "No Data" : `${fmt(part)} of ${fmt(whole)}`);
-/** The share as a percentage, 0 when there is nothing to count against. */
 /** Part as a percentage of the whole; 0 when the whole is zero. */
 export const share = (part: number, whole: number) => (whole === 0 ? 0 : (part / whole) * 100);
 
@@ -103,10 +103,14 @@ export function Tile({ label, value, stat, note, fmt }: { label: string; value: 
   );
 }
 
-/** A tile for a share: the count is the figure ("42 of 118") and the percentage is the note. */
+/** Below this many, a percentage is a hint and not an answer: it is flagged wherever one is shown. */
+export const SMALL_SAMPLE = 20;
+
+/** A tile for a share: the count is the figure ("42 of 118") and the percentage is the note. A small sample is flagged. */
 export function CountTile({ label, part, whole, note }: { label: string; part: number; whole: number; note?: string }) {
   const pct = whole === 0 ? undefined : percent(share(part, whole));
-  return <Tile label={label} value={of(part, whole)} note={[pct, note].filter(Boolean).join(", ") || undefined} />;
+  const small = whole > 0 && whole < SMALL_SAMPLE ? "small sample" : undefined;
+  return <Tile label={label} value={of(part, whole)} note={[pct, small, note].filter(Boolean).join(", ") || undefined} />;
 }
 
 export function Tiles({ children, three }: { children: React.ReactNode; three?: boolean }) {
@@ -141,26 +145,39 @@ export function Table<T>({ cols, rows, empty = "No data yet.", max }: { cols: Co
   if (rows.length === 0) return <Note>{empty}</Note>;
   const cls = (c: Col<T>, i: number) => cn(c.wide && "hidden sm:table-cell", i === 0 && "sticky left-0 bg-background");
   return (
-    <div className="overflow-x-auto rounded-lg border">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-xs text-muted-foreground">
+    <div className="rounded-lg border">
+      <UiTable>
+        <TableHeader>
+          <TableRow>
             {cols.map((c, i) => (
-              <th key={c.head} scope="col" className={cn("px-3 py-2 font-normal whitespace-nowrap", c.num ? "text-right" : "text-left", cls(c, i))}>{c.head}</th>
+              <TableHead key={c.head} scope="col" className={cn("px-3 text-xs font-normal text-muted-foreground", c.num && "text-right", cls(c, i))}>{c.head}</TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y">
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.slice(0, max ?? rows.length).map((r, i) => (
-            <tr key={i}>
+            <TableRow key={i} className="hover:bg-transparent">
               {cols.map((c, j) => (
-                <td key={c.head} className={cn("px-3 py-2", c.num && "text-right tabular-nums", cls(c, j))}>{c.cell(r)}</td>
+                <TableCell key={c.head} className={cn("px-3 py-2", c.num && "text-right tabular-nums", cls(c, j))}>{c.cell(r)}</TableCell>
               ))}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </UiTable>
     </div>
+  );
+}
+
+/** A block that starts closed: for the tables that earn their place only once there are enough people to read them. */
+export function Advanced({ title = "Advanced", children }: { title?: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="space-y-3">
+      <Button type="button" variant="ghost" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        {open ? `Hide ${title}` : `Show ${title}`}
+      </Button>
+      {open && <div className="flex flex-col gap-3">{children}</div>}
+    </section>
   );
 }
 
@@ -169,7 +186,7 @@ export function Share({ part, whole, fmt }: { part: number; whole: number; fmt?:
   if (whole === 0) return <span className="whitespace-nowrap text-muted-foreground">No Data</span>;
   const pct = share(part, whole);
   return (
-    <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+    <div className={cn("flex items-center justify-end gap-2 whitespace-nowrap", whole < SMALL_SAMPLE && "text-muted-foreground")} title={whole < SMALL_SAMPLE ? "Small sample" : undefined}>
       <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted" aria-hidden>
         <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
       </div>
@@ -244,6 +261,7 @@ export function Bars({ data, format = num, label }: { data: { label: string; val
       </div>
       <div className="mt-1 flex justify-between text-xs text-muted-foreground">
         <span>{data[0]?.label}</span>
+        <span className="tabular-nums">Tallest bar: {format(max)}</span>
         <span>{data.at(-1)?.label}</span>
       </div>
       {/* The hiding sits on a wrapper: browsers ignore sr-only's clip on a table, so its caption painted over the page. */}

@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 import { track } from "@/lib/analytics";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsHeading, SettingsSection } from "@/components/settings/sections";
+import { SettingsHeading, SettingsSection } from "@/components/settings/primitives";
 import { LinkedInConnect } from "@/components/linkedin-connect";
 
 export default function LinkedInSetup() {

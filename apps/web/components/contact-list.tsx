@@ -4,14 +4,15 @@
 // components/contacts/ and are re-exported here, so contact-view.tsx, company-view.tsx and merge-suggestions.tsx
 // keep importing from this file. Search and ordering rules are in lib/contact-list-helpers.ts.
 
-import { useDeferredValue, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Building2, Combine, Users } from "lucide-react";
 import type { ContactSummary } from "@/lib/contacts";
 import type { CompanySummary } from "@/lib/organizations";
 import { isCompanySender } from "@/lib/people";
 import { searchDigits } from "@/lib/phone-search";
-import { bySort, detailOf, haystack, matchesQuery, plural, queryOf, sortAndView, type Sort, type View } from "@/lib/contact-list-helpers";
+import { bySort, detailOf, fold, haystack, matchesQuery, plural, queryOf, sortAndView, type Sort, type View } from "@/lib/contact-list-helpers";
+import { isPlaceholderName } from "@/lib/merging";
 import { niceName } from "@/lib/format";
 import { cn, withQuery } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -42,17 +43,23 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
   const router = useRouter();
   const params = useParams<{ id?: string }>();
   const pathname = usePathname();
-  const { suggestions, reload } = useContactsData();
+  const { suggestions, suggestionsMore, needCompanies, reload } = useContactsData();
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   useSlashFocus(searchRef);
-  const q = useDeferredValue(search).trim().toLowerCase();
-  // Brands and role senders (noreply@, info@) are listed under Companies, not People.
+  const q = fold(useDeferredValue(search).trim());
+  // Companies load when the tab is open, or when a search might find one.
+  const wantsCompanies = view === "companies" || !!q;
+  useEffect(() => {
+    if (wantsCompanies) needCompanies();
+  }, [wantsCompanies, needCompanies]);
+  // Brands and role senders (noreply@, info@) are listed under Companies, not People. Hidden shows everyone hidden, so
+  // a hidden sender can be shown again whichever tab it would have been on.
   const people = useMemo(
-    () => (contacts ?? []).filter((c) => !isCompanySender(c) && c.hidden === (view === "hidden")).map((c) => ({
+    () => (contacts ?? []).filter((c) => (view === "hidden" ? c.hidden : !c.hidden && !isCompanySender(c))).map((c) => ({
       c,
-      hay: haystack([c.name, c.company, c.organizationName, c.role, ...c.emails], c.phones),
+      hay: haystack([c.name, c.company, c.organizationName, c.role, ...c.emails, ...c.handles], c.phones),
       digits: c.phones.map(searchDigits).join(" "),
     })),
     [contacts, view],
@@ -66,9 +73,33 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
     () => (companies ?? []).filter((c) => !q || haystack([c.name, c.domain]).includes(q)).sort(bySort(sort)),
     [companies, q, sort],
   );
+  // When nothing in People matches, say what the other tabs hold for the same search.
+  const elsewhere = useMemo(() => {
+    if (!q || view !== "people" || shownPeople.length > 0) return null;
+    const hidden = (contacts ?? []).filter((c) => c.hidden && matchesQuery(q, haystack([c.name, c.company, c.organizationName, c.role, ...c.emails, ...c.handles], c.phones), c.phones.map(searchDigits).join(" "))).length;
+    return { companies: shownCompanies.length, hidden };
+  }, [q, view, shownPeople.length, contacts, shownCompanies.length]);
+  // Every contact is a company sender or hidden, so People is empty for a reason other than a new account.
+  const allElsewhere = !!contacts?.length && view === "people" && !people.length;
   // A tab or sort change replaces the entry rather than adding one, so Back leaves Contacts in one step.
   const go = (nextSort: Sort, nextView: View) => router.replace(withQuery("/contacts", queryOf(nextSort, nextView)));
   const noMatches = { title: "No Matches", description: `Nothing matches "${search.trim()}".` };
+  const peopleEmpty = q
+    ? {
+        ...noMatches,
+        // Buttons to the tabs that do have a match.
+        action: elsewhere && (elsewhere.companies > 0 || elsewhere.hidden > 0) && (
+          <div className="flex flex-wrap justify-center gap-2">
+            {elsewhere.companies > 0 && <Button variant="secondary" onClick={() => go(sort, "companies")}>{plural(elsewhere.companies, "Result")} in Companies</Button>}
+            {elsewhere.hidden > 0 && <Button variant="secondary" onClick={() => go(sort, "hidden")}>{plural(elsewhere.hidden, "Result")} in Hidden</Button>}
+          </div>
+        ),
+      }
+    : view === "hidden"
+      ? { title: "No Hidden Contacts", description: "Contacts you hide appear here." }
+      : allElsewhere
+        ? { title: "Everyone Is Under Companies or Hidden", description: "Nobody is listed under People right now.", action: <Button variant="secondary" onClick={() => go(sort, "companies")}>Open Companies</Button> }
+        : { title: "No Contacts Yet", description: "People appear here as your accounts sync." };
 
   return (
     // The scrollbar starts below the 158px header (with its line) instead of running behind it.
@@ -145,8 +176,8 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
                     </div>
                   }
                   title="Suggested Merges"
-                  aside={<Badge variant="secondary">{suggestions.length}</Badge>}
-                  detail={`${plural(suggestions.length, "pair")} that may be the same person`}
+                  aside={<Badge variant="secondary">{suggestions.length + suggestionsMore}{suggestionsMore > 0 && "+"}</Badge>}
+                  detail={`${plural(suggestions.length, "pair")}${suggestionsMore > 0 ? " or more" : ""} that may be the same person`}
                   selected={pathname === "/contacts/merges"}
                 />
                 <div className="my-2 pl-14"><Separator /></div>
@@ -158,7 +189,7 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
               label="Loading contacts"
               icon={Users}
               failed="Contacts Did Not Load"
-              empty={q ? noMatches : view === "hidden" ? { title: "No Hidden Contacts", description: "Contacts you hide appear here." } : { title: "No Contacts Yet", description: "People appear here as your accounts sync." }}
+              empty={peopleEmpty}
               onRetry={reload}
             >
               {shownPeople.map((c) => (
@@ -169,6 +200,7 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
                   title={niceName(c.name)}
                   at={c.lastAt}
                   detail={detailOf(c)}
+                  aside={isPlaceholderName(c.name) ? <Badge variant="outline">Needs a Name</Badge> : undefined}
                   selected={params.id === c.id}
                   className="scroll-mt-[157px]"
                 />

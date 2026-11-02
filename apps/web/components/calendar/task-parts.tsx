@@ -17,7 +17,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 
 import { Detail } from "./event-details";
-import { Page } from "./page-context";
+import { Now, Page } from "./page-context";
 
 export const PRIORITIES: Record<number, string> = { 1: "High", 2: "Medium", 3: "Low" };
 
@@ -30,7 +30,7 @@ export function taskDue(task: Task) {
 
 export function TaskCheckbox({ task, via }: { task: Task; via: "calendar" | "details" }) {
   const { tickTask } = useApp();
-  return <Checkbox checked={task.completed} onCheckedChange={(checked) => tickTask(task, checked === true, via)} disabled={isTempTask(task)} aria-label={task.title} />;
+  return <Checkbox checked={task.completed} onCheckedChange={(checked) => tickTask(task, checked === true, via)} disabled={isTempTask(task)} aria-label={`${task.completed ? "Mark not done" : "Mark done"}: ${task.title}`} />;
 }
 
 /** A task in the week grid: in the all-day row, or as a short item at its time. Clicking the title shows its details. */
@@ -93,7 +93,8 @@ export function TaskDialog({ task, onClose, onEdit }: { task: Task | null; onClo
 }
 
 export function TaskDialogBody({ task, onClose, onEdit }: { task: Task; onClose: () => void; onEdit: (task: Task) => void }) {
-  const { now, sourceOf } = useContext(Page);
+  const { sourceOf } = useContext(Page);
+  const now = useContext(Now);
   const { contactById, tickTask, deleteTask } = useApp();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const saved = !isTempTask(task);

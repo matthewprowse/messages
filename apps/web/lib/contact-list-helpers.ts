@@ -3,6 +3,7 @@
 
 import { formatPhone } from "./format";
 import type { ContactSummary } from "./contacts";
+import { isPlaceholderName } from "./merging";
 import { phoneQueryMatches } from "./phone-search";
 
 export type Sort = "recent" | "name";
@@ -17,9 +18,19 @@ export function firstReach(c: { emails: string[]; phones: string[] }) {
   return c.emails[0] ?? (c.phones[0] ? formatPhone(c.phones[0]) : "");
 }
 
-/** Most recent conversation first, then by name. */
+// One collator, built once: accents and case do not decide the order, and "2" sorts before "10".
+const collator = new Intl.Collator("en-ZA", { sensitivity: "base", numeric: true });
+
+/** By name as it is read: real names in order, then the contacts that are only a number or an address. */
+export function byName(a: { name: string }, b: { name: string }) {
+  return Number(isPlaceholderName(a.name)) - Number(isPlaceholderName(b.name)) || collator.compare(a.name, b.name);
+}
+
+/** Most recent conversation first, then by name. Timestamps are ISO strings, which order as plain text. */
 export function byRecent(a: { name: string; lastAt: string | null }, b: { name: string; lastAt: string | null }) {
-  return (b.lastAt ?? "").localeCompare(a.lastAt ?? "") || a.name.localeCompare(b.name);
+  const x = a.lastAt ?? "";
+  const y = b.lastAt ?? "";
+  return x === y ? byName(a, b) : x < y ? 1 : -1;
 }
 
 /** The query string for a sort and view; the defaults (people, recent) leave it out so the URL stays clean. */
@@ -41,17 +52,26 @@ export function detailOf(c: ContactSummary) {
 }
 
 export function bySort(sort: Sort) {
-  return sort === "name" ? (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name) : byRecent;
+  return sort === "name" ? byName : byRecent;
 }
 
-/** Lower-cased text to search, with each number also written the way it is displayed. */
+/** Lower case without accents, so "Zoë" is found by "zoe" and the other way round. */
+export function fold(s: string) {
+  return s.normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase();
+}
+
+/** Folded text to search, with each number also written the way it is displayed. */
 export function haystack(parts: (string | null | undefined)[], phones: string[] = []) {
-  return [...parts, ...phones, ...phones.map(formatPhone)].filter(Boolean).join("\n").toLowerCase();
+  return fold([...parts, ...phones, ...phones.map(formatPhone)].filter(Boolean).join("\n"));
 }
 
-/** Whether the typed text is part of the name, an address, a number or the company. Digits match numbers however they are spaced. */
+/**
+ * Whether the typed text is part of the name, an address, a number or the company. Every word typed must be found,
+ * in any order ("smith john" finds John Smith). Digits match numbers however they are spaced. The query is folded.
+ */
 export function matchesQuery(q: string, hay: string, phoneDigits: string) {
   if (!q) return true;
-  if (hay.includes(q)) return true;
-  return phoneQueryMatches(q, phoneDigits);
+  if (hay.includes(q) || phoneQueryMatches(q, phoneDigits)) return true;
+  const words = q.split(/\s+/).filter(Boolean);
+  return words.length > 1 && words.every((w) => hay.includes(w));
 }

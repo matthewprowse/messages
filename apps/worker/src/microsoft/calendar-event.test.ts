@@ -64,3 +64,28 @@ test("leaves out cancelled events and ones without a start", () => {
   assert.equal(storedOutlookEvent({ id: "e4" }, owner), null);
   assert.equal(storedOutlookEvent({ start: { dateTime: "2026-10-24T08:00:00" } }, owner), null);
 });
+
+const base = { id: "e9", start: { dateTime: "2026-10-24T08:00:00.0000000" }, end: { dateTime: "2026-10-24T09:00:00.0000000" } };
+
+test("a Teams meeting's join link comes from onlineMeeting", () => {
+  const row = storedOutlookEvent({ ...base, onlineMeeting: { joinUrl: "https://teams.microsoft.com/l/meetup-join/abc" } }, owner);
+  assert.equal(row?.conference_url, "https://teams.microsoft.com/l/meetup-join/abc");
+});
+
+test("a Zoom link in the body is found when Outlook has no online meeting", () => {
+  const row = storedOutlookEvent({ ...base, body: { content: "Join Zoom Meeting\nhttps://us02web.zoom.us/j/12345?pwd=abc.\nPasscode 1" } }, owner);
+  assert.equal(row?.conference_url, "https://us02web.zoom.us/j/12345?pwd=abc");
+  assert.ok(row?.description?.includes("Passcode 1"));
+});
+
+test("a plain http link or no link gives no join link", () => {
+  assert.equal(storedOutlookEvent({ ...base, body: { content: "http://zoom.us/j/1" } }, owner)?.conference_url, null);
+  assert.equal(storedOutlookEvent({ ...base, onlineMeeting: { joinUrl: "http://teams.microsoft.com/x" } }, owner)?.conference_url, null);
+  assert.equal(storedOutlookEvent(base, owner)?.conference_url, null);
+});
+
+test("the calendar's name is kept and an HTML body is stored as text", () => {
+  const row = storedOutlookEvent({ ...base, body: { content: "<p>Bring the<br>contract</p>" } }, { ...owner, calendarName: "Work" });
+  assert.equal(row?.calendar_name, "Work");
+  assert.ok(!row?.description?.includes("<"));
+});

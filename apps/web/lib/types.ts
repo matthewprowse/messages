@@ -35,6 +35,10 @@ export interface Contact {
   avatarPath?: string;
   /** Writes as a company (a no-reply sender, a brand) rather than as themselves, which picks their avatar's icon. */
   isCompany: boolean;
+  /** Set by the user when the guess about person or company was wrong; undefined means the guess stands. */
+  kindOverride?: "person" | "company";
+  /** Has a LinkedIn identity. Its id is not a name or a link, so only the fact is kept. */
+  hasLinkedIn?: boolean;
   /** The company they write for, as grouped on the Companies tab, with its shared logo. */
   organization?: { id: string; name: string; logoPath?: string };
 }
@@ -101,7 +105,7 @@ export interface Message {
   /** How far a WhatsApp message you sent has got: WhatsApp's one tick, two ticks, two blue ticks. */
   receipt?: "sent" | "delivered" | "read";
   /** Set on a reply you just sent until the real message arrives from the mail server. */
-  sendState?: "sending" | "failed";
+  sendState?: "queued" | "sending" | "sent" | "failed";
   sendError?: string;
   /** For a failed send: "retry" is definitely not sent, "unsure" may have gone out (no Retry), "none" cannot be re-queued. */
   sendRecovery?: "retry" | "unsure" | "none";

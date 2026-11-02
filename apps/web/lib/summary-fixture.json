@@ -1,0 +1,26 @@
+{
+  "note": "Shared by lib/summary.test.ts and apps/ai/tests/test_brief.py so the Summary page and the spoken brief cannot drift apart. ageHours is how long ago the last message was.",
+  "threads": [
+    { "id": "reply-urgent", "ageHours": 5, "needsReply": true, "priority": "urgent", "category": "work" },
+    { "id": "reply-normal-newer", "ageHours": 2, "needsReply": true, "priority": "normal", "category": "personal" },
+    { "id": "reply-edge-14d", "ageHours": 336, "needsReply": true, "priority": "normal", "category": "personal" },
+    { "id": "reply-too-old", "ageHours": 337, "needsReply": true, "priority": "normal", "category": "personal" },
+    { "id": "important", "ageHours": 30, "priority": "important", "category": "work" },
+    { "id": "urgent-edge-7d", "ageHours": 168, "priority": "urgent", "category": "personal" },
+    { "id": "urgent-too-old", "ageHours": 169, "priority": "urgent", "category": "personal" },
+    { "id": "newsletter-important", "ageHours": 3, "priority": "important", "category": "newsletter" },
+    { "id": "update", "ageHours": 3, "priority": "normal", "category": "fyi", "summary": "Rates went up." },
+    { "id": "update-edge-24h", "ageHours": 24, "priority": "normal", "category": "work", "summary": "Signed." },
+    { "id": "update-too-old", "ageHours": 25, "priority": "normal", "category": "work", "summary": "Signed." },
+    { "id": "update-no-summary", "ageHours": 3, "priority": "normal", "category": "fyi", "summary": "  " },
+    { "id": "answered-urgent", "ageHours": 2, "priority": "urgent", "lastFromMe": true },
+    { "id": "answered-reply", "ageHours": 2, "needsReply": true, "lastFromMe": true },
+    { "id": "junk", "ageHours": 1, "needsReply": true, "junk": true },
+    { "id": "archived", "ageHours": 1, "needsReply": true, "status": "archived" }
+  ],
+  "expected": {
+    "reply": ["reply-urgent", "reply-normal-newer", "reply-edge-14d"],
+    "priority": ["urgent-edge-7d", "important"],
+    "updates": ["update", "update-edge-24h"]
+  }
+}

@@ -17,7 +17,10 @@ from zoneinfo import ZoneInfo
 from . import log
 from .supabase import Supabase
 
-WORD = re.compile(r"^[a-z][a-z0-9_.:-]{0,39}$")
+# A dot only between two digits ("gemini-2.5-flash"); "jane.doe" and "acme.co" are not code words. Same rule as the
+# database (analytics_word_ok) and packages/analytics.
+WORD = re.compile(r"^[a-z](?:[a-z0-9_:-]|[0-9]\.(?=[0-9]))*$")
+MAX_WORD = 40
 GENERIC_SENDERS = {
     "noreply", "no-reply", "donotreply", "do-not-reply", "info", "support", "help", "hello", "team", "sales", "billing",
     "accounts", "admin", "contact", "notifications", "notification", "news", "newsletter", "mail", "service", "office",
@@ -27,7 +30,7 @@ GENERIC_SENDERS = {
 
 def word(value: Any) -> str | None:
     """value if it is a plain code word, else None. Text is dropped, never tidied into a word."""
-    return value if isinstance(value, str) and WORD.match(value) else None
+    return value if isinstance(value, str) and len(value) <= MAX_WORD and WORD.match(value) else None
 
 
 def prompt_id(*texts: str) -> str:

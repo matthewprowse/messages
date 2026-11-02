@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./allowed": "./src/allowed.ts",
     "./draft": "./src/draft.ts",
     "./stats": "./src/stats.ts"
   },

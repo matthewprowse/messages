@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 from ai import gemini
-from ai.billing import Breaker, is_billing_error, is_billing_paused
+from ai.billing import Breaker, is_billing_error, is_billing_paused, persist_to
 from ai.gemini import Gemini, GeminiError
 from ai.http import Response
 from ai.meetings import MAX_TRIES as MEETING_TRIES
@@ -156,3 +156,43 @@ class NotATry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BreakerPersistence(unittest.TestCase):
+    def test_reports_trip_and_recovery_once_each(self):
+        clock = Clock()
+        seen: list[tuple[bool, bool]] = []
+        b = Breaker(600, clock, on_change=lambda paused, since: seen.append((paused, since is not None)))
+        b.trip()
+        b.trip()  # in flight calls failing together: no second write inside a minute
+        self.assertEqual(seen, [(True, True)])
+        clock.now += 61
+        b.trip()  # a failed probe much later refreshes the row so the page knows the pause is current
+        self.assertEqual(len(seen), 2)
+        b.success()
+        b.success()
+        self.assertEqual(seen[-1], (False, False))
+        self.assertEqual(len(seen), 3)
+
+    def test_a_failing_callback_changes_nothing(self):
+        def boom(paused, since):
+            raise RuntimeError("db down")
+
+        b = Breaker(600, Clock(), on_change=boom)
+        self.assertTrue(b.trip())
+        self.assertTrue(b.tripped)
+        self.assertTrue(b.success())
+
+    def test_persist_writes_the_row_and_swallows_errors(self):
+        db = mock.Mock()
+        write = persist_to(db)
+        write(True, "2026-11-17T14:02:00+00:00")
+        row = db.upsert.call_args.args[1]
+        self.assertEqual(row["billing_paused_since"], "2026-11-17T14:02:00+00:00")
+        self.assertIsNotNone(row["billing_checked_at"])
+        write(False, None)
+        row = db.upsert.call_args.args[1]
+        self.assertIsNone(row["billing_paused_since"])
+        self.assertEqual(db.upsert.call_args.kwargs["on_conflict"], "id")
+        db.upsert.side_effect = RuntimeError("down")
+        write(True, "x")

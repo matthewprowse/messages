@@ -9,7 +9,7 @@ import type { Account } from "@/lib/types";
 import { isEmail, sendAddressesOf } from "@/lib/send-from";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
+import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 /** iCloud and other IMAP mailboxes: the server cannot say which addresses you send from, so you list them. */
 function ListedAddresses({ account }: { account: Account }) {

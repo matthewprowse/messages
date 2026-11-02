@@ -2,7 +2,8 @@
 
 // The Edit Contact dialog on a contact's page. The form fields are shared with New Contact (contact-list.tsx).
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { identityGroups } from "@/lib/merging";
 import { markSubmitted } from "@/lib/analytics";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
@@ -34,8 +35,10 @@ export function EditContactDialog({ contact, open, onOpenChange }: { contact: Co
 function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: () => void }) {
   const router = useRouter();
   const { refreshContacts } = useApp();
-  // Their current addresses and numbers. A WhatsApp-only privacy ID is not shown: it is not a number.
-  const existing = contact.identityRows.filter((i) => i.kind === "email" || i.kind === "phone");
+  // Their current addresses and numbers, one row each, whichever way they are stored: a number that is only a WhatsApp
+  // identity can be removed too, and removing a number takes its phone and WhatsApp entries together. A WhatsApp-only
+  // privacy ID is not shown (it is not a number), and Instagram and LinkedIn are shown on the contact's page, not here.
+  const existing = useMemo(() => identityGroups(contact.identityRows).filter((g) => !g.social && g.label !== "WhatsApp"), [contact.identityRows]);
   const [removed, setRemoved] = useState<string[]>([]);
   const [tried, setTried] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -82,17 +85,18 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
           existing.length > 0 && (
             <div className="grid gap-2">
               <Label>Addresses and Numbers</Label>
-              {existing.map((i) => {
-                const gone = removed.includes(i.id);
+              {existing.map((g) => {
+                const gone = g.ids.every((id) => removed.includes(id));
+                const text = g.detail === "Email" ? g.label : formatPhone(g.label);
                 return (
-                  <div key={i.id} className="flex items-center gap-2">
+                  <div key={g.ids.join(",")} className="flex items-center gap-2">
                     <span className={gone ? "min-w-0 flex-1 truncate text-sm text-muted-foreground line-through" : "min-w-0 flex-1 truncate text-sm"}>
-                      {i.kind === "phone" ? formatPhone(i.value) : i.value}
+                      {text}
                     </span>
                     {gone ? (
-                      <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => setRemoved(removed.filter((id) => id !== i.id))}>Undo</Button>
+                      <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => setRemoved(removed.filter((id) => !g.ids.includes(id)))}>Undo</Button>
                     ) : (
-                      <Button type="button" variant="ghost" size="icon" aria-label={`Remove ${i.value}`} disabled={saving} onClick={() => setRemoved([...removed, i.id])}><X /></Button>
+                      <Button type="button" variant="ghost" size="icon" aria-label={`Remove ${text}`} disabled={saving} onClick={() => setRemoved([...removed, ...g.ids])}><X /></Button>
                     )}
                   </div>
                 );

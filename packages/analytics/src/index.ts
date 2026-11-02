@@ -20,7 +20,9 @@ export interface Traits {
   source: "model" | "rule" | "copied";
 }
 
-export type LabelField = "priority" | "category" | "junk" | "needs_reply";
+/** The labels a person can change by hand today. Category and Needs Reply have no control in the app, so there is
+ *  nothing to record; add them here when one is built. */
+export type LabelField = "priority" | "junk";
 
 /** The edit made to a draft before it was sent, as facts about the change, not its words. */
 export interface DraftEdit {
@@ -54,6 +56,8 @@ export interface Events {
   setting_changed: { setting: string };
   search: { len: number; results: number; picked_rank?: number };
   thread_opened: { via: string; channel: Channel; had_summary: boolean; unread: boolean };
+  /** The Summary page drawn once a visit: how many rows each section held, so "do summaries save reading" can be answered. */
+  summary_shown: { reply: number; priority: number; updates: number; older: number; events: number; tasks: number };
   original_opened: { channel: Channel };
   attachment_used: { action: "open" | "download"; kind: string };
   // Sorting and labels
@@ -86,9 +90,9 @@ export interface Events {
   // Onboarding: the setup dialog's steps
   onboarding_step: { step: string; outcome: "start" | "done" | "skipped" };
   sync_error: { provider: string; code: string };
-  send_result: { provider: string; outcome: "sent" | "failed"; attempts: number; code?: string };
+  /** A send is tried once and never retried (a retry could send the same message twice), so there is no attempts count. */
+  send_result: { provider: string; outcome: "sent" | "failed"; code?: string };
   wa_reconnect: { reason: string };
-  sync_lag: { provider: string; secs: number };
   // The AI worker
   ai_call: {
     feature: string;
@@ -113,15 +117,16 @@ export interface Event<K extends EventName = EventName> {
   screen?: string;
 }
 
-const WORD = /^[a-z][a-z0-9_.:-]{0,39}$/;
+// A code word: lowercase, starting with a letter. A dot is allowed only between two digits ("gemini-2.5-flash",
+// "v0.0.12"): a local part ("jane.doe") or a domain ("acme.co") has dots between letters and is refused. The database
+// applies the same rule (analytics_word_ok). A lone lowercase word such as a first name has the shape of a code word, so
+// free-form sources go through the allow-lists in allowed.ts before they get here.
+const WORD = /^[a-z](?:[a-z0-9_:-]|[0-9]\.(?=[0-9]))*$/;
 const KEY = /^[a-z][a-z0-9_]{0,29}$/;
 const MAX_NUMBER = 1_000_000_000;
+const MAX_WORD = 40;
 
-/** Code words the app sends that hold a dot. A dot is how a local part ("jane.doe") or a domain ("acme.co") looks, so
- *  any other word with one is dropped. No caller sends a dotted word today; add one here when one starts to. */
-export const DOTTED_WORDS: ReadonlySet<string> = new Set<string>();
-
-const plainWord = (w: string) => WORD.test(w) && (!w.includes(".") || DOTTED_WORDS.has(w));
+const plainWord = (w: string) => w.length <= MAX_WORD && WORD.test(w);
 
 /** A text value that is only a plain code word. Anything else (a space, a capital, an @, a number
  *  first) is not one, and is dropped rather than changed, so text can never be tidied into a word. */

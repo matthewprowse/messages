@@ -5,7 +5,7 @@
 import { useTeam } from "@/lib/team";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsEmpty } from "@/components/settings/sections";
+import { SettingsEmpty } from "@/components/settings/primitives";
 import { ExportLogSection } from "@/components/settings/team-exports";
 
 export default function ExportsPage() {

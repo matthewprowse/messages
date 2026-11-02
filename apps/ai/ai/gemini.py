@@ -22,7 +22,7 @@ from typing import Any
 
 from . import log
 from .analytics import Analytics, event, prompt_id
-from .billing import Breaker, is_billing_error
+from .billing import Breaker, is_billing_error, persist_to
 from .gemini_batch import BatchMixin
 from .gemini_budget import BudgetMixin
 from .gemini_estimate import (  # noqa: F401  re-exported: other modules and tests import these from here
@@ -75,7 +75,7 @@ class Gemini(BudgetMixin, FilesMixin, BatchMixin):
         self._db = db
         self._usage = ThreadPoolExecutor(max_workers=1, thread_name_prefix="usage")  # finishes its queue on exit
         self._events = Analytics(db)
-        self._breaker = Breaker()  # trips on a billing failure so calls stop at once instead of failing one by one
+        self._breaker = Breaker(on_change=persist_to(db))  # trips on a billing failure so calls stop at once instead of failing one by one
         self._no_minimal: set[str] = set()  # models that turned down thinkingLevel "minimal"
         self._lock = threading.Lock()
         # user -> (read at, month % per feature, week % per feature, month dollars per feature, week dollars per feature)

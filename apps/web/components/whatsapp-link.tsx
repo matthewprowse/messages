@@ -10,7 +10,7 @@ import { encodeQr, qrToSvgPath } from "@messages/qr";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { openAddresses } from "@/lib/open-rows";
-import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/sections";
+import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

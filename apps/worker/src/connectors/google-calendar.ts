@@ -13,6 +13,7 @@ import { CALENDAR_EVENTS_SCOPE, CALENDAR_SCOPE, GoogleAuthError } from "../googl
 import { googleFatalDetail, openGoogleClient } from "../google/session";
 import { sealEvent } from "../calendar/sealed";
 import { storeWindow } from "../calendar/store-window";
+import { FULL_EVERY_MS, syncWindow } from "../calendar/sync-window";
 import { DELETE_NOT_GRANTED, GONE, claimDelete, failDelete, settleDeleted, storedEventOf, type CalendarDeleteRow } from "../calendar/delete-event";
 import { claimUpdate, failUpdate, settleUpdated, storeChange, storedEventOfUpdate } from "../calendar/update-queue";
 import { SERIES_RULE, ruleOf } from "../calendar/recurrence";
@@ -30,11 +31,8 @@ import {
 } from "../calendar/create-event";
 
 const POLL_MS = 5 * 60_000;
-const PAST_DAYS = 7;
-const FUTURE_DAYS = 60;
 const CALENDARS_AT_ONCE = 3; // calendars read together
 const SERIES_AT_ONCE = 4; // series read together for their rules
-const FULL_EVERY_MS = 60 * 60_000; // full fetch at least hourly, even when nothing changed
 
 interface CalendarListEntry {
   id: string;
@@ -175,8 +173,7 @@ export class GoogleCalendarConnector {
   /** Fetches the window from every calendar shown in Google Calendar and replaces the stored copy. */
   private async sync(client: GoogleClient) {
     const now = Date.now();
-    const timeMin = new Date(now - PAST_DAYS * 86_400_000).toISOString();
-    const timeMax = new Date(now + FUTURE_DAYS * 86_400_000).toISOString();
+    const { timeMin, timeMax } = syncWindow(now);
 
     const calendars: CalendarListEntry[] = [];
     let pageToken: string | undefined;

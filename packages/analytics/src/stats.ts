@@ -14,4 +14,5 @@ export interface Counted {
 
 export const DIMENSIONS = ["sender", "channel", "bulk", "attach", "len", "hour", "known", "source", "prompt"] as const;
 export type Dimension = (typeof DIMENSIONS)[number];
-export type LabelFieldName = "priority" | "category" | "junk";
+/** The labels with a correction control in the app (see LabelField in index.ts). */
+export type LabelFieldName = "priority" | "junk";

@@ -10,10 +10,11 @@
 // application/octet-stream; the real content type is kept in the row and the bytes are opened when the
 // file is viewed or saved (lib/signed-urls.ts). Files uploaded before sealing began are still read as they are.
 
-import { encryptBytes, encryptField, isCiphertext } from "@messages/crypto";
+import { decryptAny, encryptBytes, encryptField, isCiphertext } from "@messages/crypto";
 import { FIELD, type Field } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
-import { open, openRows, userKeys } from "./vault";
+import { open, openRows, teamKeys, userKeys } from "./vault";
+import { NoteConflict, type PersistOpts, type RemoteNote } from "./note-saver";
 import { noteExcerpt as excerptOf } from "./note-text";
 import { BUCKET, formatBytes, mimeOf, uploadFile, displayName } from "./outbox-files";
 import { rememberNoteMime } from "./signed-urls";
@@ -33,6 +34,10 @@ export interface Note {
   /** What is stored is still plaintext or lacks an excerpt, so saving the note rewrites it sealed. */
   stale?: boolean;
   pinned: boolean;
+  /** The row's edited time as last read or written here: what a save expects, so a change elsewhere is noticed. Not shown. */
+  serverAt?: string;
+  /** Counts times the text was replaced from outside the editor (taking the other version), so the editor opens afresh. */
+  revision?: number;
   /** Given to the AI with every draft, for facts a reply may need (fees, checklists, addresses). */
   useInDrafts: boolean;
   createdAt: string;
@@ -57,7 +62,7 @@ type NoteRow = { id: string; title: string; excerpt: string | null; pinned: bool
 type FileRow = { id: string; note_id: string; storage_path: string; name: string; mime_type: string; size_bytes: number };
 
 function mapNote(r: NoteRow, stale: boolean): Note {
-  return { id: r.id, title: r.title ?? "", body: "", excerpt: r.excerpt, unloaded: true, stale, pinned: r.pinned, useInDrafts: r.use_in_drafts, createdAt: r.created_at, updatedAt: r.updated_at };
+  return { id: r.id, title: r.title ?? "", body: "", excerpt: r.excerpt, unloaded: true, stale, pinned: r.pinned, serverAt: r.updated_at, useInDrafts: r.use_in_drafts, createdAt: r.created_at, updatedAt: r.updated_at };
 }
 
 function mapFile(r: FileRow): NoteFile {
@@ -89,41 +94,112 @@ export async function loadNotes(): Promise<Note[]> {
   return rows.map((r) => mapNote(r, stale.has(r.id)));
 }
 
-/** Downloads and opens the text of these notes. A note that is gone is left out; plain says it was stored unencrypted. */
-export async function loadNoteBodies(ids: string[]): Promise<Map<string, { body: string; plain: boolean }>> {
-  const { data, error } = await supabase.from("notes").select("id, body").in("id", ids);
+/**
+ * Opens one sealed value, throwing when it cannot be opened. vault.open turns a failure into "", which for a note's
+ * text would read as an empty note that autosave then writes over the real one.
+ */
+async function openStrict(field: Field, value: string | null | undefined): Promise<string> {
+  if (value == null || !isCiphertext(value)) return value ?? "";
+  return decryptAny({ user: await userKeys(), team: await teamKeys() }, field, value);
+}
+
+/**
+ * Downloads and opens the text of these notes. A note that is gone, or whose text cannot be opened, is left out
+ * (the caller marks it failed, never empty); plain says it was stored unencrypted; updatedAt is the row's version.
+ */
+export async function loadNoteBodies(ids: string[]): Promise<Map<string, { body: string; plain: boolean; updatedAt: string }>> {
+  const { data, error } = await supabase.from("notes").select("id, body, updated_at").in("id", ids);
   if (error) throw error;
-  const rows = data as { id: string; body: string }[];
-  const out = new Map<string, { body: string; plain: boolean }>();
-  await Promise.all(rows.map(async (r) => { out.set(r.id, { body: (await open(FIELD.note, r.body)) ?? "", plain: isPlain(r.body) }); }));
+  const rows = data as { id: string; body: string; updated_at: string }[];
+  const out = new Map<string, { body: string; plain: boolean; updatedAt: string }>();
+  await Promise.all(rows.map(async (r) => {
+    try { out.set(r.id, { body: await openStrict(FIELD.note, r.body), plain: isPlain(r.body), updatedAt: r.updated_at }); } catch { /* left out: failed */ }
+  }));
   return out;
+}
+
+/** A note's stored title and text as they are now, or null when the row is gone. Throws when it cannot be opened. */
+export async function loadNoteRemote(id: string): Promise<RemoteNote | null> {
+  const { data, error } = await supabase.from("notes").select("title, body, updated_at").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return { title: await openStrict(FIELD.noteTitle, data.title), body: await openStrict(FIELD.note, data.body), updatedAt: data.updated_at };
+}
+
+/** Writes the row for a note id (with its text, when given); resolves to the time the database stamped. */
+export async function insertNoteRow(id: string, fields?: { title: string; body: string }): Promise<string> {
+  const row: Record<string, unknown> = { id, excerpt: "" };
+  if (fields) {
+    row.title = await sealNote(FIELD.noteTitle, fields.title);
+    row.body = await sealNote(FIELD.note, fields.body);
+    row.excerpt = await sealNote(FIELD.noteExcerpt, excerptOf(fields.body));
+  }
+  const { data, error } = await supabase.from("notes").insert(row).select("updated_at").single();
+  if (error) throw error;
+  return data.updated_at;
+}
+
+/** Keeps a copy of some text as a new note (the other version in a conflict). Resolves to the new note. */
+export async function saveNoteCopy(fields: { title: string; body: string }): Promise<Note> {
+  const id = crypto.randomUUID();
+  const at = await insertNoteRow(id, fields);
+  const now = new Date().toISOString();
+  return { id, title: fields.title, body: fields.body, excerpt: excerptOf(fields.body), pinned: false, serverAt: at, useInDrafts: false, createdAt: now, updatedAt: at };
 }
 
 /**
  * A new, empty note, handed back at once so it can open without waiting for the database. The id is made here;
- * `saved` settles when the row exists, and anything that needs the row (a save, a file) waits for it.
+ * `saved` settles with the row's edited time when the row exists, and anything that needs the row (a save, a file) waits for it.
  */
-export function createNote(): { note: Note; saved: Promise<void> } {
+export function createNote(): { note: Note; saved: Promise<string> } {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const note: Note = { id, title: "", body: "", excerpt: "", pinned: false, useInDrafts: false, createdAt: now, updatedAt: now };
-  const saved = (async () => {
-    const { error } = await supabase.from("notes").insert({ id, excerpt: "" });
-    if (error) throw error;
-  })();
-  return { note, saved };
+  return { note, saved: insertNoteRow(id) };
 }
 
-/** Saves the title, text and excerpt, all sealed, resolving to the time the database stamped. */
-export async function saveNote(id: string, note: { title: string; body: string }): Promise<string> {
+// A page-closing request may carry about 64 KB; a bigger one takes the ordinary path.
+const KEEPALIVE_BYTES = 60_000;
+
+/**
+ * Saves the title, text and excerpt, all sealed, resolving to the time the database stamped. The write only
+ * applies if the row still has the edited time in `expected`; otherwise it throws NoteConflict and changes
+ * nothing, so a second tab or device is never overwritten. `keepalive` sends it so it outlives the page.
+ */
+export async function saveNote(id: string, note: { title: string; body: string }, opts: PersistOpts = {}): Promise<string> {
   const [title, body, excerpt] = await Promise.all([
     sealNote(FIELD.noteTitle, note.title),
     sealNote(FIELD.note, note.body),
     sealNote(FIELD.noteExcerpt, excerptOf(note.body)),
   ]);
-  const { data, error } = await supabase.from("notes").update({ title, body, excerpt }).eq("id", id).select("updated_at").single();
+  const fields = { title, body, excerpt };
+  const json = JSON.stringify(fields);
+  if (opts.keepalive && json.length < KEEPALIVE_BYTES) {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) {
+      const url = new URL(`${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/rest/v1/notes`);
+      url.searchParams.set("id", `eq.${id}`);
+      if (opts.expected) url.searchParams.set("updated_at", `eq.${opts.expected}`);
+      url.searchParams.set("select", "updated_at");
+      const res = await fetch(url, {
+        method: "PATCH",
+        keepalive: true,
+        headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "", Authorization: `Bearer ${token}`, "Content-Type": "application/json", Prefer: "return=representation" },
+        body: json,
+      });
+      if (!res.ok) throw new Error(`Saving failed (${res.status}).`);
+      const rows = (await res.json()) as { updated_at: string }[];
+      if (rows.length === 0) throw new NoteConflict();
+      return rows[0].updated_at;
+    }
+  }
+  let q = supabase.from("notes").update(fields).eq("id", id);
+  if (opts.expected) q = q.eq("updated_at", opts.expected);
+  const { data, error } = await q.select("updated_at");
   if (error) throw error;
-  return data.updated_at;
+  if (!data || data.length === 0) throw new NoteConflict();
+  return data[0].updated_at;
 }
 
 export async function pinNote(id: string, pinned: boolean): Promise<void> {

@@ -124,7 +124,7 @@ export function Workspaces({ version, onInvite, onBusy }: { version: number; onI
       ) : teams === null ? (
         <Skeleton className="h-24 w-full rounded-lg" />
       ) : teams.length === 0 ? (
-        <div className="py-12"><EmptyState icon={Users} title="No Teams Yet" description="Approve a team request in the waitlist to make one." /></div>
+        <div className="py-12"><EmptyState icon={Users} title="No Teams Yet" description="Approve a team request under Requests to make one." /></div>
       ) : (
         <div>
           {teams.map((t, i) => (

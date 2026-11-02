@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { track } from "@/lib/analytics";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsHeading, SettingsSection } from "@/components/settings/sections";
+import { SettingsHeading, SettingsSection } from "@/components/settings/primitives";
 import { useWhatsAppLink, WhatsAppLinkPanel } from "@/components/whatsapp-link";
 
 export default function WhatsAppSetup() {
@@ -38,11 +38,11 @@ export default function WhatsAppSetup() {
           <SettingsHeading level={3} title="Read Receipts" description={<>
             <p>
               Blue ticks are sent only when you open a chat here, and only while WhatsApp Read Receipts is on in{" "}
-              <Link href="/settings/notifications" className="underline underline-offset-2">Notifications</Link>.
+              <Link href="/settings/accounts#read-receipts" className="underline underline-offset-2">Accounts</Link>.
             </p>
           </>} />
           <SettingsHeading level={3} title="Groups" description={<>
-            <p>Group chats are imported, but AI triage is off for them unless you turn it on.</p>
+            <p>Group chats are imported, but AI triage is off for them.</p>
           </>} />
           <SettingsHeading level={3} title="Unlinking" description={<>
             <p>

@@ -6,7 +6,7 @@
 import { useTeam } from "@/lib/team";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsEmpty } from "@/components/settings/sections";
+import { SettingsEmpty } from "@/components/settings/primitives";
 import { CompanyVoiceSections } from "@/components/settings/team-voice";
 
 export default function CompanyVoicePage() {

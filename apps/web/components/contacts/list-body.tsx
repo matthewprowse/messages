@@ -11,7 +11,7 @@ import { Divided } from "./list-rows";
 
 function LoadingRows({ label }: { label: string }) {
   return (
-    <div className="flex flex-col gap-2" aria-label={label}>
+    <div className="flex flex-col gap-2" role="status" aria-busy="true" aria-label={label}>
       {Array.from({ length: 8 }, (_, i) => (
         <div key={i} className="flex items-center gap-3 p-3">
           <Skeleton className="size-8 shrink-0 rounded-full" />
@@ -34,7 +34,7 @@ export function ListBody({ items, label, icon, failed, empty, onRetry, children 
   label: string;
   icon: typeof Users;
   failed: string;
-  empty: { title: string; description: string };
+  empty: { title: string; description: string; action?: React.ReactNode };
   onRetry: () => void;
   children: React.ReactNode;
 }) {
@@ -63,7 +63,7 @@ export function ListBody({ items, label, icon, failed, empty, onRetry, children 
         {items === null ? (
           <EmptyState icon={icon} title={failed} description="Check your connection, then try again." action={<Button variant="secondary" onClick={onRetry}>Retry</Button>} />
         ) : (
-          <EmptyState icon={icon} title={empty.title} description={empty.description} />
+          <EmptyState icon={icon} title={empty.title} description={empty.description} action={empty.action || undefined} />
         )}
       </div>
     );

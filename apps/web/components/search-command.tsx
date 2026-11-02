@@ -316,6 +316,15 @@ const SHORTCUTS: { heading: string; rows: { label: string; keys: string[] }[] }[
   {
     heading: "Conversations",
     rows: [
+      { label: "Open the Next or Previous", keys: ["J", "K"] },
+      { label: "Open the First", keys: ["Enter"] },
+      { label: "Archive", keys: ["E"] },
+      { label: "Delete", keys: ["#"] },
+      { label: "Move to Junk", keys: ["!"] },
+      { label: "Mark as Read or Unread", keys: ["U"] },
+      { label: "Reply", keys: ["R"] },
+      { label: "Search the List", keys: ["/"] },
+      { label: "Close", keys: ["Esc"] },
       { label: "Send a Reply", keys: ["⌘", "Enter"] },
     ],
   },

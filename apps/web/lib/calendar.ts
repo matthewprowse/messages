@@ -1,16 +1,18 @@
-// Calendar events as the Calendar page needs them. The worker copies events from Google Calendar into
-// calendar_events, and row-level security returns only the signed-in user's own events.
-// All-day events are stored as midnight UTC on their date, with an end date that is not included.
+// Calendar events as the Calendar page needs them: the CalendarEvent type, loading events and following a queued
+// change. The worker copies events from the calendars into calendar_events, and row-level security returns only the
+// signed-in user's own events. All-day events are stored as midnight UTC on their date, with an end date that is not
+// included. The day maths is in calendar-days.ts and building changes in calendar-edit.ts; both are re-exported here
+// because the Summary imports them from this module.
 
 import { addressIndex } from "@messages/crypto/addresses";
-import type { TablesInsert } from "@messages/db";
-import { timeOf } from "./format";
-import { buildEventRow, dateKey, timeKey, type EventField, type EventForm } from "./new-items";
-import { sameRepeat } from "./recurrence";
-import type { Contact as AddressBookContact } from "./types";
 import { supabase } from "./supabase";
 import { openEvents } from "./open-rows";
+import { eventNotes } from "@messages/email-text/event-notes";
 import { userKeys } from "./vault";
+
+export { dayKey } from "./dates";
+export { daysOf, eventDetail } from "./calendar-days";
+export * from "./calendar-edit";
 
 export interface EventAttendee {
   name: string;
@@ -170,7 +172,8 @@ async function toEvents(data: Row[], detailed: boolean): Promise<CalendarEvent[]
     const organizer = all.find((a) => a.organizer && !a.self);
     return {
       ...base,
-      description: e.description?.trim() || null,
+      // Notes stored as Google sent them (HTML) before the worker kept text are turned into text here, never rendered as markup.
+      description: eventNotes(e.description),
       // The worker keeps only https links, and so does the app, as the link becomes a button.
       conferenceUrl: e.conference_url && /^https:\/\//i.test(e.conference_url) ? e.conference_url : null,
       providerEventId: e.provider_event_id,
@@ -188,23 +191,35 @@ async function toEvents(data: Row[], detailed: boolean): Promise<CalendarEvent[]
   });
 }
 
+const PAGE = 1000; // rows one request returns
+const MAX_PAGES = 5; // a year of a very busy diary; beyond it the latest days are cut, as before but ten times later
+const DAY_MS = 86_400_000;
+
 /**
  * Events that start before `end` and are still going at `start` or start after it. With `details: false` only
  * what a grid or list needs is fetched (no guests, notes or meeting link), and loadEventDetail fills in the rest.
+ * The query reaches a day either side: all-day events are stored at midnight UTC, which for anyone west of UTC falls
+ * a day off the local midnights, and daysOf drops the extras. It is read in pages so a long agenda is not cut at 1,000.
  */
 export async function loadEvents(start: Date, end: Date, options: { details?: boolean } = {}): Promise<CalendarEvent[]> {
   const detailed = options.details !== false;
-  const from = start.toISOString();
-  const to = end.toISOString();
-  const { data, error } = await supabase
-    .from("calendar_events")
-    .select(detailed ? DETAIL_COLUMNS : GRID_COLUMNS)
-    .lt("starts_at", to)
-    .or(`starts_at.gte.${from},ends_at.gt.${from}`)
-    .order("starts_at")
-    .limit(2000);
-  if (error) throw new Error(`Load events failed (${error.code})`);
-  return toEvents(await openEvents(data as unknown as Row[]), detailed);
+  const from = new Date(start.getTime() - DAY_MS).toISOString();
+  const to = new Date(end.getTime() + DAY_MS).toISOString();
+  const rows: Row[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await supabase
+      .from("calendar_events")
+      .select(detailed ? DETAIL_COLUMNS : GRID_COLUMNS)
+      .lt("starts_at", to)
+      .or(`starts_at.gte.${from},ends_at.gt.${from}`)
+      .order("starts_at")
+      .order("id")
+      .range(page * PAGE, page * PAGE + PAGE - 1);
+    if (error) throw new Error(`Load events failed (${error.code})`);
+    rows.push(...(data as unknown as Row[]));
+    if (data.length < PAGE) break;
+  }
+  return toEvents(await openEvents(rows), detailed);
 }
 
 /** One event with everything about it, or null when it is not there (any more). */
@@ -225,152 +240,6 @@ export function googleEventUrl(e: Pick<CalendarEvent, "providerEventId" | "calen
   } catch {
     return null;
   }
-}
-
-/** A local calendar day as "YYYY-MM-DD". */
-export function dayKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/**
- * The local days an event appears on, within the given days. Timed events show on every day they run,
- * so one that started before the first day shown still appears; ending at midnight does not count that day.
- */
-export function daysOf(event: CalendarEvent, days: string[]): string[] {
-  if (!event.allDay) {
-    const start = new Date(event.startsAt);
-    const first = dayKey(start);
-    const end = event.endsAt ? new Date(event.endsAt) : null;
-    const last = end && end > start ? dayKey(new Date(end.getTime() - 1)) : first;
-    return days.filter((d) => d >= first && d <= last);
-  }
-  // All-day dates are calendar dates, so they are compared as written rather than in local time.
-  const first = event.startsAt.slice(0, 10);
-  const last = event.endsAt ? event.endsAt.slice(0, 10) : null;
-  return days.filter((d) => d >= first && (last && last > first ? d < last : d === first));
-}
-
-/** An event row's second line: when, where and who, such as "09:00 to 10:00 · Office · Sarah Lee". */
-export function eventDetail(e: CalendarEvent) {
-  const who = e.attendees.map((a) => a.name).join(", ");
-  // All Day already sits on the right, so an all-day event's line starts with where.
-  const when = e.allDay ? "" : e.endsAt && e.endsAt !== e.startsAt ? `${timeOf(e.startsAt)} to ${timeOf(e.endsAt)}` : timeOf(e.startsAt);
-  return [when, e.location, who].filter(Boolean).join(" · ") || "All Day";
-}
-
-// ---------------------------------------------------------------------------
-// Changing an event
-// ---------------------------------------------------------------------------
-
-/** The calendars whose events can be edited and answered from here. Outlook Calendar's sign-in is read only for now. */
-export function canChangeEvents(provider: string | undefined) {
-  return provider === "google_calendar" || provider === "icloud_calendar";
-}
-
-/** Your answers to an invitation, as the calendar_updates table spells them. */
-export type EventResponse = "accepted" | "tentative" | "declined";
-export type UpdateScope = "occurrence" | "series";
-export type UpdateInsert = TablesInsert<"calendar_updates">;
-
-/** What the app shows of an event until the worker has made a change: the changed fields, laid over the event. */
-export type EventPatch = Partial<Pick<CalendarEvent, "title" | "startsAt" | "endsAt" | "allDay" | "location" | "description" | "attendees" | "response" | "recurrence">>;
-
-export function withPatch(event: CalendarEvent, patch: EventPatch | undefined): CalendarEvent {
-  return patch ? { ...event, ...patch, pending: true } : event;
-}
-
-const HOUR_MS = 3_600_000;
-const DAY_MS = 24 * HOUR_MS;
-
-/**
- * An event as the dialog's form holds it, and whether its time can be edited there: the form has one date and a
- * start and end time, so an event over several days (or of no length) keeps the time it has.
- */
-export function formOf(event: CalendarEvent): { form: EventForm; editableTime: boolean } {
-  const base = { title: event.title, location: event.location ?? "", description: event.description ?? "", guests: event.attendees.map((a) => a.email), sendInvites: true, addMeet: false, repeat: event.recurrence ?? "" };
-  if (event.allDay) {
-    const days = event.endsAt ? Math.round((Date.parse(`${event.endsAt.slice(0, 10)}T00:00:00Z`) - Date.parse(`${event.startsAt.slice(0, 10)}T00:00:00Z`)) / DAY_MS) : 1;
-    return { form: { ...base, date: event.startsAt.slice(0, 10), allDay: true, startTime: "09:00", endTime: "10:00" }, editableTime: days <= 1 };
-  }
-  const start = new Date(event.startsAt);
-  const end = event.endsAt ? new Date(event.endsAt) : new Date(start.getTime() + HOUR_MS);
-  const nextDay = dateKey(new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1));
-  const form = { ...base, date: dateKey(start), allDay: false, startTime: timeKey(start), endTime: timeKey(end) };
-  const sameDay = dateKey(end) === form.date && end > start;
-  const overnight = dateKey(end) === nextDay && form.endTime < form.startTime;
-  return { form, editableTime: sameDay || overnight };
-}
-
-const sameList = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n");
-
-/**
- * The calendar_updates row for the changes made in the form, with only the fields that changed, and what to show
- * meanwhile. `row` is null when nothing changed. Times are the browser's, as for a new event.
- */
-export function buildUpdate(
-  event: CalendarEvent,
-  form: EventForm,
-  scope: UpdateScope,
-  timeZone: string,
-  contacts: AddressBookContact[],
-): { ok: true; row: UpdateInsert | null; patch: EventPatch } | { ok: false; field: EventField; error: string } {
-  const initial = formOf(event);
-  const accountId = event.accountId ?? "";
-  // A time the form cannot show is kept as it is, so it must not be able to stop an edit of something else.
-  const safe = (f: EventForm): EventForm => (initial.editableTime ? f : { ...f, allDay: false, startTime: "09:00", endTime: "10:00" });
-  const next = buildEventRow(safe(form), accountId, timeZone);
-  if (!next.ok) return next;
-  const before = buildEventRow(safe(initial.form), accountId, timeZone);
-
-  const row: UpdateInsert = { account_id: accountId, event_id: event.id, kind: "update", scope, send_invites: form.sendInvites };
-  const patch: EventPatch = {};
-  if (next.row.title !== initial.form.title.trim()) {
-    row.title = next.row.title;
-    patch.title = next.row.title;
-  }
-  if ((next.row.location ?? "") !== initial.form.location.trim()) {
-    row.location = next.row.location ?? "";
-    patch.location = next.row.location;
-  }
-  if ((next.row.description ?? "") !== initial.form.description.trim()) {
-    row.description = next.row.description ?? "";
-    patch.description = next.row.description;
-  }
-  if (initial.editableTime && (!before.ok || before.row.starts_at !== next.row.starts_at || before.row.ends_at !== next.row.ends_at || before.row.all_day !== next.row.all_day)) {
-    row.starts_at = next.row.starts_at;
-    row.ends_at = next.row.ends_at;
-    row.all_day = next.row.all_day;
-    row.time_zone = timeZone;
-    patch.allDay = next.row.all_day;
-    if (next.row.all_day) {
-      const day = new Date(`${form.date}T00:00:00Z`);
-      patch.startsAt = day.toISOString();
-      patch.endsAt = new Date(day.getTime() + DAY_MS).toISOString();
-    } else {
-      patch.startsAt = next.row.starts_at;
-      patch.endsAt = next.row.ends_at;
-    }
-  }
-  if (!sameList(next.row.attendees, initial.form.guests.map((g) => g.toLowerCase()))) {
-    row.attendees = next.row.attendees;
-    patch.attendees = next.row.attendees.map((email) => {
-      const known = event.attendees.find((a) => a.email === email);
-      const contact = contacts.find((c) => c.emails.some((e) => e.toLowerCase() === email));
-      return known ?? { email, name: contact?.name ?? email, contactId: contact?.id ?? null };
-    });
-  }
-  // A new rule, never none: a series cannot be made a single event from here, and "" leaves a single event as it is.
-  if (form.repeat && !sameRepeat(form.repeat, initial.form.repeat ?? "", new Date(event.startsAt))) {
-    row.recurrence = form.repeat;
-    patch.recurrence = form.repeat;
-  }
-  const changed = row.title !== undefined || row.location !== undefined || row.description !== undefined || row.starts_at !== undefined || row.attendees !== undefined || row.recurrence !== undefined;
-  return { ok: true, row: changed ? row : null, patch };
-}
-
-/** The calendar_updates row that answers an invitation. */
-export function buildResponse(event: CalendarEvent, response: EventResponse): UpdateInsert {
-  return { account_id: event.accountId ?? "", event_id: event.id, kind: "rsvp", scope: "occurrence", response };
 }
 
 export interface UpdateResult {

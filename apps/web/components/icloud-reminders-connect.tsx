@@ -7,7 +7,7 @@ import { RefreshCw } from "lucide-react";
 import { track } from "@/lib/analytics";
 import { postAsUser } from "@/lib/onboarding";
 import { useApp } from "@/lib/store";
-import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/sections";
+import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

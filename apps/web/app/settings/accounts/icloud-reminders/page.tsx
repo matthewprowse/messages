@@ -6,7 +6,7 @@
 import { useEffect } from "react";
 import { track } from "@/lib/analytics";
 import { SettingsHeader } from "@/components/settings-header";
-import { SettingsHeading, SettingsSection } from "@/components/settings/sections";
+import { SettingsHeading, SettingsSection } from "@/components/settings/primitives";
 import { ICloudRemindersConnect } from "@/components/icloud-reminders-connect";
 
 export default function ICloudRemindersSetup() {

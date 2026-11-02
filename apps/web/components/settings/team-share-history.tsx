@@ -6,7 +6,7 @@ import { useCover, coverState, lastDay } from "@/lib/team-cover";
 import { useAuth } from "@/lib/auth";
 import { useExportedChats } from "@/lib/compliance-export";
 import { useTeam } from "@/lib/team";
-import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/sections";
+import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/primitives";
 
 const day = (d: Date | string) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 

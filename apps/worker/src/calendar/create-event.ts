@@ -2,7 +2,9 @@
 // created event into a calendar_events row. Pure functions only, so all of it is unit tested.
 
 import type { Json, Tables, TablesInsert } from "@messages/db";
+import { eventNotes } from "@messages/email-text/event-notes";
 import { isEmailAddress } from "../send/from-address";
+import { findMeetingLink, providerLink } from "./meeting-link";
 import { BAD_RULE, ruleOf, validRule } from "./recurrence";
 
 export const API = "https://www.googleapis.com/calendar/v3";
@@ -187,7 +189,8 @@ export function storedEvent(
     all_day: !event.start?.dateTime,
     location: event.location ?? null,
     attendees: attendees satisfies Json,
-    description: event.description?.trim().slice(0, 5000) || null,
+    // Google sends notes as HTML; they are kept as text so the page never shows tags.
+    description: eventNotes(event.description),
     calendar_name: owner.calendarName ?? null,
     conference_url: meetingUrl(event),
     resource_url: null,
@@ -197,10 +200,13 @@ export function storedEvent(
   };
 }
 
-/** The video link Google has for an event: its Meet link, else any video entry point. Only https. */
-function meetingUrl(event: GoogleEvent): string | null {
-  const link = event.hangoutLink ?? event.conferenceData?.entryPoints?.find((p) => p.entryPointType === "video")?.uri;
-  return link && /^https:\/\//i.test(link) ? link : null;
+/**
+ * The video link for an event: Google's own (its Meet link, else any video entry point), else a Zoom, Meet, Teams or
+ * Webex address in the location or notes, as most Zoom and Teams add-ons write the link there. Only https.
+ */
+export function meetingUrl(event: GoogleEvent): string | null {
+  const own = providerLink(event.hangoutLink) ?? providerLink(event.conferenceData?.entryPoints?.find((p) => p.entryPointType === "video")?.uri);
+  return own ?? findMeetingLink([], [event.location, event.description]);
 }
 
 /**

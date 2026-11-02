@@ -4,12 +4,11 @@
 
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
-import { buildResponse, followUpdate, withPatch, type CalendarEvent, type EventPatch, type EventResponse, type UpdateScope } from "@/lib/calendar";
+import { buildResponse, followUpdate, type CalendarEvent, type EventResponse, type PendingEdit } from "@/lib/calendar";
 import { supabase } from "@/lib/supabase";
 import type { DeleteScope } from "@/components/delete-event-dialog";
 
 export type HiddenEvent = { token: string; id: string; seriesId: string | null; scope: DeleteScope };
-export type PendingEdit = { token: string; id: string; seriesId: string | null; scope: UpdateScope; patch: EventPatch };
 
 export function usePendingChanges(reload: () => void) {
   // Events saved in the dialog that the worker has not created yet, shown as if they were. One leaves this list when
@@ -24,20 +23,6 @@ export function usePendingChanges(reload: () => void) {
   // days reload after the worker made it, or straight away when it could not.
   const [edits, setEdits] = useState<PendingEdit[]>([]);
   const updated = useRef(new Set<string>());
-
-  // An event with the changes saved for it laid over it. A change to a whole series shows on the rest of the series
-  // too, except its time, which moves each occurrence by its own amount once the days reload.
-  const applyEdits = (event: CalendarEvent) => {
-    let patch: EventPatch | undefined;
-    for (const edit of edits) {
-      if (edit.id === event.id) patch = { ...patch, ...edit.patch };
-      else if (edit.scope === "series" && edit.seriesId && edit.seriesId === event.seriesId) {
-        const { startsAt: _s, endsAt: _e, allDay: _a, ...rest } = edit.patch;
-        patch = { ...patch, ...rest };
-      }
-    }
-    return withPatch(event, patch);
-  };
 
   // Answers an invitation. The answer shows at once, marked as saving, while the worker sends it to the calendar.
   const answer = useCallback(
@@ -66,7 +51,7 @@ export function usePendingChanges(reload: () => void) {
     [reload],
   );
 
-  return { queued, setQueued, created, hidden, setHidden, deleted, edits, setEdits, updated, applyEdits, answer };
+  return { queued, setQueued, created, hidden, setHidden, deleted, edits, setEdits, updated, answer };
 }
 
 export type PendingChanges = ReturnType<typeof usePendingChanges>;

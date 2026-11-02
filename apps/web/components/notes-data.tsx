@@ -6,16 +6,19 @@
 // is skipped when nothing changed since the last one. Kept between visits, so coming back to Notes shows
 // the list straight away while it refreshes. The list loads titles and excerpts only; a note's text is
 // downloaded and opened when the note opens, in the background for older notes without an excerpt, and for
-// every note when searching.
+// every note when searching. Changes made in another tab or on another device arrive by Realtime and when the
+// tab comes back (components/use-notes-sync.ts); a save that would overwrite one stops as a conflict instead.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { useAuth } from "@/lib/auth";
-import { createNote, deleteNote, loadNoteBodies, loadNotes, pinNote, prefetchNoteFiles, removeNoteFiles, saveNote, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
+import { createNote, deleteNote, insertNoteRow, loadNoteBodies, loadNoteRemote, loadNotes, pinNote, prefetchNoteFiles, removeNoteFiles, saveNote, saveNoteCopy, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
 import { isBlankNote, noteExcerpt, sortNotes, unusedFiles } from "@/lib/note-text";
-import { NoteSaver, noteReady, trackCreating, type SaveState } from "@/lib/note-saver";
+import { mergeLoaded } from "@/lib/note-merge";
+import { NoteSaver, isCreating, noteReady, trackCreating, type RemoteNote, type SaveState } from "@/lib/note-saver";
+import { useNotesSync } from "@/components/use-notes-sync";
 
 // The save and race logic lives in lib/note-saver.ts; this file is the React side: state, loading and the context.
 export { noteReady };
@@ -42,7 +45,10 @@ interface NotesValue {
   /** Rewrites an opened note that is still stored as plaintext or without an excerpt, sealed. */
   upgrade: (id: string) => Promise<void>;
   noteById: (id: string) => Note | undefined;
-  saveState: (id: string) => SaveState | undefined;
+  /** What another tab or device left, while the note waits on a choice; null when its row is gone. */
+  conflictOf: (id: string) => RemoteNote | null | undefined;
+  /** Settles a conflict: keep both versions (the other becomes a new note), keep only this one, or take the other. */
+  resolveConflict: (id: string, how: "both" | "mine" | "theirs") => Promise<void>;
   create: () => Promise<Note | null>;
   /** The text can be a function, read when the save is due. */
   edit: (id: string, fields: { title?: string; body?: string | (() => string) }) => void;
@@ -52,11 +58,16 @@ interface NotesValue {
   /** Whether the AI is given this note with every draft. */
   draftWith: (id: string, on: boolean) => void;
   remove: (id: string) => Promise<void>;
-  /** Called when a note is closed: drops it if it was left empty, and deletes files taken out of it. */
-  close: (id: string, files: NoteFile[]) => void;
+  /**
+   * Called when a note is closed: drops it if it was left empty, and deletes files taken out of it. files is null
+   * when the note's files could not be listed, and then nothing is dropped or deleted (it may only look empty).
+   */
+  close: (id: string, files: NoteFile[] | null) => void;
 }
 
 const NotesContext = createContext<NotesValue | null>(null);
+// Save states live in a context of their own, so a note starting or finishing a save does not redraw the list.
+const SaveStatesContext = createContext<Record<string, SaveState>>({});
 
 // The notes as last loaded, for the user who loaded them, so reopening Notes shows them at once.
 let cached: { userId: string; notes: Note[] } | null = null;
@@ -84,33 +95,38 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setState = useCallback((id: string, state: SaveState) => setStates((s) => (s[id] === state ? s : { ...s, [id]: state })), []);
-  const [saver] = useState(() => new NoteSaver({ notes: () => notesRef.current, update: commit, setState, persist: saveNote, ready: noteReady }));
-  const { save, upgrade, edit, current, resolve } = saver;
+  const [saver] = useState(() => new NoteSaver({
+    notes: () => notesRef.current, update: commit, setState, persist: saveNote, ready: noteReady,
+    remote: loadNoteRemote, recreate: (id) => insertNoteRow(id),
+  }));
+  const { save, upgrade, current, resolve } = saver;
 
-  const load = useCallback(async (isCancelled: () => boolean = () => false) => {
-    setError(false);
+  // While a note is being edited it keeps its place in the list (its edited time when editing began), so the list does
+  // not move under the cursor; it takes its new place once the note is closed.
+  const holds = useRef(new Map<string, string>());
+  const edit = useCallback<NotesValue["edit"]>((id, fields) => {
+    if (!holds.current.has(id)) {
+      const at = notesRef.current.find((n) => n.id === id)?.updatedAt;
+      if (at) holds.current.set(id, at);
+    }
+    saver.edit(id, fields);
+  }, [saver]);
+
+  const load = useCallback(async (isCancelled: () => boolean = () => false, quiet = false) => {
+    if (!quiet) setError(false);
     try {
       const rows = await loadNotes();
       if (isCancelled()) return;
-      commit((prev) => {
-        const before = new Map(prev.map((n) => [n.id, n]));
-        return rows.map((row) => {
-          const old = before.get(row.id);
-          // Notes being edited are left as they are, and text already opened is not closed again.
-          if (old && saver.isEditing(row.id)) return old;
-          saver.dropLatest(row.id);
-          if (old && !old.unloaded && old.updatedAt === row.updatedAt) {
-            return { ...row, body: old.body, unloaded: false, excerpt: row.excerpt ?? noteExcerpt(old.body), stale: row.stale && old.stale };
-          }
-          return row;
-        });
-      });
+      const editing = new Set(rows.filter((r) => saver.isEditing(r.id)).map((r) => r.id));
+      commit((prev) => mergeLoaded(prev, rows, { isEditing: (id) => saver.isEditing(id), isCreating }));
+      // The list now holds what is stored, so versions and editor text remembered for these notes are dropped.
+      for (const row of rows) if (!editing.has(row.id)) saver.dropLatest(row.id);
     } catch {
-      if (isCancelled()) return;
+      if (isCancelled() || quiet) return;
       setError(true);
       toast.error("Could not load your notes.");
     } finally {
-      if (!isCancelled()) setLoading(false);
+      if (!isCancelled() && !quiet) setLoading(false);
     }
   }, [commit, saver]);
 
@@ -124,6 +140,11 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     void load();
   }, [load]);
+
+  // Reads the list again without a spinner or an error toast: for other tabs' changes and the tab coming back.
+  const refresh = useCallback(() => { void load(undefined, true); }, [load]);
+  const has = useCallback((id: string) => notesRef.current.some((n) => n.id === id), []);
+  useNotesSync({ userId, saver, refresh, has });
 
   // Downloads and opens the text of these notes. A note that could not be had is marked failed, so the
   // background loop does not ask for it again.
@@ -142,7 +163,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
             if (!need.includes(n.id) || !n.unloaded) return n;
             const got = bodies.get(n.id);
             if (!got) return { ...n, failed: true };
-            return { ...n, body: got.body, unloaded: false, failed: undefined, excerpt: n.excerpt ?? noteExcerpt(got.body), stale: n.stale || got.plain };
+            return { ...n, body: got.body, unloaded: false, failed: undefined, serverAt: got.updatedAt, excerpt: n.excerpt ?? noteExcerpt(got.body), stale: n.stale || got.plain };
           }));
           for (const [id, got] of bodies) {
             const note = notesRef.current.find((n) => n.id === id);
@@ -207,33 +228,20 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     if (!loading && needsExcerpt) loadMore();
   }, [loading, needsExcerpt, loadMore]);
 
-  // Leaving Notes, or the page, saves what is still waiting. Closing the tab with a save still to finish
-  // asks first, so the change is not lost.
-  useEffect(() => {
-    const warn = (e: BeforeUnloadEvent) => {
-      if (!saver.busy) return;
-      saver.flushAll();
-      e.preventDefault();
-    };
-    window.addEventListener("pagehide", saver.flushAll);
-    window.addEventListener("beforeunload", warn);
-    return () => {
-      window.removeEventListener("pagehide", saver.flushAll);
-      window.removeEventListener("beforeunload", warn);
-      saver.flushAll();
-    };
-  }, [saver]);
-
   const create = useCallback(async () => {
     const { note, saved } = createNote();
     saver.setSaved(note.id, note);
-    trackCreating(note.id, saved);
+    const written = saved.then((at) => {
+      saver.setVersion(note.id, at);
+      commit((prev) => prev.map((n) => (n.id === note.id ? { ...n, serverAt: at } : n)));
+    });
+    trackCreating(note.id, written);
     commit((prev) => [note, ...prev]);
     track("feature_used", { feature: "note_created" });
-    saved.catch(() => {
-      saver.abandon(note.id);
-      commit((prev) => prev.filter((n) => n.id !== note.id));
-      toast.error("Could not create a note.");
+    // The note stays, with what was typed, and its row is written again by the next save.
+    written.catch(() => {
+      saver.markFailed(note.id);
+      toast.error("Could not create the note. It will keep trying to save.");
     });
     return note;
   }, [commit, saver]);
@@ -270,20 +278,44 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     }
   }, [commit, current, saver]);
 
-  const close = useCallback((id: string, files: NoteFile[]) => {
+  const close = useCallback((id: string, files: NoteFile[] | null) => {
     resolve(id);
+    // The note takes its place in the list again.
+    if (holds.current.delete(id)) commit((prev) => [...prev]);
     const note = current(id);
-    if (!note || note.unloaded) return;
-    if (isBlankNote(note) && files.length === 0) {
+    // A note that is not open, or whose text or files could not be had, may only look empty: leave it be.
+    if (!note || note.unloaded || note.failed || files === null) return;
+    if (isBlankNote(note) && files.length === 0 && saver.conflictOf(id) === undefined) {
       void remove(id);
       return;
     }
     const unused = unusedFiles(files, note.body);
     // Files are deleted only once the body without them is saved; offline, the saved body may still point at them.
     if (unused.length) void save(id).then((saved) => (saved ? removeNoteFiles(unused) : undefined)).catch(() => {});
-  }, [remove, save, resolve, current]);
+  }, [remove, save, resolve, current, commit, saver]);
 
-  const sorted = useMemo(() => sortNotes(notes), [notes]);
+  const resolveConflict = useCallback(async (id: string, how: "both" | "mine" | "theirs") => {
+    if (how === "theirs") { saver.useTheirs(id); return; }
+    const other = saver.conflictOf(id);
+    if (how === "both" && other) {
+      try {
+        const copy = await saveNoteCopy({ title: `${other.title.trim() || "Untitled Note"} (Other Version)`, body: other.body });
+        saver.setSaved(copy.id, copy);
+        commit((prev) => [copy, ...prev]);
+      } catch {
+        toast.error("Could not keep the other version.");
+        return;
+      }
+    }
+    if (!(await saver.keepMine(id))) toast.error("Could not save the note.");
+  }, [commit, saver]);
+
+  // Notes being edited are sorted as they stood when editing began.
+  const sorted = useMemo(() => {
+    if (!notes.some((n) => holds.current.has(n.id))) return sortNotes(notes);
+    const byId = new Map(notes.map((n) => [n.id, n]));
+    return sortNotes(notes.map((n) => (holds.current.has(n.id) ? { ...n, updatedAt: holds.current.get(n.id)! } : n))).map((n) => byId.get(n.id)!);
+  }, [notes]);
   const value = useMemo<NotesValue>(() => ({
     notes: sorted,
     loading,
@@ -295,17 +327,27 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     ensureAllBodies,
     upgrade,
     noteById: (id) => notes.find((n) => n.id === id),
-    saveState: (id) => states[id],
+    conflictOf: saver.conflictOf.bind(saver),
+    resolveConflict,
     create,
     edit,
-    flush: save,
+    flush: (id) => save(id),
     pin,
     draftWith,
     remove,
     close,
-  }), [sorted, notes, loading, error, anyUnloaded, reload, ensureBody, warm, ensureAllBodies, upgrade, states, create, edit, save, pin, draftWith, remove, close]);
+  }), [sorted, notes, loading, error, anyUnloaded, reload, ensureBody, warm, ensureAllBodies, upgrade, resolveConflict, create, edit, save, pin, draftWith, remove, close]);
 
-  return <NotesContext.Provider value={value}>{children}</NotesContext.Provider>;
+  return (
+    <NotesContext.Provider value={value}>
+      <SaveStatesContext.Provider value={states}>{children}</SaveStatesContext.Provider>
+    </NotesContext.Provider>
+  );
+}
+
+/** How a note's last save went, or undefined before it has been changed. Redraws only its callers, not the list. */
+export function useSaveState(id: string): SaveState | undefined {
+  return useContext(SaveStatesContext)[id];
 }
 
 export function useNotes() {

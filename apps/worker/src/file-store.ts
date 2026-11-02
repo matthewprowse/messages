@@ -9,7 +9,8 @@ import type { TablesUpdate } from "@messages/db";
 import { db, must } from "./db";
 import { env } from "./env";
 import { errorCode, log } from "./log";
-import { canThumbnail, makeThumbnail, thumbPathFor } from "./photos/thumbnail";
+import { canTilePicture, makeTilePicture } from "./photos/tile-picture";
+import { thumbPathFor } from "./photos/thumbnail";
 import { ATTACHMENTS_BUCKET, attachmentPath, storedType, uploadObject } from "./storage";
 import { isVideoLink, maySave, noteSaved, stateFor, type CapState, type NotKept } from "./storage-rules";
 import { keysFor } from "./vault";
@@ -46,7 +47,7 @@ export interface KeepDeps {
 }
 
 /**
- * Writes the sealed thumbnail beside a just-stored photo and records it. The thumbnail is a nicety: any failure here
+ * Writes the sealed thumbnail beside a just-stored photo or PDF (its first page) and records it. The thumbnail is a nicety: any failure here
  * (an unreadable image, storage, the column not yet migrated) is logged and ignored, and tiles use the full file.
  */
 export async function keepThumbnail(
@@ -55,9 +56,9 @@ export async function keepThumbnail(
   path: string,
   deps: Pick<KeepDeps, "upload" | "setThumb">,
 ): Promise<string | null> {
-  if (file.kind !== "image" || !deps.setThumb || !canThumbnail(file.mimeType)) return null;
+  if (!deps.setThumb || !canTilePicture(file.kind, file.mimeType)) return null;
   try {
-    const thumb = await makeThumbnail(file.bytes);
+    const thumb = await makeTilePicture(file.kind, file.bytes);
     if (!thumb) return null;
     const sealed = await encryptBytes(keys, FIELD.attachmentData, new Uint8Array(thumb));
     const thumbPath = thumbPathFor(path);
