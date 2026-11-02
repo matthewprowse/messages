@@ -64,7 +64,8 @@ export function useReactorName(contacts: Contact[]): NameOf {
 
 /** Reactions under a bubble, one chip per emoji with a count. Tapping one sets or removes yours. */
 /** With inline, the chips sit in a line of text rather than under a bubble, so they take no margin or padding of their own. */
-export function ReactionChips({ m, me, nameOf, onReact, inline = false }: { m: Message; me: boolean; nameOf: NameOf; onReact: OnReact; inline?: boolean }) {
+/** With canReact false (a channel that cannot send reactions, see lib/reactions.ts) the chips only show and cannot be tapped. */
+export function ReactionChips({ m, me, nameOf, onReact, canReact = true, inline = false }: { m: Message; me: boolean; nameOf: NameOf; onReact: OnReact; canReact?: boolean; inline?: boolean }) {
   const chips = useMemo(() => {
     const byEmoji = new Map<string, string[]>();
     for (const [who, emoji] of Object.entries(m.reactions ?? {})) byEmoji.set(emoji, [...(byEmoji.get(emoji) ?? []), who]);
@@ -80,9 +81,10 @@ export function ReactionChips({ m, me, nameOf, onReact, inline = false }: { m: M
               type="button"
               aria-pressed={chip.mine}
               aria-label={`${chip.emoji} ${chip.people.length}`}
+              disabled={!canReact}
               onClick={() => onReact(m, chip.mine ? "" : chip.emoji)}
               className={cn(
-                "inline-flex h-6 items-center gap-1 rounded-full border bg-background px-2 text-xs shadow-xs transition-colors hover:bg-muted",
+                "inline-flex h-6 items-center gap-1 rounded-full border bg-background px-2 text-xs shadow-xs transition-colors enabled:hover:bg-muted disabled:cursor-default",
                 chip.mine && "border-primary/40 bg-secondary",
               )}
             >

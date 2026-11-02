@@ -31,6 +31,8 @@ import { useContactsData } from "@/components/contacts-data";
 import { setContactVip } from "@/lib/contact-relations-io";
 import { statusLine } from "@/lib/relationship-status";
 import { useMeetings } from "@/components/meetings-data";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TimelineTab } from "@/components/timeline/timeline-tab";
 
 // Email goes through New Email, a first WhatsApp message through New WhatsApp Message, and an event
 // with them as a guest through New Event. An existing WhatsApp chat opens instead of starting another.
@@ -96,6 +98,8 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
   const [starred, setStarred] = useState<{ id: string; vip: boolean } | null>(null);
   // An address picked in Details opens New Email to it.
   const [email, setEmail] = useState({ open: false, to: "" });
+  // Contacts with any conversation open on their timeline; a contact made by hand opens on the overview.
+  const [tab, setTab] = useState<"timeline" | "overview">(contact && contact.conversations.length > 0 ? "timeline" : "overview");
 
   if (!contact) {
     return <EmptyState icon={Users} title="Contact Not Found" description="They may have been merged or deleted." action={<Button variant="secondary" asChild><Link href="/contacts">Back to Contacts</Link></Button>} />;
@@ -173,6 +177,14 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
         </div>
       </div>
 
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "timeline" | "overview")}>
+        <TabsList>
+          <TabsTrigger value="timeline">Timeline</TabsTrigger>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tab === "timeline" ? <TimelineTab key={contact.id} contact={contact} /> : <>
       {contact.summary && (
         <Section title="Summary">
           <p className="text-sm leading-6 text-muted-foreground">{contact.summary}</p>
@@ -210,6 +222,7 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
           <AttachmentGrid items={contact.attachments} />
         </Section>
       )}
+      </>}
     </DetailPage>
   );
 }

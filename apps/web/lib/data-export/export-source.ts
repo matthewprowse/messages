@@ -19,6 +19,7 @@ import { loadEvents } from "../calendar";
 import { loadNoteBodies, loadNotes } from "../notes";
 import { mapTask, TASK_COLUMNS } from "../tasks";
 import type { Contact } from "../types";
+import { browserExportExtras } from "./export-extras";
 import type { ExportSource, SourceFile, SourceMessage, SourceThread } from "./build-export";
 
 const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram", teams: "Teams", zoom: "Zoom", google_chat: "Google Chat" };
@@ -34,6 +35,8 @@ export function browserExportSource(): ExportSource {
   const stored = new Map<string, Stored>();
 
   return {
+    extras: browserExportExtras,
+
     async threads() {
       const [me, people] = await Promise.all([myId(), everyone()]);
       const names = new Map(people.map((c) => [c.id, c.name]));
@@ -90,6 +93,15 @@ export function browserExportSource(): ExportSource {
       const rows = await allRows("Load promises", (from, to) => supabase.from("commitments").select("id, thread_id, owner, text, due_on, status, done_at, created_at").order("id").range(from, to));
       await openRows(rows, [["text", FIELD.taskTitle]] as const);
       return rows;
+    },
+
+    async matters() {
+      const [matters, links] = await Promise.all([
+        allRows("Load matters", (from, to) => supabase.from("matters").select("id, contact_id, name, kind, status, created_at, closed_at").order("id").range(from, to)),
+        allRows("Load matter links", (from, to) => supabase.from("matter_links").select("id, matter_id, thread_id, note_id, attachment_id, meeting_id").order("id").range(from, to)),
+      ]);
+      await openRows(matters, [["name", FIELD.name]] as const);
+      return [{ matters, links }];
     },
 
     async automations() {

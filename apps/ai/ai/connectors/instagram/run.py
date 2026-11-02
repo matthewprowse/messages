@@ -21,6 +21,7 @@ from typing import Any
 
 from ... import log
 from ...config import _load_env_file, check_encryption, flag_on
+from ...flags import DISABLE_INSTAGRAM, flags_for
 from ...supabase import Supabase, missing_relation
 from ...vault import Vault
 from .credentials import OFFICIAL, kind_of
@@ -95,7 +96,7 @@ class Accounts:
             seen.add(account_id)
             creds = row.get("account_credentials")
             updated = (creds[0] if isinstance(creds, list) and creds else creds or {}).get("updated_at")
-            wanted = row.get("status") in RUNNING and bool(updated)
+            wanted = row.get("status") in RUNNING and bool(updated) and not self.switched_off(row)
             with self.lock:
                 current = self.running.get(account_id)
             if current and (not wanted or current.credentials_at != updated):
@@ -113,6 +114,11 @@ class Accounts:
             self.start({"id": account_id, "user_id": row["user_id"]}, str(updated))
         for account_id in [a for a in self.running if a not in seen]:
             self.halt(account_id)
+
+    def switched_off(self, row: dict[str, Any]) -> bool:
+        """Whether the owner's kill switch (Admin, Flags) has Instagram off for this account's person. A paused account is halted like one the person paused."""
+        db = getattr(self.store, "db", None)
+        return db is not None and flags_for(db).is_on(DISABLE_INSTAGRAM, row.get("user_id"))
 
     def start(self, account: dict[str, Any], credentials_at: str) -> None:
         stop = threading.Event()

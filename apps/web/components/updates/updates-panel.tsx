@@ -64,6 +64,7 @@ export function UpdatesPanel() {
         <ViewButtons label="Show" value={view} onSelect={setView} items={[{ key: "all", label: `All (${counts.all})` }, { key: "drafts", label: `Drafts (${counts.drafts})` }, { key: "published", label: `Published (${counts.published})` }]} />
         <Button variant="secondary" className="ml-auto shrink-0" onClick={() => edit()}>New Update</Button>
       </PaneControls>
+      <p className="text-xs text-muted-foreground">To start from your commits, run pnpm updates:draft in the terminal. It prints a rough list of changes to rewrite in plain words; nothing is saved.</p>
       {updates && updates.length > 0 && <SearchBand value={search} onChange={setSearch} placeholder="Search Updates" />}
       <div>
         {updates === null && !failed && <div className="flex flex-col gap-3"><Skeleton className="h-32 w-full rounded-lg" /><Skeleton className="h-32 w-full rounded-lg" /></div>}

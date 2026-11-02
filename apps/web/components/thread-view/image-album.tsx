@@ -27,7 +27,7 @@ export const ImageAlbum = memo(function ImageAlbum({ ms, showMeta, sender, sende
         </div>
         <BubbleActions m={last} canReact={whatsapp} revealed={touch.revealed} onReply={onReply} onReact={onReact} />
       </div>
-      {ms.map((m) => <ReactionChips key={m.id} m={m} me={me} nameOf={nameOf} onReact={onReact} />)}
+      {ms.map((m) => <ReactionChips key={m.id} m={m} me={me} nameOf={nameOf} onReact={onReact} canReact={whatsapp} />)}
       {showMeta && (
         <div className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground">
           {sender && <ContactAvatar contact={senderContact} className="size-6" />}

@@ -7,6 +7,8 @@ import { errorCode, log } from "../log";
 import { ownsAccount } from "../shard";
 import { startStaggered } from "../staggered-start";
 import { openAddressRows } from "../vault";
+import { connectorBlocked } from "../flags";
+import { flags } from "../flags-db";
 import type { Tables } from "@messages/db";
 import { CONNECTORS } from "./registry";
 import { running, stopConnector } from "./state";
@@ -55,9 +57,11 @@ async function reconcileOnce() {
   // decides on, so nothing is decrypted for an account that is already running and unchanged.
   // Only the accounts this shard owns: a connector for any other account is stopped by the last loop below.
   // Paged and ordered: past 1000 rows the API cuts a plain read off, and the last loop would stop connectors whose rows were cut.
+  // The connector kill switches (Admin, Flags) are read once per pass; a blocked account is treated like a paused one: stopped if running, not started.
+  await flags.refresh();
   const rows = (
     await allRows(
-      (from, to) => db.from("accounts").select("id, provider, status, account_credentials(updated_at)").in("provider", Object.keys(CONNECTORS)).order("id").range(from, to),
+      (from, to) => db.from("accounts").select("id, user_id, provider, status, account_credentials(updated_at)").in("provider", Object.keys(CONNECTORS)).order("id").range(from, to),
       "load accounts",
     )
   ).filter((a) => ownsAccount(a.id));
@@ -66,7 +70,7 @@ async function reconcileOnce() {
   // Accounts to start (new, or with fresh credentials) are read in full below; the rest never are.
   const wantedStart = (account: (typeof rows)[number]) => {
     const updatedAt = account.account_credentials?.updated_at;
-    if (account.status === "disconnected" || updatedAt === undefined) return false;
+    if (account.status === "disconnected" || updatedAt === undefined || connectorBlocked(flags, account.provider, account.user_id)) return false;
     return running.get(account.id)?.credentialsUpdatedAt !== updatedAt;
   };
   const startIds = rows.filter(wantedStart).map((a) => a.id);
@@ -80,7 +84,7 @@ async function reconcileOnce() {
   for (const { account_credentials: credentials, ...summary } of rows) {
     const current = running.get(summary.id);
     const updatedAt = credentials?.updated_at;
-    const wanted = summary.status !== "disconnected" && updatedAt !== undefined;
+    const wanted = summary.status !== "disconnected" && updatedAt !== undefined && !connectorBlocked(flags, summary.provider, summary.user_id);
 
     if (!wanted) {
       if (current && (await stopConnector(summary.id, current))) {

@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 
 from . import log
+from .flags import flags_for
 from .gemini_types import BUDGET_CHECK_S, BUDGET_EXEMPT, DEFAULT_LIMITS, SETUP_FEATURES, GeminiError, Hold, UsageContext
 
 
@@ -94,6 +95,9 @@ class BudgetMixin:
         share until release, and counted with what was spent since the allowance was read, so the room left is what
         the share has over both. strict also refuses a call whose whole estimate does not fit, for a job that
         reserves its full cost up front (a meeting). Returns the dollars held, for release."""
+        # The owner's kill switches (Admin, Flags) come first, and bite even for exempt features: pause_all_ai means all.
+        if flags_for(self._db).blocks_feature(ctx.feature, ctx.user_id):
+            raise GeminiError(None, "budget_paused")
         if ctx.feature in BUDGET_EXEMPT:
             return 0.0
         if ctx.feature in SETUP_FEATURES and self._setup_left(ctx.user_id) > 0:

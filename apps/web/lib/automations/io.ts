@@ -94,7 +94,7 @@ export async function waitForPreview(id: string, signal: AbortSignal): Promise<{
     }
     await new Promise((r) => setTimeout(r, PREVIEW_POLL_MS));
   }
-  return { error: signal.aborted ? "" : "The preview is taking too long. Check that the AI worker is running, then try again." };
+  return { error: signal.aborted ? "" : "The preview is taking too long. Please try again in a moment." };
 }
 
 /** Removes a preview request once it has been read. Best effort. */

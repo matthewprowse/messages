@@ -81,7 +81,7 @@ export function useTasks({ userId, stored, rawDispatch, stateRef, saveFailed }: 
         saveFailed();
         return;
       }
-      const result = await followTaskUpdate(id, 60_000, 2000, "Creating the task is taking too long. Check that the worker is running.");
+      const result = await followTaskUpdate(id, 60_000, 2000, "Creating the task is taking too long. Please try again in a moment.");
       // The worker has stored the real task by now (its Realtime insert replaces this one); on failure it never will.
       rawDispatch({ type: "removeTask", id: temp });
       toast(result.status === "failed" ? (result.error ?? "The task could not be created.") : "Task created.");
@@ -102,7 +102,7 @@ export function useTasks({ userId, stored, rawDispatch, stateRef, saveFailed }: 
         saveFailed();
         return;
       }
-      const result = await followTaskUpdate(id, 60_000, 2000, "Saving the task is taking too long. Check that the worker is running.");
+      const result = await followTaskUpdate(id, 60_000, 2000, "Saving the task is taking too long. Please try again in a moment.");
       if (result.status === "failed") {
         restore();
         toast(result.error ?? "The task could not be changed.");
@@ -122,7 +122,7 @@ export function useTasks({ userId, stored, rawDispatch, stateRef, saveFailed }: 
         saveFailed();
         return;
       }
-      const result = await followTaskUpdate(id, 60_000, 2000, "Deleting the task is taking too long. Check that the worker is running.");
+      const result = await followTaskUpdate(id, 60_000, 2000, "Deleting the task is taking too long. Please try again in a moment.");
       if (result.status === "failed") {
         rawDispatch({ type: "upsertTask", task });
         toast(result.error ?? "The task could not be deleted.");

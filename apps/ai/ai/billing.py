@@ -66,6 +66,16 @@ def persist_to(db) -> Callable[[bool, str | None], None]:
     return write
 
 
+def persist_unpriced(db, models: list[str]) -> None:
+    """Writes the configured models that have no price to ai_status, so Admin can raise an alert. Never raises: the worker
+    starts either way (and the models are billed at the dearest known price, see pricing.py)."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        db.upsert("ai_status", {"id": True, "unpriced_models": sorted(set(models)), "updated_at": now}, on_conflict="id")
+    except Exception:
+        pass
+
+
 class Breaker:
     def __init__(self, window_s: float = TRIP_WINDOW_S, clock: Callable[[], float] = time.monotonic, on_change: Callable[[bool, str | None], None] | None = None):
         self._window = window_s

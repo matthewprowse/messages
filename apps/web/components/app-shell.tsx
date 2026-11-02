@@ -18,6 +18,7 @@ import { useNow } from "@/components/summary/use-now";
 import { PwaBoot } from "@/components/pwa-boot";
 import { NoteCaptureShortcut } from "@/components/note-capture";
 import { SyncBar } from "@/components/sync-bar";
+import { WhatsNewDialog } from "@/components/whats-new/whats-new-dialog";
 import { UsageRing } from "@/components/usage-ring";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -253,6 +254,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <BottomBar hidden={isDetail} />
       {onboarding && <Suspense><SetupDialog /></Suspense>}
       {reviewPending && <TeamReview />}
+      <WhatsNewDialog />
     </div>
   );
 }

@@ -13,7 +13,7 @@ export const OWNED_TABLES = [
   "message_embeddings", "message_versions", "messages", "note_attachments", "note_links", "notes", "organizations", "outbox", "outbox_attachments",
   "priority_rules", "profiles", "push_subscriptions", "saved_views", "share_jobs", "storage_deletions", "style_rules", "task_updates",
   "tasks", "thread_label_removals", "thread_labels", "thread_links", "thread_notes", "thread_participants", "threads", "unsubscribes", "user_keys", "user_templates", "workspace_activity", "workspace_contact_agents",
-  "client_cards", "event_preps",
+  "client_cards", "event_preps", "matter_links", "matters",
   "workspace_inbox_access", "workspace_members", "writing_examples",
 ] as const;
 

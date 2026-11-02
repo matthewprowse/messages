@@ -7,7 +7,9 @@
 //   contacts/contacts.csv, contacts.vcf
 //   notes/<title>.md
 //   tasks/tasks.json, tasks/promises.json, calendar/events.ics, calendar/events.json
-//   profile/profile.json             name, About You, AI settings, rules, writing examples, connected accounts (never credentials)
+//   organise/, writing/, notes/note-links.json, conversations/linked-chats.json and message-history.json,
+//   contacts/client-cards.json, files/document-cards.json   labels, saved views, templates, signatures, links, cards, history
+//   profile/profile.json            name, About You, AI settings, rules, writing examples, connected accounts (never credentials)
 //   files/<kind>/...                 only when attachments are chosen
 //   problems.txt                     only when something could not be read; says what and why, never contents
 
@@ -17,6 +19,8 @@ import { ZipWriter } from "./zip-writer";
 export interface SourceThread { id: string; title: string; channel: string; status: string; lastMessageAt: string }
 export interface SourceMessage { id: string; sentAt: string; direction: "in" | "out"; who: string; address?: string; subject?: string; text: string; quoted?: string; transcript?: string; files: string[] }
 export interface SourceNote { id: string; title: string; body: string; pinned: boolean; createdAt: string; updatedAt: string }
+/** One more file of already-opened rows (labels, templates, links and so on); `what` names it in problems.txt. */
+export interface ExportExtra { path: string; what: string; read: () => Promise<unknown[]> }
 export interface SourceFile { id: string; name: string; kind: "attachment" | "note"; bytes: number }
 
 /** Where the export reads from. Every method may throw; the build records the failure and carries on where it can. */
@@ -28,8 +32,12 @@ export interface ExportSource {
   tasks(): Promise<unknown[]>;
   /** Promises found in conversations; a source without them leaves the file out. */
   commitments?(): Promise<unknown[]>;
+  /** A contact's matters and what each holds (ids only); a source without them leaves the file out. */
+  matters?(): Promise<unknown[]>;
   /** Automations and their run history; a source without them leaves the file out. */
   automations?(): Promise<unknown[]>;
+  /** Everything added since the core content (labels, templates, signatures, links, cards, message versions); optional. */
+  extras?(): ExportExtra[];
   events(): Promise<(ExportEvent & { calendar?: string | null })[]>;
   settings(): Promise<Record<string, unknown>>;
   /** Stored files, only asked for when attachments are chosen. */
@@ -118,12 +126,19 @@ export async function buildExport(source: ExportSource, options: { attachments: 
   const tasks = await note("Tasks", () => source.tasks(), [] as unknown[]);
   zip.add("tasks/tasks.json", JSON.stringify(tasks, null, 2));
   if (source.commitments) zip.add("tasks/promises.json", JSON.stringify(await note("Promises", () => source.commitments!(), [] as unknown[]), null, 2));
+  if (source.matters) zip.add("tasks/matters.json", JSON.stringify(await note("Matters", () => source.matters!(), [] as unknown[]), null, 2));
   if (source.automations) zip.add("tasks/automations.json", JSON.stringify(await note("Automations", () => source.automations!(), [] as unknown[]), null, 2));
   const events = await note("Calendar", () => source.events(), [] as (ExportEvent & { calendar?: string | null })[]);
   zip.add("calendar/events.ics", icsCalendar(events, now));
   zip.add("calendar/events.json", JSON.stringify(events, null, 2));
   counts.tasks = tasks.length;
   counts.events = events.length;
+
+  // Labels, templates, signatures, links, cards and message history: one file each, a failure in one leaves the rest.
+  for (const extra of source.extras?.() ?? []) {
+    const rows = await note(extra.what, extra.read, null as unknown[] | null);
+    if (rows) zip.add(extra.path, JSON.stringify(rows, null, 2));
+  }
 
   // Profile and AI settings
   zip.add("profile/profile.json", JSON.stringify(await note("Profile", () => source.settings(), {}), null, 2));
@@ -164,6 +179,7 @@ function readme(now: Date, c: Record<string, number>, withFiles: boolean, proble
     `Notes: ${c.notes}, in notes/ as Markdown`,
     `Tasks: ${c.tasks}, in tasks/tasks.json`,
     `Calendar events: ${c.events}, in calendar/ as .ics and JSON`,
+    "Labels, saved views, templates, snippets, signatures, links, client cards, document cards and edited or deleted messages: organise/, writing/ and the matching folders above",
     "Your profile, About You and AI settings: profile/profile.json",
     withFiles ? `Files: ${c.files}, in files/` : "Files: not included. Download again with Include Files switched on to get them.",
     problems > 0 ? `\nSome things could not be included: see problems.txt.` : "",

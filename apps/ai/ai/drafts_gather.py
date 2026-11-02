@@ -44,6 +44,7 @@ from .fields import (
     WRITING_SITUATION,
 )
 from .gemini import DEFAULT_LIMITS
+from .flags import PAUSE_PREDRAFTS, flags_for
 from .predraft_cap import user_cap_reached
 
 
@@ -79,6 +80,10 @@ class GatherMixin:
             return self._compose_limited(d)
         limits = self.gemini.limits() if hasattr(self.gemini, "limits") else DEFAULT_LIMITS
         auto = bool(d.get("auto"))
+        if auto and d.get("user_id") and flags_for(self.db).is_on(PAUSE_PREDRAFTS, d["user_id"]):  # the owner's kill switch (Admin, Flags)
+            self._expire(d)
+            log.info("pre-drafts paused", draft=d["id"])
+            return True
         if auto and d.get("user_id") and user_cap_reached(self.db, d["user_id"]):  # the per-user daily cap, whatever put the row there
             self._expire(d)
             log.info("pre-draft cap reached", draft=d["id"])

@@ -18,6 +18,6 @@ export async function queueNudge(form: TaskForm, contactId: string, provider: st
     .select("id")
     .single();
   if (error || !data) return "Could not set the reminder. Check your connection and try again.";
-  const result = await followTaskUpdate(data.id, 60_000, 2000, "Setting the reminder is taking too long. Check that the worker is running.");
+  const result = await followTaskUpdate(data.id, 60_000, 2000, "Setting the reminder is taking too long. Please try again in a moment.");
   return result.status === "failed" ? (result.error ?? "The reminder could not be made.") : null;
 }

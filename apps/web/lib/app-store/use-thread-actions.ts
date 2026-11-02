@@ -2,6 +2,7 @@
 // feedback and reactions. Mail-server changes are queued as mail_actions rows for the sync worker.
 
 import { useCallback } from "react";
+import { canReactOn } from "../reactions";
 import { returnText } from "../snooze";
 import { supabase } from "../supabase";
 import type { Message, Thread, ThreadStatus } from "../types";
@@ -164,6 +165,8 @@ export function useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, 
 
   // Shown at once; the worker sends it over WhatsApp and the stored message then matches.
   const react = useCallback((message: Message, emoji: string) => {
+    // A last line of defence: the UI hides the button, but nothing may queue a reaction a channel cannot send (reactions.ts).
+    if (!canReactOn(threadMapRef.current.get(message.threadId)?.channel)) return;
     const reactions = { ...(message.reactions ?? {}) };
     if (emoji) reactions.me = emoji;
     else delete reactions.me;

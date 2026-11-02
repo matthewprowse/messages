@@ -74,9 +74,27 @@ export type Database = {
         Relationships: []
       }
       ai_status: {
-        Row: { id: boolean; billing_paused_since: string | null; billing_checked_at: string | null; updated_at: string }
-        Insert: { id?: boolean; billing_paused_since?: string | null; billing_checked_at?: string | null; updated_at?: string }
-        Update: { id?: boolean; billing_paused_since?: string | null; billing_checked_at?: string | null; updated_at?: string }
+        Row: { id: boolean; billing_paused_since: string | null; billing_checked_at: string | null; unpriced_models: string[]; updated_at: string }
+        Insert: { id?: boolean; billing_paused_since?: string | null; billing_checked_at?: string | null; unpriced_models?: string[]; updated_at?: string }
+        Update: { id?: boolean; billing_paused_since?: string | null; billing_checked_at?: string | null; unpriced_models?: string[]; updated_at?: string }
+        Relationships: []
+      }
+      admin_audit: {
+        Row: { id: number; at: string; actor: string | null; action: string; target: string | null; old_value: Json | null; new_value: Json | null }
+        Insert: { id?: number; at?: string; actor?: string | null; action: string; target?: string | null; old_value?: Json | null; new_value?: Json | null }
+        Update: { id?: number; at?: string; actor?: string | null; action?: string; target?: string | null; old_value?: Json | null; new_value?: Json | null }
+        Relationships: []
+      }
+      admin_settings: {
+        Row: { key: string; value: number; updated_at: string }
+        Insert: { key: string; value: number; updated_at?: string }
+        Update: { key?: string; value?: number; updated_at?: string }
+        Relationships: []
+      }
+      feature_flags: {
+        Row: { key: string; enabled: boolean; user_ids: string[]; description: string; updated_at: string; updated_by: string | null }
+        Insert: { key: string; enabled?: boolean; user_ids?: string[]; description?: string; updated_at?: string; updated_by?: string | null }
+        Update: { key?: string; enabled?: boolean; user_ids?: string[]; description?: string; updated_at?: string; updated_by?: string | null }
         Relationships: []
       }
       analytics_daily: {
@@ -2119,6 +2137,116 @@ export type Database = {
           },
         ]
       }
+      matter_links: {
+        Row: {
+          attachment_id: string | null
+          created_at: string
+          id: string
+          matter_id: string
+          meeting_id: string | null
+          note_id: string | null
+          thread_id: string | null
+          user_id: string
+        }
+        Insert: {
+          attachment_id?: string | null
+          created_at?: string
+          id?: string
+          matter_id: string
+          meeting_id?: string | null
+          note_id?: string | null
+          thread_id?: string | null
+          user_id?: string
+        }
+        Update: {
+          attachment_id?: string | null
+          created_at?: string
+          id?: string
+          matter_id?: string
+          meeting_id?: string | null
+          note_id?: string | null
+          thread_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "matter_links_attachment_id_fkey"
+            columns: ["attachment_id"]
+            isOneToOne: false
+            referencedRelation: "attachments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "matter_links_matter_id_fkey"
+            columns: ["matter_id"]
+            isOneToOne: false
+            referencedRelation: "matters"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "matter_links_meeting_id_fkey"
+            columns: ["meeting_id"]
+            isOneToOne: false
+            referencedRelation: "meetings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "matter_links_note_id_fkey"
+            columns: ["note_id"]
+            isOneToOne: false
+            referencedRelation: "notes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "matter_links_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      matters: {
+        Row: {
+          closed_at: string | null
+          contact_id: string
+          created_at: string
+          id: string
+          kind: string
+          name: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          closed_at?: string | null
+          contact_id: string
+          created_at?: string
+          id?: string
+          kind?: string
+          name: string
+          status?: string
+          user_id?: string
+        }
+        Update: {
+          closed_at?: string | null
+          contact_id?: string
+          created_at?: string
+          id?: string
+          kind?: string
+          name?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "matters_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       meeting_participants: {
         Row: {
           address: string | null
@@ -3833,6 +3961,7 @@ export type Database = {
           created_at: string
           id: string
           published: boolean
+          published_at: string | null
           released_on: string
           summary: string | null
           title: string
@@ -3844,6 +3973,7 @@ export type Database = {
           created_at?: string
           id?: string
           published?: boolean
+          published_at?: string | null
           released_on?: string
           summary?: string | null
           title: string
@@ -3855,6 +3985,7 @@ export type Database = {
           created_at?: string
           id?: string
           published?: boolean
+          published_at?: string | null
           released_on?: string
           summary?: string | null
           title?: string
@@ -4887,6 +5018,14 @@ export type Database = {
       share_write: { Args: { p_rows: Json; p_table: string; p_thread: string; p_workspace: string | null }; Returns: number }
       queue_share_followup: { Args: { p_thread: string }; Returns: undefined }
       bump_workspace_activity: { Args: { p_moved_back: number; p_shared: number; p_user: string; p_workspace: string }; Returns: undefined }
+      feature_flag_state: { Args: never; Returns: Json }
+      admin_feature_flags: { Args: never; Returns: { key: string; enabled: boolean; description: string; emails: string[]; updated_at: string }[] }
+      admin_set_flag: { Args: { p_key: string; p_enabled: boolean; p_emails?: string[] | null }; Returns: undefined }
+      admin_set_setting: { Args: { p_key: string; p_value: number }; Returns: undefined }
+      admin_audit_log: { Args: { p_limit?: number }; Returns: { id: number; at: string; actor_email: string | null; action: string; target: string | null; old_value: Json | null; new_value: Json | null }[] }
+      admin_system_health: { Args: never; Returns: Json }
+      admin_connector_health: { Args: never; Returns: Json }
+      admin_ai_history: { Args: never; Returns: Json }
       ai_usage_by_user: {
         Args: never
         Returns: {

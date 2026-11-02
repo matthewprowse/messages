@@ -12,6 +12,8 @@ import { open, openAddresses, openStrict } from "../vault";
 import { openOutgoingText } from "./outgoing-text";
 import { mayUseAccount, replyFor, type ReplyFor } from "./inbox";
 import { dueFilter, isDue } from "./send-after";
+import { flags } from "../flags-db";
+import { SENDS_FLAG } from "../flags";
 
 export type OutboxRow = Tables<"outbox">;
 
@@ -33,6 +35,8 @@ async function claim(id: string): Promise<boolean> {
  * files never arrive is claimed and failed. Returns null when there is nothing to send.
  */
 export async function claimReady(row: OutboxRow): Promise<OutboxRow | null> {
+  // The send kill switch (Admin, Flags): the row stays queued, untouched, until the switch is off. Every connector's sends come through here.
+  if (await flags.on(SENDS_FLAG, row.user_id)) return null;
   const current = must(await db.from("outbox").select("*").eq("id", row.id).maybeSingle(), "load outbox row");
   if (!current || current.status !== "queued" || !isDue(current.send_after)) return null;
   const problem = await waitForAttachments(current);

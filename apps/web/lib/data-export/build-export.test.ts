@@ -80,3 +80,14 @@ test("an empty account still makes a valid zip", async () => {
   const out = await run(source({ threads: async () => [], contacts: async () => [], notes: async () => [], tasks: async () => [], events: async () => [] }));
   assert.ok("README.txt" in out && "contacts/contacts.csv" in out);
 });
+
+test("extras are written one file each, and one that cannot be read is reported without stopping the others", async () => {
+  const out = await run(source({ extras: () => [
+    { path: "organise/labels.json", what: "Labels", read: async () => [{ name: "Clients" }] },
+    { path: "writing/signatures.json", what: "Signatures", read: async () => { throw Object.assign(new Error("secret"), { code: "PGRST" }); } },
+  ] }));
+  assert.equal(JSON.parse(strFromU8(out["organise/labels.json"]))[0].name, "Clients");
+  assert.ok(!("writing/signatures.json" in out));
+  assert.match(strFromU8(out["problems.txt"]), /Signatures: could not be read/);
+  assert.doesNotMatch(strFromU8(out["problems.txt"]), /secret/);
+});

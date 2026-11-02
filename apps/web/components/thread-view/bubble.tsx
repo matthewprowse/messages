@@ -86,7 +86,7 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
         </div>
       )}
       {/* Received messages show their reactions on the line below, after the name, date and time. */}
-      {(me || !showMeta) && <ReactionChips m={m} me={me} nameOf={nameOf} onReact={onReact} />}
+      {(me || !showMeta) && <ReactionChips m={m} me={me} nameOf={nameOf} onReact={onReact} canReact={whatsapp} />}
       {m.sendState === "failed" ? (
         <div className="flex flex-wrap items-center gap-1 px-3 text-xs text-destructive">
           {/* A failure that may have gone out never offers Retry: check the Sent folder, or copy the text to send it by hand. */}
@@ -113,7 +113,7 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
               {m.edited && <EditedMark m={m} dot={showMeta} />}
               {me && (whatsapp ? m.receipt && <Ticks receipt={m.receipt} /> : seen && <span>Seen</span>)}
             </span>
-            {!me && showMeta && <ReactionChips m={m} me={false} nameOf={nameOf} onReact={onReact} inline />}
+            {!me && showMeta && <ReactionChips m={m} me={false} nameOf={nameOf} onReact={onReact} canReact={whatsapp} inline />}
           </div>
         )
       )}

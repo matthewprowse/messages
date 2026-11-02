@@ -1,0 +1,21 @@
+# apps/web stays in the context: pnpm checks the lockfile against every workspace package, so the web manifest must be there.
+# Keeps secrets and bulk out of every build context (images are built from the repo root).
+.git
+.claude
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+**/*.tsbuildinfo
+**/__pycache__
+**/*.pyc
+**/.venv
+captures
+docs
+supabase
+**/*.log
+backup-*.sql
+*.dump

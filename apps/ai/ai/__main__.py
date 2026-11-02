@@ -16,8 +16,10 @@ import threading
 import time
 
 from . import config, log
+from .ops import metrics, report, start as start_ops
 from .brief import IDLE_S as BRIEF_IDLE_S, POLL_S as BRIEF_POLL_S, Brief
 from .batching import BatchQueue
+from .billing import persist_unpriced
 from .bulk_read import BulkRead
 from .chasers import Chasers
 from .documents import Documents
@@ -89,9 +91,11 @@ def main() -> None:
         logos()
         return
     cfg = config.load()
-    for model in unpriced([cfg.model, cfg.fast_model, cfg.embed_model, cfg.tts_model, cfg.learn_model, cfg.brief_model, cfg.predraft_model, cfg.transcribe_model]):
+    missing = unpriced([cfg.model, cfg.fast_model, cfg.embed_model, cfg.tts_model, cfg.learn_model, cfg.brief_model, cfg.predraft_model, cfg.transcribe_model])
+    for model in missing:
         log.error("configured model has no entry in pricing.PRICES, its calls are billed at the dearest known price", model=model)
     db = Supabase(cfg.supabase_url, cfg.service_role_key)
+    persist_unpriced(db, missing)  # Admin shows it as an alert
     vault = Vault(db, cfg.key_wrapping_key, cfg.encrypt_content)  # one key cache shared by every job
     lease = Lease(db)
     if not lease.acquire():
@@ -125,6 +129,7 @@ def main() -> None:
     if cfg.company_logos:  # off until the logo system is rolled out (docs/PLAN.md, Company Logos)
         jobs.append(("logos", LOGOS_EVERY_S, Logos(db, gemini, cfg.fast_model).run_once))
     stop = threading.Event()
+    health = start_ops(stop)  # health endpoint (HEALTH_PORT), error reporting and the metrics log line; see ai/ops and docs/RUNBOOK.md
 
     def background() -> None:
         last = {name: 0.0 for name, _, _ in jobs}
@@ -140,13 +145,14 @@ def main() -> None:
                     triage_at = time.monotonic() + triage_wait.next(busy > 0)
                 except Exception as err:
                     triage_at = time.monotonic() + TRIAGE_IDLE_S
-                    log.error("triage loop failed", code=log.code_of(err))
+                    report(err, "triage_loop")
             for name, every, job in jobs:
                 if stop.is_set() or time.monotonic() - last[name] <= due[name]:
                     continue
                 last[name] = time.monotonic()
                 try:
                     found = job()
+                    metrics.count_job(name)
                     worked = not isinstance(found, int) or found > 0
                     due[name] = waits[name].next(worked)
                     if isinstance(found, int) and found > 0:  # a transcript, embedding or note may be what triage is waiting for
@@ -154,7 +160,7 @@ def main() -> None:
                         triage_at = 0.0
                 except Exception as err:
                     due[name] = every
-                    log.error(f"{name} loop failed", code=log.code_of(err))
+                    report(err, f"{name}_job")
             stop.wait(1 if busy else min(TRIAGE_IDLE_S, EMBED_EVERY_S))  # work through a backlog quickly, then idle
 
     brief = Brief(db, gemini, cfg.brief_model, cfg.tts_model, cfg.tts_voice, vault)
@@ -171,7 +177,7 @@ def main() -> None:
                 if missing_relation(err):  # the briefs migration is not applied yet
                     stop.wait(600)
                     continue
-                log.error("brief loop failed", code=log.code_of(err))
+                report(err, "brief_loop")
             stop.wait(wait.next(found))
 
     bulk_read = BulkRead(db, gemini, cfg.triage_model, vault)
@@ -188,7 +194,7 @@ def main() -> None:
                 if missing_relation(err):  # the bulk_reads migration is not applied yet
                     stop.wait(600)
                     continue
-                log.error("bulk read loop failed", code=log.code_of(err))
+                report(err, "bulk_read_loop")
             stop.wait(wait.next(found))
 
     documents = Documents(db, gemini, cfg.triage_model, vault)  # document cards: a thread of its own, as a PDF read takes seconds
@@ -208,11 +214,11 @@ def main() -> None:
                 if missing_relation(err):  # the meetings migration is not applied yet
                     stop.wait(600)
                     continue
-                log.error("meetings loop failed", code=log.code_of(err))
+                report(err, "meetings_loop")
             stop.wait(1 if busy else meeting_wait.next(False))
 
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    lease.keep(stop, stop.set)  # renewed in the background; losing it stops the worker rather than run twice
+    lease.keep(stop, lambda: (health.set_lease_held(False), stop.set()))  # renewed in the background; losing it stops the worker rather than run twice
     threading.Thread(target=background, name="triage", daemon=True).start()
     threading.Thread(target=briefs, name="brief", daemon=True).start()
     threading.Thread(target=meeting_steps, name="meetings", daemon=True).start()
@@ -239,7 +245,8 @@ def main() -> None:
             try:
                 drafts.run_once()
             except Exception as err:
-                log.error("draft loop failed", code=log.code_of(err))
+                report(err, "draft_loop")
+            health.tick()  # a failed turn is still a turn: readiness is about the loop turning, failures are counted and alerted on separately
             stop.wait(min(drafts.poll_wait(), DRAFT_IDLE_MAX_S))
     except KeyboardInterrupt:
         stop.set()

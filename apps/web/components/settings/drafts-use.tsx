@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { openAddresses, openRules } from "@/lib/open-rows";
+import { ruleNote } from "@/lib/rule-note";
 
 type StyleRule = Pick<Tables<"style_rules">, "id" | "rule" | "scope" | "contact_id" | "source" | "support_count" | "enabled" | "disabled_reason">;
 type PersonNote = Pick<Tables<"contacts">, "id" | "display_name" | "style_note" | "ai_summary" | "style_updated_at">;
@@ -176,7 +177,7 @@ export function DraftsUseSection() {
         <Source title="How Close Drafts Are" blurb={learning?.outcomes ? `How much of each draft you kept, over your last ${learning.outcomes} sent or rewritten drafts.` : "Shown once you have sent a reply that started as a draft."} value={learning === null ? "Loading" : learning.kept === null ? "Not Yet" : `${learning.kept}% Kept`} />
       </SettingsRows>
 
-      <SettingsSection level={3} title="Learned Style Rules" description="Turn a rule off to stop drafts following it, or remove it. Rules your mail no longer shows are turned off for you and come back if they return.">
+      <SettingsSection level={3} title="Learned Style Rules" description="Turn a rule off to stop drafts following it, or remove it. A rule marked Learning has been seen once and is off until a second edit supports it: turn it on to use it now. Rules your mail no longer shows are turned off for you and come back if they return.">
         {rules === null ? null : rulesFailed ? (
           <SettingsRows>
             <SettingsRow title="Could not load your style rules." description="Check your connection and try again.">
@@ -199,7 +200,7 @@ export function DraftsUseSection() {
                         <SettingsRow
                           key={r.id}
                           title={r.rule}
-                          description={[who ? `For ${who}` : "Everyone", r.support_count > 1 ? `Seen ${r.support_count} times` : "", !r.enabled && r.disabled_reason === "unsupported" ? "No Longer Seen In Your Mail" : ""].filter(Boolean).join(" · ")}
+                          description={ruleNote({ who, supportCount: r.support_count, enabled: r.enabled, disabledReason: r.disabled_reason })}
                         >
                           <Switch checked={r.enabled} onCheckedChange={(v) => setEnabled(r, v)} aria-label={r.rule} />
                           <Button variant="ghost" size="icon" aria-label={`Remove Rule: ${r.rule}`} onClick={() => remove(r)}><Trash2 /></Button>

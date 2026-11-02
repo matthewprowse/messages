@@ -37,16 +37,19 @@ import { startAccountJobs } from "./account/jobs";
 import { watchQueues } from "./runtime/queues";
 import { reconcile, watchAccounts } from "./runtime/reconcile";
 import { stopAndExit } from "./runtime/shutdown";
+import { countSync, reportError, startOps } from "./ops";
 
 const RECONCILE_MS = 30_000;
 const USAGE_ROLLUP_MS = 24 * 60 * 60_000;
 
 async function main() {
   log.info("worker starting", { shard: env.shardIndex, shards: env.shardCount });
-  process.on("unhandledRejection", (err) => log.error("unhandled rejection", { code: errorCode(err) }));
+  let lease: Lease | undefined;
+  const health = startOps(); // health endpoint (HEALTH_PORT), error reporting and the metrics log line; see ops/ and docs/RUNBOOK.md
+  process.on("unhandledRejection", (err) => reportError(err, "unhandled_rejection"));
+  process.on("uncaughtException", (err) => { reportError(err, "uncaught_exception"); void stopAndExit(1, lease); }); // state after one is unknown: leave cleanly and let the supervisor restart
 
   // One worker per shard. Taken before anything starts, so a second worker for this shard exits without touching a row.
-  let lease: Lease | undefined;
   if (env.lease) {
     const name = `shard-${env.shardIndex}`;
     lease = new Lease({
@@ -54,7 +57,7 @@ async function main() {
       name,
       holder: `${hostname()}-${process.pid}-${randomBytes(4).toString("hex")}`,
       log,
-      onLost: () => void stopAndExit(1), // never keep running without the lease
+      onLost: () => { health.setLeaseHeld(false); void stopAndExit(1); }, // never keep running without the lease
     });
     const got = await lease.start();
     if (got === "taken") {
@@ -72,6 +75,7 @@ async function main() {
     requeueWorkingActions(), // a mail action a stopped worker left half-claimed is idempotent, so it runs again once
   ]);
   await reconcile();
+  health.tick();
   watchAccounts();
   watchQueues();
 
@@ -98,7 +102,7 @@ async function main() {
   } else {
     log.info("not the primary shard: shared jobs run on shard 0", { shard: env.shardIndex });
   }
-  setInterval(() => reconcile().catch((err) => log.error("reconcile failed", { code: errorCode(err) })), RECONCILE_MS);
+  setInterval(() => reconcile().then(() => { health.tick(); countSync("reconcile"); }).catch((err) => reportError(err, "reconcile")), RECONCILE_MS);
 
   const shutdown = async () => {
     log.info("worker stopping");

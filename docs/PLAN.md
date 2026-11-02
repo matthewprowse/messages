@@ -505,7 +505,7 @@ pauses a feature for everyone. Changelog saves also check `updated_at`.
 | Contacts | Rename a contact and edit their company, role, relationship, addresses and numbers. A name set by hand is kept when the address book or WhatsApp name changes | Built |
 | Media | Voice notes and audio play inside the conversation (speed 1x, 1.5x, 2x); videos play in the app's own player | Built |
 | Notes | Private notes with live markdown formatting and attachments, under Attachments in the rail (see below) | Built, not yet checked in the browser |
-| Clients | Client timeline across every channel | To do |
+| Clients | Client timeline across every channel, with matters (see Client Timeline and Matters, Wave 7) | Built, not yet checked in the browser |
 | Leads | Property24 and Private Property enquiry emails turned into clients, through Automations (see Full App Review, 2 November 2026) | To do |
 | Onboarding | Sign up, a setup dialog over the app (connect, about you, what Konva found, contacts, a practice reply). The page by page tour was removed on 2 November 2026 (see below) | Built on mock data for the findings, contacts and drafts; not yet checked end to end with a new account |
 
@@ -2481,6 +2481,12 @@ Decisions made while building the screens, so later work follows them:
   true for people you know. Messages already triaged keep their old answer until they are triaged again.
 - **Updates page (owner only for now).** `public.updates` is the changelog. Record each release as a draft before pushing; mark it
   Published when it is ready to show. Making it public later is one extra read policy.
+- **What's New (Wave 7).** Any signed-in user reads published updates only (one select policy; `published_at` is set by a
+  trigger when an entry is published). A What's New dialog opens once after sign-in, after setup, when the newest published
+  entry went public after the one the user last saw (`whatsNewSeen` in the sign-in metadata; a new sign-up is compared with
+  the day they joined). It lists the changes under New, Improved, Fixed with See All Updates, a read-only `/whats-new` page.
+  It is also in Settings and the mobile More screen. Owner helper: `pnpm updates:draft` prints a JSON skeleton from `git log`
+  since the last `vX.Y.Z` commit; it calls no AI and writes nothing.
 
 ## Private Test Checklist (28 October 2026)
 
@@ -3065,6 +3071,21 @@ Review "Do not add" list stands).
   (`20261119170000_thread_links.sql`, ids and a score only); Link Them makes them show together under a matter heading in the
   person timeline, Not the Same stops the suggestion for good. Not wired yet: nothing calls `matter.suggest` on a schedule.
 
+### Client Timeline and Matters (Wave 7)
+
+- **Timeline tab:** a contact's page opens on Timeline when they have any conversation (Overview otherwise). One list, newest
+  first, grouped by day (`apps/web/lib/timeline`, `components/timeline`): messages of every one-to-one channel (not newsletters),
+  meetings with their summary, notes linked to the contact, promises (open and done), tasks about them, documents that have a
+  card, and leads an automation captured. Each row has a type icon and a link to its source. Search and a type filter work on
+  what is loaded.
+- **Paging:** messages load 40 at a time (newest first) with a Load Earlier button; things older than the oldest loaded message
+  wait for the page that reaches them. The page only reads: nothing is marked read, so no WhatsApp read receipt goes out.
+- **Matters:** per contact, a short name (60 characters, sealed under the `name` field) and a kind (Deal, Listing, Policy,
+  Matter), open or closed (`20261121100000_matters.sql`: `matters`, `matter_links`, ids only). A conversation, note, file or
+  meeting can be put in one or more matters from the plus on a row; linking a conversation brings its messages, promises and
+  files. Pick a matter above the timeline to see only that job. Deleting a matter keeps what it held. No stages, values or
+  pipeline view, on purpose.
+
 ### Draft Facts, Feedback and Voice Replies (Wave 5)
 
 - **Fact guard.** After a draft is written, `drafts_facts.py` checks that every amount, number (10 and over), date, weekday,
@@ -3134,3 +3155,54 @@ Migration `20261119120000_triage_labels_reasons.sql` (written, not applied yet).
 - **Cost records:** context cache storage is recorded (estimate $1.00 per million tokens per hour). Audio input is priced per model
   where a rate is on record ($0.50 3.1 Flash Lite, $1.00 2.5 Flash), else the $3.00 estimate, which still needs checking against
   Google's page.
+
+## Closing known gaps, Wave 7 (2 November 2026)
+
+- **Merging keeps the star, About note and lead source.** `merge_contacts` now ORs the star (`vip`) and keeps the kept contact's
+  About note and lead source, else takes the merged one's (relationship, company and role already worked that way). When both
+  have an About note the kept one stays; the other is not lost, because `contact_merges.merged_snapshot` holds the whole merged
+  row and Undo inserts it back. The three columns are recorded in `kept_before` and `kept_after` so Undo restores them unless
+  changed since. Migration `20261121130000`, patched in place like `20261116100000`.
+- **Download My Data covers the later features.** Added: labels (and which chats wear them), saved views, templates and snippets,
+  signatures (and default send-from), promises and automations with runs (already there), note links, linked chats, client cards,
+  document cards and edited or deleted message versions. `export-coverage.ts` lists every table with a `user_id` column as exported
+  or excluded with a reason, and its test reads the migrations, so a new table cannot be left out unnoticed. Known gaps, marked
+  "Not yet" in that file: unsent drafts, meetings (notes, summaries, transcripts) and the learned style rules. There is no
+  matters table, so nothing to export there.
+- **No LinkedIn reactions from the app.** `lib/reactions.ts` is the one list of channels a reaction can be sent on (WhatsApp only).
+  The react button, the reaction chips (shown but not tappable on other channels) and the store action all follow it. To switch
+  LinkedIn on: add the `react` command to both LinkedIn helpers (Go bridge and `apps/ai` connector), then add "linkedin" to
+  `REACTION_CHANNELS`.
+- **Tentative style rules say so.** In Settings, What Drafts Use, a rule seen once and still off shows "Learning: seen once"; the
+  switch turns it on now, and Remove deletes it.
+- **Customer wording.** Time-out messages no longer tell people to check that a worker is running.
+
+### Built: Wave 7, Admin for an Owner-Operator (21 November 2026)
+
+Admin gained five sections beside AI Usage, AI Budget, Teams and Updates. All are owner only (`is_analytics_owner`), and
+all show counts, ages, codes and dollars: never message content, names or addresses, and never "view as user".
+
+- **Health:** a lease per sync shard and the AI worker's `ai` lease (red when run out, amber when a renewal was missed), and
+  each queue's depth with the age of its oldest waiting row: outbox (waiting and sending), drafts, mail actions, task
+  updates, calendar writes, automation previews and AI batches. Thresholds are in `lib/admin-ops.ts` (`QUEUES`). Below it,
+  connectors: accounts by provider and status, the oldest good sync among connected accounts (heartbeat or last sync;
+  amber past 1 hour, red past 6), and error codes over 24 hours from the content-free analytics events, so people with
+  Share Usage Data off are not counted.
+- **AI History** (under AI Usage): month over month for everyone, and per person a 30 day sparkline, this month against
+  last, and cost per feature. Includes setup work and logos, because it is what Google bills.
+- **Flags:** `feature_flags` (key, enabled, optional people). On means the switch is thrown. Seeds: `pause_all_ai`,
+  `pause_predrafts`, `pause_documents`, `pause_automations`, `disable_connector_instagram`, `disable_connector_linkedin`,
+  `disable_sends`. Read with a 15 second cache by both workers; a worker that cannot read the table runs with every switch
+  off. Choke points: the AI budget check (`gemini_budget._check_budget`: all AI, documents, automations), the pre-draft
+  gate (`drafts_gather._limited`), the outbox claim (`send/outbox.ts claimReady`: a held row stays queued, Undo works), the
+  sync worker's connector reconcile (LinkedIn) and the Instagram connector's reconcile. The web app can ask
+  `feature_flag_state()` for the signed-in person's switches; nothing in the app reads it yet.
+- **Alerts:** a list worked out from the live numbers, no emails: billing paused, a lease run out (or no AI lease), daily AI
+  spend past a limit the owner sets (amber from 80%, default $20, stored in `admin_settings`), a configured model with no
+  price (the AI worker writes `ai_status.unpriced_models` at start), and a stuck queue. The tab shows the count. A
+  content-free web push to the owner is not built; the existing push sender would need a job for it.
+- **Audit:** `admin_audit`, written by database triggers on budget saves, switch and setting changes, seat changes, new teams
+  and request decisions: who, when, old and new values (numbers, flags and ids only). Changes made with the service role are
+  not logged.
+
+Migrations `20261121110000_feature_flags_audit.sql` and `20261121111000_admin_operator_views.sql` are written, not yet applied.
