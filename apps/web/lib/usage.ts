@@ -8,7 +8,7 @@ export type Allowance = { used_pct: number; resets_at: string; features: Record<
 export type StorageUse = { held: number; cap: number; team: boolean };
 
 // In the order shown. A feature that is not in the budget is not listed.
-export const FEATURE_LABEL: Record<string, string> = { triage: "Sorting and Junk", draft: "Drafts", learn: "Learning From Edits", brief: "Daily Brief", transcribe: "Transcripts", bulk_read: "Readable Bulk Email" };
+export const FEATURE_LABEL: Record<string, string> = { triage: "Sorting and Junk", draft: "Drafts", learn: "Learning From Edits", brief: "Daily Brief", transcribe: "Transcripts", bulk_read: "Readable Bulk Email", documents: "Document Cards" };
 
 export const clampPct = (n: number) => Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
 export const pctLabel = (n: number) => `${Math.round(clampPct(n))}%`;

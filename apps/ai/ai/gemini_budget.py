@@ -42,6 +42,11 @@ class BudgetMixin:
             read = self._setups[user_id] = [now, left]
         return read[1]
 
+    def in_setup(self, user_id: str) -> bool:
+        """Whether this person is still inside the setup allowance of a newly connected account: the first sort and
+        learning, which nobody is waiting on, so it can go through the half price Batch API (batching.py)."""
+        return self._setup_left(user_id) > 0
+
     def _allowance(self, user_id: str) -> tuple[float, dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
         """The person's percent used per feature (month and week) and, when ai_allowance_shares_for exists, the
         dollars each share is worth, read at most once a minute. Raises GeminiError(budget_unknown) when the

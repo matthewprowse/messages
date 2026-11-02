@@ -6,6 +6,7 @@ import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 import { dayKey, eventDetail, type CalendarEvent } from "@/lib/calendar";
 import { timeOf } from "@/lib/format";
+import { PrepMark } from "@/components/prep/prep-mark";
 
 // Laid out like a conversation row: an avatar-sized icon, a title line and a detail line. Events are not
 // tied to a conversation, so the row opens the Calendar.
@@ -29,6 +30,7 @@ export function EventRow({ event, today }: { event: CalendarEvent; today: string
         </div>
         <div className="flex h-4 items-center">
           <span className="min-w-0 truncate text-xs">{eventDetail(event)}</span>
+          <PrepMark eventId={event.id} startsAt={event.startsAt} allDay={event.allDay} />
         </div>
       </div>
     </Link>

@@ -84,6 +84,7 @@ class Gemini(BudgetMixin, FilesMixin, BatchMixin):
         self._spent: dict[tuple[str, str], float] = {}  # (user, feature) -> dollars used since the allowance was last read
         self._limits: tuple[float, dict[str, int]] | None = None
         self._setups: dict[str, list[float]] = {}  # user -> [read at, setup dollars left]
+        self._caches: dict[str, tuple[str, UsageContext, int, float, int]] = {}  # cache name -> (model, who, tokens, made at, ttl) until its storage is recorded
 
 
     def billing_blocked(self) -> bool:

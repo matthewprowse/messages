@@ -4,6 +4,7 @@
 import type { Tables } from "@messages/db";
 import type { Account, AccountStatus, Draft, Profile, Provider, Unsubscribe } from "../types";
 import type { ChoiceKind } from "../choices";
+import { parseAudit, parseReport } from "../draft-trust";
 import type { AccountRow, DraftRow, ProfileRow, UnsubscribeRow } from "./columns";
 
 export const EMPTY_PROFILE: Profile = {
@@ -80,6 +81,9 @@ export function mapDraft(row: DraftRow): Draft {
     decision: row.decision && row.decision_kind ? { text: row.decision, kind: row.decision_kind as ChoiceKind } : undefined,
     source: row.source ?? undefined,
     auto: row.auto || undefined,
+    report: parseReport(row.report),
+    audit: parseAudit(row.audit),
+    feedback: row.feedback === "up" || row.feedback === "down" ? row.feedback : undefined,
     generatedAt: row.updated_at,
   };
 }

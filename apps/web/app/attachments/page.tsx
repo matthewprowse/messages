@@ -10,6 +10,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronRight, Paperclip, Search } from "lucide-react";
+import { DOC_FILTERS, docFilterOf, matchesDocFilter } from "@/lib/search/document-card";
 import { setAttachmentsHidden } from "@/lib/data";
 import { deleteAttachmentFiles } from "@/lib/attachment-actions/load-copies";
 import { downloadZip } from "@/lib/attachment-actions/download-zip";
@@ -29,6 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ContactAvatar, EmptyState } from "@/components/primitives";
 import { AttachmentGrid } from "@/components/attachments";
 import { DeleteFilesDialog } from "@/components/attachments/delete-dialog";
+import { useDocumentCards } from "@/components/attachments/document-store";
 import { SelectionBar } from "@/components/attachments/selection-bar";
 
 function AttachmentsPage() {
@@ -40,19 +42,22 @@ function AttachmentsPage() {
   // The search is typed into at once and written to the address after a pause; everything else is read from the address.
   const [query, setQuery] = useState(fromAddress.q);
   const filters: Filters = { ...fromAddress, q: query };
-  const go = (patch: Partial<Filters>) => router.replace(filtersHref({ ...filters, ...patch }), { scroll: false });
+  // The document filter (Invoices, Contracts...) is kept in the address beside the others.
+  const doc = docFilterOf(params.get("doc"));
+  const hrefWith = (f: Filters, d = doc) => { const base = filtersHref(f); return d === "all" ? base : `${base}${base.includes("?") ? "&" : "?"}doc=${d}`; };
+  const go = (patch: Partial<Filters>) => router.replace(hrefWith({ ...filters, ...patch }), { scroll: false });
   const typing = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(typing.current), []);
   const search = (value: string) => {
     setQuery(value);
     clearTimeout(typing.current);
-    typing.current = setTimeout(() => router.replace(filtersHref({ ...filters, q: value }), { scroll: false }), 300);
+    typing.current = setTimeout(() => router.replace(hrefWith({ ...filters, q: value }), { scroll: false }), 300);
   };
 
   const [hiddenOpen, setHiddenOpen] = useState(false);
   const visible = useAttachmentPages(kind, "visible");
   const hidden = useAttachmentPages(kind, "hidden", hiddenOpen);
-  const narrowed = isNarrowed(filters);
+  const narrowed = isNarrowed(filters) || doc !== "all";
 
   // A filter or search can only be right about files that are loaded, so while one is on the remaining pages are fetched.
   useEffect(() => { if (narrowed && visible.files && visible.more && !visible.loading) visible.loadMore(); }, [narrowed, visible]);
@@ -89,10 +94,13 @@ function AttachmentsPage() {
   // Everyone who sent one of the files in view, with you first. A chosen person with nothing left in view falls back to Everyone.
   const people = useMemo(() => peopleIn(inViewVisible, nameOf), [inViewVisible, nameOf]);
   const person = effectivePerson(filters.person, people);
-  const only = (files: FiledAttachment[]) => (person === "all" ? files : files.filter((a) => a.from === person));
+  // Cards are looked up for every loaded file only while a document filter is on; otherwise the grid asks for the tiles it shows.
+  const cardOf = useDocumentCards(useMemo(() => (doc === "all" ? [] : [...inViewVisible, ...inViewHidden].filter((a) => a.path && (a.kind === "pdf" || a.kind === "image")).map((a) => a.id)), [doc, inViewVisible, inViewHidden]));
+  const cardType = (a: FiledAttachment) => { const e = cardOf(a.id); return e?.state === "card" ? e.card : null; };
+  const only = (files: FiledAttachment[]) => (person === "all" ? files : files.filter((a) => a.from === person)).filter((a) => matchesDocFilter(cardType(a), doc));
   const largest = filters.sort === "largest";
-  const shown = useMemo(() => (largest ? sortLargest(only(inViewVisible)) : only(inViewVisible)), [inViewVisible, person, largest]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shownHidden = useMemo(() => (largest ? sortLargest(only(inViewHidden)) : only(inViewHidden)), [inViewHidden, person, largest]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = useMemo(() => (largest ? sortLargest(only(inViewVisible)) : only(inViewVisible)), [inViewVisible, person, largest, doc, cardOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownHidden = useMemo(() => (largest ? sortLargest(only(inViewHidden)) : only(inViewHidden)), [inViewHidden, person, largest, doc, cardOf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Hide or unhide from the viewer: the file moves between the two lists at once, and goes back if it could not be saved.
   const toggleHidden = async (a: FiledAttachment) => {
@@ -184,6 +192,10 @@ function AttachmentsPage() {
                 {DATES.map((d) => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}
               </SelectContent>
             </Select>
+            <Select value={doc} onValueChange={(d) => router.replace(hrefWith(filters, docFilterOf(d)), { scroll: false })}>
+              <SelectTrigger aria-label="Document" className="col-span-2 w-full data-[size=default]:h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>{DOC_FILTERS.map((d) => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}</SelectContent>
+            </Select>
             {/* On a phone there is no people list beside the grid, so the sender is chosen here. */}
             <Select value={person} onValueChange={pickPerson}>
               <SelectTrigger aria-label="Sent By" className="col-span-2 w-full data-[size=default]:h-8 md:hidden"><SelectValue /></SelectTrigger>
@@ -225,7 +237,7 @@ function AttachmentsPage() {
             {loaded ? countLabel({ shown: shown.length, total: kind === "audio" ? null : visible.total, more: visible.more, narrowed }) : loaded === false ? "Not Loaded" : "Loading"}
           </span>
           <span className="flex items-center gap-3">
-            {(narrowed || kind !== "all") && loaded && <Button variant="ghost" onClick={() => { setQuery(""); router.replace(filtersHref(NO_FILTERS), { scroll: false }); }}>Clear Filters</Button>}
+            {(narrowed || kind !== "all") && loaded && <Button variant="ghost" onClick={() => { setQuery(""); router.replace(hrefWith(NO_FILTERS, "all"), { scroll: false }); }}>Clear Filters</Button>}
             {loaded && <span className="flex h-8 items-center text-sm text-muted-foreground tabular-nums">{sizeLabel(shown, visible.more)}</span>}
             <Select value={filters.sort} onValueChange={(sort) => go({ sort: sort as Sort })}>
               <SelectTrigger aria-label="Sort" className="w-28 data-[size=default]:h-8"><SelectValue /></SelectTrigger>

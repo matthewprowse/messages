@@ -9,15 +9,17 @@ proposed meeting time included; the full model got those right, and once per mes
 A call pays for its instructions and answer overhead on the full model however few conversations it holds,
 and one or two are usually due per run, so a user is asked about once MIN_BATCH are due or the oldest has
 waited MAX_HOLD past its due time, then in one call of up to BATCH.
-Only counts are logged, never what was said."""
+
+The same call lists the promises in those two messages ("I'll send the quote by Friday", "they will confirm Monday")
+for public.commitments (commitments.py), so tracking promises costs no second call. Only counts are logged, never what was said."""
 
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from . import log
+from . import commitments, log
 from .fields import BODY, HTML
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
@@ -33,7 +35,7 @@ PER_THREAD_MESSAGES = 3  # latest_per_thread needs your last message and the one
 MIN_BATCH = 5  # a user is only asked about when this many are due, or the oldest has waited MAX_HOLD past its due time
 MAX_HOLD = timedelta(hours=12)  # still inside the two-day Waiting window: read by about a day and a half
 MESSAGE_CHARS = 500
-CHASER_MAX_OUTPUT = 1024  # ten short answers; the schema is a list of id and a boolean
+CHASER_MAX_OUTPUT = 2048  # ten answers, each an id and a boolean, and up to three short promises
 
 SYSTEM = """You read the end of some conversations. In each, the person you work for wrote the last message.
 For each conversation, say whether their last message expects an answer from the other person.
@@ -42,7 +44,9 @@ Yes: a question, a request, a proposal, offer or suggested time waiting on a yes
 work sent for them to look at or act on (an application, a quote, a CV), or a reminder about something
 still owed.
 No: thanks, an acknowledgement, a goodbye or "see you then", an answer that closes the topic, or a
-message that only gives information and asks for nothing.""" + UNTRUSTED
+message that only gives information and asks for nothing.
+
+""" + commitments.INSTRUCTIONS + UNTRUSTED
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -51,7 +55,7 @@ SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"id": {"type": "string", "description": "The conversation's number, such as 1."}, "expects_reply": {"type": "boolean"}},
+                "properties": {"id": {"type": "string", "description": "The conversation's number, such as 1."}, "expects_reply": {"type": "boolean"}, "commitments": commitments.SCHEMA},
                 "required": ["id", "expects_reply"],
             },
         }
@@ -60,11 +64,12 @@ SCHEMA: dict[str, Any] = {
 }
 
 
-def build_prompt(cases: list[tuple[str, str, str]], fence: str | None = None) -> str:
+def build_prompt(cases: list[tuple[str, str, str]], fence: str | None = None, today: date | None = None) -> str:
     """cases: (id, the message before yours or "", your last message). Each conversation sits between lines
-    carrying a random code (fence), as the system prompt says: the other person's words are data."""
+    carrying a random code (fence), as the system prompt says: the other person's words are data. today lets
+    "by Friday" be worked out as a date; it is ours, so it sits outside the fences."""
     fence = fence or new_fence()
-    out = []
+    out = [f"Today is {today:%A %Y-%m-%d}.", ""] if today else []
     for cid, before, mine in cases:
         body = (f"--- Them:\n{before}\n" if before else "") + f"--- Me (last):\n{mine}"
         out += [f"Conversation {cid}:", fenced(body, fence), ""]
@@ -118,6 +123,14 @@ class Chasers:
         self.vault = vault or Vault(db)
 
     def run_once(self) -> int:
+        done = self._check_waiting()
+        try:
+            commitments.sweep(self.db, datetime.now(timezone.utc))
+        except Exception as err:  # the promises migration may not be applied yet; the Waiting check must not suffer for it
+            log.warn("promise sweep failed", code=log.code_of(err))
+        return done
+
+    def _check_waiting(self) -> int:
         now = datetime.now(timezone.utc)
         threads = self.db.select(
             "threads",
@@ -191,13 +204,30 @@ class Chasers:
         if not cases:
             return self._save(user, items, {k: False for k in quiet})
         try:
-            result = self.gemini.json(self.model, SYSTEM, build_prompt(cases), SCHEMA, UsageContext(user, "triage"), temperature=0, thinking="low", attempts=2, max_output=CHASER_MAX_OUTPUT)
+            result = self.gemini.json(self.model, SYSTEM, build_prompt(cases, today=datetime.now(timezone.utc).date()), SCHEMA, UsageContext(user, "triage"), temperature=0, thinking="low", attempts=2, max_output=CHASER_MAX_OUTPUT)
         except GeminiError as err:
             log.warn("follow-ups not checked", status=err.status)
             return 0
         # The number alone: the model sometimes answers "Conversation 1".
         answers = {re.sub(r"\D", "", str(a.get("id"))): bool(a.get("expects_reply")) for a in result.get("items") or [] if isinstance(a, dict)}
-        return self._save(user, items, {**answers, **{k: False for k in quiet}})
+        today = datetime.now(timezone.utc).date()
+        promises = {re.sub(r"\D", "", str(a.get("id"))): commitments.clean_commitments(a.get("commitments"), today) for a in result.get("items") or [] if isinstance(a, dict)}
+        saved = self._save(user, items, {**answers, **{k: False for k in quiet}})
+        self._save_promises(user, items, promises)
+        return saved
+
+    def _save_promises(self, user: str, items: list[tuple[str, tuple[dict[str, Any] | None, dict[str, Any]]]], promises: dict[str, list[dict[str, Any]]]) -> None:
+        """Stores the promises found. A failure here (the table not there yet) never undoes the follow-up check."""
+        rows = []
+        for n, (thread, (before, mine)) in enumerate(items):
+            rows += commitments.commitment_rows(user, thread, before, mine, promises.get(str(n + 1), []), self.vault)
+        if not rows:
+            return
+        try:
+            self.db.upsert("commitments", rows, on_conflict="message_id,seq")
+            log.info("promises found", count=len(rows))
+        except Exception as err:
+            log.warn("promises not saved", code=log.code_of(err))
 
     def _save(self, user: str, items: list[tuple[str, tuple[dict[str, Any] | None, dict[str, Any]]]], answers: dict[str, bool]) -> int:
         rows = [

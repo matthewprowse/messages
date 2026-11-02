@@ -14,6 +14,7 @@ import { ThreadShare } from "@/components/work-badge";
 import { NotesChip } from "@/components/notes-chip";
 import { ScheduleButton } from "@/components/schedule-button";
 import { ChannelTabs } from "@/components/thread-view/channel-tabs";
+import { TriageNotes } from "@/components/triage/triage-notes";
 import { LabelItems } from "@/components/labels/label-items";
 import { ManageLabelsHost } from "@/components/labels/manage-labels-dialog";
 import { DROPDOWN_KIT } from "@/components/snooze/menu-kit";
@@ -102,6 +103,7 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
         </DropdownMenu>
       </header>
       {pick.dialog}
+      <TriageNotes thread={thread} />
       <ManageLabelsHost />
     </>
   );

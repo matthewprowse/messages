@@ -4,7 +4,10 @@ as a short script read aloud by Gemini, for listening on the move.
 One brief per user per local day (public.briefs). It is written at profiles.briefing_time in their time
 zone, or straight away when the app asks for one (a 'pending' row, also how Refresh works). The script
 comes from the same labels the Summary page uses: needs a reply, urgent or important, and FYI or work
-updates from the last day, with each conversation's one-line summary. Nothing is read from message
+updates from the last day, with each conversation's one-line summary. Version 2 adds who is waiting on
+them (conversations you wrote last that expect an answer, with how many days), promises due today or late
+(public.commitments, text opened and fenced like the rest), and tomorrow's first meeting with one prep fact
+(an open promise with someone named in its title). Nothing is read from message
 bodies. Tasks (Microsoft To Do, Google Tasks, iCloud Reminders) are open ones due today or before, by title
 only: their notes and list names are never read. The script and the audio are encrypted (field "brief"); briefs older than KEEP_DAYS are deleted,
 as the audio is large.
@@ -67,6 +70,10 @@ PRIORITY_DAYS = 7
 UPDATE_HOURS = 24
 MAX_ITEMS = 8  # conversations per section in the prompt
 MAX_TASKS = 8  # tasks per section in the prompt; the rest are counted
+MAX_WAITING = 3  # conversations waiting on them, in the prompt
+MAX_PROMISES = 4
+WAITING_MIN_DAYS = 2  # the same two days as the Summary's Waiting On Others
+WAITING_MAX_DAYS = 14
 DEFAULT_ZONE = "Africa/Johannesburg"
 VOICES = {"Kore", "Aoede", "Sulafat", "Charon", "Achird", "Iapetus"}  # profiles.brief_voice allows these
 # Each part is spoken on its own, so every boundary is a place the voice can change tone. Parts grow: the
@@ -106,6 +113,11 @@ while they drive, so it must sound natural when heard, not read.
 - Tasks get one or two sentences: overdue ones first, then what is due today, naming at most three by
   their title in plain words and counting the rest ("and four more"). Say a task is overdue, never how
   many days late unless it is a week or more. With no tasks, say nothing about tasks.
+- Waiting on them: one sentence naming at most two people who have not answered, with how many days
+  ("Sam Naidoo has not replied in four days"). Promises: say what is due today or late in one sentence, naming
+  at most two ("you promised Sam the quote today", "Lerato's signed lease is two days late"). Tomorrow: when a
+  first meeting is given, one sentence with its time and title, adding the prep fact only if one is given. These
+  three are the first to drop if the brief would pass 160 words; keep it to 160 words.
 - Updates are optional. Mention one only if it is clearly worth knowing, never just to fill space.
 - Say times the way people speak them ("half past nine", "three in the afternoon"), never "15:00".
 - Speak to them as "you". Never say their own name except a first-name greeting: when a summary
@@ -218,6 +230,56 @@ def sections(threads: list[dict[str, Any]], now: datetime) -> dict[str, list[dic
     return {"reply": sorted(reply, key=pressing), "priority": sorted(priority, key=pressing), "updates": sorted(updates, key=lambda t: age_h(t))}
 
 
+def waiting_on_them(threads: list[dict[str, Any]], expecting: set[str], now: datetime) -> list[dict[str, Any]]:
+    """Conversations you wrote last that the AI says expect an answer, quiet for WAITING_MIN_DAYS to WAITING_MAX_DAYS,
+    the longest waiting first. Snoozed ones are left out, as in the Summary."""
+    out = []
+    for t in threads:
+        if t["id"] not in expecting or t.get("status") != "inbox" or t.get("junk") or not t.get("last_from_me"):
+            continue
+        until = t.get("snoozed_until")
+        if until and _when(until) > now:
+            continue
+        days = (now - _when(t["last_message_at"])).total_seconds() / 86400
+        if WAITING_MIN_DAYS <= days <= WAITING_MAX_DAYS:
+            out.append({**t, "_days": int(days)})
+    return sorted(out, key=lambda t: -t["_days"])
+
+
+def promises_due(rows: list[dict[str, Any]], today: date, who: dict[str, str]) -> list[dict[str, Any]]:
+    """Open promises due today or before, not snoozed, with a person to name. Late ones first, then today's; a promise
+    whose conversation is not known (older than the brief looks back) has nobody to name and is left out."""
+    out = []
+    for r in rows:
+        if r.get("status", "open") != "open" or not r.get("due_on") or r["thread_id"] not in who:
+            continue
+        due = date.fromisoformat(str(r["due_on"])[:10])
+        if due > today:
+            continue
+        snoozed = r.get("snoozed_until")
+        if snoozed and _when(snoozed) > datetime.combine(today, dtime(23, 59), timezone.utc):
+            continue
+        out.append({**r, "_late": (today - due).days, "_who": who[r["thread_id"]]})
+    return sorted(out, key=lambda r: -r["_late"])
+
+
+def first_meeting(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The earliest event that has a time of day; an all-day one is not a meeting to prepare for."""
+    timed = [e for e in events if not e.get("all_day") and e.get("starts_at")]
+    return min(timed, key=lambda e: _when(e["starts_at"]), default=None)
+
+
+def prep_fact(event: dict[str, Any] | None, open_promises: list[dict[str, Any]], who: dict[str, str]) -> str:
+    """One fact for the meeting from what is already stored: an open promise with someone whose name is in the event's
+    title ("Lunch with Sam Naidoo"). Empty when the title names nobody we hold a promise with."""
+    title = (event or {}).get("title") or ""
+    for r in open_promises:
+        name = who.get(r["thread_id"], "")
+        if name and name.lower() in title.lower():
+            return f"{'You promised' if r['owner'] == 'me' else name + ' promised'}: {r['text'][:120]}"
+    return ""
+
+
 def _when(at: Any) -> datetime:
     return datetime.fromisoformat(str(at).replace("Z", "+00:00"))
 
@@ -247,9 +309,14 @@ def build_prompt(
     parts: dict[str, list[dict[str, Any]]],
     now: datetime,
     tasks: dict[str, list[dict[str, Any]]] | None = None,
+    waiting: list[dict[str, Any]] | None = None,
+    promises: list[dict[str, Any]] | None = None,
+    tomorrow: dict[str, Any] | None = None,
+    prep: str = "",
 ) -> str:
     """Everything the script may say. Conversations carry who, which channel, how long ago and the summary.
-    Tasks carry their title and when they were due."""
+    Tasks carry their title and when they were due. waiting, promises and tomorrow (with its prep fact) are the
+    version 2 sections; all three are optional so a brief without them reads as it did."""
 
     def when(e: dict[str, Any]) -> str:
         if e.get("all_day"):
@@ -292,6 +359,20 @@ def build_prompt(
         # Without a summary there is nothing the script could say about it.
         said = [t for t in parts[key] if (t.get("summary") or "").strip()]
         lines += ["", f"{title}:"] + ([line(t) for t in said[:MAX_ITEMS]] or ["(none)"])
+    lines += ["", "Waiting on them (you wrote last, no answer yet):"] + (
+        [f"- {t['_who']} ({'WhatsApp' if t.get('channel') == 'whatsapp' else 'email'}, {t['_days']} days): {(t.get('summary') or '').strip()[:200]}" for t in (waiting or [])[:MAX_WAITING]] or ["(none)"]
+    )
+
+    def promise_line(r: dict[str, Any]) -> str:
+        by = "You promised" if r.get("owner") == "me" else "They promised you"
+        when_ = "due today" if r["_late"] == 0 else ("due yesterday" if r["_late"] == 1 else f"due {r['_late']} days ago")
+        return f"- {by} ({r['_who']}), {when_}: {(r.get('text') or '').strip()[:200]}"
+
+    lines += ["", "Promises due today or late:"] + ([promise_line(r) for r in (promises or [])[:MAX_PROMISES]] or ["(none)"])
+    if tomorrow:
+        lines += ["", "Tomorrow's first meeting:", f"- {when(tomorrow)}: {(tomorrow.get('title') or 'No title').strip()[:200]}" + (f", at {tomorrow['location'].strip()[:200]}" if (tomorrow.get("location") or "").strip() else "")]
+        if prep:
+            lines.append(f"- Prep fact: {prep}")
     # The part written by others sits inside one random fence, so none of it can close the block or pass for a rule.
     head, rest = lines[:5], lines[5:]
     return "\n".join(head) + "\n" + fenced("\n".join(rest), new_fence())
@@ -466,7 +547,8 @@ class Brief:
                 t["summary"] = self.vault.open(user_id, SUMMARY, t.get("summary"))
                 names = [self.vault.open(user_id, NAME, (p.get("contacts") or {}).get("display_name")) for p in t.get("thread_participants") or []]
                 t["_who"] = (t.get("group_name") if t.get("is_group") else None) or next((n for n in names if n), None) or "Someone"
-            prompt = build_prompt(profile.get("display_name") or "", day, zone, events, sections(threads, now), now, task_sections(tasks, day, zone))
+            waiting, promises, tomorrow, prep = self._v2(user_id, day, end, zone, now, threads)
+            prompt = build_prompt(profile.get("display_name") or "", day, zone, events, sections(threads, now), now, task_sections(tasks, day, zone), waiting, promises, tomorrow, prep)
             usage = UsageContext(user_id, "brief")
             script = str(self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, usage, temperature=0.4, thinking="minimal", max_output=SCRIPT_MAX_OUTPUT).get("script") or "").strip()
             if not script:
@@ -499,6 +581,43 @@ class Brief:
             log.warn("brief failed", user=user_id, code=reason)
             self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "failed", "error": "write_failed", "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
             return 0
+
+    def _v2(self, user_id: str, day: date, end: datetime, zone: ZoneInfo, now: datetime, threads: list[dict[str, Any]]):
+        """The version 2 sections: waiting on them, promises due, tomorrow's first meeting and its prep fact. Each is
+        optional: a table or column that is not there yet (a migration not applied) leaves that section empty."""
+        who = {t["id"]: t["_who"] for t in threads}
+        waiting: list[dict[str, Any]] = []
+        promises: list[dict[str, Any]] = []
+        tomorrow = None
+        prep = ""
+        try:
+            expecting = {r["thread_id"] for r in self.db.select("follow_ups", {"select": "thread_id", "user_id": f"eq.{user_id}", "expects_reply": "eq.true", "limit": "300"})}
+            waiting = waiting_on_them(threads, expecting, now)
+        except Exception as err:
+            log.warn("brief waiting skipped", code=log.code_of(err))
+        try:
+            rows = self.db.select("commitments", {"select": "thread_id,owner,text,due_on,status,snoozed_until", "user_id": f"eq.{user_id}", "status": "eq.open", "order": "due_on", "limit": "100"})
+            for r in rows:
+                r["text"] = self.vault.open(user_id, TASK_TITLE, r.get("text")) or ""
+            rows = [r for r in rows if r["text"].strip()]
+            promises = promises_due(rows, day, who)
+            open_dated = [r for r in rows if r.get("due_on")]
+        except Exception as err:
+            log.warn("brief promises skipped", code=log.code_of(err))
+            open_dated = []
+        try:
+            rows = self.db.select(
+                "calendar_events",
+                {"select": "title,starts_at,ends_at,all_day,location", "user_id": f"eq.{user_id}", "all_day": "eq.false", "starts_at": f"gte.{_iso(end)}", "and": f"(starts_at.lt.{_iso(end + timedelta(days=1))})", "order": "starts_at", "limit": "5"},
+            )
+            for e in rows:
+                e["title"] = self.vault.open(user_id, EVENT_TITLE, e.get("title"))
+                e["location"] = self.vault.open(user_id, EVENT_LOCATION, e.get("location"))
+            tomorrow = first_meeting(rows)
+            prep = prep_fact(tomorrow, open_dated, who)
+        except Exception as err:
+            log.warn("brief tomorrow skipped", code=log.code_of(err))
+        return waiting, promises, tomorrow, prep
 
     def _requeue(self, brief_id: str, user_id: str, day: date | None, status: str | None) -> None:
         """Puts a claimed brief back to waiting. A daily brief nobody asked for (status None) is deleted instead, and

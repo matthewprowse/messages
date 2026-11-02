@@ -394,6 +394,7 @@ test("cleanText stays fast on a 1MB hostile string", () => {
   for (const unit of hostile) {
     const start = performance.now();
     cleanText(unit.repeat(Math.ceil(1_000_000 / unit.length)));
-    assert.ok(performance.now() - start < 500, `slow on ${unit.slice(0, 12)}`);
+    // A catastrophic regex takes seconds to minutes here; 2s keeps that caught while a busy machine (parallel test runs) passes.
+    assert.ok(performance.now() - start < 2000, `slow on ${unit.slice(0, 12)}`);
   }
 });

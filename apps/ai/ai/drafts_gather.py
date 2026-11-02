@@ -21,6 +21,7 @@ from .drafts_context import (
     pick_voice,
     stale,
 )
+from .drafts_facts import CALENDAR_DAYS, calendar_lines
 from .drafts_prompt import build_prompt, is_adjust
 from .fields import (
     BODY,
@@ -43,6 +44,28 @@ from .fields import (
     WRITING_SITUATION,
 )
 from .gemini import DEFAULT_LIMITS
+from .predraft_cap import user_cap_reached
+
+
+def evidence_of(you: dict[str, Any], conversation: list[str], d: dict[str, Any], subject: str | None, calendar: list[str]) -> list[str]:
+    """Everything a draft may rightly state, as plain texts for the fact check: the conversation, what you asked
+    for and decided, the saved facts and your note about this person, and the calendar."""
+    out = list(conversation) + [subject or "", d.get("instruction") or "", d.get("decision") or "", you.get("about_note") or "", you.get("them") or "", you.get("me") or ""]
+    for title, body in you.get("facts") or []:
+        out += [title, body]
+    return [t for t in out + calendar if t]
+
+
+def audit_of(you: dict[str, Any], messages: int, calendar: bool) -> dict[str, Any]:
+    """What a draft was written from, as counts only (the app shows "Based on: last 3 messages, 2 saved facts")."""
+    return {
+        "messages": messages,
+        "facts": len(you.get("facts") or []),
+        "rules": len(you.get("rules") or []) + len(you.get("person_rules") or []),
+        "replies": len(you.get("similar") or []) + len(you.get("more_voice") or []) + len(you.get("recent") or []),
+        "note": bool(you.get("about_note")),
+        "calendar": calendar,
+    }
 
 
 class GatherMixin:
@@ -56,6 +79,10 @@ class GatherMixin:
             return self._compose_limited(d)
         limits = self.gemini.limits() if hasattr(self.gemini, "limits") else DEFAULT_LIMITS
         auto = bool(d.get("auto"))
+        if auto and d.get("user_id") and user_cap_reached(self.db, d["user_id"]):  # the per-user daily cap, whatever put the row there
+            self._expire(d)
+            log.info("pre-draft cap reached", draft=d["id"])
+            return True
         since = datetime.now(timezone.utc) - (timedelta(days=1) if auto else timedelta(hours=1))
         try:
             made = self.db.count(
@@ -149,10 +176,14 @@ class GatherMixin:
 
         # The team's voice is for a new draft in a work chat. An edit or adjustment only corrects their own text.
         company = self._company(user, d["thread_id"]) if edit is None else None
+        you = self._you(user, first, similar, thread.get("channel") or "email")
+        calendar = self._calendar(user) if edit is None else []
         return {
             "thread": thread,
+            "evidence": evidence_of(you, [text for _, text in conversation], d, thread.get("subject"), calendar),
+            "audit": audit_of(you, len(conversation), bool(calendar)),
             "prompt": build_prompt(
-                **self._you(user, first, similar),
+                **you,
                 conversation=conversation,
                 tone=d.get("tone") or "default",
                 instruction=d.get("instruction"),
@@ -164,6 +195,7 @@ class GatherMixin:
                 subject=thread.get("subject") or "",
                 last_from_me=messages[-1]["direction"] == "outbound",
                 company=company,
+                voice_note=bool(latest_in and latest_in.get("transcript") and messages[-1] is latest_in),
             ),
             "edit": edit is not None,
             "company": company is not None,
@@ -211,7 +243,35 @@ class GatherMixin:
             log.warn("about note not read", code=log.code_of(err))
             return ""
 
-    def _you(self, user: str, first: dict[str, Any], similar: list[tuple[str, str]]) -> dict[str, Any]:
+    def _calendar(self, user: str) -> list[str]:
+        """The next CALENDAR_DAYS of events as plain day and time lines, for the fact check only (titles are never
+        read). Never fails the draft: without them a weekday is found only when the conversation names it."""
+        try:
+            now = datetime.now(timezone.utc)
+            rows = self.db.select(
+                "calendar_events",
+                {"select": "starts_at,ends_at,all_day", "user_id": f"eq.{user}", "and": f"(starts_at.gte.{(now - timedelta(days=1)).isoformat()},starts_at.lte.{(now + timedelta(days=CALENDAR_DAYS)).isoformat()})", "order": "starts_at", "limit": "100"},
+            )
+            zone = self.db.first("profiles", {"select": "timezone", "user_id": f"eq.{user}"}) or {}
+            return calendar_lines(rows, zone.get("timezone"), now)
+        except Exception as err:
+            log.warn("calendar not read for draft check", code=log.code_of(err))
+            return []
+
+    def _channel_rules(self, user: str, channel: str, rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """rules without the ones learned on the other channel, so email habits never reach a WhatsApp draft. draft_context
+        returns rules without their channel, so the other channel's are read here (one small read) and left out by
+        their stored text. Never fails the draft: on an error the rules are kept as they came."""
+        other = "email" if channel == "whatsapp" else "whatsapp"
+        try:
+            left = self.db.select("style_rules", {"select": "rule", "user_id": f"eq.{user}", "enabled": "is.true", "channel": f"eq.{other}", "limit": "200"})
+        except Exception as err:
+            log.warn("channel rules not read", code=log.code_of(err))
+            return rules
+        gone = {r.get("rule") for r in left if isinstance(r, dict)} if isinstance(left, list) else set()
+        return [r for r in rules if r.get("rule") not in gone] if gone else rules
+
+    def _you(self, user: str, first: dict[str, Any], similar: list[tuple[str, str]], channel: str = "email") -> dict[str, Any]:
         """The parts of the prompt about you and the person, from draft_context or compose_context."""
         profile = first.get("profile") or {}
         contact = first.get("contact") or {}
@@ -219,7 +279,7 @@ class GatherMixin:
         org = contact.get("organizations") or {}
         recent = pick_voice([], first["recent"], limit=RECENT_VOICE)
         opened = lambda field, value: self.vault.open(user, field, value) or ""  # sealed or plain
-        rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in first["rules"]]
+        rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in self._channel_rules(user, channel, first["rules"])]
         return {
             **self._composer(user),
             "me": profile.get("display_name") or "",
@@ -253,10 +313,13 @@ class GatherMixin:
         if edit is None and not (d.get("instruction") or "").strip() and not d.get("audio_path"):
             return "Say what the message should say first."
         channel = account.get("channel") or "email"
+        you = self._you(user, first, [], channel)
         return {
             "thread": {"id": None, "account_id": account["id"]},
+            "evidence": evidence_of(you, [], d, None, []),
+            "audit": audit_of(you, 0, False),
             "prompt": build_prompt(
-                **self._you(user, first, []),
+                **you,
                 conversation=[],
                 tone=d.get("tone") or "default",
                 instruction=d.get("instruction"),

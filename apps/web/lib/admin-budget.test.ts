@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { LIMITS, badFields, billingState, budgetProblem, formSnapshot, mergeShares, projectMonth, sharesOf, shareTotal, unknownShares, usageSummary, zeroedFeatures, type BudgetForm } from "./admin-budget";
 
 const form = (over: Partial<BudgetForm> = {}): BudgetForm => ({
-  monthly: "5", shares: { triage: "30", draft: "30", learn: "15", brief: "10", transcribe: "15", bulk_read: "0" }, weeklyPct: "40", weekly: ["draft"], setupUsd: "1", setupDays: "7",
+  monthly: "5", shares: { triage: "30", draft: "30", learn: "15", brief: "10", transcribe: "15", bulk_read: "0", documents: "0" }, weeklyPct: "40", weekly: ["draft"], setupUsd: "1", setupDays: "7",
   limits: Object.fromEntries(LIMITS.map((x) => [x.key, "10"])) as BudgetForm["limits"], ...over,
 });
 
@@ -25,11 +25,11 @@ test("a problem names the field and why", () => {
 });
 
 test("shares the page has no row for count toward the total and survive a save", () => {
-  const original = sharesOf({ triage: 30, draft: 30, learn: 15, brief: 10, transcribe: 10, bulk_read: 0, mystery: 5, bad: "x" });
+  const original = sharesOf({ triage: 30, draft: 30, learn: 15, brief: 10, transcribe: 10, bulk_read: 0, documents: 0, mystery: 5, bad: "x" });
   assert.deepEqual(unknownShares(original), { mystery: 5 });
   assert.equal(shareTotal(form(), original), 105);
   assert.match(budgetProblem(form(), original)!, /105%/);
-  const edited = { triage: 30, draft: 30, learn: 15, brief: 10, transcribe: 10, bulk_read: 0 };
+  const edited = { triage: 30, draft: 30, learn: 15, brief: 10, transcribe: 10, bulk_read: 0, documents: 0 };
   assert.deepEqual(mergeShares(original, edited), { ...edited, mystery: 5 });
 });
 

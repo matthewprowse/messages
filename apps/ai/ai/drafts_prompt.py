@@ -81,6 +81,10 @@ ADJUST_SYSTEM = """You adjust a reply one person is about to send, in their own 
 - When they also give an instruction, follow it.
 - Plain text. No markdown, no emojis unless their own text or examples use them. Never use em dashes.""" + UNTRUSTED
 
+# Added when the latest message is a voice note (its transcript is in the conversation, marked "(Voice note)"). The
+# interface is British English, but the reply follows the language spoken: the transcript is in it as heard.
+VOICE_NOTE_NOTE = "The latest message is a voice note, shown as what was said in it. Answer every point they made, one after the other, and reply in the language they spoke in, mixing languages as they do."
+
 TONES = {
     "default": "Their usual voice for this person.",
     "shorter": "Shorter than they would usually write: just what is needed.",
@@ -138,6 +142,7 @@ def build_prompt(
     company: dict[str, Any] | None = None,
     draft_tone: str | None = None,
     has_signature: bool = False,
+    voice_note: bool = False,
 ) -> str:
     """You first (the same for every draft on this channel, so Gemini can bill it at the cached rate), then
     this person, then the conversation, and what you asked for last. With edit, the end is your own text
@@ -221,6 +226,9 @@ def build_prompt(
     else:
         # No sender name here: it is written by the other side, so it stays between the marked lines above.
         lines.append(f"\nWrite their {medium} reply to the latest message in the conversation.")
+        if voice_note:
+            # A voice note is a run of points said aloud; a reply that answers only the first is the usual failure.
+            lines.append(VOICE_NOTE_NOTE)
     return "\n".join(lines)
 
 

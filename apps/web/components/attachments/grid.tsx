@@ -9,6 +9,8 @@ import { filesLabel, messageHref, monthKey, monthTitle } from "@/lib/attachment-
 import type { FiledAttachment } from "@/lib/types";
 import { fullDate, stampOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import type { DocCard } from "@/lib/search/document-card";
+import { useDocumentCards } from "./document-store";
 import { AttachmentTile } from "./tile";
 import { AttachmentViewer } from "./viewer";
 import { useSeen } from "./use-seen";
@@ -29,7 +31,7 @@ function MoreSentinel({ onSeen }: { onSeen: () => void }) {
 }
 
 /** One tile in the grid. Memoized with a stable onView, so loading more files or a store change does not redraw every tile. */
-const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecting, selected, onToggle }: { attachment: FiledAttachment; sender: string; onView: (a: FiledAttachment) => void; selecting: boolean; selected: boolean; onToggle: (id: string) => void }) {
+const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecting, selected, onToggle, card }: { card?: DocCard; attachment: FiledAttachment; sender: string; onView: (a: FiledAttachment) => void; selecting: boolean; selected: boolean; onToggle: (id: string) => void }) {
   return (
     <>
       <AttachmentTile
@@ -37,6 +39,7 @@ const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecti
         onOpen={() => (selecting ? onToggle(a.id) : onView(a))}
         selecting={selecting}
         selected={selected}
+        card={card}
         showName={false}
         overlay={<><span className="truncate">{sender}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
         className="aspect-square size-auto w-full"
@@ -55,6 +58,8 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
   const { contactById } = useApp();
   const [viewing, setViewing] = useState<FiledAttachment | null>(null);
   const [limit, setLimit] = useState(GRID_PAGE);
+  const shownIds = useMemo(() => items.slice(0, limit).filter((a) => a.path && (a.kind === "pdf" || a.kind === "image")).map((a) => a.id), [items, limit]);
+  const cardOf = useDocumentCards(shownIds);
   const who = (from: string) => (from === "me" ? "You" : contactById(from)?.name ?? "Unknown");
   const perMonth = useMemo(() => {
     const counts = new Map<string, number>();
@@ -94,7 +99,7 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
                 </h2>
               )}
               <div className="flex min-w-0 flex-col gap-1">
-                <GridTile attachment={a} sender={who(a.from)} onView={setViewing} selecting={selecting} selected={!!selection?.selected.has(a.id)} onToggle={toggleSelected} />
+                <GridTile card={(() => { const e = cardOf(a.id); return e?.state === "card" ? e.card : undefined; })()} attachment={a} sender={who(a.from)} onView={setViewing} selecting={selecting} selected={!!selection?.selected.has(a.id)} onToggle={toggleSelected} />
               </div>
             </Fragment>
           );

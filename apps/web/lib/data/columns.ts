@@ -20,7 +20,7 @@ export type MessageRow = Pick<
 > & { attachments: AttachmentRow[] };
 export type AccountRow = Pick<Tables<"accounts">, "id" | "provider" | "label" | "nickname" | "address" | "status" | "status_detail" | "last_synced_at" | "send_addresses">;
 export type ProfileRow = Pick<Tables<"profiles">, "display_name" | "avatar_path" | "about" | "important_people" | "quiet_start" | "quiet_end" | "push_urgent" | "push_important" | "auto_draft_top" | "whatsapp_read_receipts" | "share_usage" | "language">;
-export type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruction" | "decision" | "decision_kind" | "source" | "auto" | "updated_at">;
+export type DraftRow = Pick<Tables<"drafts">, "id" | "body" | "tone" | "instruction" | "decision" | "decision_kind" | "source" | "auto" | "updated_at" | "report" | "audit" | "feedback">;
 export type UnsubscribeRow = Pick<Tables<"unsubscribes">, "id" | "account_id" | "sender_address" | "status" | "manual_url" | "error">;
 
 // With the company, whose logo stands in for the photo of a sender that writes as the company.
@@ -34,7 +34,7 @@ export const THREAD_WITH_IDS = `${THREAD_COLUMNS}, accounts(provider), thread_pa
 // Explicit lists, so a column the app never reads (a WhatsApp QR or pairing code) never reaches every page.
 export const ACCOUNT_COLUMNS = "id, provider, label, nickname, address, status, status_detail, last_synced_at, send_addresses";
 export const PROFILE_COLUMNS = "display_name, avatar_path, about, important_people, quiet_start, quiet_end, push_urgent, push_important, auto_draft_top, whatsapp_read_receipts, share_usage, language";
-export const DRAFT_COLUMNS = "id, thread_id, body, tone, instruction, decision, decision_kind, source, auto, updated_at";
+export const DRAFT_COLUMNS = "id, thread_id, body, tone, instruction, decision, decision_kind, source, auto, updated_at, report, audit, feedback";
 export const UNSUBSCRIBE_COLUMNS = "id, account_id, sender_address, status, manual_url, error";
 export const ATTACHMENT_COLUMNS = "id, message_id, filename, kind, size_bytes, storage_path, team_path, hidden, sealed, not_kept";
 // Named columns, never select("*"). body_html is only still set on emails stored before the HTML stopped

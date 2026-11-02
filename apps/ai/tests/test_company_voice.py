@@ -8,6 +8,7 @@ import unittest
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from ai.actions import ACTION_SYSTEM
 from ai.company_voice import COMPANY_FACT_CHARS, COMPANY_FACTS_CHARS, COMPANY_SYSTEM, RULE_LINES, TEMPLATES_CHARS, pick_company
 from ai.crypto import derive_team_keys, derive_user_keys, encrypt_field, encrypt_team_field
 from ai.drafts import SYSTEM, Drafts, build_prompt
@@ -141,7 +142,7 @@ class WorkChats(unittest.TestCase):
         self.assertIn("- Sign-off: Kind regards, Acme Properties", prompt)
         self.assertIn("- Offer a viewing", prompt, "a leading dash on a line is not doubled")
         self.assertNotIn("- - ", prompt)
-        self.assertEqual(system, SYSTEM + COMPANY_SYSTEM)
+        self.assertEqual(system, SYSTEM + COMPANY_SYSTEM + ACTION_SYSTEM)
         self.assertEqual((usage.user_id, usage.feature, usage.thread_id), ("u", "draft", "t1"), "filed against the person, as any draft")
 
     def test_the_agents_own_style_comes_first_and_the_company_before_the_examples(self):
@@ -167,7 +168,7 @@ class WorkChats(unittest.TestCase):
         for text in SECRETS:
             self.assertNotIn(text, prompt)
         self.assertNotIn("business", prompt.lower())
-        self.assertEqual(system, SYSTEM, "the system text is exactly what it was before teams")
+        self.assertEqual(system, SYSTEM + ACTION_SYSTEM, "the system text is exactly what it was before teams")
         self.assertIn("company_voice_for_draft", db.rpcs, "asked, and the database said no")
 
     def test_a_personal_prompt_is_the_same_as_before_teams(self):
@@ -182,13 +183,13 @@ class WorkChats(unittest.TestCase):
         _, g = run(db)
         for text in SECRETS:
             self.assertNotIn(text, g.calls[0][1])
-        self.assertEqual(g.calls[0][0], SYSTEM)
+        self.assertEqual(g.calls[0][0], SYSTEM + ACTION_SYSTEM)
 
     def test_someone_in_no_team_never_asks(self):
         db = Db(VOICE, member=False)
         _, g = run(db)
         self.assertNotIn("company_voice_for_draft", db.rpcs, "no extra round trip for a personal user")
-        self.assertEqual(g.calls[0][0], SYSTEM)
+        self.assertEqual(g.calls[0][0], SYSTEM + ACTION_SYSTEM)
 
     def test_edits_and_adjustments_do_not_use_it(self):
         for tone in ("edit", "shorter"):
@@ -211,7 +212,7 @@ class WorkChats(unittest.TestCase):
         db.voice_error = True
         _, g = run(db)
         self.assertEqual(len(g.calls), 1)
-        self.assertEqual(g.calls[0][0], SYSTEM)
+        self.assertEqual(g.calls[0][0], SYSTEM + ACTION_SYSTEM)
 
     def test_values_that_cannot_be_opened_are_left_out(self):
         other = derive_team_keys(os.urandom(32))
@@ -224,7 +225,7 @@ class WorkChats(unittest.TestCase):
 
     def test_an_empty_voice_changes_nothing(self):
         _, g = run(Db([]))
-        self.assertEqual(g.calls[0][0], SYSTEM)
+        self.assertEqual(g.calls[0][0], SYSTEM + ACTION_SYSTEM)
 
 
 class Shape(unittest.TestCase):

@@ -15,9 +15,11 @@ known about you are sent once for the group, first, so they are the same at the 
 Each email goes with up to CONTEXT_MESSAGES earlier messages of its conversation, both directions, cut short, so
 the model can tell an open question from one already answered (bulk mail gets none).
 
-The same call offers guided drafting's one-tap choices for a message that needs a decision only you
-can make ("Are you free Thursday at 3?"). Messages triaged before that existed get theirs when there
-is nothing new to triage (backfill_choices), only while they still need a reply."""
+The same call offers guided drafting's one-tap choices, only for a message that asks about a time or for a
+decision ("Are you free Thursday at 3?"); old messages are not asked again later, since an unanswered one
+rarely gets answered. It also returns why it decided (a reason code and a few words), a flag for likely phishing
+or payment fraud (shown as a warning, never acted on) and the number of at most one of your Auto labels, which is
+put on the conversation unless you took it off before. Junk gets no summary: its subject stands in."""
 
 from __future__ import annotations
 
@@ -33,7 +35,9 @@ from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, billing_paused, not_in
 from .supabase import Supabase, in_list
+from .triage_extras import label_to_add, with_subject_summary
 from .text import clean
+from .triage_batch import BatchTriageMixin
 from .triage_context import ContextMixin
 from .triage_prompt import (  # noqa: F401  re-exported: other modules and tests import these from here
     LANGUAGE_NAMES,
@@ -80,7 +84,7 @@ from .triage_signals import (  # noqa: F401  re-exported: other modules and test
 from .vault import Vault
 
 
-class Triage(ContextMixin):
+class Triage(BatchTriageMixin, ContextMixin):
     def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
         self.db = db
         self.gemini = gemini
@@ -111,14 +115,14 @@ class Triage(ContextMixin):
                 keep.append(r)
         return keep
 
-    def run_once(self) -> int:
-        """Triages one batch. Returns how many were triaged, so the loop rests when nothing succeeded."""
+    def _triage_once(self) -> int:
+        """Triages one batch (run_once, in triage_batch.py, wraps it with claims and the Batch API). Returns how many were triaged, so the loop rests when nothing succeeded."""
         since = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
         now = time.monotonic()
-        rows = self.db.select("messages", pending_query(since, self._backoff.waiting(now) + [i for i, at in self._voice_wait.items() if at > now]))
+        rows = self.db.select("messages", pending_query(since, self._backoff.waiting(now) + [i for i, at in self._voice_wait.items() if at > now] + self._skip_ids()))
         rows = self._without_untranscribed(rows)
         if not rows:
-            return self.backfill_choices(since)
+            return 0
         for r in rows:  # opened first: known_outcome and superseded_outcome copy the subject into the summary
             self.vault.open_row(r["user_id"], r, [("subject", SUBJECT), ("list_unsubscribe", UNSUBSCRIBE), ("sender_address", ADDRESS)])
         thread_ids = sorted({r["thread_id"] for r in rows})
@@ -175,10 +179,12 @@ class Triage(ContextMixin):
             else:
                 firsts[key] = m
 
+        ask = self._claim_rows(ask)  # a second AI worker never pays for the same messages
         asked = len(ask)
         if ask:
             for answers in self._pool.map(lambda chunk: self._ask(contexts[chunk[0]["user_id"]], chunk), self._prepare(ask, contexts)):
                 results.update(answers)
+            results.update(self._batch_flush())  # old setup mail deferred by _ask goes as one half price batch
         for m in copies:
             first = firsts[(m["user_id"], m.get("provider_message_id") or m["id"])]
             if first["id"] in results:
@@ -201,7 +207,13 @@ class Triage(ContextMixin):
                 )
                 for m in done
             }
-            final = {m["id"]: apply_signals(results[m["id"]][0], (m.get("sender_address") or "").lower(), contexts[m["user_id"]], feedback.get(m["thread_id"], []), m.get("sender_contact_id")) for m in done}
+            final = {
+                m["id"]: with_subject_summary(
+                    apply_signals(results[m["id"]][0], (m.get("sender_address") or "").lower(), contexts[m["user_id"]], feedback.get(m["thread_id"], []), m.get("sender_contact_id")),
+                    m.get("subject"),
+                )
+                for m in done
+            }
             self.db.upsert(
                 "message_ai",
                 [
@@ -214,6 +226,9 @@ class Triage(ContextMixin):
                         "needs_reply": bool(final[m["id"]]["needs_reply"]),
                         "junk": bool(final[m["id"]]["junk"]),
                         "reply_choices": self.vault.seal(m["user_id"], CHOICES, final[m["id"]]["choices"]),
+                        "triage_reason": final[m["id"]].get("reason_code"),
+                        "triage_reason_text": self.vault.seal(m["user_id"], SUMMARY, final[m["id"]].get("reason_text") or None),
+                        "suspicious": final[m["id"]].get("suspicious"),
                         "model": results[m["id"]][1],
                         "prompt_version": prompt_id(SYSTEM) if results[m["id"]][1] else None,
                         "traits": stored[m["id"]],
@@ -230,51 +245,13 @@ class Triage(ContextMixin):
         # The conversation takes the triage of its latest incoming message.
         updates = [m for m in done if latest[m["id"]][0]]
         list(self._pool.map(lambda m: self._update_thread_safely(m, final[m["id"]], latest[m["id"]][1]), updates))
+        self._label_threads(updates, final, contexts)
         self._report(updates, final, stored)
         for m in done:
             self._backoff.succeeded(m["id"])
+        self._batch_finish([m["id"] for m in done])
         log.info("triage batch", messages=len(rows), triaged=len(done), asked=asked, threads=len(updates))
         return len(done)
-
-    def backfill_choices(self, since: str) -> int:
-        """Choices for messages triaged before guided drafting, a GROUP at a time and only when there is
-        nothing new to triage: recent ones that still need a reply. Only the latest incoming message of
-        a conversation is asked about; the rest are marked as looked at. Returns how many were done."""
-        rows = self.db.select(
-            "message_ai",
-            {
-                "select": "message_id,messages!inner(id,user_id,account_id,thread_id,provider_message_id,subject,sender_address,"
-                "sender_contact_id,list_unsubscribe,sent_at)",
-                "needs_reply": "eq.true",
-                "junk": "eq.false",
-                "reply_choices": "is.null",
-                "messages.sent_at": f"gte.{since}",
-                **not_in(self._backoff.waiting(time.monotonic()), "message_id"),
-                "limit": str(GROUP),
-            },
-        )
-        batch = [r["messages"] for r in rows if isinstance(r.get("messages"), dict)]
-        if not batch:
-            return 0
-        for m in batch:
-            self.vault.open_row(m["user_id"], m, [("subject", SUBJECT), ("list_unsubscribe", UNSUBSCRIBE), ("sender_address", ADDRESS)])
-        latest = self._latest(batch)
-        ask = [m for m in batch if latest[m["id"]][0]]
-        found: dict[str, str] = {m["id"]: NO_CHOICES for m in batch if not latest[m["id"]][0]}
-        if ask:
-            contexts = self._contexts(sorted({m["user_id"] for m in ask}))
-            for answers in self._pool.map(lambda chunk: self._ask(contexts[chunk[0]["user_id"]], chunk), self._prepare(ask, contexts)):
-                found.update({mid: result["choices"] for mid, (result, _model) in answers.items()})
-        by_id = {m["id"]: m for m in batch}
-
-        def store(item: tuple[str, str]) -> None:
-            mid, choices = item
-            self.db.update("message_ai", {"message_id": f"eq.{mid}"}, {"reply_choices": self.vault.seal(by_id[mid]["user_id"], CHOICES, choices)}, minimal=True)
-            self._backoff.succeeded(mid)
-
-        list(self._pool.map(store, found.items()))
-        log.info("choices backfill", messages=len(batch), asked=len(ask), done=len(found))
-        return len(found)
 
     def _all(self, calls: dict[str, Callable[[], Any]]) -> dict[str, Any]:
         futures = {name: self._pool.submit(fn) for name, fn in calls.items()}
@@ -320,7 +297,7 @@ class Triage(ContextMixin):
             }
         return groups(ask)
 
-    def _ask(self, ctx: UserContext, chunk: list[dict[str, Any]]) -> dict[str, tuple[dict[str, Any], str | None]]:
+    def _ask_model(self, ctx: UserContext, chunk: list[dict[str, Any]]) -> dict[str, tuple[dict[str, Any], str | None]]:
         """The model's results by message id for one group (one user and account). An email it would
         not answer in a group is asked about on its own, so it cannot hold the others up."""
         first = chunk[0]
@@ -346,7 +323,7 @@ class Triage(ContextMixin):
                 return {}
             self._failed(chunk, err.status)
             return {}
-        got = read_results(result, len(chunk))
+        got = read_results(result, len(chunk), len(ctx.auto_labels))
         out = {m["id"]: (got[i], self.model) for i, m in enumerate(chunk, 1) if i in got}
         missing = [m for m in chunk if m["id"] not in out]
         if missing and len(chunk) > 1:
@@ -405,6 +382,30 @@ class Triage(ContextMixin):
                 "summary": self.vault.seal(m["user_id"], SUMMARY, result["summary"]),
                 "needs_reply": bool(result["needs_reply"]) and waiting_on_them,
                 "junk": bool(result["junk"]),
+                "triage_reason": result.get("reason_code"),
+                "triage_reason_text": self.vault.seal(m["user_id"], SUMMARY, result.get("reason_text") or None),
+                "suspicious": result.get("suspicious"),
             },
             minimal=True,
         )
+
+    def _label_threads(self, updates: list[dict[str, Any]], final: dict[str, dict[str, Any]], contexts: dict[str, UserContext]) -> None:
+        """Puts the Auto label the model chose on each conversation, unless it already wears an Auto label or the user took
+        this one off it before. Two reads for the batch; one failure is logged and costs only labels, not the triage."""
+        picks = [m for m in updates if contexts[m["user_id"]].auto_labels and final[m["id"]].get("label_index") and not final[m["id"]]["junk"]]
+        if not picks:
+            return
+        try:
+            threads = in_list(sorted({m["thread_id"] for m in picks}))
+            wearing: dict[str, set[str]] = {}
+            for r in self.db.select("thread_labels", {"select": "thread_id,label_id", "thread_id": threads}):
+                wearing.setdefault(r["thread_id"], set()).add(r["label_id"])
+            taken_off: dict[str, set[str]] = {}
+            for r in self.db.select("thread_label_removals", {"select": "thread_id,label_id", "thread_id": threads}):
+                taken_off.setdefault(r["thread_id"], set()).add(r["label_id"])
+            for m in picks:
+                chosen = label_to_add(contexts[m["user_id"]].auto_labels, final[m["id"]]["label_index"], wearing.get(m["thread_id"], set()), taken_off.get(m["thread_id"], set()))
+                if chosen:
+                    self.db.insert_new("thread_labels", {"thread_id": m["thread_id"], "label_id": chosen, "user_id": m["user_id"], "auto": True}, "thread_id,label_id")
+        except Exception as err:
+            log.warn("auto labels not saved", threads=len(picks), code=log.code_of(err))

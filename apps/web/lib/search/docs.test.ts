@@ -88,6 +88,6 @@ test("text is tidied and cut to the length for its kind", () => {
   assert.equal(clip("  a \n\n b  ", "message"), "a b");
   assert.equal(clip("x".repeat(5000), "message").length, TEXT_CAP.message);
   assert.equal(clip("x".repeat(5000), "note").length, TEXT_CAP.note);
-  assert.equal(clip("anything", "file"), "");
+  assert.equal(clip("anything", "file"), "anything");
   assert.equal(clip(null, "task"), "");
 });

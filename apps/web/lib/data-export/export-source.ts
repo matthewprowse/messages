@@ -86,6 +86,12 @@ export function browserExportSource(): ExportSource {
       return rows.map(mapTask);
     },
 
+    async commitments() {
+      const rows = await allRows("Load promises", (from, to) => supabase.from("commitments").select("id, thread_id, owner, text, due_on, status, done_at, created_at").order("id").range(from, to));
+      await openRows(rows, [["text", FIELD.taskTitle]] as const);
+      return rows;
+    },
+
     async events() {
       const now = Date.now();
       const out = [];

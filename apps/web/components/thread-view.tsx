@@ -28,6 +28,7 @@ import { meetingsAmong } from "@/lib/meetings";
 import { useMeetings } from "@/components/meetings-data";
 import { ShareNotice } from "@/components/share-notice";
 import { SummaryStrip } from "@/components/thread-view/summary-strip";
+import { CommitmentsStrip } from "@/components/commitments/commitments-strip";
 import { ThreadHeader } from "@/components/thread-view/header";
 import { Messages } from "@/components/thread-view/message-list";
 import { Composer } from "@/components/thread-view/composer";
@@ -239,6 +240,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       />
       <ShareNotice thread={thread} />
       <SummaryStrip summary={thread.summary} />
+      <CommitmentsStrip threadId={thread.id} theirName={title} />
 
       {/* Padding sits outside the 672px column, as in the composer, so bubbles line up with the message box. */}
       <div className="relative min-h-0 flex-1">

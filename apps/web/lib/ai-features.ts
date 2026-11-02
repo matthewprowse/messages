@@ -9,6 +9,7 @@ export const AI_FEATURES: { key: string; label: string; note: string }[] = [
   { key: "brief", label: "Daily Brief", note: "The daily brief and its spoken version." },
   { key: "transcribe", label: "Transcripts", note: "Voice note and meeting transcripts." },
   { key: "bulk_read", label: "Readable Bulk Email", note: "The short readable version of a newsletter or marketing email, made when it is opened." },
+  { key: "documents", label: "Document Cards", note: "The type, amount and due date read from a PDF or scanned document, for files you ask about and files from your contacts." },
 ];
 
 /** The name of a feature, or its key when Admin does not know it yet. */

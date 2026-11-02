@@ -46,6 +46,7 @@ facts win on content. Edits, adjustments and new messages do not use it."""
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -53,7 +54,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Any
 
-from . import log
+from . import actions, log
 from .company_voice import COMPANY_SYSTEM
 from .config import edit_thinking, draft_thinking
 from .drafts_context import (  # noqa: F401  re-exported: other modules and tests import these from here
@@ -87,6 +88,7 @@ from .drafts_context import (  # noqa: F401  re-exported: other modules and test
     pick_voice,
     stale,
 )
+from .drafts_facts import RETRY_TEMPERATURE, check, needs_retry, retry_note
 from .drafts_gather import GatherMixin
 from .drafts_prompt import (  # noqa: F401  re-exported: other modules and tests import these from here
     ADJUST_SYSTEM,
@@ -113,6 +115,7 @@ from .text import plain_dashes
 from .vault import Vault
 
 MAX_RUNNING = 4
+DRAFT_TEMPERATURE = 0.6  # a fresh draft; the fact guard asks again at drafts_facts.RETRY_TEMPERATURE when it finds unsupported details
 HEDGE_AFTER_S = 4.5  # past the model's p90 (about 3.3s on a draft): a second request is sent and the first answer used
 
 
@@ -158,6 +161,8 @@ class Drafts(GatherMixin):
         self._hold_until = 0.0  # time.monotonic: pending drafts are not looked for before this (billing paused)
         self._active_until = 0.0
         self._idle = Backoff(POLL_IDLE_S, POLL_IDLE_MAX_S, 1.5)
+
+    claims = None  # a claims.Claims, set by the entry point: the second-worker guard
 
     def poll_wait(self) -> float:
         """Seconds until the next check: sooner while drafts are being asked for."""
@@ -208,6 +213,9 @@ class Drafts(GatherMixin):
             self.vault.open_row(d["user_id"], d, [("instruction", INSTRUCTION), ("decision", INSTRUCTION), ("source", DRAFT)])
         started = pick_drafts(pending, running, MAX_RUNNING - len(running))
         started = [d for d in started if not self._limited(d)]
+        if self.claims and started:  # a second AI worker never writes (and pays for) the same draft
+            got = self.claims.claim("draft", [d["id"] for d in started])
+            started = [d for d in started if d["id"] in got]
         warm = getattr(self.gemini, "warm", None)
         if started and warm:  # the connection is ready by the time draft_context has been read
             threading.Thread(target=warm, args=(self.fast_model if all(revises(d) for d in started) else self.model,), daemon=True).start()
@@ -235,6 +243,8 @@ class Drafts(GatherMixin):
         finally:
             with self._lock:
                 self._running.pop(d["id"], None)
+            if self.claims:
+                self.claims.release("draft", [d["id"]])
             self._active_until = time.monotonic() + ACTIVE_FOR_S
 
     def _fail(self, d: dict[str, Any], reason: str) -> None:
@@ -278,18 +288,26 @@ class Drafts(GatherMixin):
         compose = thread["id"] is None
         adjust = edit and is_adjust(d.get("tone"))
         model = self.fast_model if edit else self.predraft_model if d.get("auto") else self.model
+        # A next step (book, task, file, template) may ride on a fresh reply draft; edits, adjustments and new messages get none.
+        offer = actions.gather(self.db, self.vault, d["user_id"], thread["id"]) if not edit and not compose else None
+        if offer is not None:
+            prompt += actions.prompt_block(offer, d["id"])
         audio = self._recording(d) if d.get("audio_path") and not edit else None
         if d.get("audio_path") and not edit and audio is None:
             self._fail(d, "The recording could not be read. Try again.")
             return
-        try:
-            result = self._hedged(lambda: self.gemini.json(
+        system = ADJUST_SYSTEM if adjust else EDIT_SYSTEM if edit else COMPOSE_SYSTEM if compose else SYSTEM + COMPANY_SYSTEM if gathered.get("company") else SYSTEM
+        if offer is not None:
+            system += actions.ACTION_SYSTEM
+
+        def ask(text: str, temperature: float) -> dict[str, Any]:
+            return self._hedged(lambda: self.gemini.json(
                 model,
-                ADJUST_SYSTEM if adjust else EDIT_SYSTEM if edit else COMPOSE_SYSTEM if compose else SYSTEM + COMPANY_SYSTEM if gathered.get("company") else SYSTEM,
-                prompt,
-                schema_for(voice=audio is not None, subject=subject),
+                system,
+                text,
+                actions.with_action(schema_for(voice=audio is not None, subject=subject)) if offer is not None else schema_for(voice=audio is not None, subject=subject),
                 UsageContext(d["user_id"], "draft", thread["account_id"], thread["id"]),
-                temperature=0.4 if adjust else 0.2 if edit else 0.6,  # an edit should come back the same way each time
+                temperature=temperature,
                 # On low the fast model let typos in all-lowercase text through; medium caught them in 2 to 5s,
                 # where the full model took 2 to 17s.
                 thinking=edit_thinking() if edit and not adjust else draft_thinking(),
@@ -298,6 +316,23 @@ class Drafts(GatherMixin):
                 max_output=DRAFT_MAX_OUTPUT,
                 audio=audio,
             ), hedge=audio is None and hedge_on())
+
+        report: dict[str, Any] | None = None
+        try:
+            result = ask(prompt, 0.4 if adjust else 0.2 if edit else DRAFT_TEMPERATURE)  # an edit should come back the same way each time
+            if not edit:  # your own text is not checked: it is yours
+                report = self._checked(result, gathered)
+                if needs_retry(report):
+                    # A detail that is in nothing the draft was written from, or a placeholder: one more try, colder.
+                    # The better of the two is kept; a failed second try keeps the first.
+                    log.info("draft facts unsupported", draft=d["id"], missing=report["missing"])
+                    try:
+                        again = ask(prompt + retry_note(report), RETRY_TEMPERATURE)
+                        second = self._checked(again, gathered)
+                        if second["missing"] <= report["missing"]:
+                            result, report = again, second
+                    except GeminiError:
+                        pass
         except GeminiError as err:
             if billing_paused(err):  # the draft stays pending and is written once the pause ends (or fails as stale)
                 self._hold_until = time.monotonic() + BILLING_HOLD_S
@@ -314,6 +349,10 @@ class Drafts(GatherMixin):
             self._fail(d, "The draft came back empty. Try again.")
             return
         done: dict[str, Any] = {"body": self.vault.seal(d["user_id"], DRAFT, body), "status": "active", "model": model, "error": None, "updated_at": _now()}
+        if report is not None:
+            # The report names details from the draft, so it is sealed as the draft is; the audit is counts only.
+            done["report"] = self.vault.seal(d["user_id"], DRAFT, json.dumps(report, separators=(",", ":")))
+            done["audit"] = gathered.get("audit")
         title = plain_dashes((result.get("subject") or "").replace("\n", " ")).strip()[:200] if subject else ""
         if title:
             done["subject"] = self.vault.seal(d["user_id"], SUBJECT, title)
@@ -337,7 +376,15 @@ class Drafts(GatherMixin):
             {"status": "expired" if d.get("auto") else "revised" if revises(d) else "discarded", "updated_at": _now()},
             minimal=True,
         )
+        if offer is not None:
+            actions.propose(self.db, self.vault, d["user_id"], thread["id"], d["id"], result.get("action"), offer)
         log.info("draft written", draft=d["id"])
+
+    def _checked(self, result: dict[str, Any], gathered: dict[str, Any]) -> dict[str, Any]:
+        """The fact report for a model answer: its body against everything it was written from, and what the person
+        said into a recording (which is part of what the draft may rightly state)."""
+        spoken = (result.get("said") or "") if isinstance(result.get("said"), str) else ""
+        return check(plain_dashes(result.get("body")), list(gathered.get("evidence") or []) + [spoken])
 
     def _hedged(self, call: Any, *, hedge: bool = True) -> dict[str, Any]:
         """call(), and when it has not answered after HEDGE_AFTER_S, the same call again: whichever answers

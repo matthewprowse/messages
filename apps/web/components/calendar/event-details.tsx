@@ -19,6 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { EventMeetings } from "@/components/meeting-card";
+import { EventPrep } from "@/components/prep/event-prep";
 
 import { isDimmed, timeRange } from "./dates";
 import { Now, Page } from "./page-context";
@@ -159,6 +160,7 @@ export function EventDetails({ event }: { event: CalendarEvent }) {
         </div>
       )}
       {!full.detailed && detailsFailed.has(event.id) && <p className="text-sm text-muted-foreground">Guests and notes did not load.</p>}
+      <EventPrep eventId={full.pending ? null : full.id} />
       <EventMeetings eventId={full.pending ? null : full.id} />
     </div>
   );

@@ -5,14 +5,15 @@
 
 /** Tables with a user_id column (docs/PLAN.md, "Deleting an account"). Add a new one here in the same change as its migration. */
 export const OWNED_TABLES = [
-  "account_composer", "account_deletions", "account_removals", "accounts", "address_book_cards", "ai_setup_grants", "ai_usage", "ai_usage_monthly",
+  "account_composer", "account_deletions", "account_removals", "accounts", "actions", "address_book_cards", "ai_batches", "ai_setup_grants", "ai_usage", "ai_usage_monthly",
   "attachment_fetch_requests", "attachments", "brief_parts", "brief_requests", "briefs", "bulk_reads",
-  "calendar_deletes", "calendar_events", "calendar_outbox", "calendar_updates", "compliance_exports", "compliance_opens",
-  "contact_identities", "contact_merges", "contact_suggestions", "contacts", "draft_outcomes", "drafts", "email_originals",
+  "calendar_deletes", "calendar_events", "calendar_outbox", "calendar_updates", "commitments", "compliance_exports", "compliance_opens",
+  "contact_identities", "contact_merges", "contact_suggestions", "contacts", "document_reads", "draft_outcomes", "drafts", "email_originals",
   "feedback", "follow_ups", "instagram_sign_ins", "labels", "mail_actions", "meeting_participants", "meetings", "message_ai",
   "message_embeddings", "messages", "note_attachments", "note_links", "notes", "organizations", "outbox", "outbox_attachments",
   "priority_rules", "profiles", "push_subscriptions", "saved_views", "share_jobs", "storage_deletions", "style_rules", "task_updates",
-  "tasks", "thread_labels", "thread_notes", "thread_participants", "threads", "unsubscribes", "user_keys", "user_templates", "workspace_activity", "workspace_contact_agents",
+  "tasks", "thread_label_removals", "thread_labels", "thread_links", "thread_notes", "thread_participants", "threads", "unsubscribes", "user_keys", "user_templates", "workspace_activity", "workspace_contact_agents",
+  "client_cards", "event_preps",
   "workspace_inbox_access", "workspace_members", "writing_examples",
 ] as const;
 

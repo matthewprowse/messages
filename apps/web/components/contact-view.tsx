@@ -25,6 +25,7 @@ import { withQuery } from "@/lib/utils";
 import { formatPhone, niceName } from "@/lib/format";
 import { EditContactDialog } from "@/components/contact-edit-dialog";
 import { MeetingList } from "@/components/meeting-card";
+import { ClientCard } from "@/components/prep/client-card";
 import { FollowUpMenu } from "@/components/contacts/follow-up-menu";
 import { useContactsData } from "@/components/contacts-data";
 import { setContactVip } from "@/lib/contact-relations-io";
@@ -198,6 +199,8 @@ export function ContactView({ contact }: { contact: ContactDetail | null }) {
           <ConversationRows items={contact.conversations} avatar={<ContactAvatar contact={contact} className="size-8" />} />
         )}
       </Section>
+
+      <ClientCard contactId={contact.id} />
 
       <ContactMeetings contactId={contact.id} />
 

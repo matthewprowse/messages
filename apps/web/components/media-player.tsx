@@ -77,7 +77,7 @@ const RATES = [1, 1.5, 2];
  * A voice note or audio file in a conversation: play and pause, a bar to scrub through it, the time,
  * and a speed button (1x, 1.5x, 2x), drawn to match the bubble it sits in.
  */
-export function VoiceNote({ attachment: a, me, transcript }: { attachment: Attachment; me: boolean; transcript?: string }) {
+export function VoiceNote({ attachment: a, me, transcript, onReplyWithPoints }: { attachment: Attachment; me: boolean; transcript?: string; onReplyWithPoints?: () => void }) {
   const url = useSignedUrl("attachments", a.path, false, a.sealed ? mimeFor(a) : undefined);
   const ref = useRef<HTMLAudioElement>(null);
   const { playing, time, duration, failed, toggle, seek } = useMedia(ref);
@@ -120,6 +120,10 @@ export function VoiceNote({ attachment: a, me, transcript }: { attachment: Attac
           <Button variant="ghost" size="xs" className="mt-1 self-start hover:bg-current/10" onClick={() => setReading((r) => !r)} aria-expanded={reading}>
             {reading ? "Hide Transcript" : "View Transcript"}
           </Button>
+          {/* Only on a voice note sent to you: drafts a reply covering what was said, in the language it was said in. */}
+          {onReplyWithPoints && (
+            <Button variant="ghost" size="xs" className="mt-1 self-start hover:bg-current/10" onClick={onReplyWithPoints}>Reply With These Points</Button>
+          )}
         </>
       )}
     </div>

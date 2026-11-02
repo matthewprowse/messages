@@ -134,6 +134,10 @@ class SimilarIndex:
                 out.append({**row, "similarity": score})
         return out[:limit]
 
+    def items(self, user_id: str) -> list[tuple[str, str | None, array]]:
+        """A user's cached (message id, thread id, unit vector) items, loaded when not cached. Read only: do not change the list."""
+        return self._items(user_id)
+
     def _items(self, user_id: str) -> list[tuple[str, str | None, array]]:
         now = time.monotonic()
         with self._lock:

@@ -56,7 +56,7 @@ test("a returned snooze says Snoozed for a day, a returned reminder says Follow 
   assert.equal(snoozeMark({ snoozedUntil: hoursAgo(30), snoozeKind: "snooze", lastFromMe: false }, now), null);
   assert.equal(snoozeMark({ snoozedUntil: hoursAgo(-2), snoozeKind: "snooze", lastFromMe: false }, now), null); // still snoozed
   assert.equal(snoozeMark({ snoozedUntil: hoursAgo(50), snoozeKind: "reminder", lastFromMe: true }, now), "follow_up");
-  assert.equal(snoozeMark({ snoozedUntil: hoursAgo(50), snoozeKind: "reminder", lastFromMe: false }, now), null); // they wrote since
+  assert.equal(snoozeMark({ snoozedUntil: hoursAgo(50), snoozeKind: "reminder", lastFromMe: false }, now), "follow_up"); // a promise of theirs that passed its day
   assert.equal(snoozeMark({ snoozedUntil: hoursAgo(24 * 8), snoozeKind: "reminder", lastFromMe: true }, now), null);
 });
 

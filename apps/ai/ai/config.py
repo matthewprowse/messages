@@ -96,6 +96,11 @@ def check_encryption(content: bool, addresses: bool, *, prod: bool | None = None
         sys.exit(1)
 
 
+def batch_enabled() -> bool:
+    """The half price Batch API for setup triage and learning backlogs is on unless AI_BATCH is "off"."""
+    return os.environ.get("AI_BATCH", "").strip().lower() not in ("off", "false", "0")
+
+
 def load() -> Config:
     _load_env_file(Path(__file__).resolve().parent.parent / ".env")
 

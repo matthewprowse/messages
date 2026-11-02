@@ -8,12 +8,13 @@ before the count of sent mail, so the count is only made for a user who is other
 
 Rules already known gain support instead of being added twice. A rule from your sent mail that the
 newest learning no longer finds is turned off (never deleted) and comes back if your mail shows it
-again. A rule you turned off yourself stays off."""
+again. A rule you turned off yourself stays off.
+
+Email and WhatsApp are learned apart: each channel has its own counters on the profile, its own prompt and its own rules
+(style_rules.channel), so email habits never end up in WhatsApp drafts."""
 
 from __future__ import annotations
 
-import difflib
-import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -22,7 +23,8 @@ from . import log
 from .fields import BODY, HTML, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
-from .text import clean, plain_dashes
+from .rules import rule_key, same_rule, tidy_rule  # noqa: F401  shared with learn.py and signals.py
+from .text import clean
 from .vault import Vault
 
 MIN_EMAILS = 10  # fewer than this says too little about how someone writes
@@ -33,7 +35,6 @@ MAX_EMAILS = 40
 EMAIL_CHARS = 800
 PROMPT_CHARS = 24000
 MAX_RULES = 8
-SAME_RULE = 0.88  # wording this close to an existing rule is that rule
 LEARN_MAX_OUTPUT = 2048  # tokens, thinking included: a few short rules
 RETRY_S = 3600  # after a failed or skipped attempt, try that user again an hour later
 
@@ -65,35 +66,35 @@ rule the emails no longer support or contradict; it will be turned off.
 Never write a rule they turned off, or one that means the same.
 Never use em dashes."""
 
+# WhatsApp is its own voice: chat messages are short, often have no greeting or sign-off, and use emoji and slang that
+# the same person's email never does. Its rules are kept apart (style_rules.channel) so neither leaks into the other.
+WHATSAPP_SYSTEM = f"""You read WhatsApp messages one person wrote and sent, and write down how they write in chat, so an
+assistant can write new WhatsApp messages in their voice. Write up to {MAX_RULES} rules. Each rule is one short, concrete,
+reusable instruction about how they open (or do not), how they end, typical length, how they split a thought over
+several short messages, emoji, slang and abbreviations, languages they mix, and punctuation and capitalisation habits.
+Only write a rule that most of the messages support.
+Ignore what the messages are about (facts, dates, names, decisions); describe style only.
+If an existing rule still holds, repeat its wording exactly so it gains support. Leave out an existing
+rule the messages no longer support or contradict; it will be turned off.
+Never write a rule they turned off, or one that means the same.
+Never use em dashes."""
 
-def build_prompt(emails: list[str], existing: list[str], turned_off: list[str] | None = None) -> str:
+
+def build_prompt(emails: list[str], existing: list[str], turned_off: list[str] | None = None, channel: str = "email") -> str:
     """Existing rules first, then the emails newest first, kept within PROMPT_CHARS."""
+    noun = "Message" if channel == "whatsapp" else "Email"
     lines = ["Existing rules:"] + ([f"- {r}" for r in existing] or ["(none)"])
     if turned_off:
         lines += ["", "Rules they turned off:"] + [f"- {r}" for r in turned_off]
-    lines += ["", "Emails they sent, newest first:"]
+    lines += ["", f"{noun}s they sent, newest first:"]
     used = sum(len(line) + 1 for line in lines)
     for i, email in enumerate(emails, 1):
-        block = f"--- Email {i}:\n{email}"
+        block = f"--- {noun} {i}:\n{email}"
         if used + len(block) > PROMPT_CHARS:
             break
         lines.append(block)
         used += len(block) + 1
     return "\n".join(lines)
-
-
-def rule_key(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip().lower()).rstrip(".")
-
-
-def tidy_rule(text: str) -> str:
-    """The app never shows dashes; the model sometimes writes them anyway."""
-    return re.sub(r"\s+", " ", plain_dashes(text)).strip()
-
-
-def same_rule(a: str, b: str) -> bool:
-    ka, kb = rule_key(a), rule_key(b)
-    return ka == kb or difflib.SequenceMatcher(None, ka, kb, autojunk=False).ratio() >= SAME_RULE
 
 
 def wait_left(learned_at: str | None, now: datetime | None = None) -> float:
@@ -119,13 +120,14 @@ def voice_due(outbound: int, learned_outbound: int, learned_at: str | None, now:
     return learned_at is None or (outbound - learned_outbound >= VOICE_STEP and waited(learned_at, now))
 
 
-def plan_voice(existing: list[dict[str, Any]], learned: list[str]) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
+def plan_voice(existing: list[dict[str, Any]], learned: list[str], channel: str = "email") -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
     """Returns (updates as (id, patch), new rule texts).
 
-    A learned rule matching an existing global rule supports it, whichever source it came from, and
-    turns it back on if the AI had turned it off. Rules you turned off stay off. Global rules from sent
-    mail that the newest learning did not repeat are turned off as unsupported."""
-    globals_ = [r for r in existing if r.get("scope") == "global" and not r.get("contact_id")]
+    A learned rule matching an existing global rule of this channel (or one for every channel) supports it, whichever
+    source it came from, and turns it back on if the AI had turned it off. Rules you turned off stay off. Global rules
+    from sent mail on this channel that the newest learning did not repeat are turned off as unsupported; the other
+    channel's rules are never touched. A rule without a channel is an email rule, as every rule was before channels."""
+    globals_ = [r for r in existing if r.get("scope") == "global" and not r.get("contact_id") and r.get("channel", "email") in (channel, "any")]
     updates: dict[str, dict[str, Any]] = {}
     inserts: list[str] = []
     matched: set[str] = set()
@@ -146,9 +148,18 @@ def plan_voice(existing: list[dict[str, Any]], learned: list[str]) -> tuple[list
             patch["enabled"] = True
         updates[r["id"]] = patch
     for r in globals_:
-        if r["id"] not in matched and r.get("source") == "sent_mail" and r.get("enabled", True):
+        if r["id"] not in matched and r.get("source") == "sent_mail" and r.get("enabled", True) and r.get("channel", "email") == channel:
             updates[r["id"]] = {"enabled": False, "disabled_reason": "unsupported"}
     return list(updates.items()), inserts
+
+
+# The profile columns holding when, and after how many sent messages, each channel's voice was last learned.
+COUNTERS = {"email": ("voice_learned_at", "voice_learned_outbound"), "whatsapp": ("voice_whatsapp_learned_at", "voice_whatsapp_learned_outbound")}
+
+
+def slot_of(user_id: str, channel: str) -> str:
+    """The key for one user's one channel in the retry timers; email keeps the bare user id it always had."""
+    return user_id if channel == "email" else f"{user_id}:{channel}"
 
 
 class Voice:
@@ -175,44 +186,51 @@ class Voice:
         self._dirty |= {r["user_id"] for r in probe}
         if not self._dirty and not everyone:
             return 0
-        accounts = self.db.select("accounts", {"select": "id,user_id", "provider": "in.(icloud,gmail,outlook)", "status": "neq.disconnected"})
-        by_user: dict[str, list[str]] = {}
+        accounts = self.db.select("accounts", {"select": "id,user_id,provider", "provider": "in.(icloud,gmail,outlook,whatsapp)", "status": "neq.disconnected"})
+        by_user: dict[str, dict[str, list[str]]] = {}
         for a in accounts:
-            by_user.setdefault(a["user_id"], []).append(a["id"])
+            by_user.setdefault(a["user_id"], {}).setdefault("whatsapp" if a.get("provider") == "whatsapp" else "email", []).append(a["id"])
         if everyone:
             self._dirty |= set(by_user)
         done = 0
         for user_id in sorted(self._dirty & set(by_user)):
-            if time.monotonic() < self._next.get(user_id, 0.0):
-                continue  # still dirty: looked at once the wait is over
             self._dirty.discard(user_id)
-            try:  # one user's failure must not skip the others
-                if self._learn(user_id, by_user[user_id]):
-                    done += 1
-            except Exception as err:
-                self._next[user_id] = time.monotonic() + RETRY_S
-                self._keep.add(user_id)
-                log.warn("voice learning errored", user=user_id, code=log.code_of(err))
+            for channel, ids in by_user[user_id].items():
+                slot = slot_of(user_id, channel)
+                if time.monotonic() < self._next.get(slot, 0.0):
+                    self._keep.add(user_id)  # still dirty: looked at once the wait is over
+                    continue
+                try:  # one user's failure must not skip the others
+                    if self._learn(user_id, ids, channel):
+                        done += 1
+                except Exception as err:
+                    self._next[slot] = time.monotonic() + RETRY_S
+                    self._keep.add(user_id)
+                    log.warn("voice learning errored", user=user_id, channel=channel, code=log.code_of(err))
         self._dirty |= self._keep
         self._keep.clear()
         return done
 
-    def _learn(self, user_id: str, account_ids: list[str]) -> bool:
-        profile = self.db.first("profiles", {"select": "voice_learned_at,voice_learned_outbound", "user_id": f"eq.{user_id}"})
+    def _learn(self, user_id: str, account_ids: list[str], channel: str = "email") -> bool:
+        """One channel's voice: email and WhatsApp are learned apart, each with its own counters on the profile and its
+        own rules (style_rules.channel), so neither one's habits end up in the other's drafts."""
+        slot = slot_of(user_id, channel)
+        cols = COUNTERS[channel]
+        profile = self.db.first("profiles", {"select": ",".join(cols), "user_id": f"eq.{user_id}"})
         if not profile:
-            self._next[user_id] = time.monotonic() + RETRY_S
+            self._next[slot] = time.monotonic() + RETRY_S
             return False
-        left = wait_left(profile.get("voice_learned_at"))
+        left = wait_left(profile.get(cols[0]))
         if left > 0:  # the count is not made until the wait is over, and the user is not looked at before then either
-            self._next[user_id] = time.monotonic() + left
+            self._next[slot] = time.monotonic() + left
             self._keep.add(user_id)
             return False
         sent_filter = {"user_id": f"eq.{user_id}", "account_id": in_list(account_ids), "direction": "eq.outbound"}
         outbound = self.db.count("messages", sent_filter)
-        if not voice_due(outbound, int(profile.get("voice_learned_outbound") or 0), profile.get("voice_learned_at")):
+        if not voice_due(outbound, int(profile.get(cols[1]) or 0), profile.get(cols[0])):
             return False
 
-        self._next[user_id] = time.monotonic() + RETRY_S
+        self._next[slot] = time.monotonic() + RETRY_S
         sent = self.db.select("messages", {"select": "body_text,body_html", **sent_filter, "order": "sent_at.desc", "limit": str(MAX_EMAILS)})
         sent = [self.vault.open_row(user_id, m, [("body_text", BODY), ("body_html", HTML)]) for m in sent]
         emails = [t for t in (clean(m.get("body_text"), m.get("body_html"), limit=EMAIL_CHARS) for m in sent) if t]
@@ -221,34 +239,35 @@ class Voice:
 
         existing = self.db.select(
             "style_rules",
-            {"select": "id,rule,scope,contact_id,source,support_count,enabled,disabled_reason", "user_id": f"eq.{user_id}", "limit": "200"},
+            {"select": "id,rule,scope,contact_id,source,support_count,enabled,disabled_reason,channel", "user_id": f"eq.{user_id}", "limit": "200"},
         )
         for r in existing:  # rules written sealed are opened here; plain ones pass through
             r["rule"] = self.vault.open(user_id, STYLE_RULE, r.get("rule")) or ""
-        global_rules = [r for r in existing if r["scope"] == "global"]
+        global_rules = [r for r in existing if r["scope"] == "global" and r.get("channel", "email") in (channel, "any")]
         prompt = build_prompt(
             emails,
             [r["rule"] for r in global_rules if r["enabled"]],
             [r["rule"] for r in global_rules if not r["enabled"] and r.get("disabled_reason") == "user"],
+            channel,
         )
         try:
-            result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"), max_output=LEARN_MAX_OUTPUT)
+            result = self.gemini.json(self.model, WHATSAPP_SYSTEM if channel == "whatsapp" else SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"), max_output=LEARN_MAX_OUTPUT)
         except GeminiError as err:
             log.warn("voice learning failed", user=user_id, status=err.status)
             self._keep.add(user_id)
             return False
 
         learned = [item.get("rule") or "" for item in (result.get("rules") or []) if isinstance(item, dict)]
-        updates, inserts = plan_voice(existing, learned)
+        updates, inserts = plan_voice(existing, learned, channel)
         now = datetime.now(timezone.utc).isoformat()
         for rule_id, patch in updates:
             self.db.update("style_rules", {"id": f"eq.{rule_id}", "user_id": f"eq.{user_id}"}, {**patch, "updated_at": now}, minimal=True)
         if inserts:
             self.db.insert(
                 "style_rules",
-                [{"user_id": user_id, "scope": "global", "contact_id": None, "rule": self.vault.seal(user_id, STYLE_RULE, text), "source": "sent_mail"} for text in inserts],
+                [{"user_id": user_id, "scope": "global", "contact_id": None, "rule": self.vault.seal(user_id, STYLE_RULE, text), "source": "sent_mail", "channel": channel} for text in inserts],
             )
-        self.db.update("profiles", {"user_id": f"eq.{user_id}"}, {"voice_learned_at": now, "voice_learned_outbound": outbound}, minimal=True)
+        self.db.update("profiles", {"user_id": f"eq.{user_id}"}, {cols[0]: now, cols[1]: outbound}, minimal=True)
         turned_off = sum(1 for _, p in updates if p.get("enabled") is False)
-        log.info("voice learned", user=user_id, emails=len(emails), added=len(inserts), supported=len(updates) - turned_off, turned_off=turned_off)
+        log.info("voice learned", user=user_id, channel=channel, emails=len(emails), added=len(inserts), supported=len(updates) - turned_off, turned_off=turned_off)
         return True

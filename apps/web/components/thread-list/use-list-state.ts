@@ -26,5 +26,7 @@ export function useListState() {
   // A message jumped to from search belongs to one conversation, so it is not carried into list links.
   const query = new URLSearchParams(params);
   query.delete("message");
-  return { view, filter, label, query: query.toString() };
+  // By Person (group=person) shows one row per contact; it is carried in the address like the view, so it survives a reload.
+  const byPerson = params.get("group") === "person" && view !== "subscriptions" && view !== "deleted";
+  return { view, filter, label, byPerson, query: query.toString() };
 }

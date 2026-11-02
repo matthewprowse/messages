@@ -133,6 +133,8 @@ class Transcribe:
         now = time.monotonic()
         return [mid for mid, (_, at) in self._tries.items() if at > now]
 
+    claims = None  # a claims.Claims, set by the entry point: the second-worker guard
+
     def run_once(self) -> int:
         rows = self.db.select("attachments", pending_query(self.waiting(), sorted(self._other_audio)[-500:]))
         done = 0
@@ -145,11 +147,16 @@ class Transcribe:
                 continue
             if taken >= BATCH:
                 break
+            if self.claims and not self.claims.claim("transcribe", [a["id"]]):  # another AI worker has this note
+                continue
             taken += 1
             try:
                 done += self._one(a, m)
             except Exception as err:  # any one note (a cut-off download, a bad key, a malformed answer) must not stop the rest or go untried
                 self._failed(m, err)
+            finally:
+                if self.claims:
+                    self.claims.release("transcribe", [a["id"]])
         if done:
             log.info("voice notes transcribed", count=done)
         return done

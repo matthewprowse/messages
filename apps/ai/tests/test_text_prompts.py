@@ -237,7 +237,7 @@ class LearnRules(unittest.TestCase):
     def test_the_rule_query_is_enabled_only_and_ordered(self):
         db = self.learn([], [])
         [params] = db.queries
-        self.assertEqual(params["enabled"], "eq.true")
+        self.assertIn("enabled.eq.true", params["or"])  # rules turned off are left out; tentative ones are kept to be counted
         self.assertTrue(params["order"].startswith("support_count.desc"))
 
     def test_a_reworded_rule_adds_support_instead_of_a_duplicate(self):

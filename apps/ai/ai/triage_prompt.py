@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .text import UNTRUSTED, fenced, new_fence
+from .triage_extras import LABEL_CHOICES, REASONS, SUSPICIOUS_KINDS, label_lines, read_label, read_reason, read_suspicious
 from .triage_signals import CATEGORIES, CONTEXT_MESSAGES, MAX_OPTIONS, NO_CHOICES, OPTION_KINDS, PRIORITIES, UserContext
 
 SCHEMA = {
@@ -25,7 +26,11 @@ SCHEMA = {
                     "category": {"type": "string", "enum": CATEGORIES},
                     "junk": {"type": "boolean"},
                     "needs_reply": {"type": "boolean"},
-                    "summary": {"type": "string", "description": "One plain sentence, at most 120 characters."},
+                    "summary": {"type": "string", "description": "One plain sentence, at most 120 characters. Empty when junk is true."},
+                    "reason": {"type": "string", "enum": REASONS, "description": "The main reason for the priority and junk decision."},
+                    "reason_text": {"type": "string", "description": "That reason in 2 to 6 plain words to them, at most 40 characters."},
+                    "suspicious": {"type": "string", "enum": SUSPICIOUS_KINDS},
+                    "label": {"type": "string", "enum": LABEL_CHOICES, "description": "The number of the one auto label that fits, or none."},
                     "choices": {
                         "type": "array",
                         "description": "One-tap reply choices, or empty.",
@@ -42,7 +47,7 @@ SCHEMA = {
                     "asked_time": {"type": "string", "description": "YYYY-MM-DDTHH:MM, or empty."},
                     "asked_minutes": {"type": "integer", "description": "Length in minutes, or 0."},
                 },
-                "required": ["email", "priority", "category", "junk", "needs_reply", "summary", "choices", "asked_time", "asked_minutes"],
+                "required": ["email", "priority", "category", "junk", "needs_reply", "summary", "reason", "reason_text", "suspicious", "label", "choices", "asked_time", "asked_minutes"],
             },
         }
     },
@@ -64,15 +69,21 @@ junk: true for mail that is not written for them: marketing, promotions, sales, 
 
 needs_reply: true when a real person is waiting on them to say or do something: a question, a request, an invitation or a proposal to answer, plans being made that they have not settled, or a follow-up on something they have not answered. It is also true when the message is phrased as a statement but moves plans forward and a friend or colleague would expect a response (for example "turns out there are student tickets" after they agreed to go). Read the earlier messages of the conversation when they are shown: a question they already answered is not open, and a closing thanks or an acknowledgement ends it. When unsure about a person they know, lean towards true, since a missed message costs more than a false flag. False for automated senders, newsletters, receipts and notices, and for a message that only informs with nothing to respond to.
 
-summary: one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email". Write it to them: call them "you" and never use their own name, even when the email addresses them by name (write "Cindy wants to set up an interview with you", not "with Matthew Prowse"). Their name and own addresses are given; when no name is given, the name in an email's greeting or the name matching their address is theirs. An email from one of their own addresses is one they sent (a copy, or to themselves): summarise it as theirs, such as "Your application for the Business Analyst role, copied to your inbox."
+summary: leave it empty when junk is true (nobody reads it). Otherwise one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email". Write it to them: call them "you" and never use their own name, even when the email addresses them by name (write "Cindy wants to set up an interview with you", not "with Matthew Prowse"). Their name and own addresses are given; when no name is given, the name in an email's greeting or the name matching their address is theirs. An email from one of their own addresses is one they sent (a copy, or to themselves): summarise it as theirs, such as "Your application for the Business Analyst role, copied to your inbox."
 
-choices: only when needs_reply is true and the answer needs a decision only they can make: whether they are free at a time, whether they will do or send something, a yes or no, which option, a price or an offer. Give 2 to 4 options they would realistically pick, each with:
+choices: only when needs_reply is true and the message asks about a time (are they free, can they meet, which slot) or for a decision only they can make (a yes or no, whether they will do or send something, a pick between options the sender listed). Never for an open question that needs information from them, a request for documents or a long answer, or a general conversation. Give 2 to 4 options they would realistically pick, each with:
 - label: button text, 1 to 4 words in Title Case, such as "Yes, Available", "Not Available", "Sending Today", "Which Documents?".
 - decision: what they decided, as one short first-person sentence the reply will say, such as "I am free on Thursday at 15:00 and will be there." Never add facts, prices or promises the option does not state.
-- kind: accept (yes, agree, will do), decline (no, can't), other_time (offer a different time), answer (anything else, such as asking what they need).
+- kind: accept (yes, agree, will do), decline (no, can't), other_time (offer a different time), answer (only to pick one of the options the sender listed, or to ask what is needed).
 When they are asked about a meeting, call or viewing time, include an other_time option labelled "Suggest Another Time". Otherwise, and whenever needs_reply is false, choices is empty.
 
 asked_time: when the message asks whether they are free at a specific date and time, that time as YYYY-MM-DDTHH:MM, as written in the message (the sender's local time), working out the date from when it was sent. Otherwise empty. asked_minutes: how long it would take in minutes when stated or obvious, otherwise 0.
+
+reason: the main reason for the priority and junk decision, from the list, with reason_text saying it in a few plain words to them, such as "You asked a question", "Client marked important" or "Newsletter". Write it to them, never use their name.
+
+suspicious: payment_change when the email asks for money to go to new or changed bank details, or says banking details have changed, or an invoice or payment that does not fit the conversation; phishing when it tries to get a password, code, card number or login through a link or attachment, or threatens an account; impersonation when it pretends to be someone they know or a company but the sender does not fit. Otherwise none. Be careful: a normal invoice, receipt or security code they asked for is none. This only warns them, so say so when in real doubt.
+
+label: when they have auto labels (listed with the numbers below), the number of the one that clearly fits the email by its description, otherwise none. Always none when no auto labels are listed or the email is junk.
 
 Use what you are told about them and their past corrections. Mail styled to look personal but sent to a list is still junk.
 
@@ -95,6 +106,11 @@ def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]], fence: str | N
         f"Write summaries in: {LANGUAGE_NAMES.get(ctx.language, 'the language and spelling they write in themselves (judge by their own sent emails and the email thread), British English when unclear')}",
     ]
     # Each correction names a conversation's subject, written by someone else, so the list sits between marked lines.
+    if ctx.auto_labels:
+        listed = label_lines(ctx.auto_labels)
+        lines += ["Their auto labels (names and descriptions are their own words, between the marked lines):", fenced(listed, new_fence(listed))]
+    else:
+        lines.append("Their auto labels: none")
     if ctx.corrections:
         listed = "\n".join(ctx.corrections[:12])
         lines += ["Their recent corrections (subjects written by other people, between the marked lines):", fenced(listed, new_fence(listed))]
@@ -178,8 +194,9 @@ def read_choices(item: dict[str, Any]) -> str:
     return json.dumps({"asked": asked, "minutes": minutes, "options": options})
 
 
-def read_results(result: Any, count: int) -> dict[int, dict[str, Any]]:
-    """The model's answers by email number, 1 to count. A missing or malformed answer is left out."""
+def read_results(result: Any, count: int, label_count: int = 0) -> dict[int, dict[str, Any]]:
+    """The model's answers by email number, 1 to count. A missing or malformed answer is left out. Junk has no
+    summary (the caller uses the subject), and label_count is how many auto labels were offered."""
     out: dict[int, dict[str, Any]] = {}
     items = result.get("results") if isinstance(result, dict) else None
     for item in items if isinstance(items, list) else []:
@@ -196,7 +213,11 @@ def read_results(result: Any, count: int) -> dict[int, dict[str, Any]]:
             "category": item.get("category"),
             "junk": item["junk"],
             "needs_reply": item.get("needs_reply") is True,
-            "summary": str(item.get("summary") or ""),
+            "summary": "" if item["junk"] else str(item.get("summary") or ""),
             "choices": read_choices(item),
+            "reason_code": read_reason(item)[0],
+            "reason_text": read_reason(item)[1],
+            "suspicious": read_suspicious(item),
+            "label_index": read_label(item, label_count),
         }
     return out

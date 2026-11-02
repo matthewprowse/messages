@@ -95,8 +95,12 @@ export const FIELD = {
   contactSummary: "contact_summary",
   /** organizations.summary: what a company sends you, written by the AI worker from its emails */
   orgSummary: "org_summary",
+  /** actions.args: the arguments of a next step the AI proposed, as JSON */
+  action: "action",
   /** message_ai.bulk_read: the AI's readable version of a bulk email, as JSON */
   bulkRead: "bulk_read",
+  /** attachments.doc_card: the AI's card for a document (type, who, amount, due date, summary), as JSON */
+  docCard: "doc_card",
   /** message_embeddings.embedding_data: a vector sealed with encryptBytes, base64 */
   embeddingData: "embedding_data",
 } as const;

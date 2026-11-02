@@ -9,7 +9,7 @@ import { open, openRows, type TextColumn } from "./vault";
 // data.ts maps them, so a row written before encryption and one written after read the same way.
 const THREAD_TEXT: TextColumn[] = [["subject", FIELD.subject], ["last_message_preview", FIELD.preview], ["summary", FIELD.summary], ["share_match", FIELD.name]];
 const MESSAGE_TEXT: TextColumn[] = [["subject", FIELD.subject], ["preview", FIELD.preview], ["body_text", FIELD.body], ["body_html", FIELD.html], ["list_unsubscribe", FIELD.unsubscribe], ["body_marks", FIELD.marks], ["transcript", FIELD.transcript]];
-const DRAFT_TEXT: TextColumn[] = [["body", FIELD.draft], ["instruction", FIELD.instruction], ["decision", FIELD.instruction], ["source", FIELD.draft], ["subject", FIELD.subject]];
+const DRAFT_TEXT: TextColumn[] = [["body", FIELD.draft], ["instruction", FIELD.instruction], ["decision", FIELD.instruction], ["source", FIELD.draft], ["report", FIELD.draft], ["subject", FIELD.subject]];
 const TASK_TEXT: TextColumn[] = [["title", FIELD.taskTitle], ["notes", FIELD.taskNotes], ["list_name", FIELD.taskList]];
 
 // Addresses, numbers and chat IDs (encryption stage 2), wherever they sit in a row or the rows nested in

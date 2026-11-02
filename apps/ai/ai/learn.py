@@ -14,12 +14,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
+from .batching import BatchQueue
 from .fields import BODY, DRAFT, HTML, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
+from .gemini_batch import json_request
 from .retry import Backoff, billing_paused
+from .rules import find_rule, goes_live, tidy_rule, worth_learning
 from .supabase import Supabase, in_list
-from .text import clean, plain_dashes
-from .voice import same_rule
+from .text import clean
 from .vault import Vault
 
 LEARN_FROM_RATIO = 0.1  # below this the draft was sent more or less as written
@@ -27,6 +29,8 @@ REWRITE_DAYS = 14  # thrown away drafts this recent are checked for a reply you 
 REWRITE_GAP_DAYS = 3  # that reply must follow the draft within this long
 LEARN_MAX_OUTPUT = 2048  # tokens, thinking included: at most three short rules
 REWRITES_EVERY_S = 600  # thrown away drafts are looked at this often; sent ones on every run
+BATCH_MIN = 4  # a pass with this many edits to learn from is a backlog (a first import): it goes as a half price batch
+RECENT_OUTCOMES = 50  # the person's latest edit ratios, for their median
 
 SCHEMA = {
     "type": "object",
@@ -96,6 +100,11 @@ SENT_PER_RUN = 20  # of those, how many have their bodies read and learned from 
 UNFILED_LOOKS = 10  # passes a reply with no conversation yet is waited on before it is given up on
 
 
+def rule_channel(thread_channel: str | None) -> str:
+    """The style_rules channel a rule learned from this conversation belongs to: WhatsApp keeps its own, the rest is email."""
+    return "whatsapp" if thread_channel == "whatsapp" else "email"
+
+
 class Learn:
     def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
         self.db = db
@@ -108,11 +117,56 @@ class Learn:
         self._skip: set[str] = set()
         self._unfiled: dict[str, int] = {}
         self._backoff = Backoff()  # drafts whose model step keeps failing
+        self.batches: BatchQueue | None = None  # set by the entry point: the half price path for a backlog
+        self._ready: dict[str, dict[str, Any]] = {}  # draft id -> the model's answer from a batch that came back
+        self._deferred: list[tuple[str, str | None, str, str, str]] = []  # (user, account, thread, draft id, prompt) for the batch
+        self._backlog = 0
 
     def _held(self) -> set[str]:
-        return self._skip | set(self._backoff.waiting(time.monotonic()))
+        waiting = (self.batches.inflight() - set(self._ready)) if self.batches else set()  # an answer that is back is not waiting
+        return self._skip | set(self._backoff.waiting(time.monotonic())) | waiting
+
+    def _collect(self) -> None:
+        """Answers of batches that are done. One that could not be read frees its drafts to be learned the ordinary way."""
+        if self.batches is None:
+            return
+        for r in self.batches.poll():
+            for draft_id in (i for i in r.ids if i):
+                if r.answer is None:
+                    self.batches.finish([draft_id])
+                else:
+                    self._ready[draft_id] = r.answer
+        self.batches.take_freed()
+
+    def _flush(self) -> None:
+        """Sends the edits deferred this pass as one batch per person; any that cannot go are learned the ordinary way
+        on the next pass (their answer is fetched now and kept, so nothing is asked twice)."""
+        pending, self._deferred = self._deferred, []
+        by_user: dict[str, list[tuple[str, str | None, str, str, str]]] = {}
+        for item in pending:
+            by_user.setdefault(item[0], []).append(item)
+        for user_id, items in by_user.items():
+            requests = [(f"d{n}", [it[3]], json_request(SYSTEM, it[4], SCHEMA, max_output=LEARN_MAX_OUTPUT)) for n, it in enumerate(items)]
+            if self.batches and self.batches.submit(self.model, user_id, "learn", requests, items[0][1]):
+                continue
+            for _, account_id, thread_id, draft_id, prompt in items:
+                try:
+                    self._ready[draft_id] = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn", account_id, thread_id), max_output=LEARN_MAX_OUTPUT)
+                except GeminiError as err:
+                    if not (billing_paused(err) or "budget_" in str(err)):
+                        self._backoff.failed(draft_id, time.monotonic())
+                    log.warn("learning failed", draft=draft_id, status=err.status)
 
     def run_once(self) -> int:
+        self._collect()
+        self._backlog = 0
+        try:
+            return self._run()
+        finally:
+            if self._deferred:
+                self._flush()
+
+    def _run(self) -> int:
         # Ids first, bodies only for the replies not learned from yet: usually there are none.
         sent = self.db.select(
             "outbox", {"select": "id,draft_id", "status": "eq.sent", "draft_id": "not.is.null", "order": "sent_at.desc", "limit": str(SENT_LOOKED_AT)}
@@ -129,6 +183,7 @@ class Learn:
                 else []
             )
             todo = [s for s in todo if s.get("drafts")]
+            self._backlog = len(todo)
             for row in todo:
                 if not row.get("thread_id"):  # a new email or chat whose conversation is not filed yet: next time, a few times
                     looks = self._unfiled[row["draft_id"]] = self._unfiled.get(row["draft_id"], 0) + 1
@@ -196,7 +251,9 @@ class Learn:
             "drafts", {"select": "id,thread_id,created_at", "thread_id": in_list(thread_ids), "created_at": f"gte.{earliest}", "limit": "500"}
         )
         done = 0
-        for d, reply in rewrite_pairs(discarded, outbound, thread_drafts):
+        pairs = rewrite_pairs(discarded, outbound, thread_drafts)
+        self._backlog = max(self._backlog, len(pairs))
+        for d, reply in pairs:
             if reply["user_id"] != d["user_id"]:
                 continue
             sent_body = clean(reply.get("body_text"), reply.get("body_html"), limit=4000)
@@ -208,15 +265,24 @@ class Learn:
                     log.warn("rewrite not learned", draft=d["id"], code=log.code_of(err))
         return done
 
+    def _recent_ratios(self, user_id: str) -> list[float]:
+        try:
+            rows = self.db.select("draft_outcomes", {"select": "edit_ratio", "user_id": f"eq.{user_id}", "order": "created_at.desc", "limit": str(RECENT_OUTCOMES)})
+        except Exception as err:  # without the history every edit is learned from, as before
+            log.warn("edit history not read", code=log.code_of(err))
+            return []
+        return [float(r["edit_ratio"]) for r in rows if r.get("edit_ratio") is not None]
+
     def _learn(self, user_id: str, draft_id: str, thread_id: str, draft_body: str, sent_body: str, *, mark_sent: bool) -> int:
         """1 when the edit was learned from (or has nothing to learn), 0 when the model step failed and it will be tried again.
         The count keeps run_once from reporting work while Gemini is down, which would hold the poll at its busy pace."""
         ratio = edit_ratio(draft_body, sent_body)
         row = {"user_id": user_id, "draft_id": draft_id, "thread_id": thread_id, "body": sent_body}
-        thread = self.db.first("threads", {"select": "account_id,user_id", "id": f"eq.{thread_id}"})
+        thread = self.db.first("threads", {"select": "account_id,user_id,channel", "id": f"eq.{thread_id}"})
         if not thread or thread["user_id"] != user_id:  # gone or not theirs: nothing to learn from now or later
             self._skip.add(draft_id)
             return 1
+        row["channel"] = rule_channel(thread.get("channel"))
         latest_in = self.db.first(
             "messages",
             {"select": "sender_contact_id", "thread_id": f"eq.{thread_id}", "direction": "eq.inbound", "order": "sent_at.desc"},
@@ -225,15 +291,16 @@ class Learn:
 
         existing: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
-        if ratio >= LEARN_FROM_RATIO:
+        learn = ratio >= LEARN_FROM_RATIO and worth_learning(ratio, self._recent_ratios(user_id))  # from how they usually edit, not every edit
+        if learn:
             # The model step comes before the outcome is recorded: the outcome row is what marks this edit as
             # seen, so a failed call must leave it out and the edit is learned from on a later pass.
             existing = self.db.select(
                 "style_rules",
                 {
-                    "select": "id,rule,scope,contact_id,support_count",
+                    "select": "id,rule,scope,contact_id,support_count,enabled,disabled_reason",
                     "user_id": f"eq.{row['user_id']}",
-                    "enabled": "eq.true",  # a rule they turned off is not one to prompt with or to count again
+                    "or": "(enabled.eq.true,disabled_reason.eq.tentative)",  # a rule they turned off is not one to prompt with or to count again; a tentative one is
                     "order": "support_count.desc,updated_at.desc",  # the strongest first, so the limit drops the weakest
                     "limit": "100",
                 },
@@ -245,20 +312,25 @@ class Learn:
                 + [f"- {r['rule']}" for r in existing]
                 + ["", "Draft:", draft_body, "", "What they sent:", row["body"]]
             )
-            try:
-                result = self.gemini.json(
-                    self.model,
-                    SYSTEM,
-                    prompt,
-                    SCHEMA,
-                    UsageContext(row["user_id"], "learn", thread["account_id"], row["thread_id"]),
-                    max_output=LEARN_MAX_OUTPUT,
-                )
-            except GeminiError as err:
-                if not (billing_paused(err) or "budget_" in str(err)):  # a pause is not this draft's fault
-                    self._backoff.failed(draft_id, time.monotonic())
-                log.warn("learning failed", draft=row["draft_id"], status=err.status)
-                return 0
+            result = self._ready.get(draft_id)
+            if result is None:
+                if self.batches is not None and (self._backlog >= BATCH_MIN or self.gemini.in_setup(user_id)):  # nobody waits on this: half price
+                    self._deferred.append((user_id, thread["account_id"], thread_id, draft_id, prompt))
+                    return 0
+                try:
+                    result = self.gemini.json(
+                        self.model,
+                        SYSTEM,
+                        prompt,
+                        SCHEMA,
+                        UsageContext(row["user_id"], "learn", thread["account_id"], row["thread_id"]),
+                        max_output=LEARN_MAX_OUTPUT,
+                    )
+                except GeminiError as err:
+                    if not (billing_paused(err) or "budget_" in str(err)):  # a pause is not this draft's fault
+                        self._backoff.failed(draft_id, time.monotonic())
+                    log.warn("learning failed", draft=row["draft_id"], status=err.status)
+                    return 0
 
         self.db.insert(
             "draft_outcomes",
@@ -275,25 +347,42 @@ class Learn:
         if mark_sent:
             self.db.update("drafts", {"id": f"eq.{draft_id}"}, {"status": "sent"})
         self._backoff.succeeded(draft_id)
+        self._ready.pop(draft_id, None)
+        if self.batches is not None:
+            self.batches.finish([draft_id])
         log.info("draft outcome", draft=draft_id, edit_ratio=ratio, rewritten=not mark_sent)
-        if ratio < LEARN_FROM_RATIO:
+        if not learn:
             return 1
 
         for item in (result.get("rules") or [])[:3]:
-            text = plain_dashes(item.get("rule")).strip()
+            text = tidy_rule(item.get("rule") or "")
             if not text or len(text) > 200:
                 continue
             scope = "contact" if item.get("scope") == "contact" and contact_id else "global"
             owner = contact_id if scope == "contact" else None
-            # The model rewords a rule it has seen, so the match is fuzzy, as in voice learning.
-            r = next((e for e in existing if e["contact_id"] == owner and same_rule(e["rule"], text)), None)
+            # The model rewords a rule it has seen, so the match is fuzzy, as in voice learning (rules.py).
+            r = find_rule(existing, text, owner)
             if r:
-                self.db.update("style_rules", {"id": f"eq.{r['id']}"}, {"support_count": r["support_count"] + 1})
-                r["support_count"] += 1  # two rules of one answer that match the same old rule count twice
+                support = r["support_count"] + 1
+                patch: dict[str, Any] = {"support_count": support}
+                if r.get("disabled_reason") == "tentative" and goes_live(support):  # a second edit says the same: it is a habit
+                    patch["enabled"] = True
+                    r["enabled"], r["disabled_reason"] = True, None
+                self.db.update("style_rules", {"id": f"eq.{r['id']}"}, patch)
+                r["support_count"] = support  # two rules of one answer that match the same old rule count twice
             else:
+                # One edit is not a habit: the rule starts off ("tentative") and goes live when a second edit supports it.
                 self.db.insert(
                     "style_rules",
-                    {"user_id": row["user_id"], "scope": scope, "contact_id": contact_id if scope == "contact" else None, "rule": self.vault.seal(row["user_id"], STYLE_RULE, text)},
+                    {
+                        "user_id": row["user_id"],
+                        "scope": scope,
+                        "contact_id": owner,
+                        "rule": self.vault.seal(row["user_id"], STYLE_RULE, text),
+                        "enabled": False,
+                        "disabled_reason": "tentative",
+                        "channel": row.get("channel", "email"),  # learned from this edit's channel, so email habits stay out of WhatsApp drafts
+                    },
                 )
         log.info("rules learned", draft=row["draft_id"], rules=len(result.get("rules") or []))
         return 1

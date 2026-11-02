@@ -9,9 +9,11 @@ import { HIDDEN_HINT, HIDDEN_LABEL } from "@/lib/attachment-view";
 import type { Attachment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import type { DocCard } from "@/lib/search/document-card";
+import { CardChip } from "./document-card";
 import { Thumb } from "./thumb";
 
-export function AttachmentTile({ attachment: a, onOpen, className, showName = true, overlay, selecting = false, selected = false }: { attachment: Attachment; onOpen: () => void; className?: string; showName?: boolean; overlay?: ReactNode; /** Selecting several files (the Attachments page): the tile shows a tick circle and a click picks it instead of opening it. */ selecting?: boolean; selected?: boolean }) {
+export function AttachmentTile({ attachment: a, onOpen, className, showName = true, overlay, selecting = false, selected = false, card }: { /** The document card the AI made for the file, shown as a chip with its type and amount. */ card?: DocCard; attachment: Attachment; onOpen: () => void; className?: string; showName?: boolean; overlay?: ReactNode; /** Selecting several files (the Attachments page): the tile shows a tick circle and a click picks it instead of opening it. */ selecting?: boolean; selected?: boolean }) {
   // What the tile shows once it has loaded: a picture, or the file type's icon. The caption waits for either, so it never
   // sits alone over an empty box.
   const [shown, setShown] = useState<"picture" | "glyph" | null>(null);
@@ -31,6 +33,7 @@ export function AttachmentTile({ attachment: a, onOpen, className, showName = tr
       ) : a.notKept && !a.path ? (
         <Badge variant="secondary" className="absolute top-1.5 left-1.5">{a.notKept === "deferred" ? "Not Downloaded" : a.notKept === "unavailable" ? "Unavailable" : a.notKept === "deleted" ? "Deleted" : "Not Kept Here"}</Badge>
       ) : null}
+      {!a.hiddenReason && <CardChip card={card} />}
       {selecting && (
         <span aria-hidden className={cn("absolute top-1.5 right-1.5 flex size-5 items-center justify-center rounded-full border bg-background/90", selected && "border-primary bg-primary text-primary-foreground")}>
           {selected && <Check className="size-3.5" />}

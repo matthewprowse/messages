@@ -26,10 +26,28 @@ export type Database = {
         Update: { id?: string; user_id?: string; account_id?: string; status?: string; attempts?: number; error_code?: string | null; created_at?: string; updated_at?: string }
         Relationships: []
       }
+      ai_batches: {
+        Row: { name: string; kind: string; model: string; user_id: string; feature: string; items: Json; created_at: string }
+        Insert: { name: string; kind: string; model: string; user_id: string; feature: string; items?: Json; created_at?: string }
+        Update: { name?: string; kind?: string; model?: string; user_id?: string; feature?: string; items?: Json; created_at?: string }
+        Relationships: []
+      }
       ai_budget: {
         Row: { id: boolean; monthly_usd: number; shares: Json; weekly_pct: number; weekly_features: string[]; setup_usd: number; setup_days: number; regen_per_hour: number; auto_drafts_per_day: number; summaries_per_day: number; flag_multiple: number; flag_day_usd: number; updated_at: string }
         Insert: { id?: boolean; monthly_usd?: number; shares?: Json; weekly_pct?: number; weekly_features?: string[]; setup_usd?: number; setup_days?: number; regen_per_hour?: number; auto_drafts_per_day?: number; summaries_per_day?: number; flag_multiple?: number; flag_day_usd?: number; updated_at?: string }
         Update: { id?: boolean; monthly_usd?: number; shares?: Json; weekly_pct?: number; weekly_features?: string[]; setup_usd?: number; setup_days?: number; regen_per_hour?: number; auto_drafts_per_day?: number; summaries_per_day?: number; flag_multiple?: number; flag_day_usd?: number; updated_at?: string }
+        Relationships: []
+      }
+      ai_claims: {
+        Row: { kind: string; row_id: string; holder: string; claimed_at: string }
+        Insert: { kind: string; row_id: string; holder: string; claimed_at?: string }
+        Update: { kind?: string; row_id?: string; holder?: string; claimed_at?: string }
+        Relationships: []
+      }
+      ai_retries: {
+        Row: { kind: string; row_id: string; failures: number; retry_at: string }
+        Insert: { kind: string; row_id: string; failures?: number; retry_at: string }
+        Update: { kind?: string; row_id?: string; failures?: number; retry_at?: string }
         Relationships: []
       }
       ai_status: {
@@ -258,6 +276,57 @@ export type Database = {
           },
         ]
       }
+      actions: {
+        Row: {
+          args: string
+          created_at: string
+          draft_id: string
+          id: string
+          kind: string
+          resolved_at: string | null
+          status: string
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          args: string
+          created_at?: string
+          draft_id: string
+          id?: string
+          kind: string
+          resolved_at?: string | null
+          status?: string
+          thread_id: string
+          user_id?: string
+        }
+        Update: {
+          args?: string
+          created_at?: string
+          draft_id?: string
+          id?: string
+          kind?: string
+          resolved_at?: string | null
+          status?: string
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "actions_draft_id_fkey"
+            columns: ["draft_id"]
+            isOneToOne: false
+            referencedRelation: "drafts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "actions_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       address_book_cards: {
         Row: {
           account_id: string
@@ -403,6 +472,10 @@ export type Database = {
       attachments: {
         Row: {
           content_hash: string | null
+          doc_by: string | null
+          doc_card: string | null
+          doc_read_at: string | null
+          doc_state: string | null
           created_at: string
           file_ext: string | null
           filename: string
@@ -428,6 +501,10 @@ export type Database = {
         }
         Insert: {
           content_hash?: string | null
+          doc_by?: string | null
+          doc_card?: string | null
+          doc_read_at?: string | null
+          doc_state?: string | null
           created_at?: string
           file_ext?: string | null
           filename: string
@@ -453,6 +530,10 @@ export type Database = {
         }
         Update: {
           content_hash?: string | null
+          doc_by?: string | null
+          doc_card?: string | null
+          doc_read_at?: string | null
+          doc_state?: string | null
           created_at?: string
           file_ext?: string | null
           filename?: string
@@ -1025,6 +1106,54 @@ export type Database = {
           },
         ]
       }
+      commitments: {
+        Row: {
+          created_at: string
+          done_at: string | null
+          due_on: string | null
+          id: string
+          message_id: string
+          nudged_at: string | null
+          owner: string
+          seq: number
+          snoozed_until: string | null
+          status: string
+          text: string
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          done_at?: string | null
+          due_on?: string | null
+          id?: string
+          message_id: string
+          nudged_at?: string | null
+          owner: string
+          seq?: number
+          snoozed_until?: string | null
+          status?: string
+          text: string
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          done_at?: string | null
+          due_on?: string | null
+          id?: string
+          message_id?: string
+          nudged_at?: string | null
+          owner?: string
+          seq?: number
+          snoozed_until?: string | null
+          status?: string
+          text?: string
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       compliance_exports: {
         Row: {
           chats: number
@@ -1311,6 +1440,38 @@ export type Database = {
           },
         ]
       }
+      document_reads: {
+        Row: {
+          attachment_id: string
+          claimed_at: string | null
+          created_at: string
+          error: string | null
+          user_id: string
+        }
+        Insert: {
+          attachment_id: string
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          user_id?: string
+        }
+        Update: {
+          attachment_id?: string
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_reads_attachment_id_fkey"
+            columns: ["attachment_id"]
+            isOneToOne: true
+            referencedRelation: "attachments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       draft_outcomes: {
         Row: {
           contact_id: string | null
@@ -1391,6 +1552,11 @@ export type Database = {
           tone: string
           updated_at: string
           user_id: string
+          audit: Json | null
+          feedback: string | null
+          feedback_at: string | null
+          feedback_reason: string | null
+          report: string | null
         }
         Insert: {
           account_id?: string | null
@@ -1413,6 +1579,11 @@ export type Database = {
           tone?: string
           updated_at?: string
           user_id: string
+          audit?: Json | null
+          feedback?: string | null
+          feedback_at?: string | null
+          feedback_reason?: string | null
+          report?: string | null
         }
         Update: {
           account_id?: string | null
@@ -1435,6 +1606,11 @@ export type Database = {
           tone?: string
           updated_at?: string
           user_id?: string
+          audit?: Json | null
+          feedback?: string | null
+          feedback_at?: string | null
+          feedback_reason?: string | null
+          report?: string | null
         }
         Relationships: [
           {
@@ -1533,6 +1709,63 @@ export type Database = {
           },
         ]
       }
+      client_cards: {
+        Row: {
+          activity_at: string | null
+          card: string | null
+          contact_id: string
+          refresh_count: number
+          refresh_day: string
+          requested_at: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          activity_at?: string | null
+          card?: string | null
+          contact_id: string
+          refresh_count?: number
+          refresh_day?: string
+          requested_at?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          activity_at?: string | null
+          card?: string | null
+          contact_id?: string
+          refresh_count?: number
+          refresh_day?: string
+          requested_at?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      event_preps: {
+        Row: {
+          brief: string
+          created_at: string
+          event_id: string
+          starts_at: string
+          user_id: string
+        }
+        Insert: {
+          brief: string
+          created_at?: string
+          event_id: string
+          starts_at: string
+          user_id: string
+        }
+        Update: {
+          brief?: string
+          created_at?: string
+          event_id?: string
+          starts_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       follow_ups: {
         Row: {
           checked_at: string
@@ -1605,6 +1838,8 @@ export type Database = {
           id: string
           name: string
           user_id: string
+          auto: boolean
+          auto_description: string | null
         }
         Insert: {
           color?: string
@@ -1612,6 +1847,8 @@ export type Database = {
           id?: string
           name: string
           user_id?: string
+          auto?: boolean
+          auto_description?: string | null
         }
         Update: {
           color?: string
@@ -1619,6 +1856,8 @@ export type Database = {
           id?: string
           name?: string
           user_id?: string
+          auto?: boolean
+          auto_description?: string | null
         }
         Relationships: []
       }
@@ -1818,6 +2057,9 @@ export type Database = {
           traits: Json | null
           user_id: string
           workspace_id: string | null
+          suspicious: string | null
+          triage_reason: string | null
+          triage_reason_text: string | null
         }
         Insert: {
           bulk_read?: string | null
@@ -1834,6 +2076,9 @@ export type Database = {
           traits?: Json | null
           user_id: string
           workspace_id?: string | null
+          suspicious?: string | null
+          triage_reason?: string | null
+          triage_reason_text?: string | null
         }
         Update: {
           bulk_read?: string | null
@@ -1850,6 +2095,9 @@ export type Database = {
           traits?: Json | null
           user_id?: string
           workspace_id?: string | null
+          suspicious?: string | null
+          triage_reason?: string | null
+          triage_reason_text?: string | null
         }
         Relationships: [
           {
@@ -1928,6 +2176,7 @@ export type Database = {
           subject: string | null
           subject_kept: boolean
           thread_id: string
+          triage_hold_until: string | null
           to_addresses: string[]
           to_indexes: string[] | null
           transcript: string | null
@@ -1962,6 +2211,7 @@ export type Database = {
           subject?: string | null
           subject_kept?: boolean
           thread_id: string
+          triage_hold_until?: string | null
           to_addresses?: string[]
           to_indexes?: string[] | null
           transcript?: string | null
@@ -1996,6 +2246,7 @@ export type Database = {
           subject?: string | null
           subject_kept?: boolean
           thread_id?: string
+          triage_hold_until?: string | null
           to_addresses?: string[]
           to_indexes?: string[] | null
           transcript?: string | null
@@ -2418,6 +2669,8 @@ export type Database = {
           voice_learned_at: string | null
           voice_learned_outbound: number
           whatsapp_read_receipts: boolean
+          voice_whatsapp_learned_at: string | null
+          voice_whatsapp_learned_outbound: number
         }
         Insert: {
           about?: string | null
@@ -2442,6 +2695,8 @@ export type Database = {
           voice_learned_at?: string | null
           voice_learned_outbound?: number
           whatsapp_read_receipts?: boolean
+          voice_whatsapp_learned_at?: string | null
+          voice_whatsapp_learned_outbound?: number
         }
         Update: {
           about?: string | null
@@ -2466,6 +2721,8 @@ export type Database = {
           voice_learned_at?: string | null
           voice_learned_outbound?: number
           whatsapp_read_receipts?: boolean
+          voice_whatsapp_learned_at?: string | null
+          voice_whatsapp_learned_outbound?: number
         }
         Relationships: []
       }
@@ -2612,6 +2869,7 @@ export type Database = {
           support_count: number
           updated_at: string
           user_id: string
+          channel: string
         }
         Insert: {
           contact_id?: string | null
@@ -2626,6 +2884,7 @@ export type Database = {
           support_count?: number
           updated_at?: string
           user_id: string
+          channel?: string
         }
         Update: {
           contact_id?: string | null
@@ -2640,6 +2899,7 @@ export type Database = {
           support_count?: number
           updated_at?: string
           user_id?: string
+          channel?: string
         }
         Relationships: [
           {
@@ -2907,26 +3167,111 @@ export type Database = {
           },
         ]
       }
+      thread_label_removals: {
+        Row: {
+          label_id: string
+          removed_at: string
+          thread_id: string
+          user_id: string
+        }
+        Insert: {
+          label_id: string
+          removed_at?: string
+          thread_id: string
+          user_id: string
+        }
+        Update: {
+          label_id?: string
+          removed_at?: string
+          thread_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       thread_labels: {
         Row: {
           created_at: string
           label_id: string
           thread_id: string
           user_id: string
+          auto: boolean
         }
         Insert: {
           created_at?: string
           label_id: string
           thread_id: string
           user_id?: string
+          auto?: boolean
         }
         Update: {
           created_at?: string
           label_id?: string
           thread_id?: string
           user_id?: string
+          auto?: boolean
         }
         Relationships: []
+      }
+      thread_links: {
+        Row: {
+          contact_id: string | null
+          created_at: string
+          decided_at: string | null
+          id: string
+          score: number
+          source: string
+          status: string
+          thread_a: string
+          thread_b: string
+          user_id: string
+        }
+        Insert: {
+          contact_id?: string | null
+          created_at?: string
+          decided_at?: string | null
+          id?: string
+          score?: number
+          source?: string
+          status?: string
+          thread_a: string
+          thread_b: string
+          user_id?: string
+        }
+        Update: {
+          contact_id?: string | null
+          created_at?: string
+          decided_at?: string | null
+          id?: string
+          score?: number
+          source?: string
+          status?: string
+          thread_a?: string
+          thread_b?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "thread_links_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "thread_links_thread_a_fkey"
+            columns: ["thread_a"]
+            isOneToOne: false
+            referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "thread_links_thread_b_fkey"
+            columns: ["thread_b"]
+            isOneToOne: false
+            referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       thread_notes: {
         Row: {
@@ -3045,6 +3390,9 @@ export type Database = {
           updated_at: string
           user_id: string
           workspace_id: string | null
+          suspicious: string | null
+          triage_reason: string | null
+          triage_reason_text: string | null
         }
         Insert: {
           account_id: string
@@ -3087,6 +3435,9 @@ export type Database = {
           updated_at?: string
           user_id: string
           workspace_id?: string | null
+          suspicious?: string | null
+          triage_reason?: string | null
+          triage_reason_text?: string | null
         }
         Update: {
           account_id?: string
@@ -3129,6 +3480,9 @@ export type Database = {
           updated_at?: string
           user_id?: string
           workspace_id?: string | null
+          suspicious?: string | null
+          triage_reason?: string | null
+          triage_reason_text?: string | null
         }
         Relationships: [
           {
@@ -3909,6 +4263,7 @@ export type Database = {
       }
     }
     Functions: {
+      request_client_card_refresh: { Args: { p_contact: string }; Returns: number }
       cancel_outbox: { Args: { p_id: string }; Returns: boolean }
       send_outbox_now: { Args: { p_id: string }; Returns: boolean }
       disconnect_account: { Args: { p_accounts: string[] }; Returns: number }

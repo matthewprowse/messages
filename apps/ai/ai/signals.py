@@ -17,6 +17,7 @@ from typing import Any
 from . import log
 from .fields import BODY, DRAFT, INSTRUCTION, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
+from .drafts_feedback import down_lines, rated, section as feedback_section
 from .supabase import Supabase, in_list
 from .vault import Vault
 from .voice import rule_key, same_rule, tidy_rule
@@ -75,7 +76,7 @@ def tone_counts(drafts: list[dict[str, Any]]) -> dict[str, int]:
     return {t: n for t, n in counts.items() if n >= MIN_TONE and total and n / total >= MIN_TONE_SHARE}
 
 
-def build_prompt(existing: list[str], instructions: list[str], thrown_away: list[tuple[str, str]], choices: list[tuple[str, str, str]] | None = None) -> str:
+def build_prompt(existing: list[str], instructions: list[str], thrown_away: list[tuple[str, str]], choices: list[tuple[str, str, str]] | None = None, rated_drafts: list[dict[str, Any]] | None = None) -> str:
     """choices are (kind, what they decided, what they sent or "" when the draft was not sent)."""
     lines = ["Existing rules from these signals:"] + ([f"- {r}" for r in existing] or ["(none)"])
     lines += ["", "Instructions they typed, newest first:"] + ([f"- {i}" for i in instructions] or ["(none)"])
@@ -83,6 +84,8 @@ def build_prompt(existing: list[str], instructions: list[str], thrown_away: list
     lines += [f"--- Picked: {kind.replace('_', ' ')}: {decision}\nThey sent: {sent or '(nothing yet)'}" for kind, decision, sent in choices or []] or ["(none)"]
     lines += ["", "Drafts they threw away without sending, newest first:"]
     lines += [f"--- Tone asked: {tone}\n{body}" for tone, body in thrown_away] or ["(none)"]
+    if rated_drafts:  # thumbs up and down given on drafts (drafts_feedback.py)
+        lines += feedback_section(rated_drafts)
     return "\n".join(lines)
 
 
@@ -183,7 +186,7 @@ class Signals:
             mine = self.db.select(
                 "drafts",
                 {
-                    "select": "id,user_id,tone,instruction,decision,decision_kind,status,body,created_at",
+                    "select": "id,user_id,tone,instruction,decision,decision_kind,status,body,created_at,feedback,feedback_reason",
                     **filters,
                     "user_id": f"eq.{user_id}",
                     "created_at": f"gte.{since}",
@@ -206,17 +209,17 @@ class Signals:
         )
         for r in existing:  # rules written sealed are opened here; plain ones pass through
             r["rule"] = self.vault.open(user_id, STYLE_RULE, r.get("rule")) or ""
-        signal_drafts = [d for d in drafts if (d.get("instruction") or "").strip() or d.get("decision_kind") or (d["status"] == "discarded" and d.get("body"))]
+        signal_drafts = [d for d in drafts if (d.get("instruction") or "").strip() or d.get("decision_kind") or (d["status"] == "discarded" and d.get("body")) or d.get("feedback") in ("up", "down")]
         instructions = [d["instruction"].strip()[:300] for d in drafts if (d.get("instruction") or "").strip()][:SAMPLES]
         thrown_away = [(d.get("tone") or "default", (d.get("body") or "")[:DRAFT_CHARS]) for d in drafts if d["status"] == "discarded" and d.get("body")][:SAMPLES]
         picked = [d for d in drafts if d.get("decision_kind") and (d.get("decision") or "").strip()][:SAMPLES]
 
         learned: list[str] | None = None
         newest = signal_drafts[0]["id"] if signal_drafts else ""
-        enough = len(instructions) >= MIN_SIGNALS or len(thrown_away) >= MIN_SIGNALS or len(picked) >= MIN_SIGNALS
+        enough = len(instructions) >= MIN_SIGNALS or len(thrown_away) >= MIN_SIGNALS or len(picked) >= MIN_SIGNALS or len(down_lines(drafts)) >= MIN_SIGNALS
         if enough and self._seen.get(user_id) != newest:
             choices = [(d["decision_kind"], d["decision"].strip()[:300], sent) for d, sent in zip(picked, self._sent_bodies(user_id, picked))]
-            prompt = build_prompt([r["rule"] for r in existing if r["enabled"] and not _is_tone_rule(r["rule"])], instructions, thrown_away, choices)
+            prompt = build_prompt([r["rule"] for r in existing if r["enabled"] and not _is_tone_rule(r["rule"])], instructions, thrown_away, choices, rated(drafts)[:SAMPLES])
             try:
                 result = self.gemini.json(self.model, SYSTEM, prompt, SCHEMA, UsageContext(user_id, "learn"), max_output=LEARN_MAX_OUTPUT)
                 learned = [item.get("rule") or "" for item in (result.get("rules") or []) if isinstance(item, dict)]

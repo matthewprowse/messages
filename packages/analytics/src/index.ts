@@ -70,6 +70,8 @@ export interface Events {
   draft_requested: { tone: string; source: "manual" | "auto" | "choice" | "compose"; channel: Channel; has_instruction?: boolean; revises?: boolean; via?: "typed" | "voice" };
   draft_shown: { tone: string; channel: Channel; ms: number; auto: boolean };
   draft_failed: { code: string; channel: Channel };
+  /** A thumbs up or down on a draft; reason is one of a closed list of chips, or none. Never text. */
+  draft_rated: { value: "up" | "down"; reason: string };
   draft_sent: Partial<DraftEdit> & { channel: Channel; tone: string; secs_to_send: number; regenerated: number; auto: boolean };
   draft_discarded: { channel: Channel; tone: string; secs: number; auto: boolean };
   choice_shown: { count: number; kinds: string[] };

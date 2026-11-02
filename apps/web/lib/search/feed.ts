@@ -3,10 +3,12 @@
 // announces. This is the I/O half; deciding where each page starts is paging.ts and building documents is docs.ts, both
 // tested without a network. Nothing read here is logged or sent anywhere except into the local index.
 
+import { FIELD } from "@messages/crypto/fields";
 import { allRows } from "../contacts";
 import { loadNoteBodies, loadNotes } from "../notes";
 import { openEvents, openMessages, openTasks } from "../open-rows";
 import { supabase } from "../supabase";
+import { open } from "../vault";
 import { mapTask, TASK_COLUMNS } from "../tasks";
 import { knownIds, removeDocs, removeMessages, saveMeta, stampsOf, upsertDocs } from "./client";
 import { eventDoc, messageDocs, noteDoc, taskDoc, type MessageRow, type People } from "./docs";
@@ -29,6 +31,16 @@ export interface FeedContext {
 }
 
 const COLUMNS = "id, thread_id, direction, sender_contact_id, sender_address, to_addresses, sent_at, subject, body_text, is_bulk, provider_meta, transcript, attachments(id, filename, hidden)";
+// Document cards (attachments.doc_card) come with their own migration; asking for the column before it exists fails the whole read.
+const COLUMNS_WITH_CARDS = COLUMNS.replace("hidden)", "hidden, doc_card)");
+let cardsPresent: Promise<boolean> | undefined;
+const columns = async () => ((await (cardsPresent ??= (async () => (await supabase.from("attachments").select("doc_card").limit(0)).error?.code !== "42703")())) ? COLUMNS_WITH_CARDS : COLUMNS);
+
+/** Opens the document cards nested in message rows, so the index holds their words and not their ciphertext. */
+async function openCards(rows: MessageRow[]): Promise<MessageRow[]> {
+  await Promise.all(rows.flatMap((r) => (r.attachments ?? []).map(async (a) => { if (a.doc_card) a.doc_card = await open(FIELD.docCard, a.doc_card).catch(() => null); })));
+  return rows;
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -44,12 +56,12 @@ async function retrying<T>(ctx: FeedContext, run: () => Promise<T>): Promise<T> 
 
 async function messagePage(userId: string, cursor: Cursor | null): Promise<MessageRow[]> {
   // The user's own, as the Inbox list does: a colleague's work chat they can read is not theirs to search.
-  let query = supabase.from("messages").select(COLUMNS).eq("user_id", userId);
+  let query = supabase.from("messages").select(await columns()).eq("user_id", userId);
   // Keyset paging on (sent_at, id), so messages sent in the same second are neither missed nor repeated.
   if (cursor) query = query.or(`sent_at.lt."${cursor.sentAt}",and(sent_at.eq."${cursor.sentAt}",id.lt.${cursor.id})`);
   const { data, error } = await query.order("sent_at", { ascending: false }).order("id", { ascending: false }).limit(PAGE);
   if (error) throw error;
-  return (await openMessages(data as object[])) as unknown as MessageRow[];
+  return openCards((await openMessages(data as object[])) as unknown as MessageRow[]);
 }
 
 /** How many messages the user has, to say "of M". Null when it cannot be counted. */
@@ -130,9 +142,9 @@ export const rememberProgress = (saved: Saved) => saveMeta({ messages: saved });
 
 /** Reads these messages again by id, for changes announced by Realtime. */
 async function messagesById(userId: string, ids: string[]): Promise<MessageRow[]> {
-  const { data, error } = await supabase.from("messages").select(COLUMNS).eq("user_id", userId).in("id", ids);
+  const { data, error } = await supabase.from("messages").select(await columns()).eq("user_id", userId).in("id", ids);
   if (error) throw error;
-  return (await openMessages(data as object[])) as unknown as MessageRow[];
+  return openCards((await openMessages(data as object[])) as unknown as MessageRow[]);
 }
 
 /**
@@ -196,6 +208,17 @@ export function watchChanges(userId: string, ctx: FeedContext): () => void {
         if (p.eventType === "DELETE") { const id = p.old?.id; if (typeof id === "string") void removeMessages([id]).then(bumpRev).catch(() => undefined); return; }
         const id = p.new?.id;
         if (typeof id !== "string") return;
+        queue.add(id);
+        clearTimeout(timer);
+        timer = setTimeout(() => void flush(), SETTLE_MS);
+      },
+    }]),
+    // A card made later by the AI worker changes only the file's row, so the message it came with is read again.
+    channel("search-files", [{
+      table: "attachments",
+      onChange: (p) => {
+        const id = p.new?.message_id;
+        if (p.eventType === "DELETE" || typeof id !== "string") return;
         queue.add(id);
         clearTimeout(timer);
         timer = setTimeout(() => void flush(), SETTLE_MS);

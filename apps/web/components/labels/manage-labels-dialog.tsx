@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AutoLabelsSection } from "@/components/labels/auto-labels-section";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 
 const OPEN_EVENT = "konva:manage-labels";
@@ -94,6 +95,7 @@ export function ManageLabelsHost() {
           <Input value={name} maxLength={NAME_MAX} placeholder="New Label" aria-label="New Label" className="h-8 flex-1" onChange={(e) => setName(e.target.value)} />
           <Button type="submit" variant="secondary" disabled={!name.trim()}>Add</Button>
         </form>
+        <AutoLabelsSection labels={api.labels} active={open} />
         <div className={DIALOG_BUTTONS}>
           <Button type="button" onClick={() => setOpen(false)}>Done</Button>
         </div>

@@ -1,5 +1,6 @@
 """The Gemini Batch API helpers (half price, answered within 24 hours, for work nobody is waiting on). A mixin of
-Gemini. Not called yet; kept for jobs that can wait."""
+Gemini, plus the request body and answer reading a batch needs. batching.py drives them for the setup triage of a
+newly connected account and for the learning job; both fall back to ordinary calls whenever a batch cannot be used."""
 
 from __future__ import annotations
 
@@ -11,6 +12,30 @@ from typing import Any
 from .gemini_estimate import read_usage
 from .gemini_types import BATCH_DISCOUNT, BATCH_ENDPOINT, OPERATION_ENDPOINT, GeminiError, Usage, UsageContext
 from .http import POOL
+
+
+def json_request(system: str, prompt: str, schema: dict[str, Any], *, temperature: float = 0.2, thinking: str = "low", max_output: int | None = None) -> dict[str, Any]:
+    """The body Gemini.json sends for a text prompt with a JSON schema, for a batch item (a batch cannot call json()).
+    Kept identical to json()'s so a batched answer is read exactly like an ordinary one (a test pins this)."""
+    config: dict[str, Any] = {"responseMimeType": "application/json", "responseJsonSchema": schema, "temperature": temperature, "thinkingConfig": {"thinkingLevel": thinking}}
+    if max_output:
+        config["maxOutputTokens"] = max_output
+    return {"systemInstruction": {"parts": [{"text": system}]}, "contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": config}
+
+
+def read_json_answer(answer: dict[str, Any]) -> dict[str, Any] | None:
+    """The JSON a batch answer holds, or None when it is empty, blocked, cut short or not JSON (the caller then asks
+    the ordinary way). Thought parts are skipped, as in json()."""
+    candidates = answer.get("candidates") or []
+    if not candidates:
+        return None
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    try:
+        out = json.loads(text)
+    except ValueError:
+        return None
+    return out if isinstance(out, dict) else None
 
 
 class BatchMixin:

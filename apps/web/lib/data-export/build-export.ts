@@ -6,7 +6,7 @@
 //   conversations/<name>.json|.txt   one pair per conversation, messages oldest first
 //   contacts/contacts.csv, contacts.vcf
 //   notes/<title>.md
-//   tasks/tasks.json, calendar/events.ics, calendar/events.json
+//   tasks/tasks.json, tasks/promises.json, calendar/events.ics, calendar/events.json
 //   profile/profile.json             name, About You, AI settings, rules, writing examples, connected accounts (never credentials)
 //   files/<kind>/...                 only when attachments are chosen
 //   problems.txt                     only when something could not be read; says what and why, never contents
@@ -26,6 +26,8 @@ export interface ExportSource {
   contacts(): Promise<ExportContact[]>;
   notes(): Promise<SourceNote[]>;
   tasks(): Promise<unknown[]>;
+  /** Promises found in conversations; a source without them leaves the file out. */
+  commitments?(): Promise<unknown[]>;
   events(): Promise<(ExportEvent & { calendar?: string | null })[]>;
   settings(): Promise<Record<string, unknown>>;
   /** Stored files, only asked for when attachments are chosen. */
@@ -113,6 +115,7 @@ export async function buildExport(source: ExportSource, options: { attachments: 
   onProgress({ stage: "Tasks and Calendar", done: 0, total: 1 });
   const tasks = await note("Tasks", () => source.tasks(), [] as unknown[]);
   zip.add("tasks/tasks.json", JSON.stringify(tasks, null, 2));
+  if (source.commitments) zip.add("tasks/promises.json", JSON.stringify(await note("Promises", () => source.commitments!(), [] as unknown[]), null, 2));
   const events = await note("Calendar", () => source.events(), [] as (ExportEvent & { calendar?: string | null })[]);
   zip.add("calendar/events.ics", icsCalendar(events, now));
   zip.add("calendar/events.json", JSON.stringify(events, null, 2));

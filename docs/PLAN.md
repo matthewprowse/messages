@@ -574,7 +574,7 @@ Which conversations qualify:
 - Skipped when the latest message has guided drafting choices, as the draft would have to decide for
   the user. Picking a choice drafts as before.
 - Skipped when a draft was already asked for, discarded or written since the latest message.
-- At most 30 a day per user (written by the model in the last 24 hours). After that, drafts are asked
+- At most 15 a day per user (30 until the cost pass; written by the model in the last 24 hours; enforced in request_auto_draft and again by the AI worker, so a row inserted directly cannot skip it). After that, drafts are asked
   for as before.
 - Settings, Auto-Draft Replies turns it off (profiles.auto_draft_top, on by default).
 
@@ -2939,3 +2939,105 @@ Review "Do not add" list stands).
   cannot be made from here. Migration `20261118190000_outlook_calendar_events.sql` lets the outbox take Outlook accounts.
 - **Answer for the whole series:** the Reply row has a switch for every event in a series (Google, iCloud and Outlook; Outlook
   answers on the series master). A change to a series that does not move its time also goes to the master in Outlook.
+
+## Promises and Daily Brief v2, Wave 5 (2 November 2026)
+
+- **Promises:** the follow-up check (`chasers.py`) already reads the end of each conversation where you wrote last; the same
+  call now also lists clear promises in those two messages (`{text, owner me or them, due, evidence message}`), so no extra
+  Gemini call and the cost stays under the `triage` feature. Stored in `commitments` (`20261119100000_commitments.sql`, written, not
+  applied yet): text sealed as field `task_title`, `due_on` a day, `unique (message_id, seq)`. The app can only tick one Done or
+  snooze it. A promise is only found in conversations the check reads, so a promise of theirs is caught when you replied last.
+- **Surfaces:** a Promises section on the Summary (yours due within 2 days or late, theirs late, each with Done and Snooze) and
+  a Promises strip under the summary in an open conversation (both owners, yours first).
+- **Missed promises of theirs:** the morning after the day (08:00 South Africa) with no message from them since, the AI worker
+  sets the conversation's snooze to a reminder that is already due, so it is in Inbox wearing Follow Up (up to 7 days). A snooze
+  to a later time, a snoozed promise and an archived conversation are left alone. The Follow Up mark no longer needs you to have
+  written last, since a reply after the reminder clears it in the database.
+- **Daily Brief v2:** adds Waiting On Them (conversations you wrote last that expect an answer, 2 to 14 days, with days, at most 3
+  in the prompt), promises due today or late (at most 4) and tomorrow's first timed meeting with one prep fact (an open promise
+  with a person named in its title). Same 80 to 160 word budget: these are the first lines dropped when it runs long.
+
+### One Person, One Conversation (Wave 5)
+
+- **By Person:** a toggle in the Inbox list (`group=person` in the address) shows one row per contact, merged contacts included,
+  with the channel icons and the newest message. A row opens `/inbox/person/<contact id>`: that person's email, WhatsApp, LinkedIn
+  and Instagram messages in date order, a channel badge on every message (a link that opens that conversation). The reply box goes
+  out on the channel picked, the channel of their last message to begin with. Opening the timeline only loads messages; nothing is
+  marked read, so no WhatsApp read receipt goes out, until the user opens a conversation from a badge. At most 12 conversations a
+  person are loaded into the timeline. Groups stay rows of their own.
+- **Same Matter?:** `apps/ai/ai/matter.py` pairs an email thread with a chat of the same one-to-one contact when they were last
+  active within 14 days and the mean of their sealed message vectors (`similar.py`) has cosine 0.80 or more (0.76 within 2 days).
+  From 0.68 a pair is borderline and goes to the model only through an injected `confirm`, at most 5 a run, billed under `learn`
+  (which already pays for embeddings); with none supplied it is dropped. Rows go to `thread_links` as `suggested`
+  (`20261119170000_thread_links.sql`, ids and a score only); Link Them makes them show together under a matter heading in the
+  person timeline, Not the Same stops the suggestion for good. Not wired yet: nothing calls `matter.suggest` on a schedule.
+
+### Draft Facts, Feedback and Voice Replies (Wave 5)
+
+- **Fact guard.** After a draft is written, `drafts_facts.py` checks that every amount, number (10 and over), date, weekday,
+  time, phone number, email address and web address in it appears in what it was written from: the conversation, the
+  instruction and decision, saved facts, your note about the person and your next 14 days of calendar (times and days only,
+  never titles). Amounts, times and dates match by normal form (R 4 500 is R4,500; 2pm is 14:00). Placeholders (`[Name]`,
+  `{x}`, `<Name>`, TODO, TBD) are found too. A report with anything missing makes one more try at temperature 0.2 (first try
+  0.6) with the unsupported details named; the better of the two is kept. The report is stored sealed in `drafts.report`.
+- **Chips and audit.** Under an untouched AI draft the app shows green Found and amber Check This chips and a line such as
+  "Based on: last 3 messages, 2 saved facts, your calendar" from `drafts.audit` (counts only). Nothing blocks sending.
+- **Thumbs.** Thumbs up, or thumbs down with an optional reason from a closed list (Too Formal, Too Casual, Too Long, Too
+  Short, Wrong Facts, Wrong Language, Not Like Me), stored on the draft and read by `signals.py` beside the other signals.
+  Wrong Facts and Wrong Language teach no style rule.
+- **Rules per channel.** `style_rules.channel` is `any`, `email` or `whatsapp`. Existing sent mail and edit rules became
+  email rules. WhatsApp drafts leave out email rules, and `voice.py` learns WhatsApp rules from your sent WhatsApp messages
+  on their own counters (`profiles.voice_whatsapp_*`), with a prompt about chat habits.
+- **Voice notes.** A voice note sent to you shows View Transcript and Reply With These Points, which asks for a draft that
+  answers every point, in the language spoken (the interface stays British English).
+
+## Document Cards (Wave 5)
+
+- The AI worker reads a PDF, or an image whose name looks like a document, and keeps a sealed card on the attachment: type
+  (invoice, quote, contract, ID, statement, proof of payment, other), who it is with, amount and currency (rand unless the document
+  shows another), due date, reference and a one-line summary. The file's own words are treated as untrusted.
+- It happens when someone presses Read Document in the viewer, and for PDFs and document-like images from people in the contacts list
+  (never bulk mail, last 14 days). Photos and chat images wait to be asked for.
+- Counted in AI Fair Usage as Document Cards, starting at 4% of the monthly maximum with a weekly limit. A person is capped at 15
+  automatic reads and 40 reads in all per UTC day.
+- The Attachments page shows the type and amount on a tile, the full card in the viewer, and filters for Invoices, Contracts, Proof of
+  Payment, Quotes, Statements and IDs. A dated card becomes a task ("Invoice due 30 Nov") in one click. The card's words are in the
+  private search index, so "invoice from Sipho" finds the file.
+
+## Triage labels, reasons and Clean Up, Wave 5 (2 November 2026)
+
+Migration `20261119120000_triage_labels_reasons.sql` (written, not applied yet).
+
+- **Auto labels:** up to 6 labels can be marked Auto in Manage Labels, each with a one line description (sealed with field
+  `name`). Triage sends them numbered, between marked lines, and the model returns one number or `none` in the same call (one
+  more enum field, no extra call). The worker puts at most one Auto label on a conversation (`thread_labels.auto`), never one
+  that is junk, never a second, and never one the user took off: a trigger on `thread_labels` deletes writes
+  `thread_label_removals`, and putting the label back by hand clears the row.
+- **Why:** triage stores a reason code from a closed list plus a few words (`triage_reason`, sealed `triage_reason_text`) on
+  `message_ai` and `threads`. The user's own signals set fixed words ("You unsubscribed from this sender"). The web reads them on
+  demand (hover or tap of the Urgent or Needs Reply tag, and a line under the open conversation's header) with Not Right?:
+  Not Junk, Not Important or No Reply Needed. No Reply Needed is a new `feedback` value the AI honours and lists in corrections.
+- **Suspicious mail:** `suspicious` (`payment_change`, `phishing`, `impersonation`) from the same call, shown as a warning
+  banner in the conversation. It never blocks, deletes or drafts anything.
+- **Cost:** junk gets no summary from the model (the subject stands in). Reply choices are only for messages that ask about a time
+  or for a decision, and the idle choices backfill is removed (old unanswered messages rarely get answered).
+- **Clean Up:** Inbox, Subscriptions, Clean Up (`/inbox/clean-up`). Bulk senders with nothing opened and mail at least 90 days old,
+  worked out from the loaded conversations with no AI. Unsubscribe All asks first and uses the existing unsubscribe path; Mark as
+  Junk moves their conversations to Junk. Nothing is done until a button is pressed.
+
+### Wave 5: AI Cost and Reliability
+
+- **Batch API:** setup triage (old mail, 6 hours or more, of someone still inside the setup allowance) and learning backlogs
+  (4 or more edits in a pass, or any during setup) go through the Gemini Batch API at half price, with the same prompts. Live mail
+  and anything that cannot be batched (refused budget, failed or expired job, unreadable answer) is asked the ordinary way.
+  Jobs are remembered in `ai_batches`, so a restart collects them instead of asking again; rows waiting on a batch are held out of
+  triage with `messages.triage_hold_until`. `AI_BATCH=off` turns it off.
+- **Claims and lease:** drafts, triage groups and voice notes are claimed through `claim_ai_rows` before they are paid for, and the
+  AI worker takes the lease `ai` like the sync worker's, so a second `pnpm ai` stops at start. Triage back-off lives in `ai_retries`.
+- **Draft latency:** an idle draft poll waits at most 1 second (was up to 10). Waking from Realtime needs a websocket client the
+  worker does not have; the indexed read is cheap.
+- **Learning:** one set of rule helpers (`rules.py`) for all three learners. Edits are learned from only when larger than the
+  person's median edit (once they have 20 outcomes). A rule from a single edit starts off (`tentative`) and goes live at support 2.
+- **Cost records:** context cache storage is recorded (estimate $1.00 per million tokens per hour). Audio input is priced per model
+  where a rate is on record ($0.50 3.1 Flash Lite, $1.00 2.5 Flash), else the $3.00 estimate, which still needs checking against
+  Google's page.

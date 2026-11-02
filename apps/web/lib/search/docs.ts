@@ -6,6 +6,7 @@ import { emailParts } from "@messages/email-text";
 import { noteExcerpt } from "../note-text";
 import { searchDigits } from "../phone-search";
 import type { Contact, Task, Thread } from "../types";
+import { cardSearchText, parseDocCard } from "./document-card";
 import { docId } from "./engine";
 import { TEXT_CAP, type Doc, type Kind } from "./types";
 
@@ -109,7 +110,7 @@ export interface MessageRow {
   is_bulk?: boolean | null;
   provider_meta?: unknown;
   transcript?: string | null;
-  attachments?: { id: string; filename: string; hidden?: boolean | null }[] | null;
+  attachments?: { id: string; filename: string; hidden?: boolean | null; /** The opened JSON of its document card (attachments.doc_card), when the AI worker has made one. */ doc_card?: string | null }[] | null;
 }
 
 /** The words of a message: WhatsApp text as sent; an email without its quoted history, signature and footer. */
@@ -139,7 +140,7 @@ export function messageDocs(row: MessageRow, people: People): Doc[] {
     ...(mine ? { me: 1 as const } : {}),
   };
   const fileDocs = files.map((a): Doc => ({
-    id: docId("file", a.id), k: "file", r: a.id, th: row.thread_id, mi: row.id, t: a.filename.slice(0, 200), x: "",
+    id: docId("file", a.id), k: "file", r: a.id, th: row.thread_id, mi: row.id, t: a.filename.slice(0, 200), x: clip(cardSearchText(parseDocCard(a.doc_card)), "file"),
     fr: from.slice(0, 200) || undefined, at, ...(mine ? { me: 1 as const } : {}),
   }));
   return [message, ...fileDocs];

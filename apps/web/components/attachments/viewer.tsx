@@ -21,6 +21,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { STAGE_HEIGHT, VideoPlayer, VoiceNote } from "@/components/media-player";
 import { AlsoIn } from "./also-in";
+import { DocumentCardPanel } from "./document-card";
+import { useDocumentCards } from "./document-store";
 import { FileGlyph } from "./file-glyph";
 import { ImageViewer } from "./image-viewer";
 import { useRequestedFile } from "./use-requested-file";
@@ -75,6 +77,7 @@ export function AttachmentViewer({ attachment, ...rest }: ViewerProps) {
 
 function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClose, items, index, onNavigate, onToggleHidden, onDelete, threadId }: Omit<ViewerProps, "attachment"> & { attachment: Attachment; open: boolean }) {
   const [toggling, setToggling] = useState(false);
+  const cardOf = useDocumentCards(open ? [a.id] : []);
   const [deleting, setDeleting] = useState(false);
   const requested = useRequestedFile(a, open);
   // Once the worker has stored a requested file the viewer opens it like any other.
@@ -182,6 +185,7 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
             </div>
           )}
         </div>
+        <DocumentCardPanel attachment={a} entry={cardOf(a.id)} />
         <div
           className="min-w-0"
           onTouchStart={swipeable ? (e) => {

@@ -64,7 +64,9 @@ export function snoozeMark(t: Snoozable & Pick<Thread, "lastFromMe">, now: numbe
   if (!t.snoozedUntil) return null;
   const since = now - Date.parse(t.snoozedUntil);
   if (since < 0) return null;
-  if (t.snoozeKind === "reminder") return t.lastFromMe && since <= FOLLOW_UP_MARK_DAYS * 86_400_000 ? "follow_up" : null;
+  // A reminder still set after an inbound message is one the AI worker raised for a promise of theirs that passed its day
+  // (a reply after the reminder clears it in the database), so it wears Follow Up whoever wrote last.
+  if (t.snoozeKind === "reminder") return since <= FOLLOW_UP_MARK_DAYS * 86_400_000 ? "follow_up" : null;
   return since <= SNOOZED_MARK_HOURS * 3_600_000 ? "snoozed" : null;
 }
 

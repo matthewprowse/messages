@@ -33,7 +33,10 @@ import { SuggestTimesButton } from "@/components/suggest-times-button";
 import { SignatureNote } from "@/components/signature-note";
 import { InstagramReplyNotice, useInstagramReplyClosed } from "@/components/instagram-window";
 
+import { ActionCards } from "@/components/actions/action-card";
 import { DraftBar } from "@/components/thread-view/draft-bar";
+import { DraftTrust } from "@/components/thread-view/draft-trust";
+import { onVoiceReply, VOICE_REPLY_INSTRUCTION } from "@/lib/voice-reply";
 import { beforeAsk, typedText } from "@/components/thread-view/composer-memory";
 
 // The ask dialogs open on a click, so their code loads on its own the first time one is wanted.
@@ -127,6 +130,10 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
   const startDraft = () => {
     ask(said ? "custom" : "default", said || undefined, draft?.decision);
   };
+  // "Reply With These Points" on a voice note in this conversation asks for a draft covering it, in the language it was spoken in.
+  const askRef2 = useRef(ask);
+  askRef2.current = ask;
+  useEffect(() => onVoiceReply(thread.id, () => askRef2.current("custom", VOICE_REPLY_INSTRUCTION)), [thread.id]);
   const startEdit = () => {
     const note = change.trim();
     setAsking(null);
@@ -208,6 +215,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
             onDiscard={() => { beforeAsk.delete(thread.id); typedText.delete(thread.id); onDiscardDraft(); setText(""); }}
           />
         )}
+        {!recorder && !busy && <ActionCards thread={thread} msgs={msgs} draftId={draft?.id} vars={vars} files={files} text={text} onText={type} />}
         {/* While a draft is written the text box becomes a placeholder line. */}
         <div {...files.dropProps} className={cn("rounded-lg border bg-background/50 p-3 focus-within:ring-3 focus-within:ring-ring/30", files.dragging && "border-ring ring-3 ring-ring/30")}>
           <ReplyHeader thread={thread} msgs={msgs} reply={replyFrom} all={replyAll} />
@@ -254,6 +262,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
               )}
           </div>
         </div>
+        {untouchedDraft && <DraftTrust draft={draft} />}
       </div>
       {(asking || askedOnce.current) && <AskDialogs
         asking={asking}

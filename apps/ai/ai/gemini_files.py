@@ -12,7 +12,7 @@ from . import log
 from .gemini_estimate import error_reason
 from .gemini_types import CACHE_ENDPOINT, FILE_ENDPOINT, FILE_READY_S, UPLOAD_ENDPOINT, GeminiError, Usage, UsageContext, guarded
 from .http import POOL
-from .pricing import cost_usd
+from .pricing import cache_storage_usd, cost_usd
 
 
 class FilesMixin:
@@ -79,8 +79,9 @@ class FilesMixin:
         ask about different parts of it (the windows of a long meeting) are billed for it once at full price and
         after that at the cached rate, instead of in full every time. Returns the cache's name for json(cached=...),
         or None when it could not be made (the caller then sends the file with every call). The cache is billed
-        its tokens once, recorded here, and storage by the hour (not recorded; the ttl is kept short). Delete it
-        with delete_cache when done."""
+        its tokens once, recorded here, and storage by the hour, recorded by delete_cache for the time it lived (a cache
+        that is never deleted is recorded for its whole ttl, when the next cache is made). Delete it when done."""
+        self._settle_expired_caches()
         body = {
             "model": f"models/{model}",
             "systemInstruction": {"parts": [{"text": system}]},
@@ -99,11 +100,30 @@ class FilesMixin:
         if tokens:
             now = datetime.now(timezone.utc)
             self._record(model, usage, Usage(tokens, 0, 0, round(cost_usd(model, now.date(), tokens, 0, 0, tokens), 6)))
+        self._caches[name] = (model, usage, tokens, time.monotonic(), ttl_s)
         return name
 
     def delete_cache(self, name: str) -> None:
-        """Removes a cache made with cache_file. Failures are ignored: it expires on its own."""
+        """Removes a cache made with cache_file and records the storage it cost. Failures are ignored: it expires on its own."""
+        self._record_storage(name)
         try:
             POOL.request("DELETE", FILE_ENDPOINT.format(name=name), None, {"x-goog-api-key": self._key}, timeout=30)
         except Exception:
             pass
+
+    def _record_storage(self, name: str, *, expired: bool = False) -> None:
+        """Records a cache's storage cost once: for the time it lived, never more than its ttl."""
+        entry = self._caches.pop(name, None)
+        if not entry:
+            return
+        model, usage, tokens, made, ttl_s = entry
+        lived = ttl_s if expired else min(ttl_s, time.monotonic() - made)
+        cost = cache_storage_usd(tokens, lived)
+        if cost > 0:
+            self._record(model, usage, Usage(0, 0, 0, round(cost, 6)))
+
+    def _settle_expired_caches(self) -> None:
+        """Caches nobody deleted have expired on their own: record their whole ttl of storage."""
+        now = time.monotonic()
+        for name in [n for n, e in self._caches.items() if now - e[3] > e[4]]:
+            self._record_storage(name, expired=True)

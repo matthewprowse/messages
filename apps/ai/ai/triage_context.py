@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import log
-from .fields import ADDRESS, BODY, CHOICES, HTML, PROFILE_ABOUT, PROFILE_PEOPLE, SUBJECT, SUMMARY, TRANSCRIPT
+from .fields import ADDRESS, BODY, CHOICES, HTML, NAME, PROFILE_ABOUT, PROFILE_PEOPLE, SUBJECT, SUMMARY, TRANSCRIPT
 from .supabase import in_list
 from .text import clean
+from .triage_extras import MAX_AUTO_LABELS, AutoLabel
 from .triage_signals import CONTEXT_CHARS, CONTEXT_MESSAGES, CONTEXT_TTL_S, LATEST_ROWS, SENDER_KEEP, UserContext, latest_incoming, sender_outcome
 
 
@@ -43,6 +44,7 @@ class ContextMixin:
         ]
         return UserContext(
             vip_contacts=self._vip_contacts(user_id),
+            auto_labels=self._auto_labels(user_id),
             name=profile.get("display_name") or "",
             own_addresses=sorted({a for a in ((self.vault.open(user_id, ADDRESS, r.get("address")) or "").lower() for r in accounts) if "@" in a}),
             about=self.vault.open(user_id, PROFILE_ABOUT, profile.get("about")) or "",  # sealed or plain
@@ -55,6 +57,20 @@ class ContextMixin:
             timezone=profile.get("timezone") or "",
             language=profile.get("language") or "",
         )
+
+    def _auto_labels(self, user_id: str) -> list[AutoLabel]:
+        """The labels the user marked Auto, oldest first (their position is the number the model answers with). Names
+        and descriptions are sealed with the user's key. Without the labels.auto migration, or when the read fails,
+        there are none and triage runs as before."""
+        try:
+            rows = self.db.select(
+                "labels", {"select": "id,name,auto_description", "user_id": f"eq.{user_id}", "auto": "eq.true", "order": "created_at.asc,id.asc", "limit": str(MAX_AUTO_LABELS)}
+            )
+        except Exception as err:
+            log.warn("auto labels not read", code=log.code_of(err))
+            return []
+        labels = [AutoLabel(r["id"], self.vault.open(user_id, NAME, r.get("name")) or "", self.vault.open(user_id, NAME, r.get("auto_description")) or "") for r in rows]
+        return [l for l in labels if l.name]
 
     def _vip_contacts(self, user_id: str) -> set[str]:
         """Ids of the contacts the user starred. Without the contacts.vip migration, or when the read fails,
@@ -127,7 +143,7 @@ class ContextMixin:
         rows = self.db.select(
             "messages",
             {
-                "select": "user_id,provider_message_id,message_ai!inner(priority,category,summary,needs_reply,junk,reply_choices,model)",
+                "select": "user_id,provider_message_id,message_ai!inner(priority,category,summary,needs_reply,junk,reply_choices,model,triage_reason,triage_reason_text,suspicious)",
                 "account_id": in_list(accounts),  # with the Message-ID, this is the (account_id, provider_message_id) index
                 "provider_message_id": in_list(ids),
                 "direction": "eq.inbound",
@@ -142,6 +158,9 @@ class ContextMixin:
                 copied = {k: ai[k] for k in ("priority", "category", "summary", "needs_reply", "junk")}
                 copied["summary"] = self.vault.open(r["user_id"], SUMMARY, copied["summary"])  # sealed again when written
                 copied["choices"] = self.vault.open(r["user_id"], CHOICES, ai.get("reply_choices"))
+                copied["reason_code"] = ai.get("triage_reason") or "copied"
+                copied["reason_text"] = self.vault.open(r["user_id"], SUMMARY, ai.get("triage_reason_text")) or ""
+                copied["suspicious"] = ai.get("suspicious")
                 out[(r["user_id"], r["provider_message_id"])] = (copied, ai.get("model"))
         return out
 

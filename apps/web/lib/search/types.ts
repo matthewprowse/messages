@@ -78,4 +78,4 @@ export interface IndexProgress {
 }
 
 /** Text kept per document, by kind (characters). Bounds memory; the start of a long note or email is what people search. */
-export const TEXT_CAP: Record<Kind, number> = { thread: 500, message: 600, contact: 300, note: 4000, event: 1000, task: 600, file: 0 };
+export const TEXT_CAP: Record<Kind, number> = { thread: 500, message: 600, contact: 300, note: 4000, event: 1000, task: 600, file: 400 };

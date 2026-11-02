@@ -14,6 +14,7 @@ import { AttachmentTile, StickerImage, isSticker } from "@/components/attachment
 import { InviteCard } from "@/components/invite-card";
 import { MessageBody, hasFullText } from "@/components/message-body";
 import { VoiceNote } from "@/components/media-player";
+import { askVoiceReply } from "@/lib/voice-reply";
 import { ScheduledLine } from "@/components/thread-view/scheduled-line";
 import { BubbleActions, QuoteBlock, ReactionChips, useTouchReveal, type NameOf, type OnReact } from "@/components/message-extras";
 
@@ -61,7 +62,7 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
               isSticker(a) && a.path
                 ? <StickerImage key={a.id} attachment={a} onOpen={() => onOpen(a)} />
                 : a.kind === "audio"
-                  ? <VoiceNote key={a.id} attachment={a} me={me} transcript={m.transcript} />
+                  ? <VoiceNote key={a.id} attachment={a} me={me} transcript={m.transcript} onReplyWithPoints={!me && !m.sendState ? () => askVoiceReply(m.threadId) : undefined} />
                   : <AttachmentTile key={a.id} attachment={a} onOpen={() => onOpen(a)} showName={!(whatsapp && a.kind === "image")} />,
             )}
           </div>

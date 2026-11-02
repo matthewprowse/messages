@@ -3,6 +3,7 @@
 
 import type { ChoiceKind } from "./choices";
 import type { Emphasis, ForwardedEmail } from "./email-text";
+import type { DraftAudit, DraftReport } from "./draft-trust";
 
 /** A guided drafting choice you picked: what the draft says, and the kind of answer it is. */
 export interface Decision {
@@ -125,6 +126,11 @@ export interface Draft {
   decision?: Decision;
   /** Written before you asked (a pre-draft), so it never replaces what you are typing. */
   auto?: boolean;
+  /** The fact guard's findings and what the draft was written from (docs/PLAN.md, Draft Facts). */
+  report?: DraftReport;
+  audit?: DraftAudit;
+  /** Your thumbs up or down on it. */
+  feedback?: "up" | "down";
   generatedAt: string;
 }
 

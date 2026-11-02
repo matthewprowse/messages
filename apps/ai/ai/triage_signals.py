@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .retry import not_in
+from .triage_extras import AutoLabel, reason_phrase
 
 PRIORITIES = ["urgent", "important", "normal", "low"]
 CATEGORIES = ["personal", "work", "needs_reply", "fyi", "newsletter", "notification"]
@@ -46,6 +47,7 @@ class UserContext:
     timezone: str = ""  # profiles.timezone, for the time of day in a message's traits
     language: str = ""  # profiles.language: en-GB, en-US or af; empty follows how they write
     vip_contacts: set[str] = field(default_factory=set)  # contacts.vip: starred people, whose mail is never junk
+    auto_labels: list[AutoLabel] = field(default_factory=list)  # labels.auto: up to 6 the model may put on a conversation
 
 
 def matches(address: str, targets: list[str]) -> bool:
@@ -70,24 +72,39 @@ def apply_signals(result: dict[str, Any], sender: str, ctx: UserContext, thread_
     if out.get("category") not in CATEGORIES:
         out["category"] = "fyi"
     out["summary"] = str(out.get("summary") or "")[:200]
+    why = [out.get("reason_code")]  # the last signal to change the result is the reason shown
 
     if sender and sender.lower() in ctx.unsubscribed:
         out.update(junk=True, priority="low", needs_reply=False)
+        why.append("unsubscribed")
     if sender and matches(sender, ctx.never):
         out.update(priority="low")
+        why.append("rule_never")
     if sender and matches(sender, ctx.always):
         out.update(junk=False, priority="urgent" if out["priority"] == "urgent" else "important")
+        why.append("rule_always")
     if sender_contact and sender_contact in ctx.vip_contacts and not (sender and sender.lower() in ctx.unsubscribed):
         out.update(junk=False, priority="urgent" if out["priority"] == "urgent" else "important")
+        why.append("vip")
 
     for value in thread_feedback:  # the latest correction on this conversation wins per kind
         if value in ("junk", "not_junk"):
             out["junk"] = value == "junk"
+            why.append("marked_junk" if out["junk"] else "marked_not_junk")
             break
     for value in thread_feedback:
         if value in ("important", "not_important"):
             out["priority"] = ("urgent" if out["priority"] == "urgent" else "important") if value == "important" else "low"
+            why.append("marked_" + value)
             break
+    if "no_reply_needed" in thread_feedback:
+        out["needs_reply"] = False
+        why.append("no_reply_needed")
+    # A code we set ourselves has fixed words; the model's own words come with its answer.
+    code = next((c for c in reversed(why) if c), None)
+    if code and (code != out.get("reason_code") or not out.get("reason_text")):
+        out["reason_text"] = reason_phrase(code)
+    out["reason_code"] = code
     if out["junk"]:
         out["needs_reply"] = False
     # Choices only while a reply is needed. None leaves reply_choices empty; NO_CHOICES means looked at.
@@ -104,7 +121,8 @@ def known_outcome(m: dict[str, Any], ctx: UserContext, thread_feedback: list[str
     if not unsubscribed and junk_mark != "junk":
         return None
     category = "newsletter" if unsubscribed or m.get("list_unsubscribe") else "fyi"
-    return {"priority": "low", "category": category, "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
+    return {"priority": "low", "category": category, "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200],
+            "reason_code": "unsubscribed" if unsubscribed else "marked_junk"}
 
 
 def sender_outcome(m: dict[str, Any], history: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
@@ -125,7 +143,8 @@ def sender_outcome(m: dict[str, Any], history: list[dict[str, Any]], now: dateti
         return None
     if now - decided > timedelta(days=SENDER_RECHECK_DAYS):
         return None
-    return {"priority": newest["priority"], "category": newest["category"], "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
+    return {"priority": newest["priority"], "category": newest["category"], "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200],
+            "reason_code": "sender_settled"}
 
 
 def superseded_outcome(m: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +191,8 @@ def pending_query(since: str, skip: list[str] | None = None) -> dict[str, str]:
         "direction": "eq.inbound",
         "message_ai": "is.null",
         "threads.triage_enabled": "eq.true",
+        # Old mail waiting on a half price batch is held out (triage_batch.py) until its answer is back.
+        "or": f"(triage_hold_until.is.null,triage_hold_until.lt.{datetime.now(timezone.utc).isoformat()})",
         "sent_at": f"gte.{since}",
         "order": "sent_at.desc",
         "limit": str(BATCH),

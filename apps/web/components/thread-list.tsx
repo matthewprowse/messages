@@ -29,10 +29,12 @@ import { RowButton } from "@/components/thread-list/row-button";
 import { BulkBar, SelectionBar } from "@/components/thread-list/selection-bar";
 import { SubscriptionRow } from "@/components/thread-list/subscription-row";
 import { ThreadRow } from "@/components/thread-list/thread-row";
+import { PersonList } from "@/components/person/person-list";
 import { useInboxKeys } from "@/components/thread-list/use-inbox-keys";
 import { useListState } from "@/components/thread-list/use-list-state";
 import { useRowActions } from "@/components/thread-list/use-row-actions";
 import { useSwipedRow, useToday } from "@/components/thread-list/use-row-state";
+import { CleanUpLink } from "@/components/clean-up/clean-up-link";
 import { useSubscriptions } from "@/components/thread-list/use-subscriptions";
 import { useThreadSelection } from "@/components/thread-list/use-thread-selection";
 
@@ -42,7 +44,7 @@ export type { RowAction } from "@/components/thread-list/use-row-actions";
 const NO_THREADS: Thread[] = [];
 
 export function ThreadList() {
-  const { view, filter, label, query } = useListState();
+  const { view, filter, label, byPerson, query } = useListState();
   const params = useParams<{ id?: string }>();
   const { listThreads, accounts, loading, contactById: contactOf, prefetchMessages, labels: labelApi } = useApp();
   const noAccounts = !accounts.some((a) => a.status !== "disconnected");
@@ -141,10 +143,11 @@ export function ThreadList() {
             onAction={(action) => run(picked, action)}
           />
         ) : (
-          <ListControls view={view} filter={filter} label={label} />
+          <ListControls view={view} filter={filter} label={label} byPerson={byPerson} />
         )}
         </PaneHeader>
         <SearchBand value={search} onChange={setSearch} placeholder="Search Conversations" />
+        {view === "subscriptions" && <CleanUpLink />}
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3">
@@ -191,6 +194,8 @@ export function ThreadList() {
                 </Fragment>
               ))}
             </div>
+          ) : byPerson ? (
+            <PersonList threads={threads} query={query} limit={shown} />
           ) : (
             <div className="flex flex-col gap-2">
               {threads.slice(0, shown).map((t, i) => (

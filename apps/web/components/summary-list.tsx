@@ -32,6 +32,7 @@ import { CalendarBody } from "@/components/summary/calendar-body";
 import { Section, Separated } from "@/components/summary/section";
 import { LoadingSummary, SummaryEmpty } from "@/components/summary/summary-empty";
 import { TaskRow } from "@/components/summary/task-row";
+import { PromisesSection } from "@/components/summary/promises-section";
 import { useBandHeight, useHeaderHeight } from "@/components/summary/use-header-height";
 import { useRowNavigation } from "@/components/summary/use-row-navigation";
 import { useTodaysEvents } from "@/components/summary/use-todays-events";
@@ -225,6 +226,7 @@ export function SummaryList() {
                 <Separated>{todaysTasks.map((t) => <TaskRow key={t.task.id} item={t} today={today} source={sourceOf(t.task.accountId)} />)}</Separated>
               </Section>
             )}
+            <PromisesSection headerHeight={headerHeight} now={sectionsNow} base={BASE} />
             {sections.reply.length > 0 && <Section title="Needs Reply" count={sections.reply.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0}>{rows(sections.reply)}</Section>}
             {sections.priority.length > 0 && <Section title="Important" count={sections.priority.length} headerHeight={headerHeight}>{rows(sections.priority)}</Section>}
             {sections.updates.length > 0 && <Section title="Updates" count={sections.updates.length} headerHeight={headerHeight}>{rows(sections.updates)}</Section>}
