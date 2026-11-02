@@ -498,7 +498,7 @@ team (see Teams) and shows an invite link for its owner, and Teams lists each te
 | Media | Voice notes and audio play inside the conversation (speed 1x, 1.5x, 2x); videos play in the app's own player | Built |
 | Notes | Private notes with live markdown formatting and attachments, under Attachments in the rail (see below) | Built, not yet checked in the browser |
 | Clients | Client timeline across every channel | To do |
-| Leads | Property24 and Private Property enquiry emails turned into clients | To do |
+| Leads | Property24 and Private Property enquiry emails turned into clients, through Automations (see Full App Review, 2 November 2026) | To do |
 | Onboarding | Sign up, a setup dialog over the app (connect, about you, what Konva found, contacts, a practice reply) and a page by page tour (see below) | Built on mock data for the findings, contacts and drafts; not yet checked end to end with a new account |
 
 ## How the Key Features Work
@@ -2508,3 +2508,106 @@ sends twice, row level security has no gaps, and no message content is logged.
 ### Not Done
 
 - `20261115100000_review_fixes.sql` is written but not applied or dry run yet.
+
+## Full App Review (2 November 2026)
+
+Sixteen read-only reviews: one per sidebar page (Summary, Calendar, Inbox, Contacts, Attachments, Notes, Settings,
+Analytics, Updates, Admin) and six across the app (security, channels, backend, AI, web app, strategy). The reports are
+in `docs/reviews/2026-11-02/` on the owner's machine (kept out of git, as the security report describes open weaknesses), one file each, with file and line references. The owner agreed the recommendations, with
+the changes below.
+
+### Decided (2 November 2026)
+
+- **Fix first:** ignore `captures/` in git (it holds LinkedIn captures with passwords and cookies), give the LinkedIn
+  helper an allow-listed environment instead of every secret, stop Enter in the New Email fields from sending, stop a
+  retry making a second outbox row, repoint every link when contacts merge, stop the setup dialog saving made-up
+  people and style into real profiles, and stop email quote cutting at the first `>` line.
+- **Developer setup comes out of Settings.** No terminal steps (`pnpm connect:*`, Cloud Console, env vars) are shown
+  to users. They move to the worker README.
+- **Security recommendations are agreed,** including the key route, KMS credentials, MFA, CSP and per-tenant worker
+  isolation. The order is in the security report.
+- **Baileys supply chain.** No fork for now. Instead: pin the exact version (no range), keep the reviewed source in the
+  repo or a private mirror with a checksum, build the `whatsapp-rust-bridge` WASM from source, strip the WAM telemetry
+  hooks, read the diff before every update, add a minimum release age and an audit to CI, and only ever install
+  Baileys from the official repository (the 2025 "lotusbail" fork stole WhatsApp sessions). Later, WhatsApp sessions
+  run in their own process holding only that user's keys.
+- **Gemini key.** Before launch the AI worker gets its own Gemini key, separate from Mendr. Moving to Vertex AI for
+  Google's Limited Use rules is part of the security work.
+- **Multilingual replies: planned, not built now.** Drafts reply in the language of the conversation, which Gemini
+  already follows from the thread. A "Reply In" option and a test set of mixed English, Afrikaans, isiZulu and isiXhosa
+  messages come later. The interface (labels, buttons, the Summary) stays in British English.
+- **Upload from cloud storage.** Attaching a file (replies, new emails, notes) can pick from Google Drive and OneDrive
+  as well as the device, through Google's Picker (the non-restricted `drive.file` scope) and the OneDrive File Picker.
+  The browser downloads the picked file and seals it like a local upload, so nothing changes in the privacy model.
+  iCloud Drive has no web API: on Apple devices the system file picker already shows iCloud Drive, and the dialog says
+  so.
+- **Still to decide:** whether LinkedIn is paused until a paying customer asks (strategy) or kept (channels); whether
+  Notes grows into linked client notes or stays as saved facts for drafts; the pricing in the strategy report.
+
+### Automations and Lead Capture
+
+Leads reach agents as emails from the portals (Property24, Private Property) and sometimes as SMS alerts. The email
+comes from the portal's no-reply address, but the real person, their number, the listing and their question are in the
+body. Today Konva files these under the portal. Automations fix that, and let users build their own.
+
+An automation is **When, Read, Do**, set up in the web page like connecting an account:
+
+1. **When** a message arrives on a chosen channel (an email account, the Konva SMS number, WhatsApp, or a forwarding
+   address) and matches simple conditions: from address or domain, sender number, subject or body contains.
+2. **Read** the fields out of it. Templates for known services use a fixed parser (free and exact). Custom automations,
+   or a template whose email has changed, ask Gemini to fill the fields the user named, each with a one-line
+   description (name, phone, email, listing reference, address, price, message). This counts against AI fair usage
+   as its own feature.
+3. **Do** any of: create or update the contact (matched on the number in +27 form and the email, so a repeat enquirer
+   joins their existing record), mark them a Lead with the source, attach the listing to their client timeline, link
+   the original message to them, add a task ("Call Back Within 5 Minutes"), write a reply draft to the lead's own email
+   or WhatsApp (never the portal, and never sent without the user), and send an urgent notification.
+
+**Templates first:** Property24 Enquiry and Private Property Enquiry, built from real enquiry emails read only, with the
+parsers tested on anonymised copies. Then a Custom automation, then more templates as users ask (website contact forms,
+Gumtree, Facebook Lead Ads, IOL Property).
+
+**Turning one on** shows a preview: "In the last 30 days this would have made 14 leads", with the list, before it runs.
+Every run is recorded so the user can see what it did and undo it.
+
+**SMS: to do, not in this build (decided 2 November 2026).** Konva cannot read SMS on an iPhone, and the Android
+bridge is unofficial. When it is built, SMS comes through a Konva number from a South African SMS provider with inbound
+webhooks (to choose: Clickatell, BulkSMS or SMSPortal, checked for two-way long numbers and their price), which the user
+points portal SMS alerts at. A per-user forwarding address for leads that land in an inbox Konva does not read comes
+after that. Automations are built so either can be added as one more "When" channel.
+
+**How it is built:**
+
+- `automations`: user or team, template key, name, enabled, and the conditions, fields and actions as one sealed JSON
+  (conditions can name people). `automation_runs`: automation, message, status, the sealed extracted fields, the
+  contact made or updated, an error code. Both with row level security like every other table.
+- The AI worker runs automations right after triage, since it already reads each new message: the fixed parser first,
+  Gemini only when needed. Parsers live in `apps/ai/ai/automations/` with one file per template and tests in
+  `apps/ai/tests`.
+- The web app gets Settings, Automations: a gallery of template cards like the account cards, a builder for When,
+  Read and Do, and the run history. Contacts gets a Leads filter.
+- Effort: templates and the engine M, the custom builder M.
+
+### Build Order
+
+Built by Sonnet agents in waves, each in its own git worktree and owning a fixed set of files, then reviewed and
+merged by hand. Migrations get a timestamp block per agent, and `database.types.ts` is merged by hand.
+
+1. Fix first and security (the items above, the worker URL limit, developer setup removal, Baileys hardening).
+2. Split the oversized files (`thread-view`, `store`, `thread-list`, `attachments`, `contact-list`, the calendar page,
+   `data`) without changing behaviour, and remove the X from every dialog.
+3. Bugs on each page, one agent per page.
+4. Core features: Undo Send and Send Later, snooze and remind-if-no-reply, web push, signatures, data export and account
+   deletion, search, cloud file picker.
+5. AI features: commitment tracker, scheduling replies, meeting prep, client summary card, noise cleanup, labels,
+   daily brief v2.
+6. Channels: WhatsApp safety limits, edit and delete history, labels, Instagram webhooks, Outlook calendar writes,
+   Automations and lead capture (email only).
+7. Client Timeline, Analytics and Admin views, operations (hosting, health, alerts).
+
+### To Do, Not In This Build (2 November 2026)
+
+- **SMS** (a Konva number for leads and replies; see Automations above).
+- **The official WhatsApp Business Cloud API** next to Baileys, with Coexistence and Embedded Signup in the web page.
+  It is also what a regulated compliance archive needs.
+- **Billing:** Paystack subscriptions, trials, seats, EFT invoices for firms, VAT, and a plan page in Settings.

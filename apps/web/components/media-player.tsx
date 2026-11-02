@@ -133,16 +133,17 @@ export function VideoPlayer({ src, name }: { src: string; name: string }) {
   const { playing, time, duration, muted, failed, toggle, seek, mute } = useMedia(ref);
   const [full, setFull] = useState(false);
   useEffect(() => {
-    const onChange = () => setFull(document.fullscreenElement === frame.current);
+    const box = frame.current; // by cleanup time the ref is null, which would match "nothing is in full screen"
+    const onChange = () => setFull(document.fullscreenElement === box);
     document.addEventListener("fullscreenchange", onChange);
     return () => {
       document.removeEventListener("fullscreenchange", onChange);
       // Closing the dialog or stepping to another file while full screen must not leave the page in it.
-      if (document.fullscreenElement === frame.current) void document.exitFullscreen();
+      if (box && document.fullscreenElement === box) void document.exitFullscreen().catch(() => undefined);
     };
   }, []);
   const fullscreen = () => {
-    if (document.fullscreenElement) { void document.exitFullscreen(); return; }
+    if (document.fullscreenElement) { void document.exitFullscreen().catch(() => undefined); return; }
     const box = frame.current;
     if (box?.requestFullscreen) void box.requestFullscreen().catch(() => undefined);
     else (ref.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null)?.webkitEnterFullscreen?.(); // iPhone Safari: only the video itself, with its own controls
