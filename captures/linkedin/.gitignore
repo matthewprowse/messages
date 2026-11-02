@@ -1,0 +1,3 @@
+# HAR captures hold cookies and passwords: never commit them
+*
+!.gitignore

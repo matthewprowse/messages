@@ -108,7 +108,7 @@ class Embeddings:
             log.warn("embedding failed", message=message.get("id"), status=err.status)
             return None
         if message.get("id") and message.get("sent_at"):
-            self._save([{**message, "user_id": user_id}], [vector])
+            self._save([{**message, "user_id": user_id, "thread_id": thread_id}], [vector])
         return vector
 
     def stored(self, user_id: str, message_id: str) -> list[float] | None:
@@ -130,7 +130,7 @@ class Embeddings:
         rows = self.db.select(
             "message_embeddings",
             {
-                "select": "message_id,user_id,sent_at,messages(account_id,subject,body_text,body_html)",
+                "select": "message_id,user_id,sent_at,messages(account_id,thread_id,subject,body_text,body_html)",
                 "embedding_data": "is.null",
                 "order": "sent_at.desc",
                 "limit": str(BATCH),
@@ -142,20 +142,30 @@ class Embeddings:
     def _save(self, messages: list[dict[str, Any]], vectors: list[list[float]]) -> set[str]:
         """Seals the vectors with their owners' keys and saves them, all in one request. Returns the ids saved;
         a message whose owner has no key yet is not saved (a vector is never stored readable)."""
-        saved: list[tuple[dict[str, Any], str]] = []
+        saved: list[tuple[dict[str, Any], str, list[float]]] = []
         for m, v in zip(messages, vectors):
             keys = self.vault.keys_for(m["user_id"])
             if keys is None:
                 log.warn("embedding not saved, no key", user=m["user_id"])
                 continue
-            saved.append((m, seal_vector(keys, v)))
+            saved.append((m, seal_vector(keys, v), v))
         if not saved:
             return set()
         try:
-            self.db.upsert("message_embeddings", embedding_rows([m for m, _ in saved], [e for _, e in saved]), on_conflict="message_id")
+            self.db.upsert("message_embeddings", embedding_rows([m for m, _, _ in saved], [e for _, e, _ in saved]), on_conflict="message_id")
         except Exception as err:
             log.warn("embeddings not saved", messages=len(saved), code=log.code_of(err))
             return set()
-        for user_id in {m["user_id"] for m, _ in saved}:
-            self.index.forget(user_id)  # its cached vectors no longer include this one
-        return {m["id"] for m, _ in saved}
+        by_user: dict[str, list[tuple[str, str | None, list[float]]]] = {}
+        unknown: set[str] = set()
+        for m, _, v in saved:
+            if "thread_id" in m:
+                by_user.setdefault(m["user_id"], []).append((m["id"], m["thread_id"], v))
+            else:
+                unknown.add(m["user_id"])
+        for user_id in unknown:
+            self.index.forget(user_id)  # without the conversation the vector cannot be searched correctly: read again
+        for user_id, items in by_user.items():
+            if user_id not in unknown:
+                self.index.add(user_id, items)  # appended: the 45 minute cache of the rest is kept
+        return {m["id"] for m, _, _ in saved}

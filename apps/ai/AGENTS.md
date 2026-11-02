@@ -8,11 +8,12 @@ calls Gemini. Read `../../AGENTS.md` and `../../docs/CONVENTIONS.md` first, then
 | Path | Contents |
 | --- | --- |
 | `ai/__main__.py` | Entry (`pnpm ai`). Starts the draft loop and the triage, learning, brief and meetings threads. |
-| `ai/triage.py`, `drafts.py`, `learn.py`, `voice.py`, `people.py`, `signals.py`, `chasers.py`, `brief.py`, `meetings.py`, `transcribe.py`, `embed.py`, `similar.py`, `company_voice.py`, `logos.py` | One module per behaviour. Each module's docstring says what it does and what it reads and writes. |
+| `ai/triage.py`, `drafts.py`, `learn.py`, `voice.py`, `people.py`, `signals.py`, `chasers.py`, `brief.py`, `meetings.py`, `transcribe.py`, `embed.py`, `similar.py`, `company_voice.py`, `logos.py`, `bulk_read.py` (with `bulk_read_text.py`, its pure half) | One module per behaviour. Each module's docstring says what it does and what it reads and writes. |
 | `ai/gemini.py`, `pricing.py` | The only place that calls Gemini, and what each call costs. |
 | `ai/supabase.py`, `http.py`, `retry.py`, `poll.py` | Database access, HTTP, retry and poll plumbing. |
 | `ai/crypto.py`, `keys.py`, `vault.py`, `fields.py` | Field encryption (mirrors `packages/crypto`), per-user keys, sealing and opening. |
 | `ai/connectors/instagram`, `icloud_reminders` | Python connectors, each with `run.py` (entry), `sync.py`, `client.py`, `mapping.py`, `store.py`. |
+| `ai/connectors/linkedin` | The LinkedIn helper the sync worker starts per account (`python3 -m ai linkedin`): JSON lines on stdin and stdout, protocol in `apps/linkedin/README.md`. `client.py` is the interface to LinkedIn, `factory.py`, `api.py`, `session.py`, `realtime.py`, `mapping.py` and `queries.py` its real implementation (cookie sessions; no password sign-in yet). `queries.py` holds LinkedIn's query IDs, which go stale when it ships a web build. |
 | `tests/test_<module>.py` | `unittest`, run with `pnpm test:ai`. |
 
 ## Working here

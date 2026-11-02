@@ -118,10 +118,16 @@ const WORD = /^[a-z][a-z0-9_.:-]{0,39}$/;
 const KEY = /^[a-z][a-z0-9_]{0,29}$/;
 const MAX_NUMBER = 1_000_000_000;
 
+/** Code words the app sends that hold a dot. A dot is how a local part ("jane.doe") or a domain ("acme.co") looks, so
+ *  any other word with one is dropped. No caller sends a dotted word today; add one here when one starts to. */
+export const DOTTED_WORDS: ReadonlySet<string> = new Set<string>();
+
+const plainWord = (w: string) => WORD.test(w) && (!w.includes(".") || DOTTED_WORDS.has(w));
+
 /** A text value that is only a plain code word. Anything else (a space, a capital, an @, a number
  *  first) is not one, and is dropped rather than changed, so text can never be tidied into a word. */
 export function isWord(v: unknown): v is string {
-  return typeof v === "string" && WORD.test(v);
+  return typeof v === "string" && plainWord(v);
 }
 
 /** The props of an event with everything that is not allowed removed. The database does the same. */
@@ -147,7 +153,7 @@ export function cleanProps(props: Record<string, unknown> | undefined): Record<s
 export function wordOf(s: string | null | undefined): string | undefined {
   const w = (s ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   // Not for words on the screen (a button's text can hold a name). Names the code gave things only, and not IDs.
-  return WORD.test(w) && !/\d{4,}|[0-9a-f]{8,}/.test(w) ? w : undefined;
+  return plainWord(w) && !/\d{4,}|[0-9a-f]{8,}/.test(w) ? w : undefined;
 }
 
 export function sizeOf(width: number): Size {

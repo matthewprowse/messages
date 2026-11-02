@@ -61,6 +61,7 @@ PRUNE_BATCH = 200
 KEEP_DAYS = 2  # audio is rebuilt on request and is the bulk of the storage, so it is not kept for long
 SWEEP_EVERY_S = 300  # stuck briefs are failed and old ones deleted this often, not on every look (STALE_AFTER is 10 minutes)
 STALE_AFTER = timedelta(minutes=10)  # a brief still 'working' this long was cut off (a restart) and is failed
+QUIET_RECHECK_S = 1800  # a user with nothing new since their last brief is looked at again this often, not on every poll
 REPLY_DAYS = 14  # the same windows as the Summary page (apps/web/lib/summary.ts)
 PRIORITY_DAYS = 7
 UPDATE_HOURS = 24
@@ -74,8 +75,6 @@ VOICES = {"Kore", "Aoede", "Sulafat", "Charon", "Achird", "Iapetus"}  # profiles
 PART_WORDS_BY_SEQ = (40, 80, 160)
 FIRST_PART_WORDS = PART_WORDS_BY_SEQ[0]
 PART_WORDS = PART_WORDS_BY_SEQ[-1]
-# Said to the speech model with every part, so all of them sound like one brief read in one go.
-READ_AS = "Read this aloud in a warm, steady, conversational tone, as one part of a single continuous morning briefing:"
 # Silence the speech model leaves at each end of a part, kept short so parts follow on like sentences.
 KEEP_LEAD_MS = 40
 KEEP_TAIL_MS = 260
@@ -304,6 +303,7 @@ class Brief:
         self._pruned: date | None = None
         self._swept: float | None = None  # when _sweep last ran (time.monotonic)
         self._profiles: tuple[float, list[dict[str, Any]]] | None = None
+        self._quiet: dict[tuple[str, str], float] = {}  # (user, day) -> monotonic time to check again, for users with nothing to brief on
         self._made: set[tuple[str, str]] = set()  # (user, day) briefs known to exist, so they are not asked about again
 
     def run_once(self) -> int:
@@ -313,6 +313,8 @@ class Brief:
         if self._swept is None or time.monotonic() - self._swept >= SWEEP_EVERY_S:
             self._swept = time.monotonic()
             self._sweep(now)
+        if self.gemini.billing_blocked():  # every claim would be written, refused and put back (or deleted) again on each poll
+            return 0
         done = 0
         for row in self.db.select("briefs", {"select": "id,user_id", "status": "eq.speak_pending", "order": "updated_at", "limit": "5"}):
             if self._claim(row["id"], "speak_pending"):
@@ -322,7 +324,7 @@ class Brief:
                 done += self._write(row["id"], row["user_id"], date.fromisoformat(row["for_date"]), now)
         # Who is due is worked out here from profiles read every PROFILES_TTL_S, not selected on each look.
         due = {p["user_id"]: d for p in self._profile_rows() if (d := due_today(now, zone_of(p.get("timezone")), p.get("briefing_time")))}
-        due = {u: d for u, d in due.items() if (u, d.isoformat()) not in self._made}
+        due = {u: d for u, d in due.items() if (u, d.isoformat()) not in self._made and self._quiet.get((u, d.isoformat()), 0.0) <= time.monotonic()}
         if due:
             have = self.db.select("briefs", {"select": "user_id,for_date", "user_id": in_list(sorted(due)), "for_date": f"gte.{min(due.values())}"})
             made = {(h["user_id"], h["for_date"]) for h in have}
@@ -330,11 +332,23 @@ class Brief:
             for user_id, day in due.items():
                 if (user_id, day.isoformat()) in made:
                     continue
+                if not self._has_news(user_id, now):  # an unasked-for brief costs a call and a card: only for someone with mail to brief on
+                    self._quiet[(user_id, day.isoformat())] = time.monotonic() + QUIET_RECHECK_S
+                    continue
                 rows = self.db.insert_new("briefs", {"user_id": user_id, "for_date": day.isoformat(), "status": "working"}, "user_id,for_date")
                 self._made.add((user_id, day.isoformat()))  # only once the row exists: a failed insert is tried again
                 if rows:
                     done += self._write(rows[0]["id"], user_id, day, now, speak=False)
         return done
+
+    def _has_news(self, user_id: str, now: datetime) -> bool:
+        """Whether a daily brief is worth making: a connected account, and a message that arrived since the last brief
+        (or in the last REPLY_DAYS when there has been none)."""
+        if not self.db.select("accounts", {"select": "id", "user_id": f"eq.{user_id}", "status": "in.(connected,syncing)", "limit": "1"}):
+            return False
+        last = self.db.first("briefs", {"select": "created_at", "user_id": f"eq.{user_id}", "order": "created_at.desc"})
+        since = (last or {}).get("created_at") or _iso(now - timedelta(days=REPLY_DAYS))
+        return bool(self.db.select("messages", {"select": "id", "user_id": f"eq.{user_id}", "created_at": f"gt.{since}", "limit": "1"}))
 
     def _profile_rows(self) -> list[dict[str, Any]]:
         now = time.monotonic()
@@ -526,7 +540,8 @@ class Brief:
         self.db.delete("brief_parts", {"brief_id": f"eq.{brief_id}"})
 
         def speak(seq: int) -> int:
-            wav = trim_silence(self.gemini.speak(self.tts_model, f"{READ_AS}\n\n{parts[seq]}", voice, usage))
+            # The part alone: a style direction in front of it was read out at the start of every part.
+            wav = trim_silence(self.gemini.speak(self.tts_model, parts[seq], voice, usage))
             length = wav_seconds(wav)
             path = audio_path(user_id, brief_id, seq)
             sealed = self.vault.seal(user_id, BRIEF, base64.b64encode(wav).decode()) or ""

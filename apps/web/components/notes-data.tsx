@@ -13,12 +13,22 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { useAuth } from "@/lib/auth";
-import { createNote, deleteNote, loadNoteBodies, loadNotes, pinNote, removeNoteFiles, saveNote, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
+import { createNote, deleteNote, loadNoteBodies, loadNotes, pinNote, prefetchNoteFiles, removeNoteFiles, saveNote, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
 import { isBlankNote, noteExcerpt, sortNotes, unusedFiles } from "@/lib/note-text";
 
 const SAVE_IDLE_MS = 2500;
 const SAVE_MAX_MS = 30_000;
+/** How long typing must pause (ms) before the note's edited time moves it in the list. */
+const BUMP_IDLE_MS = 1000;
 const OPEN_BATCH = 20;
+// The newest notes are opened as soon as the list loads, so the ones most likely to be clicked open at once.
+const WARM_NEWEST = 8;
+
+// Notes made here whose row is still being written, by id. A save, a delete or a file waits for it.
+const creating = new Map<string, Promise<void>>();
+
+/** Settles once a new note's row exists in the database (at once for any other note). */
+export const noteReady = (id: string): Promise<void> => creating.get(id) ?? Promise.resolve();
 
 const keyOf = (n: { title: string; body: string }) => JSON.stringify([n.title, n.body]);
 
@@ -34,6 +44,8 @@ interface NotesValue {
   reload: () => void;
   /** Downloads one note's text now, ahead of the rest. */
   ensureBody: (id: string) => Promise<void>;
+  /** Starts loading a note's text and files, for a note about to be opened. */
+  warm: (id: string) => void;
   /** Downloads every note's text, for searching. */
   ensureAllBodies: () => void;
   /** Rewrites an opened note that is still stored as plaintext or without an excerpt, sealed. */
@@ -71,6 +83,8 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   const notesRef = useRef(notes);
   notesRef.current = notes;
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // Pending "edited just now" updates for notes whose list-visible fields did not change.
+  const bumps = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   // Notes changed since their last save, when each first changed, and the save running for each.
   const dirty = useRef(new Set<string>());
   const firstDirty = useRef(new Map<string, number>());
@@ -178,6 +192,18 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   }, [commit]);
 
   const ensureBody = useCallback((id: string) => ensureBodies([id]), [ensureBodies]);
+  const warm = useCallback((id: string) => {
+    void ensureBodies([id]);
+    prefetchNoteFiles(id);
+  }, [ensureBodies]);
+
+  // Once the list is in, the newest notes' text is fetched in one request.
+  const warmed = useRef(false);
+  useEffect(() => {
+    if (loading || warmed.current || notes.length === 0) return;
+    warmed.current = true;
+    void ensureBodies(sortNotes(notes).slice(0, WARM_NEWEST).map((n) => n.id));
+  }, [loading, notes, ensureBodies]);
 
   // The rest of the text is downloaded a few notes at a time: always for notes with no excerpt yet (the
   // list needs one), and for every note once a search wants them all.
@@ -220,6 +246,8 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     resolve(id);
     clearTimeout(timers.current.get(id));
     timers.current.delete(id);
+    // A new note is saved only once its row exists.
+    await noteReady(id).catch(() => {});
     // One save at a time per note; a change made during it is saved after.
     await running.current.get(id);
     resolve(id);
@@ -290,11 +318,25 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   }, [save]);
 
   const edit = useCallback<NotesValue["edit"]>((id, fields) => {
-    const updatedAt = new Date().toISOString();
     const { body, ...rest } = fields;
     if (typeof body === "function") getters.current.set(id, body);
     else if (body !== undefined) { getters.current.delete(id); latest.current.set(id, body); }
-    commit((prev) => prev.map((n) => (n.id === id ? { ...n, ...rest, ...(typeof body === "string" ? { body } : {}), updatedAt } : n)));
+    // The list shows the title, excerpt and order, none of which move while only the editor's text changes (it is read
+    // lazily). Committing then would re-sort and re-render every consumer per keystroke, so only a real change commits,
+    // and the "edited" time catches up once typing pauses.
+    const note = notesRef.current.find((n) => n.id === id);
+    const shown = (Object.keys(rest) as (keyof typeof rest)[]).some((k) => note?.[k] !== rest[k]) || (typeof body === "string" && body !== note?.body);
+    clearTimeout(bumps.current.get(id));
+    if (shown) {
+      const updatedAt = new Date().toISOString();
+      commit((prev) => prev.map((n) => (n.id === id ? { ...n, ...rest, ...(typeof body === "string" ? { body } : {}), updatedAt } : n)));
+    } else {
+      bumps.current.set(id, setTimeout(() => {
+        bumps.current.delete(id);
+        const updatedAt = new Date().toISOString();
+        commit((prev) => prev.map((n) => (n.id === id ? { ...n, updatedAt } : n)));
+      }, BUMP_IDLE_MS));
+    }
     dirty.current.add(id);
     setStates((s) => (s[id] === "saving" ? s : { ...s, [id]: "saving" }));
     // Saves once typing has paused, and in any case within the longest wait after the first change.
@@ -305,22 +347,28 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     timers.current.set(id, setTimeout(() => void save(id), Math.max(0, Math.min(SAVE_IDLE_MS, first + SAVE_MAX_MS - now))));
   }, [commit, save]);
 
+  // The note opens at once; its row is written meanwhile, and if that fails the note is taken back out.
   const create = useCallback(async () => {
-    try {
-      const note = await createNote();
-      lastSaved.current.set(note.id, keyOf(note));
-      commit((prev) => [note, ...prev]);
-      track("feature_used", { feature: "note_created" });
-      return note;
-    } catch {
-      toast.error("Could not create a note.");
-      return null;
-    }
+    const { note, saved } = createNote();
+    lastSaved.current.set(note.id, keyOf(note));
+    creating.set(note.id, saved);
+    commit((prev) => [note, ...prev]);
+    track("feature_used", { feature: "note_created" });
+    saved.then(
+      () => { creating.delete(note.id); },
+      () => {
+        creating.delete(note.id);
+        dirty.current.delete(note.id);
+        commit((prev) => prev.filter((n) => n.id !== note.id));
+        toast.error("Could not create a note.");
+      },
+    );
+    return note;
   }, [commit]);
 
   const pin = useCallback((id: string, pinned: boolean) => {
     commit((prev) => prev.map((n) => (n.id === id ? { ...n, pinned } : n)));
-    pinNote(id, pinned).catch(() => {
+    noteReady(id).then(() => pinNote(id, pinned)).catch(() => {
       commit((prev) => prev.map((n) => (n.id === id ? { ...n, pinned: !pinned } : n)));
       toast.error(pinned ? "Could not pin the note." : "Could not unpin the note.");
     });
@@ -329,7 +377,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   const draftWith = useCallback((id: string, on: boolean) => {
     commit((prev) => prev.map((n) => (n.id === id ? { ...n, useInDrafts: on } : n)));
     track("setting_changed", { setting: "note_use_in_drafts" });
-    useNoteInDrafts(id, on).catch(() => {
+    noteReady(id).then(() => useNoteInDrafts(id, on)).catch(() => {
       commit((prev) => prev.map((n) => (n.id === id ? { ...n, useInDrafts: !on } : n)));
       toast.error("Could not change whether drafts use the note.");
     });
@@ -339,12 +387,15 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     const note = current(id);
     clearTimeout(timers.current.get(id));
     timers.current.delete(id);
+    clearTimeout(bumps.current.get(id));
+    bumps.current.delete(id);
     dirty.current.delete(id);
     firstDirty.current.delete(id);
     getters.current.delete(id);
     latest.current.delete(id);
     commit((prev) => prev.filter((n) => n.id !== id));
     try {
+      await noteReady(id).catch(() => {});
       await running.current.get(id);
       // A save that failed meanwhile marks the note changed again; it is going, so nothing is left to save.
       dirty.current.delete(id);
@@ -378,6 +429,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     opening: anyUnloaded,
     reload,
     ensureBody,
+    warm,
     ensureAllBodies,
     upgrade,
     noteById: (id) => notes.find((n) => n.id === id),
@@ -389,7 +441,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     draftWith,
     remove,
     close,
-  }), [sorted, notes, loading, error, anyUnloaded, reload, ensureBody, ensureAllBodies, upgrade, states, create, edit, save, pin, draftWith, remove, close]);
+  }), [sorted, notes, loading, error, anyUnloaded, reload, ensureBody, warm, ensureAllBodies, upgrade, states, create, edit, save, pin, draftWith, remove, close]);
 
   return <NotesContext.Provider value={value}>{children}</NotesContext.Provider>;
 }

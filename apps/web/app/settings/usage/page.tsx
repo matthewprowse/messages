@@ -12,11 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SettingsHeader } from "@/components/settings-header";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/sections";
 import { StorageSection } from "@/components/settings/storage-section";
-
-type Allowance = { used_pct: number; resets_at: string; features: Record<string, number>; week_pct: number | null; week_resets_at: string; week_features: Record<string, number> };
-
-// In the order shown. A feature that is not in the budget is not listed.
-const FEATURE_LABEL: Record<string, string> = { triage: "Sorting and Junk", draft: "Drafts", learn: "Learning From Edits", brief: "Daily Brief", transcribe: "Transcripts" };
+import { FEATURE_LABEL, type Allowance } from "@/lib/usage";
 
 const pct = (n: number) => `${Math.min(100, Math.round(n))}%`;
 const resets = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "long" });

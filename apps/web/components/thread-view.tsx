@@ -14,6 +14,7 @@ import type { Attachment, Contact, Decision, Draft, FiledAttachment, Message, Th
 import { dayLabel, formatPhone, fullStamp, niceName, relTime, timeOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { seenLabelId } from "@/lib/seen";
+import { isNearBottom } from "@/components/near-bottom";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,7 +31,7 @@ import { GuidedChoices } from "@/components/guided-choices";
 import { BubbleActions, QuoteBlock, ReactionChips, useReactorName, useTouchReveal, type NameOf, type OnReact } from "@/components/message-extras";
 import { ReplyHeader, useReplyAll, useReplyFrom } from "@/components/reply-header";
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
-import { RecordButton, RecordingActions, RecordingStatus, useVoiceRecorder } from "@/components/voice-recorder";
+import { RecordButton, RecordingActions, RecordingStatus, SpeakButton, useVoiceRecorder } from "@/components/voice-recorder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TemplatePicker } from "@/components/template-picker";
 import { isTypingKey } from "@/components/new-menu";
@@ -49,8 +50,6 @@ const ComposeDialog = dynamic(() => import("@/components/compose-dialog").then((
 
 /** A conversation is marked read after it has been open this long in a visible tab. */
 const READ_AFTER_MS = 2000;
-/** Within this many pixels of the end of the list counts as being at the bottom. */
-const NEAR_BOTTOM_PX = 120;
 
 /** basePath is where Back, Escape and archiving return: /inbox, or /summary when opened from the Summary page. */
 export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string; basePath?: string }) {
@@ -167,7 +166,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     if (!el) return;
     function onScroll() {
       if (!el) return;
-      const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+      const near = isNearBottom(el);
       nearBottom.current = near;
       if (near) setNewBelow(false);
     }
@@ -190,6 +189,8 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   // was. Measured from that message, so it holds whether or not the browser's own scroll anchoring acts.
   const anchor = useRef<{ id: string; top: number } | null>(null);
   const firstId = msgs[0]?.id;
+  const firstIdNow = useRef(firstId);
+  firstIdNow.current = firstId;
   const [loadingOlder, setLoadingOlder] = useState(false);
   useLayoutEffect(() => {
     const el = viewportOf(scrollRef.current);
@@ -204,11 +205,18 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     function onScroll() {
       const first = el?.querySelector("[data-message-id]");
       if (!el || !first || el.scrollTop > 400 || anchor.current || !hasOlder(threadId)) return;
+      const startId = firstIdNow.current;
       anchor.current = { id: first.getAttribute("data-message-id")!, top: first.getBoundingClientRect().top };
       setLoadingOlder(true);
       loadOlderMessages(threadId)
         .then((added) => { if (!added) anchor.current = null; })
-        .finally(() => setLoadingOlder(false));
+        .catch(() => { anchor.current = null; })
+        .finally(() => {
+          setLoadingOlder(false);
+          // The layout effect clears the anchor when the first message changed; if nothing was prepended it never runs and
+          // the stale anchor would stop older pages loading. Checked after the commit so a real prepend is not cut short.
+          requestAnimationFrame(() => { if (firstIdNow.current === startId) anchor.current = null; });
+        });
     }
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
@@ -571,6 +579,9 @@ const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, see
   const byProviderId = useMemo(() => new Map(msgs.flatMap((m) => (m.providerId ? [[m.providerId, m.id] as const] : []))), [msgs]);
   // Split each day into runs of consecutive messages from the same sender, with a meeting between the messages
   // sent before and after it starts (and so ending a run). The label is worked out once per day.
+  // A run keeps the key of any message it already held, so prepending older messages or appending new ones from the same
+  // sender does not remount it (which would lose an open View Original dialog, a playing voice note, Show Full Text).
+  const runKeys = useRef(new Map<string, string>());
   const groups = useMemo(() => {
     const now = new Date();
     const out: { key: string; day: string; runs: (Message[] | Meeting)[] }[] = [];
@@ -595,6 +606,16 @@ const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, see
       else g.runs.push([m]);
     }
     for (; next < meetings.length; next++) dayOf(meetings[next].startedAt).runs.push(meetings[next]);
+    const keys = runKeys.current;
+    // A run that splits (a meeting landing inside it) would hand both halves the same key; the second takes its own.
+    const used = new Set<string>();
+    for (const g of out) for (const run of g.runs) {
+      if (!Array.isArray(run)) continue;
+      const kept = run.map((m) => keys.get(m.id)).find((k) => k && !used.has(k));
+      const key = kept ?? (used.has(run[0].id) ? `${run[0].id}:${run.length}` : run[0].id);
+      used.add(key);
+      for (const m of run) keys.set(m.id, key);
+    }
     return out;
   }, [msgs, meetings]);
   return (
@@ -610,7 +631,7 @@ const Messages = memo(function Messages({ msgs, meetings, isGroup, whatsapp, see
             if (!Array.isArray(run)) return <MeetingCard key={run.id} meeting={run} place="conversation" />;
             const items = whatsapp ? withAlbums(run) : run.map((m) => [m]);
             return (
-              <div key={run[0].id} className="flex flex-col gap-2">
+              <div key={runKeys.current.get(run[0].id) ?? run[0].id} className="flex flex-col gap-2">
                 {items.map((ms, i) => {
                   const m = ms[ms.length - 1];
                   const shared = {
@@ -884,7 +905,9 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
   // Draft and Edit Text each ask what you want first, in a dialog, so it is clear what they will do.
   const [asking, setAsking] = useState<"draft" | "edit" | null>(null);
   const [change, setChange] = useState("");
-  const draftLabel = draft ? "Redraft" : thread.lastFromMe ? "Draft Follow-Up" : "Draft";
+  // The ask dialog and its note belong to one conversation; they must not follow you to the next.
+  useEffect(() => { setAsking(null); setChange(""); }, [thread.id]);
+  const draftLabel = draft ? "New Draft" : thread.lastFromMe ? "Draft Follow-Up" : "Draft";
   const startDraft = () => {
     setAsking(null);
     ask(said ? "custom" : "default", said || undefined, draft?.decision);
@@ -940,19 +963,23 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
         {closed && <InstagramReplyNotice />}
         {!draft && !busy && <GuidedChoices thread={thread} msgs={msgs} disabled={busy} onPick={(decision) => ask("default", undefined, decision)} />}
         {!recorder && (
-          // Each button says what it will do in a tooltip, and Draft and Edit Text ask what you want in a dialog first.
+          // Draft writes a whole new reply and replaces the box. Fix Typos and Grammar and Edit Text work on what is
+          // already there. Tooltips are one short line; Draft, discard, attach and voice notes have none (their labels and icons say enough).
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <Hint text={draft ? "Writes a new version of this draft that replaces it. Undo brings the old one back." : thread.lastFromMe ? "Writes a follow-up to the message you sent last, in your voice. Nothing is sent." : "Writes a reply in your voice from this conversation. You choose what it should say first. Nothing is sent."}>
-              <Button type="button" variant="secondary" disabled={busy} onClick={() => setAsking("draft")}>{draftLabel}</Button>
-            </Hint>
+            <Button type="button" variant="secondary" disabled={busy} onClick={() => setAsking("draft")}>{draftLabel}</Button>
+            {editable && text.trim() && (
+              <Hint text="Fixes typos, keeps your words">
+                <Button type="button" variant="secondary" disabled={busy} onClick={() => ask("edit", undefined, undefined, text)}>Fix Typos and Grammar</Button>
+              </Hint>
+            )}
             {editable && (
-              <Hint text="Fixes spelling and wording in what you wrote, or changes it the way you ask, keeping your meaning. Nothing is sent.">
+              <Hint text="Changes your text as you ask">
                 <Button type="button" variant="secondary" disabled={busy} onClick={() => setAsking("edit")}>Edit Text</Button>
               </Hint>
             )}
             {text.trim() && (
               <DropdownMenu>
-                <Hint text="Rewrites your text to be shorter, more formal or more casual.">
+                <Hint text="Shorter, formal or casual">
                   <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Adjust <ChevronDown /></Button></DropdownMenuTrigger>
                 </Hint>
                 <DropdownMenuContent align="start">
@@ -962,8 +989,8 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {undoable && <Hint text="Puts back what was in the box before the last draft."><Button type="button" variant="secondary" onClick={undo}>Undo</Button></Hint>}
-            {draft && <Hint text="Removes this draft and empties the box."><Button type="button" variant="ghost" size="icon" className="size-8" aria-label="Discard Draft" disabled={busy} onClick={() => { beforeAsk.delete(thread.id); typedText.delete(thread.id); onDiscardDraft(); setText(""); }}><X /></Button></Hint>}
+            {undoable && <Hint text="Brings back the earlier text"><Button type="button" variant="secondary" onClick={undo}>Undo</Button></Hint>}
+            {draft && <Button type="button" variant="ghost" size="icon" className="size-8" aria-label="Discard Draft" disabled={busy} onClick={() => { beforeAsk.delete(thread.id); typedText.delete(thread.id); onDiscardDraft(); setText(""); }}><X /></Button>}
           </div>
         )}
         {/* While a draft is written the text box becomes a placeholder line. */}
@@ -994,6 +1021,7 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
             {recorder ? <div /> : (
               <div className="flex items-center gap-2">
                 <AttachButton files={files} />
+                <SpeakButton voice={speech} disabled={busy} />
                 <RecordButton files={files} voice={voice} />
                 <TemplatePicker workspaceId={thread.workspaceId} disabled={busy} onInsert={(t) => type(text.trim() ? `${text.trimEnd()}\n\n${t}` : t)} />
               </div>
@@ -1010,7 +1038,7 @@ function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend }: { th
             <DialogTitle>{draftLabel}</DialogTitle>
             <DialogDescription>
               {draft
-                ? "Say what to change, or leave it empty to try again. The new version replaces this draft."
+                ? "This writes a brand new draft and replaces the current one. Say what it should cover, or leave it empty to try again. Undo brings the old one back."
                 : "Say what the reply should cover, or leave it empty and Konva writes it from the conversation. Nothing is sent until you press Send."}
             </DialogDescription>
           </DialogHeader>

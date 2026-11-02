@@ -59,7 +59,9 @@ async function teamOf(userId: string): Promise<TeamReply | null> {
       versions: ring.all.map((k) => ({ version: k.version, key: b64(k.key) })),
       indexKey: b64(ring.indexRoot.key),
     };
-  } catch {
+  } catch (err) {
+    // Code only: the message could carry a row. The browser asks again on its next load.
+    console.warn("keys: team keys left out", { code: (err as { code?: string } | null)?.code ?? "UNKNOWN" });
     return null;
   }
 }

@@ -110,6 +110,8 @@ class FakeDb:
         self.files = {}  # path -> bytes, the brief-audio bucket
         self.deleted = []  # (table, filters)
         self.old = []  # briefs old enough to be pruned: {"id", "user_id"}
+        self.accounts = [{"id": "a1"}]  # connected accounts of the user
+        self.news = [{"id": "m1"}]  # messages since their last brief
 
     def upload(self, bucket, path, data, content_type="application/octet-stream"):
         assert bucket == AUDIO_BUCKET
@@ -134,6 +136,10 @@ class FakeDb:
             return old
         if table == "briefs":
             return [{"user_id": b["user_id"], "for_date": b["for_date"]} for b in self.briefs]
+        if table == "accounts":
+            return self.accounts
+        if table == "messages":
+            return self.news
         if table == "profiles":
             return [{"user_id": "u1", "timezone": "Africa/Johannesburg", "briefing_time": "07:00:00"}]
         if table == "threads":
@@ -142,6 +148,8 @@ class FakeDb:
         return []
 
     def first(self, table, params):
+        if table == "briefs" and params.get("select") == "created_at":
+            return None
         if table == "briefs":
             return {"script": self.briefs[0]["script"]}
         return {"display_name": "Matthew", "timezone": "Africa/Johannesburg", "brief_voice": "Sulafat"}
@@ -168,6 +176,11 @@ class FakeDb:
 
 
 class FakeGemini:
+    blocked = False
+
+    def billing_blocked(self):
+        return self.blocked
+
     def __init__(self):
         self.prompts = []
 
@@ -232,6 +245,38 @@ class Lazy(unittest.TestCase):
         Brief(db, FakeGemini(), "m", "tts", "Kore")._sweep(datetime.now(timezone.utc))
         back = [(f, p) for f, p in db.updates if p.get("status") == "written"]
         self.assertEqual(back[0][0]["status"], "eq.speak_pending")
+
+
+class Gating(unittest.TestCase):
+    def test_a_daily_brief_is_not_made_for_someone_with_no_connected_account_or_no_news(self):
+        for kw in ({"accounts": []}, {"news": []}):
+            db, gemini = FakeDb(status=None), FakeGemini()
+            for k, v in kw.items():
+                setattr(db, k, v)
+            b = Brief(db, gemini, "m", "tts", "Kore")
+            self.assertEqual(b.run_once(), 0)
+            self.assertEqual((gemini.prompts, db.briefs), ([], []))
+            b.run_once()  # and not looked up again at once
+            self.assertTrue(b._quiet)
+
+    def test_a_quiet_user_is_checked_again_after_a_while(self):
+        from ai import brief as brief_module
+
+        db, gemini = FakeDb(status=None), FakeGemini()
+        db.news = []
+        b = Brief(db, gemini, "m", "tts", "Kore")
+        with mock.patch.object(brief_module.time, "monotonic", return_value=1000.0):
+            b.run_once()
+        db.news = [{"id": "m1"}]
+        with mock.patch.object(brief_module.time, "monotonic", return_value=1000.0 + brief_module.QUIET_RECHECK_S + 1):
+            self.assertEqual(b.run_once(), 1)
+
+    def test_nothing_is_claimed_or_requeued_while_billing_is_paused(self):
+        db, gemini = FakeDb(status="pending"), FakeGemini()
+        gemini.blocked = True
+        self.assertEqual(Brief(db, gemini, "m", "tts", "Kore").run_once(), 0)
+        self.assertEqual(db.briefs[0]["status"], "pending")
+        self.assertEqual(db.deleted, [])
 
 
 class Sweeping(unittest.TestCase):

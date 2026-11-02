@@ -8,7 +8,8 @@ import { loadAttachmentFiles, waitForAttachments } from "./outbox-attachments";
 import { chooseFrom, fromCandidates, outgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";
 import { identitiesMergedFromElsewhere } from "../contacts/merged-identities";
 import { FIELD } from "@messages/crypto/fields";
-import { open, openAddresses } from "../vault";
+import { open, openAddresses, openStrict } from "../vault";
+import { openOutgoingText } from "./outgoing-text";
 import { mayUseAccount, replyFor, type ReplyFor } from "./inbox";
 
 export type OutboxRow = Tables<"outbox">;
@@ -368,7 +369,10 @@ export async function composeOutgoing(
   keepBcc = false,
 ): Promise<Outgoing | { error: string }> {
   // What you wrote may be stored encrypted.
-  row = { ...row, body: (await open(row.user_id, FIELD.body, row.body)) ?? "", subject: await open(row.user_id, FIELD.subject, row.subject) };
+  // Strictly: a body that cannot be decrypted must fail the send, never go out blank.
+  const opened = await openOutgoingText(row, (v) => openStrict(row.user_id, FIELD.body, v), (v) => openStrict(row.user_id, FIELD.subject, v));
+  if (!opened) return { error: NOTHING_SENT };
+  row = opened;
   // The recipients are checked first: that needs nothing from the database.
   const recipients = outgoingRecipients(row, !!row.thread_id);
   if ("error" in recipients) return recipients;

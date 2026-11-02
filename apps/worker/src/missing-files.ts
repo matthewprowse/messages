@@ -9,7 +9,7 @@ import { MissingFiles } from "./ingest/attachment-files";
 import { errorCode, log } from "./log";
 import { fileRetryDelay } from "./polling";
 import { makeThumbnail, thumbPathFor } from "./photos/thumbnail";
-import { ATTACHMENTS_BUCKET, uploadObject } from "./storage";
+import { ATTACHMENTS_BUCKET, storageError, storageStatus, uploadObject } from "./storage";
 import { keysFor } from "./vault";
 
 // attachment_fetch_state is not in the generated types until they are regenerated after its migration.
@@ -114,7 +114,13 @@ const liveThumbDeps: ThumbDeps = {
   keys: keysFor,
   async download(path) {
     const { data, error } = await db.storage.from(ATTACHMENTS_BUCKET).download(path);
-    if (error || !data) return null;
+    if (error) {
+      // Only a file that is really not there gets NO_THUMB for good; any other failure throws, so the next pass retries it.
+      const status = storageStatus(error);
+      if (status === 400 || status === 404) return null;
+      throw storageError("read photo for thumbnail", error);
+    }
+    if (!data) return null;
     return new Uint8Array(await data.arrayBuffer());
   },
   upload: (path, bytes) => uploadObject(ATTACHMENTS_BUCKET, path, bytes, "application/octet-stream"),

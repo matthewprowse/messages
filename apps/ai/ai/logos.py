@@ -27,6 +27,7 @@ from typing import Any
 
 from . import log
 from .gemini import Gemini, GeminiError, Usage, UsageContext
+from .retry import billing_paused
 from .supabase import Supabase
 
 PER_RUN = 8
@@ -274,7 +275,7 @@ class Logos:
                 done += 1
             except GeminiError as err:
                 log.warn("logo step failed", step=row["status"], status=err.status)
-                self._failed(row, paused="budget_" in str(err))
+                self._failed(row, paused="budget_" in str(err) or billing_paused(err))
             except Exception as err:
                 log.error("logo step failed", step=row["status"], code=log.code_of(err))
                 self._failed(row)

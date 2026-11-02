@@ -6,6 +6,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { clearSignedUrls } from "./signed-urls";
 
 interface AuthState {
   /** undefined while the stored session is being checked, null when signed out. */
@@ -20,7 +21,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // Only fills the first value: an auth event that lands first is newer and wins.
     supabase.auth.getSession().then(({ data }) => setSession((s) => (s === undefined ? data.session : s)));
-    const { data } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    const { data } = supabase.auth.onAuthStateChange((_event, next) => {
+      if (!next) clearSignedUrls(); // also when the session ends elsewhere (another tab, an expired refresh)
+      setSession(next);
+    });
     return () => data.subscription.unsubscribe();
   }, []);
 
@@ -42,5 +46,6 @@ export function useIsOwner() {
 }
 
 export async function signOut() {
+  clearSignedUrls();
   await supabase.auth.signOut();
 }

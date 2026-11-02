@@ -5,9 +5,8 @@
 // Stopping adds the recording to the reply's files, to listen to or remove before sending.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AudioLines, Mic } from "lucide-react";
+import { Mic, Voicemail } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { clock } from "@/components/media-player";
 import type { OutboxFiles } from "@/components/outbox-attachments";
 
@@ -119,7 +118,7 @@ export function useVoiceRecorder(files: Pick<OutboxFiles, "addVoiceNote" | "noti
 export function SpeakButton({ voice, disabled }: { voice: VoiceRecorder; disabled?: boolean }) {
   return (
     <Button type="button" variant="secondary" size="icon" aria-label="Say What To Say" title="Say What To Say" disabled={disabled || voice.recording} onClick={voice.start}>
-      <AudioLines />
+      <Mic />
     </Button>
   );
 }
@@ -128,21 +127,15 @@ export function SpeakButton({ voice, disabled }: { voice: VoiceRecorder; disable
 export function RecordButton({ files, voice }: { files: OutboxFiles; voice: VoiceRecorder }) {
   if (files.provider !== "whatsapp") return null;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Record Voice Note"
-          disabled={files.disabled || files.uploading || voice.recording}
-          onClick={voice.start}
-        >
-          <Mic />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-64 text-balance">Record a voice note to send as your reply.</TooltipContent>
-    </Tooltip>
+    <Button
+      type="button"
+      variant="ghost"
+      aria-label="Record Voice Note"
+      disabled={files.disabled || files.uploading || voice.recording}
+      onClick={voice.start}
+    >
+      <Voicemail /> Voice Note
+    </Button>
   );
 }
 

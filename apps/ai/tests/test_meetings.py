@@ -108,6 +108,11 @@ class FakeGemini:
         self.caches = []
         self.caches_deleted = []
 
+    blocked = False
+
+    def billing_blocked(self):
+        return self.blocked
+
     @contextmanager
     def hold(self, usage, estimate, strict=True):
         if self.refuse:
@@ -455,6 +460,45 @@ class Summarising(unittest.TestCase):
         gemini = FakeGemini([turns(("Sarah", 1, "Hello.")), {"summary": "A short hello.", "action_items": []}])
         self.assertEqual(Meetings(db, gemini, "model", FakeVault()).run_once(), 2)
         self.assertEqual(db.meetings[0]["status"], "summarised")
+
+    def test_a_recording_that_breaks_with_an_unexpected_error_is_a_try_and_does_not_block_summaries(self):
+        db = FakeDb([waiting(), transcribed(id="m2")])
+
+        class Broken(FakeVault):
+            def seal(self, user_id, field, value):
+                if field == TRANSCRIPT:
+                    raise KeyError("no key")
+                return super().seal(user_id, field, value)
+
+        job = Meetings(db, FakeGemini([turns(("Sarah", 1, "Hello.")), {"summary": "Short.", "action_items": []}]), "model", Broken())
+        self.assertEqual(job.run_once(), 1)  # the summary got through
+        self.assertEqual(job._tries[MEETING][0], 1)
+        self.assertEqual([m["status"] for m in db.meetings], ["waiting", "summarised"])
+
+    def test_a_failing_step_does_not_stop_the_other_in_run_once(self):
+        job = Meetings(FakeDb([transcribed()]), FakeGemini([{"summary": "Short.", "action_items": []}]), "model", FakeVault())
+        with mock.patch.object(job, "transcribe_once", side_effect=RuntimeError("boom")):
+            self.assertEqual(job.run_once(), 1)
+
+    def test_a_recording_that_cannot_be_opened_is_tried_again_not_failed_at_once(self):
+        class NoKey(FakeVault):
+            def open_bytes(self, user_id, field, data):
+                return None
+
+        db = FakeDb([waiting(provider_meta={"recording": {"storage_path": PATH, "mime_type": "audio/mp4", "sealed": True}})])
+        job = Meetings(db, FakeGemini(), "model", NoKey())
+        job.transcribe_once()
+        self.assertEqual((db.meetings[0]["status"], job._tries[MEETING][0]), ("waiting", 1))
+
+    def test_a_paused_billing_downloads_and_uploads_nothing_and_is_not_a_try(self):
+        db = FakeDb([waiting()])
+        gemini = FakeGemini()
+        gemini.blocked = True
+        db.download = mock.Mock(side_effect=AssertionError("downloaded"))
+        job = Meetings(db, gemini, "model", FakeVault())
+        job.transcribe_once()
+        self.assertEqual((gemini.uploads, job._tries[MEETING][0], db.meetings[0]["status"]), ([], 0, "waiting"))
+        self.assertEqual(job.waiting(), [MEETING])
 
 
 class Upload(unittest.TestCase):

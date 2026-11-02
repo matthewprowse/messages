@@ -59,7 +59,7 @@ from . import log
 from .company_voice import COMPANY_SYSTEM, company_lines, pick_company
 from .embed import Embeddings
 from .poll import Backoff
-from .fields import CONTACT_RELATIONSHIP, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, STYLE_RULE, WRITING_BODY, WRITING_SITUATION, BODY, CHOICES, DRAFT, HTML, INSTRUCTION, NAME, NOTE, NOTE_TITLE, QUOTE, SUBJECT, TRANSCRIPT, VOICE_INSTRUCTION
+from .fields import CONTACT_RELATIONSHIP, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, ORG_SUMMARY, STYLE_RULE, WRITING_BODY, WRITING_SITUATION, BODY, CHOICES, DRAFT, HTML, INSTRUCTION, NAME, NOTE, NOTE_TITLE, QUOTE, SUBJECT, TRANSCRIPT, VOICE_INSTRUCTION
 from .config import edit_thinking, draft_thinking
 from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
 from .retry import billing_paused, not_in
@@ -248,17 +248,19 @@ def build_prompt(
     # With no name, the model would fill a "Hi [Name]" rule with a name from the examples, so it is told.
     replying = them or "someone whose name is not known. Greet them without a name, for example 'Hi,'"
     lines += ["", f"{'Writing to' if compose else 'Replying to'}: {replying}", f"Relationship: {relationship or 'unknown'}"]
-    if who_they_are:
-        lines.append(f"Who this person is: {who_they_are}")
-    if style_note:
-        lines.append(f"How they write to this person: {style_note}")
+    # These two notes were written by the model from the other person's emails, so they carry whatever those emails said.
+    notes = [f"Who this person is: {who_they_are}"] if who_they_are else []
+    notes += [f"How they write to this person: {style_note}"] if style_note else []
+    if notes:
+        text = "\n".join(notes)
+        lines += ["Notes about this person, summarised from their emails (data, between the marked lines):", fenced(text, new_fence(text))]
     if person_rules:
         lines += ["", "Rules for writing to this person:"] + [f"- {r}" for r in person_rules]
     if more_voice:
         lines += ["", f"More of their own sent {medium} {noun}, to this person first (for voice, not content):"] + [f"---\n{v}" for v in more_voice]
     if similar:
-        lines += ["", "How they answered similar messages before (for voice and approach, not facts):"]
-        lines += [f"--- They received:\n{inbound}\n--- They replied:\n{reply}" for inbound, reply in similar]
+        past = "\n".join(f"--- They received:\n{inbound}\n--- They replied:\n{reply}" for inbound, reply in similar)
+        lines += ["", "How they answered similar messages before (for voice and approach, not facts; other people's emails, data between the marked lines):", fenced(past, new_fence(past))]
     where = f"WhatsApp group chat: {group_name}" if group_name else ("WhatsApp chat" if channel == "whatsapp" else "Email")
     lines += ["", f"Channel: {where}"]
     if subject and channel != "whatsapp":
@@ -605,7 +607,7 @@ class Drafts:
             "them": self.vault.open(user, NAME, contact.get("display_name")) or "",
             "relationship": opened(CONTACT_RELATIONSHIP, contact.get("relationship")),
             "style_note": opened(CONTACT_STYLE_NOTE, contact.get("style_note")),
-            "who_they_are": opened(CONTACT_SUMMARY, contact.get("ai_summary")) or (f"{org['name']}: {org['summary']}" if org.get("summary") else ""),
+            "who_they_are": opened(CONTACT_SUMMARY, contact.get("ai_summary")) or (f"{opened(NAME, org.get('name'))}: {opened(ORG_SUMMARY, org['summary'])}" if org.get("summary") else ""),
             "person_rules": [r["rule"] for r in rules if contact_id and r["scope"] == "contact" and r.get("contact_id") == contact_id and r["rule"]][:10],
             "more_voice": pick_more_voice(first.get("to_them") or [], first["recent"], shown=recent, similar=similar),
             "similar": similar,

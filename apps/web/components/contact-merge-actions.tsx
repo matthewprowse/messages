@@ -285,8 +285,13 @@ export function MergedAutomatically({ contact }: { contact: ContactDetail }) {
                 disabled={busy !== null}
                 onClick={async () => {
                   setBusy(m.id);
-                  if (await undoMerge(m.id)) setMerges((list) => list.filter((x) => x.id !== m.id));
-                  setBusy(null);
+                  try {
+                    if (await undoMerge(m.id)) setMerges((list) => list.filter((x) => x.id !== m.id));
+                  } catch {
+                    toast("Could not undo this merge. Try again.");
+                  } finally {
+                    setBusy(null);
+                  }
                 }}
               >
                 {busy === m.id ? "Undoing" : "Undo"}

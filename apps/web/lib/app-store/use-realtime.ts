@@ -6,12 +6,15 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
 import type { Tables } from "@messages/db";
-import type { Message, Thread } from "../types";
+import type { Contact, Message, Thread } from "../types";
 import { supabase } from "../supabase";
-import {loadChanges, loadEverything, loadMessage, loadMessageAttachments, loadMessagesAfter, loadThread, loadThreadMessages, mapDraft, mapAccount,
+import {loadChanges, loadEverything, loadMessage, loadMessageAttachments, loadMessagesAfter, loadTasks, loadThread, loadThreadMessages, mapDraft, mapAccount,
   mapMessage, mapThread, mapUnsubscribe, type MessageRow, 
 } from "../data";
 import { changesSince, resyncPlan } from "./resync-plan";
+import { catchUpSet } from "./recent-threads";
+import { runPooled } from "./run-pooled";
+import { createUpdateFilter } from "./update-filter";
 import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "../open-rows";
 import { mapTask } from "../tasks";
 import { track } from "../analytics";
@@ -20,6 +23,9 @@ import { DraftPhase } from "./context";
 import type { Action, State } from "./reducer";
 
 
+// The thread columns that are sealed text. A payload leaves out a large unchanged one, which must not read as blank.
+const THREAD_TEXT = ["subject", "last_message_preview", "summary", "share_match"] as const;
+
 export interface RealtimeDeps {
   userId: string | null;
   schedulePreDraft: (threadId: string) => void;
@@ -27,6 +33,12 @@ export interface RealtimeDeps {
   stateRef: React.MutableRefObject<State>;
   loadedRef: React.MutableRefObject<Set<string>>;
   loadingRef: React.MutableRefObject<Map<string, Promise<void>>>;
+  /** Conversations with messages held, least recently used first (see recent-threads.ts). */
+  heldRef: React.MutableRefObject<string[]>;
+  /** The conversation on screen, whose messages are always caught up. */
+  openRef: React.MutableRefObject<string | null>;
+  /** Drops the held messages of conversations that were not caught up, so opening one loads it fresh. */
+  evictHeld: (ids: string[]) => void;
   moreRef: React.MutableRefObject<Map<string, boolean>>;
   pendingRef: React.MutableRefObject<PendingSend[]>;
   composedRef: React.MutableRefObject<Record<string, ComposeStatus | undefined>>;
@@ -40,7 +52,7 @@ export interface RealtimeDeps {
 }
 
 /** Subscribes to the user's rows while signed in and keeps the store current. */
-export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending }: RealtimeDeps) {
+export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, heldRef, openRef, evictHeld, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending }: RealtimeDeps) {
   // Live updates: the sync worker writes to Supabase and changes arrive here within a second or so.
   // Rows are built from the payload, so a change costs no extra request unless the payload is cut short.
   useEffect(() => {
@@ -75,11 +87,18 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       lastTick = now;
     }, 10_000);
 
-    /** Messages newer than the newest one held in each open conversation, or its latest page when that cannot be said. */
+    /**
+     * Messages newer than the newest one held in the recently used conversations, or the latest page when that cannot be
+     * said. Older held conversations are dropped instead (they load fresh when opened), so a long session does not
+     * make a reconnect fetch dozens of them.
+     */
     async function catchUpMessages(): Promise<Set<string>> {
       const before = new Set(Object.values(stateRef.current.byThread).flatMap((list) => list.map((m) => m.id)));
       const sentIn = new Set<string>();
-      await Promise.all([...loadedRef.current].map(async (threadId) => {
+      const wanted = new Set(catchUpSet(heldRef.current, openRef.current).filter((id) => loadedRef.current.has(id)));
+      const stale = [...loadedRef.current].filter((id) => !wanted.has(id));
+      if (stale.length) evictHeld(stale);
+      await runPooled([...wanted].map((threadId) => async () => {
         const held = stateRef.current.byThread[threadId];
         const newest = held?.[held.length - 1];
         const fresh = newest ? await loadMessagesAfter(threadId, newest).catch(() => null) : null;
@@ -87,7 +106,7 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         if (!messages) return;
         rawDispatch({ type: "mergeMessages", threadId, messages });
         if (messages.some((m) => m.from === "me" && !before.has(m.id))) sentIn.add(threadId);
-      }));
+      }), 4);
       return sentIn;
     }
 
@@ -96,18 +115,30 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
     async function resync(downMs: number, since: string) {
       const plan = resyncPlan(downMs);
       if (plan === "skip") return;
+      await catchUp(plan, since);
+    }
+    /** Brings the store up to date with the database. The rows are applied on top of the state as it is when they land, not as it was when they were asked for. */
+    async function catchUp(plan: "delta" | "full", since: string) {
       let sentIn: Set<string>;
       try {
+        // What the state was when the fetch began, so edits made while it runs are told apart from what the fetch brings.
+        const base = stateRef.current;
         let delta = false;
         if (plan === "delta") {
           try {
-            rawDispatch({ type: "loaded", data: await loadChanges(since, stateRef.current.threads) });
+            const data = await loadChanges(since, base.threads);
+            if (stopped) return;
+            rawDispatch({ type: "merged", base, data });
             delta = true;
           } catch {
             delta = false;
           }
         }
-        if (!delta) rawDispatch({ type: "loaded", data: await loadEverything() });
+        if (!delta) {
+          const data = await loadEverything();
+          if (stopped) return;
+          rawDispatch({ type: "merged", base, data });
+        }
         sentIn = await catchUpMessages();
       } catch {
         return;
@@ -125,6 +156,7 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
     // together, a row changed twice in that moment once, so a burst costs one pass instead of one per change.
     // Within a pass, conversations are applied before their messages, and those before everything else.
     const BATCH_MS = 250;
+    const CONCURRENCY = 6; // requests at once while applying a batch
     const queue = new Map<string, { rank: number; run: () => Promise<void> | void }>();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let flushing: Promise<void> = Promise.resolve();
@@ -134,8 +166,22 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       const batch = [...queue.values()];
       queue.clear();
       for (let rank = 0; rank <= 3 && !stopped; rank++) {
-        await Promise.all(batch.filter((c) => c.rank === rank).map((c) => Promise.resolve().then(c.run).catch(() => undefined)));
+        // A first sync can queue a thousand changes: a few run at a time, so the browser and database are not flooded.
+        await runPooled(batch.filter((c) => c.rank === rank).map((c) => () => c.run()), CONCURRENCY);
+        if (rank === 0) applyThreads();
       }
+    }
+    // Conversations that arrived in this batch, applied in one dispatch instead of one render each.
+    const threadBuf = new Map<string, Thread>();
+    const contactBuf = new Map<string, Contact>();
+    function applyThreads() {
+      if (threadBuf.size === 0 || stopped) return;
+      const threads = [...threadBuf.values()];
+      const contacts = [...contactBuf.values()];
+      threadBuf.clear();
+      contactBuf.clear();
+      rawDispatch({ type: "upsertThreads", threads, contacts });
+      for (const t of threads) schedulePreDraft(t.id);
     }
     function queued(key: string, rank: number, run: () => Promise<void> | void) {
       queue.set(key, { rank, run }); // a repeat of the same key keeps its place and carries the newest row
@@ -147,8 +193,18 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
     // When your newest sent message arrived in each conversation, to settle a placeholder whose outbox
     // update lands in the same batch as the imported message.
     const sentArrived = new Map<string, number>();
+    const updates = createUpdateFilter();
 
     let dropped = false;
+    // Rows changed between the initial load's queries and the first SUBSCRIBED were announced to no one: once, a light
+    // catch-up reaches back to when this effect started. It waits for the load, as the load's rows would otherwise meet a half empty list.
+    let subscribedBefore = false;
+    const startedAt = Date.now();
+    function gapCatchUp(tries = 0) {
+      if (stopped) return;
+      if (stateRef.current.loading && tries < 60) { setTimeout(() => gapCatchUp(tries + 1), 500); return; }
+      if (!stateRef.current.loading) void catchUp("delta", changesSince(startedAt));
+    }
     const channel = supabase
       .channel(`inbox-${userId}`)
       // Realtime cannot filter deletions by user, so every deletion by anyone arrives: only ids held here are acted on.
@@ -159,24 +215,25 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       .on("postgres_changes", { event: "*", schema: "public", table: "threads", filter: mine }, (payload) => {
         if (payload.eventType === "DELETE") return;
         const changed = payload.new as Tables<"threads">;
+        // Large columns left out of the payload (TOAST) or a payload cut short would blank the summary and preview, so the row is read again.
+        const cut = !!payload.errors?.length || THREAD_TEXT.some((k) => changed[k] === undefined);
         queued(`thread:${changed.id}`, 0, async () => {
-          const row = (await openThreads([changed]))[0];
-          const existing = threadMapRef.current.get(row.id);
-          if (existing) {
-            rawDispatch({ type: "upsertThread", thread: mapThread(row, existing.participantIds, existing.provider) });
-            schedulePreDraft(row.id);
+          const existing = threadMapRef.current.get(changed.id);
+          if (existing && !cut) {
+            const row = (await openThreads([changed]))[0];
+            threadBuf.set(row.id, mapThread(row, existing.participantIds, existing.provider));
             return;
           }
-          if (row.status === "trash") return; // deleted conversations are not shown
-          const loaded = await loadThread(row.id).catch(() => null);
+          if (!existing && changed.status === "trash") return; // deleted conversations are not shown
+          const loaded = await loadThread(changed.id).catch(() => null);
           if (!loaded) return;
-          rawDispatch({ type: "upsertContacts", contacts: loaded.contacts });
-          rawDispatch({ type: "upsertThread", thread: loaded.thread });
-          schedulePreDraft(row.id);
+          for (const c of loaded.contacts) contactBuf.set(c.id, c);
+          if (existing || loaded.thread.status !== "trash") threadBuf.set(loaded.thread.id, loaded.thread);
         });
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: mine }, (payload) => {
         const row = payload.new as Tables<"messages">;
+        updates.changed(row.id, row); // what a later update is compared with
         queued(`message:${row.id}`, 1, async () => {
           // Your sent reply has been imported, so its placeholder can go, in the same render as the message.
           const dropSent = () => {
@@ -195,12 +252,24 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
           dropSent();
         });
       })
-      // Edits, deletions and reactions change a stored message. Read state changes arrive here too and change nothing shown.
+      // Edits, deletions and reactions change a stored message. Read state changes arrive here too and change nothing shown:
+      // those, and updates to conversations that are not held, stop before anything is decrypted.
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: mine }, (payload) => {
         const changed = payload.new as Partial<Tables<"messages">> & { id: string; thread_id: string };
+        if (!loadedRef.current.has(changed.thread_id)) return;
+        const cut = !!payload.errors?.length;
+        if (!cut && !updates.changed(changed.id, changed)) return;
         queued(`message-edit:${changed.id}`, 2, async () => {
-          const [row] = await openMessages([changed]);
-          if (loadedRef.current.has(row.thread_id)) rawDispatch({ type: "patchMessage", threadId: row.thread_id, id: row.id, row });
+          if (!loadedRef.current.has(changed.thread_id)) return;
+          if (cut) {
+            // The payload was cut short, so the row is read whole rather than patched from a partial one.
+            const message = await loadMessage(changed.id);
+            if (message) rawDispatch({ type: "replaceMessage", message });
+            return;
+          }
+          // Only the columns a patch reads are opened.
+          const [row] = await openMessages([{ id: changed.id, thread_id: changed.thread_id, provider_meta: changed.provider_meta, body_text: changed.body_text, transcript: changed.transcript }]);
+          rawDispatch({ type: "patchMessage", threadId: changed.thread_id, id: changed.id, row });
         });
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "drafts", filter: mine }, (payload) => {
@@ -290,6 +359,8 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
+          if (!subscribedBefore) gapCatchUp();
+          subscribedBefore = true;
           if (dropped) void resync(Date.now() - aliveAt, changesSince(aliveAt));
           dropped = false;
           aliveAt = Date.now();
@@ -298,6 +369,17 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         }
       });
 
+    let taskDropped = false, taskJoined = false, taskErrors = 0;
+    /** The tasks again, applied on top of the ones held (a task made here and not yet stored stays). */
+    async function refreshTasks() {
+      const base = stateRef.current.tasks;
+      try {
+        const tasks = await loadTasks();
+        if (!stopped) rawDispatch({ type: "tasksLoaded", base, tasks });
+      } catch {
+        // the next reconnect tries again
+      }
+    }
     // Tasks the worker stores or changes, on their own channel, so the inbox keeps working if this table is not published for Realtime. A resync reloads them too.
     const taskChannel = supabase
       .channel(`tasks-${userId}`)
@@ -313,7 +395,19 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
           rawDispatch({ type: "upsertTask", task: mapTask(row) });
         });
       })
-      .subscribe((status) => { if (status === "CHANNEL_ERROR") void supabase.removeChannel(taskChannel); });
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          // Tasks changed while the channel was down (or before it first joined) were never announced: read them again.
+          if (taskDropped) void refreshTasks();
+          taskDropped = false;
+          taskJoined = true;
+          taskErrors = 0;
+        } else {
+          taskDropped = true; // the client rejoins by itself
+          // A table that is not published for Realtime never joins: after a few tries it is given up on. One that joined before keeps rejoining.
+          if (status === "CHANNEL_ERROR" && !taskJoined && ++taskErrors >= 3) void supabase.removeChannel(taskChannel);
+        }
+      });
 
     return () => {
       stopped = true;

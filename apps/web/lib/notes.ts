@@ -99,10 +99,19 @@ export async function loadNoteBodies(ids: string[]): Promise<Map<string, { body:
   return out;
 }
 
-export async function createNote(): Promise<Note> {
-  const { data, error } = await supabase.from("notes").insert({ excerpt: "" }).select(NOTE_COLUMNS).single();
-  if (error) throw error;
-  return { ...mapNote(data as NoteRow, false), unloaded: false };
+/**
+ * A new, empty note, handed back at once so it can open without waiting for the database. The id is made here;
+ * `saved` settles when the row exists, and anything that needs the row (a save, a file) waits for it.
+ */
+export function createNote(): { note: Note; saved: Promise<void> } {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const note: Note = { id, title: "", body: "", excerpt: "", pinned: false, useInDrafts: false, createdAt: now, updatedAt: now };
+  const saved = (async () => {
+    const { error } = await supabase.from("notes").insert({ id, excerpt: "" });
+    if (error) throw error;
+  })();
+  return { note, saved };
 }
 
 /** Saves the title, text and excerpt, all sealed, resolving to the time the database stamped. */
@@ -137,6 +146,25 @@ export async function deleteNote(id: string): Promise<void> {
   const { error } = await supabase.from("notes").delete().eq("id", id);
   if (error) throw error;
   if (paths.length) await supabase.storage.from(BUCKET).remove(paths).catch(() => {});
+}
+
+// Files asked for ahead of opening the note (when its row is pointed at), taken by the note when it opens.
+const warmFiles = new Map<string, Promise<NoteFile[]>>();
+
+/** Starts loading a note's files so they are there when the note opens. */
+export function prefetchNoteFiles(noteId: string): void {
+  if (warmFiles.has(noteId)) return;
+  const p = loadNoteFiles(noteId);
+  warmFiles.set(noteId, p);
+  p.catch(() => warmFiles.delete(noteId));
+  setTimeout(() => warmFiles.delete(noteId), 60_000);
+}
+
+/** A note's files: the ones prefetched, once, or loaded now. */
+export function takeNoteFiles(noteId: string): Promise<NoteFile[]> {
+  const warm = warmFiles.get(noteId);
+  warmFiles.delete(noteId);
+  return warm ?? loadNoteFiles(noteId);
 }
 
 export async function loadNoteFiles(noteId: string): Promise<NoteFile[]> {

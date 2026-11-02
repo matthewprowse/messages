@@ -48,12 +48,26 @@ test("start holds the lease, renews it and releases it", async () => {
   assert.equal(lost, 0);
 });
 
-test("start reports a lease held by someone else", async () => {
-  const { db, calls } = fakeDb([{ data: false, error: null }]);
-  const lease = new Lease({ db, name: "shard-0", holder: "me", log: logs().log, onLost: () => assert.fail("not held") });
+test("start reports a lease another worker keeps renewing for a whole lifetime", async () => {
+  const taken = Array.from({ length: 40 }, () => ({ data: false, error: null }));
+  const { db, calls } = fakeDb(taken);
+  let t = 0;
+  const lease = new Lease({ db, name: "shard-0", holder: "me", log: logs().log, onLost: () => assert.fail("not held"), now: () => t, sleep: async (ms) => void (t += ms) });
   assert.equal(await lease.start(), "taken");
+  assert.ok(t >= 90_000, "waited out a full lifetime first");
   await lease.release();
   assert.equal(calls.some((c) => c.fn === "release_worker_lease"), false);
+});
+
+test("start waits for a lease left by a killed worker to run out, then holds it", async () => {
+  const { db, calls } = fakeDb([{ data: false, error: null }, { data: false, error: null }, { data: true, error: null }]);
+  let t = 0;
+  const { seen, log } = logs();
+  const lease = new Lease({ db, name: "shard-0", holder: "me", log, onLost: () => assert.fail("held"), now: () => t, sleep: async (ms) => void (t += ms) });
+  assert.equal(await lease.start(), "held");
+  assert.equal(calls.filter((c) => c.fn === "acquire_worker_lease").length, 3);
+  assert.deepEqual(seen, ["w:shard lease is held, waiting for it to expire"]);
+  await lease.release();
 });
 
 test("a database error at startup rejects", async () => {
@@ -112,5 +126,26 @@ test("a renewal that recovers keeps the lease", async () => {
   t += 5_000;
   await lease.renew();
   assert.equal(lost, 0);
+  await lease.release();
+});
+
+test("a hung call counts as a failed attempt", async () => {
+  const db: LeaseDb = { rpc: () => new Promise(() => undefined) };
+  assert.equal(await acquire(db, "a", "h", 90, 20), "error");
+});
+
+test("a hung renewal is retried and then loses the lease before it expires", async () => {
+  let t = 0;
+  let lost = 0;
+  const db: LeaseDb = { rpc: () => new Promise(() => undefined) };
+  const { log } = logs();
+  const lease = new Lease({ db: { rpc: (fn, a) => (fn === "acquire_worker_lease" && t === 0 ? Promise.resolve({ data: true, error: null }) : db.rpc(fn, a)) }, name: "a", holder: "h", log, onLost: () => void lost++, now: () => t, timeoutMs: 20 });
+  assert.equal(await lease.start(), "held");
+  t = 1; // the first renewal hangs
+  await lease.renew();
+  assert.equal(lost, 0);
+  t = 90_000;
+  await lease.renew();
+  assert.equal(lost, 1);
   await lease.release();
 });

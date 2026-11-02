@@ -181,7 +181,7 @@ class Queue(Db):
     def select(self, table, params):
         if table == "message_embeddings" and params.get("embedding_data") == "is.null":
             self.calls.append(("queue", table))
-            return [{"message_id": "m1", "user_id": "u", "sent_at": "t", "messages": {"account_id": "a", "subject": "Hi", "body_text": "x", "body_html": None}}]
+            return [{"message_id": "m1", "user_id": "u", "sent_at": "t", "messages": {"account_id": "a", "thread_id": "t7", "subject": "Hi", "body_text": "x", "body_html": None}}]
         return super().select(table, params)
 
 
@@ -196,12 +196,34 @@ class EmbeddingStorage(unittest.TestCase):
         self.assertEqual(list(open_vector(KEYS, row["embedding_data"]))[:2], [1.0, 0.0])
         self.assertEqual(store.stored("u", "m1")[:2], [1.0, 0.0])
 
-    def test_saving_an_embedding_drops_that_users_cached_vectors(self):
+    def test_saving_an_embedding_adds_to_the_cache_instead_of_dropping_it(self):
+        db = Queue()
+        store = Embeddings(db, Gem(), "e", Vault(db, MASTER_B64, True))
+        store.index._items("u")
+        loads = len([c for c in db.calls if c[0] == "select"])
+        forgotten = []
+        store.index.forget = forgotten.append
+        store.run_once()
+        self.assertEqual(forgotten, [])
+        ids = [m for m, _, _ in store.index._items("u")]
+        self.assertEqual(ids[0], "m1")  # newest first
+        self.assertEqual([t for m, t, _ in store.index._items("u") if m == "m1"], ["t7"])
+        self.assertEqual(len([c for c in db.calls if c[0] == "select" and c[1] == "message_embeddings"]), loads)  # no second load
+
+    def test_add_replaces_an_entry_for_the_same_message_and_ignores_an_uncached_user(self):
+        db = Db([stored("a", "t1", vec(1, 0))])
+        index = SimilarIndex(db, Vault(db, MASTER_B64, True))
+        index.add("u", [("z", "t2", vec(0, 1))])  # not cached: nothing to update
+        self.assertEqual(len(index._items("u")), 1)
+        index.add("u", [("a", "t1", vec(0, 1)), ("b", "t3", vec(1, 0))])
+        self.assertEqual([m for m, _, _ in index._items("u")], ["a", "b"])
+
+    def test_a_message_without_its_conversation_drops_the_cache(self):
         db = Queue()
         store = Embeddings(db, Gem(), "e", Vault(db, MASTER_B64, True))
         forgotten = []
         store.index.forget = forgotten.append
-        store.run_once()
+        store._save([{"id": "m9", "user_id": "u", "sent_at": "t"}], [[1.0] + [0.0] * 767])
         self.assertEqual(forgotten, ["u"])
 
     def test_a_user_without_a_key_is_not_embedded(self):

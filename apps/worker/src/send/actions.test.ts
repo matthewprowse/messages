@@ -1,4 +1,4 @@
-// Tests for send/actions.ts against a fake database client: the atomic claim, the throw safety net and recovery of 'working' rows.
+// Tests for send/actions.ts against a fake database client: the atomic claim, the throw safety net and the not-ready requeue.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -70,17 +70,10 @@ test("an apply that throws leaves the row failed, not working", async () => {
   assert.equal(typeof (settle.payload as { error: string }).error, "string");
 });
 
-test("recovery queues working rows again, except ones this worker is still applying", async () => {
-  const queries = fake((q) => (q.op === "select" ? [{ id: "a1" }, { id: "a2" }] : []));
-  await actions.requeueWorking(new Date("2026-10-28T10:00:00Z"), new Set(["a2"]));
-  assert.deepEqual(queries[0].filters, [["eq", "status", "working"], ["lt", "created_at", "2026-10-28T10:00:00.000Z"]]);
-  assert.deepEqual(queries[1].payload, { status: "queued" });
-  assert.deepEqual(queries[1].filters, [["eq", "status", "working"], ["in", "id", ["a1"]]]);
-});
-
-test("recovery at startup has no age limit and writes nothing when no row is working", async () => {
-  const queries = fake(() => []);
-  await actions.requeueWorking();
-  assert.equal(queries.length, 1);
-  assert.deepEqual(queries[0].filters, [["eq", "status", "working"]]);
+test("a connector that is not ready puts the row back to queued without failing it", async () => {
+  const queries = fake(() => row);
+  await actions.applyClaimed("a1", async () => { throw new actions.NotReady(); });
+  const settle = queries.at(-1)!;
+  assert.deepEqual(settle.payload, { status: "queued" });
+  assert.deepEqual(settle.filters, [["eq", "id", "a1"], ["eq", "status", "working"]]);
 });

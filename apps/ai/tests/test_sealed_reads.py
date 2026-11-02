@@ -83,6 +83,9 @@ class Transcription(unittest.TestCase):
         sent = {}
 
         class Gemini:
+            def billing_blocked(self):
+                return False
+
             def json(self, *a, **k):
                 sent["audio"] = k["audio"]
                 return {"speech": True, "transcript": "hello", "language": "English"}
@@ -164,6 +167,9 @@ class Recordings(unittest.TestCase):
                 pass
 
         class Gemini:
+            def billing_blocked(s):
+                return False
+
             def hold(s, *a, **k):
                 return Hold()
 

@@ -66,3 +66,11 @@ test("a task tick is recorded as code words and flags, never its title", () => {
   const out = cleanProps({ action: "complete", provider: "google_tasks", overdue: true, timed: false, via: "calendar", title: "Send the offer to Sam" });
   assert.deepEqual(out, { action: "complete", provider: "google_tasks", overdue: true, timed: false, via: "calendar" });
 });
+
+test("dotted values (local parts, domains, file names) are dropped unless allow-listed", () => {
+  assert.equal(isWord("jane.doe"), false);
+  assert.equal(isWord("acme.co"), false);
+  assert.equal(wordOf("Jane.Doe"), undefined);
+  assert.deepEqual(cleanProps({ detail: "jane.doe", where: "acme.co", list: ["ok_one", "sam.lee"] }), { list: ["ok_one"] });
+  assert.equal(isWord("settings_accounts"), true);
+});

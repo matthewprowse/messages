@@ -56,7 +56,13 @@ export async function setAccountStatus(accountId: string, status: AccountStatus,
   if (before.data && before.data.status === status && (before.data.status_detail ?? null) === detail && !(status === "connected" && heartbeat.due(accountId))) return;
   const patch: Database["public"]["Tables"]["accounts"]["Update"] = { status, status_detail: detail };
   if (status === "connected") patch.last_synced_at = new Date().toISOString();
-  must(await db.from("accounts").update(patch).eq("id", accountId), "update account status");
+  try {
+    must(await db.from("accounts").update(patch).eq("id", accountId), "update account status");
+  } catch (err) {
+    // due() above counted this as a heartbeat made; a failed write must not hold the next one off.
+    heartbeat.forget(accountId);
+    throw err;
+  }
   if (status === "connected") heartbeat.wrote(accountId);
   const prev = before.data;
   if (!prev || prev.status === status) return;

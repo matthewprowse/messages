@@ -100,6 +100,8 @@ export function PdfViewer({ url, name }: { url: string; name: string }) {
   const [width, setWidth] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  // The last render's promise, settled either way: pdf.js refuses a second render on a canvas the first still holds.
+  const lastRender = useRef<Promise<unknown>>(Promise.resolve());
 
   useEffect(() => {
     let cancelled = false;
@@ -115,7 +117,7 @@ export function PdfViewer({ url, name }: { url: string; name: string }) {
         else setDoc(d);
       },
       (err) => {
-        console.error(err);
+        console.error(err instanceof Error ? err.message : "The PDF could not be opened.");
         if (!cancelled) setFailed(true);
       },
     );
@@ -140,10 +142,12 @@ export function PdfViewer({ url, name }: { url: string; name: string }) {
     let task: ReturnType<typeof renderPage> | null = null;
     (async () => {
       const p = await doc.getPage(page);
+      await lastRender.current;
       if (cancelled || !canvas.current) return;
       const cssWidth = Math.max(100, (width - 32) * zoom);
       setActual(cssWidth / p.getViewport({ scale: 1 }).width);
       task = renderPage(p, canvas.current, cssWidth);
+      lastRender.current = task.promise.catch(() => {});
       await task.promise;
     })().catch((err: unknown) => {
       if ((err as { name?: string })?.name !== "RenderingCancelledException") console.error(err);

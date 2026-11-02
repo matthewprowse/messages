@@ -66,7 +66,7 @@ function AttachmentsPage() {
     loadAttachments(showHidden).then(
       (next) => { if (!cancelled) { setFiles(next); setLoading(false); } },
       (err) => {
-        console.error(err);
+        console.error(err instanceof Error ? err.message : "Load attachments failed");
         if (!cancelled) { setFiles(false); setLoading(false); }
       },
     );

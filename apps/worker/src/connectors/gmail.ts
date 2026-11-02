@@ -20,7 +20,7 @@ import { isFailure } from "../ingest/batch-rpc";
 import { saveFilesQuietly } from "../ingest/attachment-files";
 import { BackoffMissingFiles } from "../missing-files";
 import { claimReady, composeOutgoing, linkNewEmails, linkThread, markFailed, settleSent, startedHere, type OutboxRow } from "../send/outbox";
-import { finishAction } from "../send/actions";
+import { finishAction, NotReady } from "../send/actions";
 import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe-flow";
 import { normAddresses } from "../send/from-address";
 import { GoogleApiError, signInRevoked, type GoogleClient } from "../google/client";
@@ -159,13 +159,13 @@ export class GmailConnector {
       must(await db.from("accounts").update({ send_addresses: stored }).eq("id", this.id), "save send addresses");
     }
     this.selfAddresses = new Set([...sendable, ...normAddresses(entries.map((e) => e.sendAsEmail))]);
-    this.backoff.reset();
     log.info("gmail connected", { account: this.id, addresses: this.selfAddresses.size });
 
     await setAccountStatus(this.id, "syncing");
     const state = await getSyncState(this.id, "history");
     this.historyId = state?.history_id ?? null;
     await this.queue.run(() => (this.historyId ? this.catchUp(this.historyId) : this.fullSync(profile.historyId)));
+    this.backoff.reset(); // only once the first sync worked: a sync that always fails must keep backing off
     await setAccountStatus(this.id, "connected");
     this.ready = true;
     this.background(() => this.saveMissingFiles());
@@ -628,7 +628,7 @@ export class GmailConnector {
   /** Applies a read, unread, archive, unarchive, delete, undelete, junk or not junk made in the app to the labels in Gmail. */
   async applyAction(row: Tables<"mail_actions">) {
     accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
-    if (!this.ready) return; // still connecting: the next poll retries it
+    if (!this.ready) throw new NotReady(); // still connecting: back to queued, the next poll retries it
     const run = async () => {
       const change = actionLabels(row.action);
       if (!change) throw Object.assign(new Error("unknown action"), { code: "UNKNOWN_ACTION" });

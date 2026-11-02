@@ -6,7 +6,7 @@ therefore runs here, over the user's own vectors opened in memory: cosine simila
 product because every vector is normalised (gemini.normalise). Only the most recent MAX_VECTORS embedded
 messages are searched, which is the mail drafts are written from anyway.
 
-A user's vectors are cached for CACHE_S (45 minutes, or until a new embedding is saved for them: forget) so drafts read them once, and at most
+A user's vectors are cached for CACHE_S (45 minutes; a new embedding is added to them: add, or they are dropped: forget) so drafts read them once, and at most
 MAX_USERS users are cached at a time. They are never logged or written anywhere. Once the nearest messages
 are known, public.reply_pairs (a plain lookup, no vector) returns each one with the reply the user sent."""
 
@@ -98,6 +98,20 @@ class SimilarIndex:
     def forget(self, user_id: str) -> None:
         with self._lock:
             self._cache.pop(user_id, None)
+
+    def add(self, user_id: str, items: list[tuple[str, str | None, Sequence[float]]]) -> None:
+        """Puts freshly embedded messages (id, thread id, vector) at the front of a user's cached vectors, so a new
+        embedding does not throw away the whole cache and cost a full re-read and re-open. Nothing happens when the
+        user is not cached: the next read loads everything anyway. A new list is stored, never the old one changed,
+        because a search may be iterating it."""
+        with self._lock:
+            hit = self._cache.get(user_id)
+            if not hit:
+                return
+            known = {mid for mid, _, _ in items}
+            fresh = [(mid, tid, unit(vec)) for mid, tid, vec in items]
+            kept = [it for it in hit[1] if it[0] not in known]
+            self._cache[user_id] = (hit[0], (fresh + kept)[: self.max_vectors])
 
     def replies(self, user_id: str, query: Sequence[float], exclude_thread: str | None, limit: int) -> list[dict[str, Any]]:
         """The same rows public.similar_replies used to return, closest first: incoming messages from other

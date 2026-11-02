@@ -6,6 +6,8 @@ import type { Account, Attachment, Contact, Draft, Message, Priority, Profile, R
 import {
   EMPTY_PROFILE, leadParticipant, mapAttachment, patchMessage, type Loaded, 
 } from "../data";
+import { mergeById, mergeLoaded } from "./merge-loaded";
+import { isTempTask } from "../tasks";
 
 export interface State {
   loading: boolean;
@@ -24,8 +26,16 @@ export interface State {
 
 export type Action =
   | { type: "loaded"; data: Loaded }
+  /** A fetch applied on top of the state now; base is the state when the fetch began (see merge-loaded.ts). */
+  | { type: "merged"; base: State; data: Loaded }
   | { type: "clear" }
   | { type: "upsertThread"; thread: Thread }
+  /** Several conversations and their people in one render, for a burst of new ones. */
+  /** Tasks fetched again, applied on top of the ones held now; base is the list when the fetch began. */
+  | { type: "tasksLoaded"; base: Task[]; tasks: Task[] }
+  | { type: "upsertThreads"; threads: Thread[]; contacts: Contact[] }
+  /** Drops loaded messages for conversations not held any more (see recent-threads.ts). */
+  | { type: "evictMessages"; ids: string[] }
   | { type: "removeThread"; id: string }
   | { type: "patchThread"; id: string; patch: Partial<Thread> }
   | { type: "patchThreads"; ids: string[]; patch: Partial<Thread> }
@@ -87,6 +97,14 @@ function withoutFlag({ contactsLoaded: _flag, ...rest }: Loaded): Omit<Loaded, "
   return rest;
 }
 
+/** The list with these conversations replaced in place (keeping their draft and feedback) or added at the front. */
+export function withThreads(list: Thread[], incoming: Thread[]): Thread[] {
+  const byId = new Map(incoming.map((t) => [t.id, t]));
+  const held = new Set(list.map((t) => t.id));
+  const fresh = incoming.filter((t) => !held.has(t.id));
+  return [...fresh, ...list.map((t) => { const n = byId.get(t.id); return n ? { ...t, ...n, draft: t.draft, feedback: t.feedback } : t; })];
+}
+
 /** The list with these contacts added or updated. The same array when nothing changed, so lookups built on it stay stable. */
 export function withContacts(list: Contact[], incoming: Contact[]): Contact[] {
   if (list.length === 0) return incoming;
@@ -121,8 +139,22 @@ export function reducer(s: State, a: Action): State {
     case "loaded":
       // Contacts are merged, as a resync after a reconnect brings only the people in the listed threads.
       return { ...s, ...withoutFlag(a.data), contacts: withContacts(s.contacts, a.data.contacts), loading: false };
+    case "merged": {
+      const { contactsLoaded: _flag, contacts, ...rest } = a.data;
+      return { ...s, ...mergeLoaded(a.base, s, rest), contacts: withContacts(s.contacts, contacts), loading: false };
+    }
     case "clear":
       return { ...initial, loading: false };
+    case "tasksLoaded":
+      return { ...s, tasks: mergeById(a.base, a.tasks, s.tasks, { keepAlways: isTempTask }) };
+    case "upsertThreads":
+      return { ...s, threads: withThreads(s.threads, a.threads), contacts: withContacts(s.contacts, a.contacts) };
+    case "evictMessages": {
+      if (!a.ids.some((id) => id in s.byThread)) return s;
+      const byThread = { ...s.byThread };
+      for (const id of a.ids) delete byThread[id];
+      return { ...s, byThread };
+    }
     case "upsertThread": {
       const exists = s.threads.some((t) => t.id === a.thread.id);
       return {
@@ -183,7 +215,8 @@ export function reducer(s: State, a: Action): State {
     case "upsertUnsubscribe":
       return {
         ...s,
-        unsubscribes: [...s.unsubscribes.filter((u) => u.id !== a.unsubscribe.id && u.sender !== a.unsubscribe.sender), a.unsubscribe],
+        // The same sender on two accounts is two rows: the store keys them by account and sender.
+        unsubscribes: [...s.unsubscribes.filter((u) => u.id !== a.unsubscribe.id && !(u.accountId === a.unsubscribe.accountId && u.sender === a.unsubscribe.sender)), a.unsubscribe],
       };
     case "removeUnsubscribe":
       return { ...s, unsubscribes: s.unsubscribes.filter((u) => u.id !== a.id) };

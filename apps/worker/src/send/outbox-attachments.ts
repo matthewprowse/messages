@@ -21,6 +21,7 @@ import {
   storageUrlPath,
   type AttachmentProvider,
 } from "./attachment-rules";
+import { removableOutboxPath } from "./cleanup-rules";
 
 const POLL_MS = 1_000;
 
@@ -149,22 +150,26 @@ const CLEANUP_BATCH = 100;
 async function cleanupOutboxFiles(): Promise<number> {
   const cutoff = new Date(Date.now() - KEEP_MS).toISOString();
   let removed = 0;
+  // Rows whose path is not ours to remove are left alone (rows and object both) and left out of the next read, so the loop ends.
+  const skipped: string[] = [];
   for (;;) {
-    const rows = must(
-      await db
-        .from("outbox_attachments")
-        .select("id, storage_path, outbox!inner(status)")
-        .lt("created_at", cutoff)
-        .in("outbox.status", ["sent", "failed"])
-        .limit(CLEANUP_BATCH),
-      "load old outbox attachments",
-    );
+    let query = db
+      .from("outbox_attachments")
+      .select("id, user_id, storage_path, outbox!inner(status)")
+      .lt("created_at", cutoff)
+      .in("outbox.status", ["sent", "failed"]);
+    if (skipped.length) query = query.not("id", "in", `(${skipped.join(",")})`);
+    const rows = must(await query.limit(CLEANUP_BATCH), "load old outbox attachments");
     if (rows.length === 0) break;
-    const paths = rows.map((r) => r.storage_path).filter((p) => /^[0-9a-f-]{36}\/outbox\//.test(p));
-    const { error } = paths.length ? await db.storage.from(ATTACHMENTS_BUCKET).remove(paths) : { error: null };
-    if (error) throw storageError("remove outbox files", error);
-    must(await db.from("outbox_attachments").delete().in("id", rows.map((r) => r.id)), "delete old outbox attachments");
-    removed += rows.length;
+    const ours = rows.filter((r) => removableOutboxPath(r.user_id, r.storage_path));
+    for (const r of rows) if (!ours.includes(r)) skipped.push(r.id);
+    if (ours.length < rows.length) log.warn("outbox files left in place", { skipped: skipped.length });
+    if (ours.length) {
+      const { error } = await db.storage.from(ATTACHMENTS_BUCKET).remove(ours.map((r) => r.storage_path));
+      if (error) throw storageError("remove outbox files", error);
+      must(await db.from("outbox_attachments").delete().in("id", ours.map((r) => r.id)), "delete old outbox attachments");
+      removed += ours.length;
+    }
     if (rows.length < CLEANUP_BATCH) break;
   }
   return removed;

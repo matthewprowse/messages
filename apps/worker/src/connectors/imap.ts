@@ -29,7 +29,7 @@ import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe
 import type { Json, Tables } from "@messages/db";
 import { imapMove, imapThreadPlace, type FolderPaths } from "../ingest/imap-place";
 import { undoesNotJunk } from "../ingest/junk-undo";
-import { finishAction } from "../send/actions";
+import { finishAction, NotReady } from "../send/actions";
 import { pickFolders } from "../ingest/imap-folders";
 import { sealAddress } from "../vault";
 import { uidSet } from "./uid-set";
@@ -47,6 +47,7 @@ const CHECKPOINT_BYTES = 16 * 1024 * 1024; // ...or sooner when the parsed messa
 const LOCATE_AT_ONCE = 25; // Message-IDs looked up in one search of Trash or Junk
 const RECONCILE_EVERY_TICKS = 5; // the Inbox is checked every 5 minutes (a full pass only when its numbers moved, see ./inbox-check.ts); expunge events cover quick changes
 const FILES_EVERY_TICKS = 10;
+const SELF_EVERY_TICKS = 10; // ticks (minutes) between reads of the account for edited send addresses
 const WRITE_AT_ONCE = 6; // row updates in flight together
 const THREADS_AT_ONCE = 100; // thread ids in one .in() filter, to keep the request URL short
 
@@ -151,7 +152,6 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     // Whatever ends the session, the timer stops and the connection closes, so run() never leaves one open.
     try {
       await client.connect();
-      this.backoff.reset();
 
       const folders = await this.discoverFolders(client);
       this.folders = folders;
@@ -165,6 +165,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         await this.queue.run(() => (folder.role === "inbox" ? this.syncFolder(client, folder) : this.pollSideFolder(client, folder, true)));
       }
       await this.queue.run(() => this.selectInbox(client));
+      this.backoff.reset(); // only once the first sync worked: a sync that always fails must keep backing off
       await setAccountStatus(this.id, "connected");
       this.background(() => this.saveMissingFiles(client));
 
@@ -209,8 +210,10 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
           },
           () => undefined,
         );
-        // Send addresses edited in the app count as you from the next minute.
-        void this.refreshSelf(creds).catch((err) => log.warn(`${this.service.tag} send addresses failed`, { account: this.id, code: errorCode(err) }));
+        // Send addresses edited in the app count as you within ten minutes: the account is read and decrypted for
+        // this, which is too much work to repeat every minute for every mailbox. The session start read them already.
+        if (tick > 0 && tick % SELF_EVERY_TICKS === 0)
+          void this.refreshSelf(creds).catch((err) => log.warn(`${this.service.tag} send addresses failed`, { account: this.id, code: errorCode(err) }));
       }, SIDE_FOLDER_POLL_MS);
 
       await closed;
@@ -735,7 +738,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
   }
 
   async applyAction(row: Tables<"mail_actions">) {
-    if (!this.client || this.folders.length === 0) return; // still connecting: the next poll retries it
+    if (!this.client || this.folders.length === 0) throw new NotReady(); // still connecting: back to queued
     const run = async () => {
       const client = this.client;
       if (!client) throw Object.assign(new Error("not connected"), { code: "NOT_CONNECTED" });

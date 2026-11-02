@@ -211,7 +211,7 @@ export function BriefPlayer() {
     let completed = true;
     for (let seq = 0; seq < pieces && run.current === mine; seq++) {
       const el = await next;
-      if (run.current !== mine) { if (el) URL.revokeObjectURL(el.src); return; }
+      if (run.current !== mine) { if (el) URL.revokeObjectURL(el.src); dropNext(); return; }
       if (!el) { toast("Part of your brief did not arrive. Try again."); completed = false; break; }
       next = seq + 1 < pieces ? load(seq + 1) : Promise.resolve(null);
       if (seq === 0) track("brief_play", { speed: settings.speed });

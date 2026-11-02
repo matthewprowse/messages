@@ -371,3 +371,29 @@ test("cleanText drops Outlook's repeated mailto and tel targets and splits glued
   assert.equal(cleanText("Cape Town, 7700https://example.com/x"), "Cape Town, 7700 https://example.com/x");
   assert.equal(cleanText("[Read more](https://example.com/a) today"), "Read more (https://example.com/a) today");
 });
+
+test("decodeEntities maps numeric references 128-159 through windows-1252", () => {
+  assert.equal(decodeEntities("it&#146;s &#150; &#x80; &#133;"), "it\u2019s \u2013 \u20ac \u2026");
+  assert.equal(decodeEntities("a&#129;b"), "ab");
+});
+
+test("splitQuoted hides a bottom quote but keeps answers interleaved with quotes", () => {
+  const bottom = splitQuoted("Sounds good, Friday works.\n\n> Can we meet Friday?\n> Thanks");
+  assert.equal(bottom.body, "Sounds good, Friday works.");
+  assert.match(bottom.quoted ?? "", /Can we meet Friday/);
+  const inline = "Hi Sam,\n\n> Can we meet Friday?\nYes, Friday works.\n\n> Is 10am fine?\nTen is perfect.\n\nRegards";
+  assert.deepEqual(splitQuoted(inline), { body: inline });
+  const mixed = splitQuoted("Hi\n\n> a\nanswer one\n\n> b\nanswer two\n\n> old tail\n> more");
+  assert.match(mixed.body, /answer two/);
+  assert.match(mixed.quoted ?? "", /old tail/);
+  assert.doesNotMatch(mixed.body, /old tail/);
+});
+
+test("cleanText stays fast on a 1MB hostile string", () => {
+  const hostile = ["[https://" + "a".repeat(1000), "<!--" + "x".repeat(1000), "<a href=\"" + "b".repeat(500), "(\u0020".repeat(500) + "https://" + "c".repeat(500), "d".repeat(2000) + " <"];
+  for (const unit of hostile) {
+    const start = performance.now();
+    cleanText(unit.repeat(Math.ceil(1_000_000 / unit.length)));
+    assert.ok(performance.now() - start < 500, `slow on ${unit.slice(0, 12)}`);
+  }
+});

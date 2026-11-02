@@ -5,6 +5,8 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { track } from "@/lib/analytics";
+import { canRead } from "@/lib/bulk-read";
+import { BulkRead } from "@/components/bulk-read";
 import type { Message } from "@/lib/types";
 import type { Emphasis, ForwardedEmail, Mark } from "@/lib/email-text";
 import { bulkPreview, originalDoc } from "@/lib/email-text";
@@ -23,12 +25,21 @@ import { FIELD } from "@messages/crypto/fields";
 // the like are drawn from ranges over the text (rich-text.ts), and the original is only ever shown inside
 // a sandboxed iframe by ViewOriginal below.
 // bulk comes from Message.bulk, set when the message is loaded, and is shared with ViewOriginal.
-export function MessageBody({ m, whatsapp, bulk, showFull = false }: { m: Message; whatsapp: boolean; bulk: boolean; showFull?: boolean }) {
+export function MessageBody({ m, whatsapp, bulk, showFull = false, noRead = false }: { m: Message; whatsapp: boolean; bulk: boolean; showFull?: boolean; noRead?: boolean }) {
   // Newsletters and marketing mail lead with a short preview. View Original is the main way to read them.
   const preview = useMemo(() => (bulk && !whatsapp ? bulkPreview(m.body) : null), [bulk, whatsapp, m.body]);
   // WhatsApp text is shown as sent, with WhatsApp's own formatting and full links.
   if (whatsapp) return <WhatsAppText text={m.quoted ? `${m.body}\n${m.quoted}` : m.body} />;
   if (preview) {
+    const readable = !noRead && canRead({ ...m, bulk, whatsapp });
+    const trimmed = preview.text ? (
+      <>
+        <EmailText text={preview.text} marks={m.marks} />
+        {m.bodyShrunk && <div className="text-xs opacity-70">Older bulk mail is shortened. Use View Original to read it all.</div>}
+      </>
+    ) : (
+      <div>This email is mostly images. Open the original to read it.</div>
+    );
     return (
       <div className="flex flex-col items-start gap-1">
         {showFull ? (
@@ -36,13 +47,11 @@ export function MessageBody({ m, whatsapp, bulk, showFull = false }: { m: Messag
             <EmailText text={m.body} marks={m.marks} />
             {m.quoted && <div className="w-full whitespace-pre-wrap wrap-anywhere border-t border-current/20 pt-2 text-xs opacity-70"><Linked text={m.quoted} /></div>}
           </>
-        ) : preview.text ? (
-          <>
-            <EmailText text={preview.text} marks={m.marks} />
-            {m.bodyShrunk && <div className="text-xs opacity-70">Older bulk mail is shortened. Use View Original to read it all.</div>}
-          </>
+        ) : readable ? (
+          // The AI's readable version, made the first time the email is looked at; the preview stays under a skeleton and on failure.
+          <BulkRead messageId={m.id} fallback={trimmed} />
         ) : (
-          <div>This email is mostly images. Open the original to read it.</div>
+          trimmed
         )}
       </div>
     );
@@ -272,7 +281,8 @@ function awaitAnswer(id: string): Promise<Answer> {
     }
     function recheck() {
       timer = setTimeout(async () => {
-        await check();
+        // A failed read (network) is tried again on the next tick; the deadline still ends the wait.
+        try { await check(); } catch { /* retried below */ }
         if (settled) return;
         delay = Math.min(delay * 2, ORIGINAL_RECHECK_MAX_MS);
         recheck();

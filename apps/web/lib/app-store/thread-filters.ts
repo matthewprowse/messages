@@ -10,8 +10,9 @@ export const rank: Record<Priority, number> = { urgent: 0, important: 1, normal:
 export const NO_MESSAGES: Message[] = [];
 
 // Junk splits in two: Subscriptions (it offers a way to unsubscribe) and Junk (spam, cold outreach).
+// Archive holds archived conversations whatever they are; every other view holds only the inbox's.
 export const inView = (t: Thread, view: View) =>
-  view === "junk" ? t.junk && !t.subscription : view === "subscriptions" ? t.junk && t.subscription : !t.junk;
+  view === "archive" ? true : view === "junk" ? t.junk && !t.subscription : view === "subscriptions" ? t.junk && t.subscription : !t.junk;
 // Once you have answered, a conversation does not need you until they write again.
 export const isPriority = (t: Thread) => (t.priority === "urgent" || t.priority === "important") && !t.lastFromMe && t.category !== "newsletter" && t.category !== "notification";
 

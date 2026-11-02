@@ -62,7 +62,7 @@ async function changedUsers(since: string | null): Promise<Set<string> | "all"> 
 }
 
 async function runContactLinker() {
-  const all = [...new Set(must(await db.from("accounts").select("user_id"), "load linker users").map((a) => a.user_id))];
+  const all = [...new Set((await allRows((from, to) => db.from("accounts").select("user_id").order("id").range(from, to), "load linker users")).map((a) => a.user_id))];
   const now = Date.now();
   const users = pickUsers(gate, all, await changedUsers(changedSince(gate, now)), now);
   for (const user of users) {

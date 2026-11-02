@@ -301,6 +301,7 @@ func (h *Helper) start(ctx context.Context, id int64, args startArgs) Response {
 		if files, bad = checkAttachments(args.Attachments, os.TempDir()); bad != nil {
 			return Fail(id, bad)
 		}
+		defer closeAttachments(files)
 	}
 	to := Person{ID: ref.ID, URN: profilePrefix + ref.ID, Kind: "member"}
 	if ref.ID == "" {

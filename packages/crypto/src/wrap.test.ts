@@ -312,3 +312,32 @@ test("credentials sealed under a user's key match the saved vector, and only ope
   assert.notEqual(a, await sealCredential(key, "acc", "secret"));
   assert.equal(await openCredential(key, "acc", a), "secret");
 });
+
+test("concurrent unwraps of one key make one KMS call, and a failure is not cached", async () => {
+  let calls = 0;
+  let fail = true;
+  const stub = (async (_url: string, init?: RequestInit) => {
+    calls++;
+    assert.ok(init?.signal, "KMS calls carry a timeout signal");
+    await new Promise((r) => setTimeout(r, 20));
+    if (fail) return new Response("{}", { status: 503 });
+    return new Response(JSON.stringify({ plaintext: Buffer.alloc(32, 7).toString("base64") }));
+  }) as unknown as typeof fetch;
+  const w = kmsWrapper({ keyName: KEY_NAME, token: async () => "t", fetch: stub });
+  const failed = await Promise.allSettled([w.unwrap("w", "u"), w.unwrap("w", "u"), w.unwrap("w", "u")]);
+  assert.ok(failed.every((r) => r.status === "rejected"));
+  assert.equal(calls, 1);
+  fail = false;
+  const keys = await Promise.all([w.unwrap("w", "u"), w.unwrap("w", "u"), w.unwrap("w", "u")]);
+  assert.equal(calls, 2);
+  keys[0].fill(0); // each caller holds its own copy
+  assert.equal(keys[1][0], 7);
+});
+
+test("concurrent token callers share one refresh", async () => {
+  let hits = 0;
+  const stub = (async () => { hits++; await new Promise((r) => setTimeout(r, 10)); return new Response(JSON.stringify({ access_token: "tk", expires_in: 3600 })); }) as unknown as typeof fetch;
+  const token = googleAccessToken({ GCE_METADATA_HOST: "x" }, stub);
+  assert.deepEqual(await Promise.all([token(), token(), token()]), ["tk", "tk", "tk"]);
+  assert.equal(hits, 1);
+});

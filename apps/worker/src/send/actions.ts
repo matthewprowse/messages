@@ -6,6 +6,13 @@ import { db, must, retryWrite } from "../db";
 /** How long a row may stay 'working' before the poll treats its worker as gone and queues it again. */
 export const WORKING_STALE_MS = 10 * 60 * 1000;
 
+/** Thrown by a connector's applyAction while it is running but not connected yet: the row goes straight back to queued. */
+export class NotReady extends Error {
+  constructor() {
+    super("connector not ready");
+  }
+}
+
 /** Marks an action done, or failed with a reason the app can show. Retried on a database error; never throws. */
 export async function finishAction(id: string, error?: string) {
   const done_at = new Date().toISOString();
@@ -37,19 +44,12 @@ export async function applyClaimed(id: string, apply: (row: Tables<"mail_actions
   try {
     await apply(row);
   } catch (err) {
+    if (err instanceof NotReady) {
+      // Not claimed for real: queued again now, so the next poll retries it instead of waiting out the stale timeout.
+      await retryWrite(() => db.from("mail_actions").update({ status: "queued" }).eq("id", id).eq("status", "working")).catch(() => false);
+      return;
+    }
     await finishAction(id, "Could not update your mail. It will match on the next change.");
     throw err;
   }
-}
-
-/** Rows a stopped worker left 'working' go back to queued once. Mail actions are idempotent, so running again is safe. */
-export async function requeueWorking(olderThan?: Date, skip: ReadonlySet<string> = new Set()) {
-  let q = db.from("mail_actions").select("id").eq("status", "working");
-  if (olderThan) q = q.lt("created_at", olderThan.toISOString());
-  const rows = must(await q.limit(200), "load working mail actions").filter((r) => !skip.has(r.id));
-  if (rows.length === 0) return;
-  must(
-    await db.from("mail_actions").update({ status: "queued" }).eq("status", "working").in("id", rows.map((r) => r.id)),
-    "requeue working mail actions",
-  );
 }

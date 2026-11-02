@@ -32,7 +32,7 @@ import makeWASocket, {
 } from "baileys";
 import type { Json, Tables } from "@messages/db";
 import { Backoff, SerialQueue, sleep } from "../backoff";
-import { finishAction } from "../send/actions";
+import { finishAction, NotReady } from "../send/actions";
 import { allRows, db, getSyncState, must, recordEvent, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
@@ -50,6 +50,7 @@ import { messageFromRef, mediaRef, saveMedia, type MediaRow, type StoredMedia } 
 import { describe, e164, formatPairingCode, nameMentions, oneLine, pairingDigits, unreadInHistory } from "../whatsapp/normalize";
 import { quietSignalLogs } from "../whatsapp/quiet-signal";
 import { HISTORY_PER_CALL, ingestWhatsApp, ingestWhatsAppHistory, type WhatsAppStored } from "../whatsapp/ingest";
+import { retryStore } from "../whatsapp/retry";
 import { saveContactPhoto, saveGroupPhoto } from "../photos/store";
 import { chunks, mapLimit } from "../util";
 import { FIELD } from "@messages/crypto/fields";
@@ -536,14 +537,21 @@ export class WhatsAppConnector {
       unreadByChat,
     );
 
-    // Stored a chunk per database call, in order. One message that fails is logged and skipped.
+    // Stored a chunk per database call, in order. A chunk or message that still fails after retries is logged and skipped.
     let inserted = 0;
     let pending: Prepared[] = [];
     const flush = async () => {
       const chunk = pending;
       pending = [];
       if (chunk.length === 0) return;
-      const results = await ingestWhatsAppHistory.run(this.id, chunk.map((p) => p.payload));
+      let results: Awaited<ReturnType<typeof ingestWhatsAppHistory.run>>;
+      try {
+        results = await retryStore(() => ingestWhatsAppHistory.run(this.id, chunk.map((p) => p.payload)), sleep);
+      } catch (err) {
+        // History is not redelivered, but one lost chunk must not abort the rest of the batch.
+        log.warn("whatsapp history chunk failed", { account: this.id, code: errorCode(err), messages: chunk.length });
+        return;
+      }
       for (const [i, stored] of results.entries()) {
         if (isFailure(stored)) log.warn("whatsapp history message failed", { account: this.id, code: stored.code });
         else if (chunk[i].finish(stored)) inserted++;
@@ -598,7 +606,7 @@ export class WhatsAppConnector {
       await item.react();
       return false;
     }
-    return item.finish(await ingestWhatsApp(this.id, item.payload));
+    return item.finish(await retryStore(() => ingestWhatsApp(this.id, item.payload), sleep));
   }
 
   /**
@@ -1031,7 +1039,7 @@ export class WhatsAppConnector {
    */
   async applyAction(row: Tables<"mail_actions">) {
     const sock = this.sock;
-    if (!sock || !this.open) return; // not connected: the next poll retries it
+    if (!sock || !this.open) throw new NotReady(); // not connected: back to queued, the next poll retries it
     try {
       if (row.action === "react" && row.message_id) {
         const target = must(

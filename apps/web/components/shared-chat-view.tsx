@@ -27,6 +27,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/primitives";
+import { isNearBottom } from "@/components/near-bottom";
 import { MessageBody } from "@/components/message-body";
 import { TemplatePicker } from "@/components/template-picker";
 
@@ -51,7 +52,7 @@ const SharedBubble = memo(function SharedBubble({ m, client, whatsapp, showMeta 
       {(body || m.quoted || !m.attachments?.length) && (
         <div className="flex max-w-[80%] items-center gap-1">
           <div className={cn("min-w-0 rounded-lg p-3 text-sm leading-6", me ? "rounded-br-[2px] bg-primary text-primary-foreground" : "rounded-bl-[2px] bg-muted")}>
-            {m.deleted ? <p className="opacity-70">{m.body}</p> : <MessageBody m={m} whatsapp={whatsapp && !!m.whatsapp} bulk={!!m.bulk} />}
+            {m.deleted ? <p className="opacity-70">{m.body}</p> : <MessageBody m={m} whatsapp={whatsapp && !!m.whatsapp} bulk={!!m.bulk} noRead />}
           </div>
         </div>
       )}
@@ -133,8 +134,14 @@ function InboxReply({ info, presence, onSent }: { info: SharedChatInfo; presence
     if (!body.trim() || locked) return;
     setBusy(true);
     presence.setTyping(false);
-    const out = await sendInboxReply(info.threadId, body.trim());
-    setBusy(false);
+    let out: Awaited<ReturnType<typeof sendInboxReply>>;
+    try {
+      out = await sendInboxReply(info.threadId, body.trim());
+    } catch {
+      return void toast.error("Could not send. Your reply is still in the box.");
+    } finally {
+      setBusy(false);
+    }
     if ("problem" in out) return void toast.error(out.problem);
     setBody("");
     queued.start(out.id);
@@ -189,8 +196,14 @@ function OwnReply({ info, messages, onSent }: { info: SharedChatInfo; messages: 
   const send = async () => {
     if (!account || !to || !channel || !body.trim() || locked) return;
     setBusy(true);
-    const out = await sendOwnReply({ threadId: info.threadId, accountId: account.id, channel, to, subject: subject || defaultSubject, body: body.trim() });
-    setBusy(false);
+    let out: Awaited<ReturnType<typeof sendOwnReply>>;
+    try {
+      out = await sendOwnReply({ threadId: info.threadId, accountId: account.id, channel, to, subject: subject || defaultSubject, body: body.trim() });
+    } catch {
+      return void toast.error("Could not send. Your reply is still in the box.");
+    } finally {
+      setBusy(false);
+    }
     if ("problem" in out) return void toast.error(out.problem);
     setBody("");
     queued.start(out.id);
@@ -317,15 +330,35 @@ export function SharedChatView({ threadId }: { threadId: string }) {
 
   // Newest at the bottom: scroll there when the first messages arrive and when one arrives while you are near it.
   const last = messages?.[messages.length - 1]?.id;
+  const nearBottom = useRef(true);
+  const shown = useRef<{ thread?: string; last?: string }>({});
+  const ready = info !== undefined && messages !== null;
   useEffect(() => {
     const el = scrollRef.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]");
-    if (el) el.scrollTo({ top: el.scrollHeight });
+    if (!el) return;
+    const onScroll = () => { nearBottom.current = isNearBottom(el); };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [ready, info?.threadId]);
+  useEffect(() => {
+    const el = scrollRef.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]");
+    const prev = shown.current;
+    shown.current = { thread: info?.threadId, last };
+    // Opening the chat, or its first messages arriving, goes to the bottom; a later message only when you are already there.
+    const opening = prev.thread !== info?.threadId || prev.last === undefined;
+    if (el && (opening || nearBottom.current)) el.scrollTo({ top: el.scrollHeight });
   }, [last, info?.threadId]);
 
   const assign = useCallback(async (assignee: string | null) => {
     setBusy(true);
-    const { error } = await supabase.rpc("assign_inbox_chat", { p_thread: threadId, p_assignee: assignee });
-    setBusy(false);
+    let error: { message?: string } | null;
+    try {
+      ({ error } = await supabase.rpc("assign_inbox_chat", { p_thread: threadId, p_assignee: assignee }));
+    } catch {
+      error = {};
+    } finally {
+      setBusy(false);
+    }
     if (error) return void toast.error(error.message || "Could not change this. Try again.");
     void load();
   }, [threadId, load]);

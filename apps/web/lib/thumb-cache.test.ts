@@ -36,3 +36,13 @@ test("the default bound is 300", () => {
   assert.equal(cache.get("0"), undefined);
   assert.equal(cache.get("349"), "blob:349");
 });
+
+test("clear revokes every link and empties the cache", () => {
+  const revoked: string[] = [];
+  const cache = new ThumbCache(5, (url) => revoked.push(url));
+  cache.set("a", "blob:a");
+  cache.set("b", "blob:b");
+  cache.clear();
+  assert.equal(cache.size, 0);
+  assert.deepEqual(revoked.sort(), ["blob:a", "blob:b"]);
+});

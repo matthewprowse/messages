@@ -16,7 +16,7 @@ import { FIELD } from "@messages/crypto/fields";
 import { Backoff, SerialQueue, Sleeper } from "../backoff";
 import { db, getSyncState, loadCredentials, must, retryWrite, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
-import { finishAction } from "../send/actions";
+import { finishAction, NotReady } from "../send/actions";
 import { claimReady, linkThread, markFailed, settleSent, type OutboxRow } from "../send/outbox";
 import { loadAttachmentFiles } from "../send/outbox-attachments";
 import { saveContactPhoto } from "../photos/store";
@@ -24,13 +24,14 @@ import { credentialSealer, keysFor, open, openAddresses, seal, sealAddress } fro
 import { Helper, HelperError, helperBuilt, spawnTransport, type BrowserHeaders, type Commands, type HelperEvent, type LinkedInConversation, type LinkedInMessage, type LinkedInPerson, type SignInResult, type Transport } from "../linkedin/helper";
 import { NO_FILES, sendTimeoutMs, stageFiles, type StagedFiles } from "../linkedin/files";
 import { RecentTries, fetchPictureBytes, photoDue, withPictures } from "../linkedin/avatars";
+import { catchUpTargets, mayAdvanceToken } from "../linkedin/catch-up";
 import { ingestPayload, others, seenByOther, skipConversation, stubConversation, unreadUrns, type Sealer } from "../linkedin/mapping";
 import { CODE_TIMED_OUT, NO_COOKIES, NOT_BUILT, PushBack, RECONNECTING, SIGNED_OUT, SIGN_IN_EXPIRED, START_NO_PERSON, checkpointDetail, endsSession, outcomeOf, recipientOf, sendFailure, signInFailure, startFailure, surelyNotSent, type Outcome } from "../linkedin/policy";
 import { waitForReply, type Reply, type SignInStep } from "../linkedin/relay";
 import { readRelay, writeRelay } from "../linkedin/relay-db";
 
 const SYNC_SCOPE = "conversations"; // sync_state.sync_token: LinkedIn's token for "what changed since"
-const CATCH_UP_CONVERSATIONS = 20; // the conversations caught up after connecting, newest first
+const CATCH_UP_CONVERSATIONS = 20; // the conversations imported on the first run, newest first (later runs read every changed one)
 const CATCH_UP_MESSAGES = 20; // the latest messages read from each
 const CATCH_UP_PAUSE_MS = 3_000; // between conversations, so the catch-up is a trickle, not a burst
 const TOUCH_MS = 60_000;
@@ -288,20 +289,18 @@ export class LinkedInConnector {
   private async catchUp(helper: Helper, me: LinkedInPerson, live: boolean) {
     const { conversations, syncToken } = await helper.call("changes", {});
     for (const c of conversations) this.conversations.set(c.urn, c);
-    const wanted = conversations
-      .filter((c) => !skipConversation(c, me.id))
-      .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-      .slice(0, CATCH_UP_CONVERSATIONS);
+    const wanted = catchUpTargets(conversations, me.id, live, CATCH_UP_CONVERSATIONS);
     let stored = 0;
+    let failed = 0; // the token moves past every conversation, so any that did not store must be read again
     for (const [i, conv] of wanted.entries()) {
       if (this.stopped) return;
       if (i > 0) await this.sleeper.wait(CATCH_UP_PAUSE_MS);
       const { messages } = await helper.call("messages", { conversation: conv.urn, count: CATCH_UP_MESSAGES });
-      stored += await this.store(conv, messages, { live, unread: unreadUrns(conv, messages, me.id) });
+      stored += await this.store(conv, messages, { live, unread: unreadUrns(conv, messages, me.id), onFail: () => failed++ });
     }
     await this.readElsewhere(conversations);
-    if (syncToken) await saveSyncState(this.id, SYNC_SCOPE, { sync_token: syncToken });
-    log.info("linkedin caught up", { account: this.id, conversations: wanted.length, stored, first: !live });
+    if (syncToken && mayAdvanceToken(failed)) await saveSyncState(this.id, SYNC_SCOPE, { sync_token: syncToken });
+    log.info("linkedin caught up", { account: this.id, conversations: wanted.length, stored, failed, first: !live });
   }
 
   private sealer(): Sealer {
@@ -315,7 +314,7 @@ export class LinkedInConnector {
   }
 
   /** Stores messages of one conversation, in order. Returns how many were new. */
-  private async store(conv: LinkedInConversation, messages: LinkedInMessage[], opts: { live: boolean; unread: Set<string> }): Promise<number> {
+  private async store(conv: LinkedInConversation, messages: LinkedInMessage[], opts: { live: boolean; unread: Set<string>; onFail?: () => void }): Promise<number> {
     const me = this.me;
     if (!me) return 0;
     const sealer = this.sealer();
@@ -328,6 +327,7 @@ export class LinkedInConnector {
         if (stored?.result === "inserted") inserted++;
       } catch (err) {
         log.warn("linkedin message failed", { account: this.id, code: errorCode(err) });
+        opts.onFail?.();
       }
     }
     this.queuePhotos(others(conv, me.id));
@@ -605,7 +605,7 @@ export class LinkedInConnector {
    */
   async applyAction(row: Tables<"mail_actions">) {
     const helper = this.helper;
-    if (!helper || !this.ready) return; // not connected: the next poll retries it
+    if (!helper || !this.ready) throw new NotReady(); // not connected: back to queued, the next poll retries it
     if (row.action === "react") {
       await finishAction(row.id, "Reactions are not sent to LinkedIn.");
       return;

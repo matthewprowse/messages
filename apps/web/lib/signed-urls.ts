@@ -29,6 +29,8 @@ const RETRY_FAILED_MS = 60 * 1000;
 const MIN_LEFT_MS = 10 * 60 * 1000;
 /** Past this many cached links, dead ones are dropped so a long session does not keep them all. */
 const SWEEP_AT = 2000;
+const SWEEP_EVERY_MS = 60_000;
+let lastSweep = 0;
 
 // expires is when the link stops working, or for a failed one, when to ask again.
 type Entry = { url: Promise<string | null>; expires: number; value?: string | null };
@@ -151,6 +153,7 @@ function flush() {
 export function signedUrl(bucket: string, path: string, minLeftMs = MIN_LEFT_MS, thumb = false): Promise<string | null> {
   hydrate();
   const key = keyOf(bucket, path, thumb);
+  sweepIfDue();
   const hit = cache.get(key);
   if (fresh(hit, minLeftMs)) return hit.url;
   const entry: Entry = {
@@ -173,7 +176,7 @@ export function signedUrl(bucket: string, path: string, minLeftMs = MIN_LEFT_MS,
     if (!url) entry.expires = Date.now() + RETRY_FAILED_MS;
     else saveSoon();
   });
-  if (cache.size >= SWEEP_AT) sweep();
+  sweepIfDue();
   cache.set(key, entry);
   return entry.url;
 }
@@ -190,7 +193,32 @@ export async function downloadUrl(bucket: string, path: string, name: string): P
 
 function sweep() {
   const now = Date.now();
+  lastSweep = now;
   for (const [key, entry] of cache) if (entry.value !== undefined && entry.expires <= now) cache.delete(key);
+}
+
+/** Dead links are dropped at most once a minute as links are asked for, not only past SWEEP_AT, so a quiet session does not hold them. */
+function sweepIfDue() {
+  if (cache.size >= SWEEP_AT || Date.now() - lastSweep > SWEEP_EVERY_MS) sweep();
+}
+
+/**
+ * Forgets every signed link and opened picture, in memory and in sessionStorage. Signing out calls it: the links are
+ * bearer URLs for the last person's files, and a tab left open must not hand them to the next one.
+ */
+export function clearSignedUrls() {
+  cache.clear();
+  waiting.clear();
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  hydrated = true; // nothing stored is read back after this
+  thumbCache.clear();
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(STORE_KEY);
+  } catch {
+    // Storage unavailable: there was nothing kept there.
+  }
 }
 
 /** A link already in hand, so a remounted image shows at once instead of flashing a placeholder. */

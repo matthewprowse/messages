@@ -22,7 +22,7 @@ import { env } from "../env";
 import { errorCode, log } from "../log";
 import { chunks } from "../util";
 import { normAddresses } from "../send/from-address";
-import { finishAction } from "../send/actions";
+import { finishAction, NotReady } from "../send/actions";
 import { claimReady, markFailed, settleSent, type OutboxRow } from "../send/outbox";
 import { nameFromAddress } from "../ingest/normalize-email";
 import { ownIdentitiesCached } from "../contacts/own";
@@ -165,12 +165,12 @@ export class TeamsConnector {
     if (!me.id) throw Object.assign(new Error("no user id"), { code: "NO_USER_ID" });
     this.me = { userId: me.id, name: me.displayName?.trim() || null };
     this.selfAddresses = new Set(normAddresses([this.account.address, me.mail, me.userPrincipalName?.includes("@") ? me.userPrincipalName : null]));
-    this.backoff.reset();
     log.info("teams connected", { account: this.id, meetings: this.withMeetings });
 
     await setAccountStatus(this.id, "syncing");
     this.cursor = (await getSyncState(this.id, "chats"))?.sync_token ?? null;
     await this.queue.run(() => this.check());
+    this.backoff.reset(); // only once the first check worked: a sync that always fails must keep backing off
     await setAccountStatus(this.id, "connected");
     this.ready = true;
 
@@ -283,15 +283,19 @@ export class TeamsConnector {
 
     const index = await chatIndex(await keysFor(this.account.user_id), chat.id);
     let inserted = 0;
+    let failure: unknown;
     for (const msg of messages) {
-      // One message that cannot be stored is logged and skipped, as for WhatsApp, so it never holds up the chat.
+      // One message that cannot be stored does not stop the rest, but the first failure is thrown at the end so
+      // check() leaves the cursor before this chat and the next check reads it again (storing is idempotent).
       try {
         const payload = await this.payload(chat, index, members, msg, history);
         if (payload && (await ingestTeams(this.id, payload)).result === "inserted") inserted++;
       } catch (err) {
         log.warn("teams message failed", { account: this.id, code: errorCode(err) });
+        failure ??= err;
       }
     }
+    if (failure !== undefined) throw failure;
     return inserted;
   }
 
@@ -485,7 +489,7 @@ export class TeamsConnector {
    */
   async applyAction(row: Tables<"mail_actions">) {
     accountActivity.mark(this.id); // the app is in use: check chats quickly for a while
-    if (!this.ready) return; // still connecting: the next poll retries it
+    if (!this.ready) throw new NotReady(); // still connecting: back to queued, the next poll retries it
     try {
       if (row.action === "react") {
         await finishAction(row.id, "Reactions cannot be sent to Teams from here yet.");

@@ -35,6 +35,8 @@ export interface Ctx extends Omit<State, "byThread"> {
   markRead: (id: string, read: boolean, opened?: boolean) => void;
   /** Archives one conversation or several, with one Undo toast. */
   archive: (ids: string | string[]) => void;
+  /** Brings archived conversations back to the inbox, with one Undo toast. */
+  unarchive: (ids: string | string[]) => void;
   /** Moves conversations to the mail provider's Bin (never deletes for good), with an Undo toast. */
   trash: (ids: string | string[]) => void;
   pin: (id: string, pinned: boolean) => void;

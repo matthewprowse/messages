@@ -51,6 +51,10 @@ export function useComposeSend(open: boolean, onOpenChange: (open: boolean) => v
       ensureThread(threadId).then(() => {
         close.current(false);
         router.push(`/inbox/${threadId}`);
+      }).catch(() => {
+        // Let the next pass try again instead of leaving the dialog locked on a conversation that never opened.
+        opened.current = null;
+        toast("Could not open the conversation. Try again.");
       });
       return;
     }

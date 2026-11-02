@@ -81,7 +81,7 @@ class UsageContext:
     """Who a call was for, so its cost is filed against the right person and account."""
 
     user_id: str
-    feature: str  # triage, draft, learn (learning includes embeddings and summaries), brief, transcribe or logos
+    feature: str  # triage, draft, learn (learning includes embeddings and summaries), brief, transcribe, bulk_read or logos
     account_id: str | None = None
     thread_id: str | None = None
 
@@ -303,7 +303,9 @@ class Gemini:
         if ctx.feature in SETUP_FEATURES and self._setup_left(ctx.user_id) > 0:
             return 0.0
         _, month, week, usd, week_usd = self._allowance(ctx.user_id)
-        if month.get(ctx.feature, 0.0) >= 100 or week.get(ctx.feature, 0.0) >= 100:
+        # A feature with no month key has no share in ai_budget.shares: the SQL says that means exhausted. A week key is
+        # only there for features with a weekly limit, so a missing week key is simply no weekly cap.
+        if month.get(ctx.feature, 100.0) >= 100 or week.get(ctx.feature, 0.0) >= 100:
             raise GeminiError(None, "budget_paused")
         key = (ctx.user_id, ctx.feature)
         with self._lock:
@@ -334,6 +336,11 @@ class Gemini:
             yield held
         finally:
             self._release(ctx, held.amount)
+
+    def billing_blocked(self) -> bool:
+        """True while the billing breaker would refuse a call. Checked before a download or an upload so a paused
+        account does not repeat that work every poll for a call that cannot be made."""
+        return self._breaker.blocked()
 
     def _flush_usage(self) -> None:
         try:

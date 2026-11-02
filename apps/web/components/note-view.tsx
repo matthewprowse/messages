@@ -6,6 +6,7 @@
 import { notePdf, pdfName } from "@/lib/note-pdf";
 import { jpegPicture } from "@/lib/note-pdf-images";
 import { acquireNoteFile } from "@/lib/signed-urls";
+import { loadPdfJs } from "@/lib/pdf";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -16,8 +17,8 @@ import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import { relTime } from "@/lib/format";
 import { displayName, mimeOf, pastedName, UploadError } from "@/lib/outbox-files";
-import { loadNoteFiles, noteAttachment, noteFileError, removeNoteFiles, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
-import { useNotes } from "@/components/notes-data";
+import { noteAttachment, noteFileError, removeNoteFiles, takeNoteFiles, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
+import { noteReady, useNotes } from "@/components/notes-data";
 import { NoteToolbar, useKeyboardInset, useNoteEditor } from "@/components/note-editor";
 import { NoteFilesContext, type NoteFilesValue } from "@/components/note-file-node";
 import { DeleteNoteDialog } from "@/components/note-list";
@@ -82,8 +83,13 @@ function OpenNote({ note }: { note: Note }) {
 
   useEffect(() => {
     let cancelled = false;
-    loadNoteFiles(id)
-      .then((list) => { if (!cancelled) setFiles(new Map(list.map((f) => [f.id, f]))); })
+    takeNoteFiles(id)
+      .then((list) => {
+        if (cancelled) return;
+        setFiles(new Map(list.map((f) => [f.id, f])));
+        // pdf.js and its worker load while the file downloads, so a PDF in the note draws as soon as it arrives.
+        if (list.some((f) => f.mimeType === "application/pdf")) void loadPdfJs().catch(() => {});
+      })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
@@ -108,7 +114,7 @@ function OpenNote({ note }: { note: Note }) {
     stopped.current.delete(item.key);
     setUploads((m) => new Map(m).set(item.key, 0));
     const progress = (fraction: number) => setUploads((m) => new Map(m).set(item.key, fraction));
-    uploadNoteFile(id, item.file, item.name, progress)
+    noteReady(id).then(() => uploadNoteFile(id, item.file, item.name, progress))
       .then((saved) => {
         // The note was closed meanwhile, so the file is in no saved text: delete it rather than leave it unreachable.
         if (!openRef.current) { void removeNoteFiles([saved]).catch(() => {}); return; }
@@ -166,7 +172,7 @@ function OpenNote({ note }: { note: Note }) {
   const state = saveState(id);
   const status = state === "saving" ? "Saving" : state === "failed" ? "Not Saved" : state === "saved" ? "Saved" : `Edited ${relTime(note.updatedAt)}`;
   const attach = () => pickerRef.current?.click();
-  // The note as a PDF: made here in the browser, downloaded, and kept in the note's own files so it is there to open again.
+  // The note as a PDF: made here in the browser and downloaded. It is not put back into the note.
   // Pictures in the note are shrunk to what a page can show, so a note full of photos stays quick.
   const exportPdf = async () => {
     const current = editorRef.current;
@@ -185,8 +191,7 @@ function OpenNote({ note }: { note: Note }) {
         }
       });
       const name = pdfName(note.title);
-      const file = new File([bytes as BlobPart], name, { type: "application/pdf" });
-      const url = URL.createObjectURL(file);
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));
       const link = document.createElement("a");
       link.href = url;
       link.download = name;
@@ -194,8 +199,7 @@ function OpenNote({ note }: { note: Note }) {
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      addFiles([file], current.state.doc.content.size, false);
-      toast.success(`${name} is downloaded and saved in this note`, { id: toastId });
+      toast.success(`${name} is downloaded`, { id: toastId });
       track("feature_used", { feature: "note_exported", detail: "pdf" });
     } catch {
       toast.error("The PDF could not be made. Try again.", { id: toastId });

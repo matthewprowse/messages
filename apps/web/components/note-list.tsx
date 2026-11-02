@@ -55,7 +55,7 @@ function Highlight({ text, words }: { text: string; words: string[] }) {
   );
 }
 
-const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDelete }: {
+const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDelete, onWarm }: {
   note: Note;
   /** The search, when there is one: the row shows the line that matched. */
   term: string;
@@ -64,6 +64,8 @@ const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDe
   selected: boolean;
   onPin: (note: Note) => void;
   onDelete: (note: Note) => void;
+  /** Called when the row is pointed at or focused, to have the note ready. */
+  onWarm: (id: string) => void;
 }) {
   const words = useMemo(() => searchWords(term), [term]);
   // Until the text is downloaded the stored excerpt stands in for it.
@@ -76,6 +78,8 @@ const NoteRow = memo(function NoteRow({ note, term, today, selected, onPin, onDe
           <Link
             href={`/notes/${note.id}`}
             data-row-link
+            onPointerEnter={() => onWarm(note.id)}
+            onFocus={() => onWarm(note.id)}
             aria-current={selected ? "page" : undefined}
             className={cn("flex flex-col gap-1 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", FADE)}
           >
@@ -193,7 +197,7 @@ function useRowNavigation<T extends HTMLElement>() {
 }
 
 export function NoteList() {
-  const { notes, loading, error, reload, opening, ensureAllBodies, pin } = useNotes();
+  const { notes, loading, error, reload, opening, ensureAllBodies, pin, warm } = useNotes();
   const params = useParams<{ id?: string }>();
   const router = useRouter();
   const [search, setSearch] = useState("");
@@ -220,7 +224,7 @@ export function NoteList() {
       {list.map((n, i) => (
         <Fragment key={n.id}>
           {i > 0 && <div className="px-3"><Separator /></div>}
-          <NoteRow note={n} term={term} today={today} selected={params.id === n.id} onPin={onPin} onDelete={setDeleting} />
+          <NoteRow note={n} term={term} today={today} selected={params.id === n.id} onPin={onPin} onDelete={setDeleting} onWarm={warm} />
         </Fragment>
       ))}
     </section>

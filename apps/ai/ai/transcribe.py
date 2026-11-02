@@ -17,7 +17,7 @@ from .crypto import is_ciphertext
 from .fields import ATTACHMENT_DATA, FILENAME, TRANSCRIPT
 from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
-from .supabase import Supabase, SupabaseError
+from .supabase import Supabase
 from .text import UNTRUSTED
 from .triage import LOOKBACK_DAYS
 from .vault import Vault
@@ -148,7 +148,7 @@ class Transcribe:
             taken += 1
             try:
                 done += self._one(a, m)
-            except (GeminiError, SupabaseError, OSError) as err:
+            except Exception as err:  # any one note (a cut-off download, a bad key, a malformed answer) must not stop the rest or go untried
                 self._failed(m, err)
         if done:
             log.info("voice notes transcribed", count=done)
@@ -163,6 +163,8 @@ class Transcribe:
         if (a.get("size_bytes") or 0) > MAX_BYTES or (note_seconds(None, a.get("duration_s"), a.get("size_bytes")) or 0) > limit:
             self._save(m["id"], None, "failed")
             return 0
+        if self.gemini.billing_blocked():  # no point downloading a file for a call the breaker will refuse
+            raise GeminiError(None, "billing_paused")
         audio = self.db.download(BUCKET, a["storage_path"])
         # Sealed by the sync worker ("e1b:" header), opened here in memory; a plain legacy file passes through.
         opened = self.vault.open_bytes(m["user_id"], ATTACHMENT_DATA, audio)
@@ -210,8 +212,10 @@ class Transcribe:
             return
         tries = self._tries.get(m["id"], (0, 0.0))[0] + 1
         log.warn("voice note not transcribed", message=m["id"], tries=tries, code=getattr(err, "status", None) or type(err).__name__)
+        self._tries[m["id"]] = (tries, time.monotonic() + RETRY_S)  # recorded first: if the save below fails it is still a try
         if tries >= MAX_TRIES:
-            self._save(m["id"], None, "failed")
-            self._tries.pop(m["id"], None)
-        else:
-            self._tries[m["id"]] = (tries, time.monotonic() + RETRY_S)
+            try:
+                self._save(m["id"], None, "failed")
+                self._tries.pop(m["id"], None)
+            except Exception as save_err:
+                log.warn("voice note failure not saved", message=m["id"], code=log.code_of(save_err))

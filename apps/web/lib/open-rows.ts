@@ -62,6 +62,8 @@ export const openExamples = <T extends object>(rows: T[]) => openRows(rows, EXAM
 export const openRules = <T extends object>(rows: T[]) => openRows(rows, RULE_TEXT);
 
 export const openTasks = <T extends object>(rows: T[]) => openRows(rows, TASK_TEXT);
+/** Companies: the AI's summary of what they send you (the domain is opened with the addresses). */
+export const openOrganizations = <T extends object>(rows: T[]) => openRows(rows, [["summary", FIELD.orgSummary]]);
 export const openThreads = async <T extends object>(rows: T[]) => openAddresses(await openRows(rows, THREAD_TEXT));
 export const openDrafts = <T extends object>(rows: T[]) => openRows(rows, DRAFT_TEXT);
 

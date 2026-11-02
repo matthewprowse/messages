@@ -695,7 +695,9 @@ How it is built:
   directions in its prompt were sometimes read aloud, and it does not take a system instruction.
 - The audio is spoken in parts at sentence ends: a short first part on its own, then the rest at
   once, each stored as it is ready. A new brief starts playing about 12 seconds after it is asked
-  for, and a ready one in about 2 seconds.
+  for, and a ready one in about 2 seconds. Decided 2 November 2026: keep the parts for the quick start,
+  accepting that the voice can shift slightly at a join. Each part is sent with no style line in front:
+  one had crept back in and was read out at the start of every part.
 - The script and the audio are stored encrypted (briefs, brief_parts) and deleted after 7 days.
 - On the Summary page, Listen plays it, writing a fresh one first when there is none, the voice
   changed, or conversations moved on since it was written more than an hour ago. The script shows
@@ -707,7 +709,8 @@ How it is built:
 
 ### Email Display
 
-The AI does not rewrite emails for layout. It is slow, costs money per email and can change wording.
+The AI does not rewrite conversation emails for layout. It is slow, costs money per email and can change wording.
+Marketing and notification mail is the exception since 28 October 2026: see Readable Bulk Email below.
 
 1. Conversation emails (a person writing to a person): convert the HTML to a small set of
    formatting (bold, italics, links, lists, line breaks), remove quoted replies and signatures, and
@@ -727,6 +730,83 @@ How formatting is built:
   (pnpm drop-stored-html, run on 23 October 2026: 1,077 emails, 1,015 kept formatting).
 - WhatsApp text is kept as sent and drawn the way WhatsApp draws it: *bold*, _italic_,
   ~strikethrough~, `code` and ```monospace```, quote lines and bulleted lists.
+
+### Readable Bulk Email (28 October 2026)
+
+**Why.** Newsletters, marketing and notifications convert badly to text: image-only layouts, tracking links, button labels with
+no context, repeated footers. Today they show a trimmed preview (`bulkPreview`) and View Original. This replaces the preview
+with a short AI-written readable version. It revises the earlier rule that the AI does not rewrite emails for layout, and
+only for bulk mail. A person writing to a person is unchanged, and WhatsApp, Instagram and LinkedIn messages are shown as sent.
+
+**What it makes.** One summary line, up to 5 key points (the offer, dates, prices, the deadline, what is being asked), and up to
+4 links, each labelled by what it does ("View the Sale") and taken only from links that are really in the email. View Original
+stays one click away, and the readable version is marked "Summarised by AI" so nobody mistakes it for the sender's words.
+
+**Which mail.** Messages with an unsubscribe header or `is_bulk`, including junk and subscriptions. Not personal mail,
+and not mail the AI worker cannot read (see Limits).
+
+**When (decided 28 October 2026).** Only when the user opens the message, never on arrival. Most junk is never opened,
+so nothing is spent on it. The request is the same pattern as `email_originals` and `attachment_fetch_requests`:
+
+1. Opening a bulk message with no readable version inserts a row in `bulk_reads` (user, message, created, claimed, error).
+2. The AI worker claims it, opens the sealed `body_text` and `list_unsubscribe`, extracts the real links, and asks the fast
+   model for the summary, points and link labels as JSON (`bulk_read.py`, the one new module).
+3. It checks the answer (below), seals it and stores it on the message (`message_ai.bulk_read`, sealed as field `bulk_read`),
+   then deletes the request. Realtime pushes the change; the app swaps the skeleton for the result.
+4. Reopening is instant: the result is stored, not regenerated.
+
+**Rules for the answer.**
+- The model returns JSON only: `summary`, `points[]`, `links[{label, id}]`. Links are chosen by number from the list the code
+  extracted, so a link the email does not contain cannot appear, and the app shows the real address under the label.
+- Output is plain text. No HTML or Markdown is ever rendered. Limits: summary 160 characters, 5 points of 120, 4 labels of 40.
+- The email sits inside the random fence used by triage and the prompt says it is untrusted (`UNTRUSTED`), so text in an email
+  cannot give the model instructions. Dashes are stripped from the output to match the app's text rules.
+- Numbers, dates and prices in `points` must appear in the email text; a point whose figures do not is dropped. If nothing is
+  left, the app shows the existing preview as it does today.
+
+**Where it shows.**
+- `MessageBody` shows the readable version in place of `bulkPreview` when one exists (skeleton while it is made, existing
+  preview if it fails). "Show Full Text" and View Original are unchanged.
+- The inbox row for bulk mail keeps its subject line. The Summary page is unchanged.
+
+**Limits.**
+- Bulk mail older than 30 days is already shortened to about 500 characters (`body_shrunk_at`). Those messages keep today's
+  preview; an AI reading of 500 characters adds nothing. Reading them from the original is a later option through `email_originals`.
+- The worker never calls the mailbox for this. It uses the stored text, which keeps links as addresses.
+- Mail whose text is mostly images has little to summarise; the model is told to say so, and the app keeps "mostly images".
+
+**Cost (estimate, to measure).** About 700 tokens in and 150 out on the fast model at its listed price is roughly $0.0006
+per email read, so about $0.60 per 1,000 opened. It is a new feature in AI Fair Usage with its own share in Admin (starting
+5%, taken from Sorting and Junk, which is 30% today), a weekly limit like Drafts, and a content-free usage event so cost per
+email read shows in Analytics. Usage is filed under `bulk_read`, not `triage`. When the share is spent, the preview shows as it does today.
+
+**Privacy.** The same text is already sent to Gemini for triage. The result is sealed per user like summaries. Nothing is logged
+but counts and ids. Analytics are content free and need no new event type: every call is already an `ai_call` event with
+feature `bulk_read` (count, cost, failures), and the app records `feature_used` with detail `shown` or `failed`.
+
+**Build order.**
+1. Migration `supabase/migrations/<timestamp>_bulk_reads.sql`: `bulk_reads` table with RLS (insert and select own, as
+   `attachment_fetch_requests`), `message_ai.bulk_read text`, a Realtime publication entry, an index on unclaimed requests.
+   Then hand-merge `packages/db/src/database.types.ts` (never overwrite it).
+2. `fields.py` and `packages/crypto/src/fields.ts`: new field `bulk_read`; the crypto vectors test must still pass.
+3. `apps/ai/ai/bulk_read.py` with its test file: link extraction, prompt, JSON schema, answer checks, claim and write.
+   A pure `check_answer(email_text, links, answer)` holds the logic that needs testing. Start the loop from `__main__.py`.
+4. `pricing`, config and `describe_jobs`: model and thinking level (minimal), the new feature name, the Admin share and weekly limit.
+5. Web: ask on open and listen for the answer in `message-body.tsx`'s bulk branch, a small `bulk-read.tsx` for the readable view,
+   `Message.bulkRead` in `types.ts` and `data.ts`, and the "Summarised by AI" label. Stock shadcn only (Skeleton, Badge, Button).
+6. Analytics events and the Admin share. Add the entry to the Updates page as a draft before pushing.
+7. Check on 30 or more real bulk emails, read-only, in the browser on `localhost:3000`: marketing, receipts, newsletters,
+   notifications, image-only. Look for invented figures, wrong link labels and anything that reads like the sender's own words.
+
+**Built (28 October 2026).** `supabase/migrations/20261114100000_bulk_reads.sql` (apply it before using the feature),
+`apps/ai/ai/bulk_read_text.py` and `bulk_read.py` (own thread in `__main__.py`, model: the triage model at minimal thinking),
+field `bulk_read` in both `fields` files, `apps/web/lib/bulk-read.ts` and `components/bulk-read.tsx`, and the Admin, Usage and
+Settings labels. Until the migration is applied the app shows the old preview. Shared team chats never ask for one. After
+applying it, check on 30 or more real bulk emails (step 7) before publishing the Updates entry. If Admin is saved before the
+migration is applied, the new feature's share is saved as 0 and it stays paused until a share is set.
+
+**To decide.** Whether to also read shrunk old mail from the original, and whether the readable version should be offered
+for long personal mail.
 
 ### Voice Notes
 
@@ -850,6 +930,22 @@ worker only changes the command it starts. Two reasons: hosting needs only Pytho
 written from scratch rather than translated from linkedingo, so it is not under the AGPL (a translation would
 still be), which matters to anyone who later buys or invests in Konva. It still needs live testing against
 LinkedIn either way, with the same sign-in checks (email, SMS or authenticator code, app approval).
+
+LinkedIn helper in Python, 28 and 29 October 2026: the Python helper is `apps/ai/ai/connectors/linkedin`
+(`python3 -m ai linkedin`), with the whole stdin and stdout protocol, the sign-in state machine, file and picture
+checks, profile matching and error mapping (`apps/ai/tests/test_linkedin.py`). On 29 October the LinkedIn client was
+written from HAR captures of the web app in a browser, not from reading linkedingo, so the helper stays clear of the
+AGPL: conversations, messages, send, start a conversation, file upload, mark read, search and the real-time stream
+(`factory.py`, `api.py`, `session.py`, `realtime.py`, `mapping.py`; tests in `test_linkedin_client.py`, and the mapping
+was also run over the captured responses with no errors). Captures are kept in `captures/linkedin` (git ignored, they hold
+cookies and a password).
+Still open before the worker switches from the Go helper: (1) the password sign-in, which is one large server-driven-UI
+request (`flagship-web/rsc-action`) with a browser fingerprint in it, behind LinkedIn's bot checks (`sensorCollect`, reCAPTCHA
+Enterprise); nothing shows yet whether it can be made from a server, and the code and app-approval steps have not been
+captured; (2) sending into an existing conversation, document and video uploads, and message events from the real-time
+stream were not in the captures (marked UNVERIFIED in the code); (3) one live read test with a real session. `queries.py`
+holds LinkedIn's query IDs, which change when it ships a new web build. The Go helper and `apps/linkedin` are deleted in
+the same change that switches the worker's command. Scope is the Go helper only: the worker, web app and packages are TypeScript.
 
 Proxies, decided 27 October 2026: none at launch. A user's own code or app approval gets the sign-in
 through from any IP; the risk is later, when a session used from a data centre is checked again or
@@ -2243,6 +2339,10 @@ Decisions made while building the screens, so later work follows them:
 - **Mobile bottom bar.** Summary, Calendar, Inbox, Contacts and More. More is its own screen (`/more`): New Email, WhatsApp,
   LinkedIn and Instagram messages, New Event and New Task, then Notes and Attachments, then Analytics, Updates and Admin for the
   owner, then Settings.
+- **Usage ring (2 November 2026).** The last item in the desktop rail, below Settings, is a ring showing the limit closest to
+  running out (AI this week, AI this month, or storage), since that is the one that pauses something first. Hovering shows
+  every limit with its reset date and each AI feature's share (or Paused Until); a click opens Settings, Usage
+  (`components/usage-ring.tsx`, sums in `lib/usage.ts`). Not on the mobile bottom bar.
 - **Connected Accounts shows one row per sign-in.** Google (Gmail, Calendar, Tasks), Microsoft (Outlook, Calendar, To Do,
   Teams) and iCloud (Mail, Calendar, Reminders) are each one row. The workers still keep one account row per part. A name can be
   given to a sign-in; it shows beside the logo only once there are two of a service.
@@ -2253,6 +2353,10 @@ Decisions made while building the screens, so later work follows them:
   and pictures. The file downloads and is saved in the note.
 - **Profile Photo.** A photo in Settings, General is used for "You" (`profiles.avatar_path`, stored at `<user id>/me`).
 - **Seen on Instagram and LinkedIn.** Their conversations show "Seen" under your last seen message; WhatsApp keeps its ticks.
+- **Archive view (28 October 2026).** The inbox views are All, Priority, Junk, Subscriptions and Archive. Archive lists archived
+  conversations (junk or not), the row action becomes Unarchive there, and Undo works both ways. A Deleted view is agreed but
+  not built: trashed threads are not loaded, so it needs an on-demand load, Restore, Delete Forever and a 30 day auto-empty
+  (a `trashed_at` column and the retention job).
 - **Needs Reply sees the conversation (28 October 2026).** Triage judged only the newest incoming message with a one line
   definition, so "turns out there are student tickets" in a plan you had agreed missed Needs Reply. The model now also gets
   the last 4 earlier messages of the conversation (both directions, 300 characters each, none for bulk mail), and
@@ -2281,14 +2385,22 @@ Before the private test:
 6. **First-run walkthrough** that shows the value (drafts, AI profile, merges) and handles a failed or slow connection.
 7. **Privacy page** in plain words: what is stored, what is sealed, what the AI sees.
 8. **Backups and a way to delete an account** and all its data.
+9. **Finish the Python LinkedIn helper** (added 29 October 2026; detail in the LinkedIn paragraphs under the connectors).
+   Until these are done the worker keeps the Go helper and LinkedIn stays off for testers:
+   - Capture a send into an existing conversation (a chat the owner controls) and a live incoming message while
+     `linkedin.com/messaging` is open (`captures/linkedin/03-live.har`), then fix the UNVERIFIED parts: the send body key
+     in `api.py` and the real-time message events in `mapping.py`.
+   - Capture a document upload and a video upload.
+   - Capture the code and app-approval steps of the sign-in, then build the password sign-in (`factory.password_login`
+     still answers `unsupported`). If a server cannot make that request past LinkedIn's bot checks, decide between a
+     cookie-based connect in the web page and keeping the Go helper.
+   - Run one live read test with a real session, read only (no sends, no opening chats).
+   - Refresh `queries.py` from a new capture whenever LinkedIn ships a web build and calls start answering 400 or 404.
+   - Switch the worker's command to `python3 -m ai linkedin`, then delete `apps/linkedin`, its CI step and the
+     `linkedin:build` script, in one change.
 
 Core for the test: email, WhatsApp, calendar and tasks. Instagram and LinkedIn are labelled experimental.
 
-## Timeline
-
-Claude writes most of the code, so building the MVP list is about a month. What takes longer is
-testing on real accounts, refining from feedback and waiting on the approvals above. Build time is
-about 2 hours each weekday morning, 2 hours each evening and full days on weekends.
 ## Speed and Efficiency Pass (29 October 2026)
 
 Found by reading the code, not by measuring. The Gemini account was in arrears, so nothing here was tried live; the
@@ -2331,3 +2443,68 @@ numbers below are estimates from the loop intervals.
 - A 5.6MB `simple-icons` chunk shows in the dev build with no import found; rebuild clean and look again.
 - Measure real per-job latency, cost and cache hit rate from the usage rows once Gemini is paid for.
 
+## Timeline
+
+Claude writes most of the code, so building the MVP list is about a month. What takes longer is
+testing on real accounts, refining from feedback and waiting on the approvals above. Build time is
+about 2 hours each weekday morning, 2 hours each evening and full days on weekends.
+
+## Reply Box AI Controls (29 October 2026)
+
+### Decided and Built
+- Tooltips on the AI buttons are one short line. The attach and voice note buttons have no tooltip (they keep their screen reader labels).
+- Redraft is now **New Draft**: it writes an entirely new draft and replaces the current one (Undo brings it back). The dialog says so.
+- New one-click **Fix Typos and Grammar** button, shown when the box has text. It runs the existing edit with no instruction, which only fixes spelling, grammar, punctuation and phrasing and changes nothing else. **Edit Text** stays for changes you describe.
+
+- The microphone icon now means dictation (say what the reply should say, then the AI drafts it) on every channel. WhatsApp voice notes have their own ghost button labelled **Voice Note**.
+
+## Faster Notes and PDF Export (29 October 2026)
+
+Decided and built:
+- Export as PDF only downloads the file. It is no longer attached back into the note.
+- New Note opens at once: the note gets its id in the browser and the row is written in the background. Saves, pins, deletes and file uploads wait for that row; if it fails the note is taken out of the list with an error.
+- Opening a note is warmer: the text and files of a note start loading when its row is pointed at or focused, the newest 8 notes' text loads in one request once the list is in, and pdf.js is loaded as soon as a note with a PDF opens.
+
+Not done: nothing measured in a signed-in browser yet; decrypting a large sealed PDF still happens on the main thread.
+
+## Code Review Fixes (2 November 2026)
+
+A read-only review of the whole repository by seven agents, then fixes by six more, each owning its own files. Nothing
+sends twice, row level security has no gaps, and no message content is logged.
+
+### Decided and Built
+
+- An outgoing email whose body or subject cannot be decrypted fails as Nothing Sent instead of going out blank.
+- A feature with no entry in a user's AI allowance counts as out of budget, as the SQL always said. With empty shares in
+  Admin, all AI pauses. Readable Bulk Email always gets a share (`20261115100000_review_fixes.sql`).
+- The 20 pending draft cap also holds when a draft is changed to pending.
+- LinkedIn, WhatsApp and Teams no longer move past a message that failed to save. A LinkedIn catch-up after downtime
+  reads every changed conversation, not only the newest 20 (the first connect still reads 20).
+- Paid Gemini answers are not thrown away and asked again: a failure after the call backs off the item, and a budget or
+  billing pause is not counted as a try. Only 402, or a 403 that mentions billing, pauses AI for everyone.
+- Shared chats remember being answered on the chat (`threads.answered_at`), so the 30 day outbox clean-up no longer
+  makes them unanswered again.
+- The voice learning counters on profiles are kept by a trigger, not a column grant, so new profile columns stay
+  writable from Settings.
+- AI prompts fence what senders wrote, and the contact and company summaries made from it, as untrusted.
+- In the app: a failed key fetch shows an error instead of a blank inbox, a refresh after reconnecting merges into
+  what changed meanwhile instead of overwriting it, and at most 60 conversations of messages are kept in memory.
+
+### Decided (2 November 2026)
+
+- Company summaries (`organizations.summary`) are encrypted (field `org_summary`), as they say what a company emails
+  you. The AI worker seals new ones and seals old plain ones as it next reads them, with no new AI call.
+- An email queued while its account is in error waits up to 10 minutes and goes out if the account recovers; after
+  that it fails with "needs attention". A disconnected account still fails it at once.
+- The setup allowance is already once per person per address (`ai_setup_grants`, 20261102100100): reconnecting the
+  same address grants nothing new. No change.
+- Atomic claims for every AI job: not yet. One AI worker is safe; add them before running a second AI worker or
+  overlapping deploys, when both could pay for the same call.
+- The Realtime feed of messages keeps its full rows: the body is sealed, and narrowing it means fetching each new
+  message again in the app.
+- A worker that finds its shard lease held waits one lease lifetime (about 90 seconds) before giving up, so a lease
+  left by a killed worker (a dev reload saved twice in a row) runs out and the new worker starts late, not never.
+
+### Not Done
+
+- `20261115100000_review_fixes.sql` is written but not applied or dry run yet.

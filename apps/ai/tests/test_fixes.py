@@ -98,6 +98,24 @@ class ChaserBatching(unittest.TestCase):
         self.assertEqual(Chasers(Many(), Counting(), "full").run_once(), 10)
         self.assertEqual(Counting.calls, 1)  # the other two wait for the next run
 
+    def test_every_candidate_thread_gets_its_own_read_of_its_latest_messages(self):
+        reads = []
+
+        class Busy(ChaserDb):
+            def select(self, table, params):
+                old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+                if table == "threads":
+                    return [{"id": f"t{i}", "user_id": "u", "last_message_at": old} for i in range(6)]
+                if table == "messages":
+                    reads.append((params["thread_id"], params["limit"]))
+                    thread = params["thread_id"][len("in.("):-1].strip('"')
+                    return [{"id": f"m-{thread}", "user_id": "u", "thread_id": thread, "direction": "outbound", "body_text": "Can you send it?", "body_html": None, "sent_at": old}]
+                return super().select(table, params)
+
+        Chasers(Busy(), ChaserGemini(), "full").run_once()
+        self.assertEqual(sorted(r[0] for r in reads), sorted(f'in.("t{i}")' for i in range(6)))
+        self.assertEqual({r[1] for r in reads}, {"3"})
+
 
 class SplitOnlyWhenWorthIt(unittest.TestCase):
     def run_with(self, error):

@@ -80,6 +80,7 @@ def describe_jobs(cfg: Config) -> dict[str, str]:
         "brief": f"{cfg.brief_model}",
         "transcribe": f"{cfg.transcribe_model}/minimal",
         "chasers": f"{cfg.model}/low",
+        "bulk_read": f"{cfg.triage_model}/minimal",
     }
 
 

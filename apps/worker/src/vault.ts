@@ -61,9 +61,17 @@ interface Material {
 }
 const cache = new Map<string, { until: number; material: Promise<Material> }>();
 
+/** Drops expired entries, so key material is not held past its time by a user nobody reads for. Run when an entry is added. */
+function evictExpired(entries: Map<string, { until: number }>) {
+  const now = Date.now();
+  for (const [key, entry] of entries) if (entry.until <= now) entries.delete(key);
+}
+
 function materialFor(userId: string): Promise<Material> {
   const hit = cache.get(userId);
   if (hit && hit.until > Date.now()) return hit.material;
+  cache.delete(userId);
+  evictExpired(cache);
   const material = keyWrappers()
     .then((w) => dataKeyFor(store, w, userId))
     .then(async (raw) => {
@@ -96,6 +104,8 @@ const teamCache = new Map<string, { until: number; ring: Promise<TeamRing> }>();
 export function teamRingFor(workspaceId: string): Promise<TeamRing> {
   const hit = teamCache.get(workspaceId);
   if (hit && hit.until > Date.now()) return hit.ring;
+  teamCache.delete(workspaceId);
+  evictExpired(teamCache);
   const ring = keyWrappers()
     .then((w) => teamKeyring(teamStore, w, workspaceId))
     .then(async (r) => {
@@ -115,15 +125,15 @@ export function teamKeysFor(workspaceId: string): Promise<TeamKeys> {
   return teamRingFor(workspaceId).then((r) => r.current);
 }
 
-const accountOwners = new Map<string, string>();
+const accountOwners = new Map<string, { until: number; user: string }>();
 
-/** The user an account belongs to. An account never changes hands, so this is remembered. */
+/** The user an account belongs to. An account never changes hands, so this is remembered (for KEY_CACHE_MS, so the map cannot grow for good). */
 async function ownerOf(accountId: string): Promise<string> {
   const known = accountOwners.get(accountId);
-  if (known) return known;
+  if (known && known.until > Date.now()) return known.user;
   const row = must(await db.from("accounts").select("user_id").eq("id", accountId).maybeSingle(), "load account owner");
   if (!row) throw Object.assign(new Error("Unknown account"), { code: "NO_ACCOUNT" });
-  accountOwners.set(accountId, row.user_id);
+  accountOwners.set(accountId, { until: Date.now() + KEY_CACHE_MS, user: row.user_id });
   return row.user_id;
 }
 
@@ -138,6 +148,15 @@ export async function credentialSealer(accountId: string, userId?: string): Prom
 
 const workspaceCache = new Map<string, { at: number; ids: string[] }>();
 const WORKSPACES_TTL_MS = 60_000;
+
+// Entries are also dropped when nobody asks for them again: a sweep a minute, so key material never outlives KEY_CACHE_MS by long.
+setInterval(() => {
+  evictExpired(cache);
+  evictExpired(teamCache);
+  evictExpired(accountOwners);
+  const now = Date.now();
+  for (const [user, entry] of workspaceCache) if (now - entry.at >= WORKSPACES_TTL_MS) workspaceCache.delete(user);
+}, 60_000).unref();
 
 /** The workspaces a user is or was in, newest first. Cached briefly: who is in a team changes rarely. */
 async function workspacesOf(userId: string): Promise<string[]> {

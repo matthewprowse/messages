@@ -87,6 +87,10 @@ export const FIELD = {
   contactStyleNote: "contact_style_note",
   /** contacts.ai_summary: written by the AI worker */
   contactSummary: "contact_summary",
+  /** organizations.summary: what a company sends you, written by the AI worker from its emails */
+  orgSummary: "org_summary",
+  /** message_ai.bulk_read: the AI's readable version of a bulk email, as JSON */
+  bulkRead: "bulk_read",
   /** message_embeddings.embedding_data: a vector sealed with encryptBytes, base64 */
   embeddingData: "embedding_data",
 } as const;

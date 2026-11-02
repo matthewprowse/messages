@@ -3,7 +3,7 @@
 // Everything for showing files: tiles and thumbnails, the full-screen viewer with its swipe navigation, and the grid used by the Attachments page,
 // a contact's page and a conversation. Labels for kinds and sources live here too.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { track } from "@/lib/analytics";
 import Link from "next/link";
@@ -138,6 +138,7 @@ function Thumb({ attachment: a, onReady }: { attachment: Attachment; /** Called 
   const url = sealedThumb ? (thumbFailed ? undefined : thumbUrl) : fullUrl;
   const [broken, setBroken] = useState(false);
   const onError = useCallback(() => setBroken(true), []);
+  useEffect(() => { setBroken(false); }, [url]); // a different file gets its own chance to load
   const glyph = !pictured || broken || (seen && url === null);
   useEffect(() => { if (glyph) onReady?.("glyph"); }, [glyph, onReady]);
   if (glyph) return <FileGlyph attachment={a} />;
@@ -698,6 +699,20 @@ const monthTitle = (iso: string) => new Date(iso).toLocaleDateString(undefined, 
 /** "1 File" or "2,500 Files", the count in the browser's locale. */
 export const filesLabel = (n: number) => `${n.toLocaleString()} ${n === 1 ? "File" : "Files"}`;
 
+/** One tile in the grid. Memoized with a stable onView, so loading more files or a store change does not redraw every tile. */
+const GridTile = memo(function GridTile({ attachment: a, source, sender, onView }: { attachment: FiledAttachment; source?: Source; sender: string; onView: (a: FiledAttachment) => void }) {
+  return (
+    <AttachmentTile
+      attachment={a}
+      onOpen={() => onView(a)}
+      showName={false}
+      source={source}
+      overlay={<><span className="truncate">{sender}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
+      className="aspect-square size-auto w-full"
+    />
+  );
+});
+
 /**
  * Files gathered from many messages, newest first, each captioned with its name, who sent it and when,
  * with the account it came through as a small icon. With byMonth, a header with a count starts each month.
@@ -730,14 +745,7 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
                 </h2>
               )}
               <div className="flex min-w-0 flex-col gap-1">
-                <AttachmentTile
-                  attachment={a}
-                  onOpen={() => setViewing(a)}
-                  showName={false}
-                  source={sourceOf(threadById(a.threadId)?.provider)}
-                  overlay={<><span className="truncate">{who(a.from)}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
-                  className="aspect-square size-auto w-full"
-                />
+                <GridTile attachment={a} source={sourceOf(threadById(a.threadId)?.provider)} sender={who(a.from)} onView={setViewing} />
               </div>
             </Fragment>
           );

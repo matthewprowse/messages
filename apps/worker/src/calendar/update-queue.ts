@@ -40,8 +40,11 @@ export async function settleUpdated(id: string, note: string | null = null) {
   if (!saved) await failUpdate(id, NOT_RECORDED).catch(() => undefined);
 }
 
-export async function queuedUpdates(): Promise<CalendarUpdateRow[]> {
-  return must(await db.from("calendar_updates").select("*").eq("status", "queued").order("created_at").limit(50), "load calendar updates");
+/** The oldest queued changes, of the given accounts when asked (a worker reads only the accounts it runs). */
+export async function queuedUpdates(accountIds?: string[]): Promise<CalendarUpdateRow[]> {
+  if (accountIds && accountIds.length === 0) return [];
+  const query = db.from("calendar_updates").select("*").eq("status", "queued");
+  return must(await (accountIds ? query.in("account_id", accountIds) : query).order("created_at").limit(50), "load calendar updates");
 }
 
 /** An update left "updating" by a worker that stopped mid-request may or may not have happened, so it is failed rather than sent again. */

@@ -36,12 +36,16 @@ const NAMED: Record<string, string> = {
   micro: "µ", plusmn: "±", sup2: "²", sup3: "³", alpha: "α", beta: "β", pi: "π", mu: "μ", infin: "∞",
 };
 
+// HTML treats numeric references 128-159 as windows-1252 characters, not C1 controls ("&#146;" is a right quote).
+const CP1252 = "\u20ac\u0081\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\u008d\u017d\u008f\u0090\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u009d\u017e\u0178";
+
 /** Decodes HTML character references. Named ones need their semicolon, so "?a=1&copy=2" in a link survives. */
 export function decodeEntities(s: string): string {
   return s.replace(/&(?:#(\d{1,7});?|#[xX]([0-9a-fA-F]{1,6});?|([a-zA-Z][a-zA-Z0-9]{1,9});)/g, (whole, dec?: string, hex?: string, name?: string) => {
     if (name) return NAMED[name] ?? whole;
     const n = dec ? Number(dec) : parseInt(hex ?? "", 16);
     if (n === 0 || n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff)) return "";
+    if (n >= 0x80 && n <= 0x9f) { const c = CP1252[n - 0x80] ?? ""; return c < "\u00a0" && c >= "\u0080" ? "" : c; } // the five unassigned slots are dropped
     return String.fromCodePoint(n);
   });
 }
@@ -418,6 +422,9 @@ function emphasisRunsOf(html: string, max: number): Emphasis[] {
   return out.slice(0, max);
 }
 
+/** cleanText works on at most this many characters: its regexes must stay fast on hostile mail (see cleanText.test). */
+const MAX_CLEAN_TEXT = 200_000;
+
 // Marks where a bracketed image or link was removed, so a line left holding only that is dropped
 // rather than kept as a blank that splits a sentence in two.
 const GONE = "\u0001";
@@ -425,12 +432,12 @@ const IMAGE_LINK = "\u0002";
 
 /** Tidies whitespace and link noise without changing the words. */
 export function cleanText(text: string): string {
-  const raw = text
+  const raw = (text.length > MAX_CLEAN_TEXT ? text.slice(0, MAX_CLEAN_TEXT) : text)
     .replace(/\r\n?/g, "\n")
     .replace(INVISIBLE, "")
     .replace(SPACES, " ")
     // Outlook's conditional comments and drawing tags, which some text parts carry verbatim.
-    .replace(/<!--[\s\S]*?-->|<!\[endif\]-->|<\/?[vwo]:[^>]*>/gi, "")
+    .replace(/<!--[\s\S]{0,20000}?-->|<!\[endif\]-->|<\/?[vwo]:[^>]{0,500}>/gi, "")
     // Preheader padding that a converter left behind as entity names.
     .replace(/&(?:zwnj|zwj|shy|lrm|rlm|#8203|#8204|#8205|#847|#173|#x200[bcd]|#x34f|#xad);/gi, "")
     .replace(/&nbsp;/gi, " ")
@@ -439,25 +446,25 @@ export function cleanText(text: string): string {
     .replace(/(\d)(?:zwnj|zwj|nbsp)(\d)/g, "$1$2")
     // An image in brackets wrapped in a link ("[https://x/logo.png]https://click..."): the image goes and
     // the link is marked, to go too at the top of the email (a logo) and stay below it (a button).
-    .replace(/\[(?:https?:\/\/|cid:)[^\]]*\](https?:\/\/\S+)/gi, `${GONE}${IMAGE_LINK}$1`)
+    .replace(/\[(?:https?:\/\/|cid:)[^\]]{0,2000}\](https?:\/\/\S+)/gi, `${GONE}${IMAGE_LINK}$1`)
     // Gmail's text part puts image links, alt text and mailto/tel targets in square brackets.
-    .replace(/\[(?:https?:\/\/|cid:|mailto:|tel:)[^\]]*\]/gi, GONE)
-    .replace(/\[image:[^\]]*\]/gi, GONE)
+    .replace(/\[(?:https?:\/\/|cid:|mailto:|tel:)[^\]]{0,2000}\]/gi, GONE)
+    .replace(/\[image:[^\]]{0,2000}\]/gi, GONE)
     // Markdown links some senders write: "[Label](https://...)" reads as "Label (https://...)".
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)")
     // A link left as HTML in a text part (GitHub's footers): its label, plus its address when that says more.
-    .replace(/<a\s[^>]*?href\s*=\s*["']([^"']*)["'][^>]*>([^<]*)<\/a\s*>/gi, (_: string, href: string, label: string) => {
+    .replace(/<a\s[^>]{0,1000}?href\s*=\s*["']([^"']{0,2000})["'][^>]{0,1000}>([^<]{0,2000})<\/a\s*>/gi, (_: string, href: string, label: string) => {
       const text = label.trim();
       const bare = (u: string) => u.replace(/^(?:https?:\/\/|mailto:)/i, "").replace(/\/$/, "");
       if (!text || bare(text) === bare(href) || !/^(?:https?:\/\/|mailto:)/i.test(href)) return text || href;
       return `${text} (${href})`;
     })
     // Outlook repeats an address after itself: "jo@x.com<mailto:jo@x.com>", "+27 21 ... <tel:+27...>".
-    .replace(/[ \t]?<(?:mailto|tel):[^>\s]+>/gi, "")
+    .replace(/[ \t]?<(?:mailto|tel):[^>\s]{1,500}>/gi, "")
     // "( https://... )" and "<https://...>" are how HTML to text converters write links. A link written
     // as "url <url/>" keeps one copy.
-    .replace(/\(\s*(https?:\/\/[^\s)]+)\s*\)/g, "($1)")
-    .replace(/(\S*)[ \t]*<(https?:\/\/[^\s>]+)>/g, (match: string, before: string, url: string, at: number, all: string) => {
+    .replace(/\(\s{0,50}(https?:\/\/[^\s)]{1,2000})\s{0,50}\)/g, "($1)")
+    .replace(/(\S{0,500})[ \t]{0,50}<(https?:\/\/[^\s>]{1,2000})>/g, (match: string, before: string, url: string, at: number, all: string) => {
       if (before.replace(/\/$/, "") === url.replace(/\/$/, "")) return before;
       const next = all[at + match.length] ?? "";
       return `${before} ${url}${next && !/[\s.,;:!?)]/.test(next) ? " " : ""}`;
@@ -653,9 +660,26 @@ const CUTS = [
   /\n-- ?\n/, // signature delimiter
   /\n[ \t]*_{10,}[ \t]*\n(?![ \t]*Microsoft Teams)/, // Outlook reply separator, but not the line above a Teams invite
   /\n[ \t]*(?:Get Outlook for|Sent from my|Sent from Outlook|Sent from Mail for) [^\n]*/i, // mobile app footers
-  /\n[ \t]*>(?![ \t]*https?:\/\/\S+[ \t]*$)[^\n]*/m, // first quoted line, but not a "> https://..." link arrow
   /\n[^\n]{2,80}\n[A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2}(?: [AP]M)? GMT[+-]\d{1,2}(?::\d{2})?\n/, // Zendesk ticket history
 ];
+
+const QUOTE_LINE = /^[ \t]*>(?![ \t]*https?:\/\/\S+[ \t]*$)/;
+
+/** Where a trailing block of "> " lines starts (index of the newline before it), or -1. Quotes with answers after
+ * them (an interleaved reply) are not trailing, so those answers are not hidden. */
+function trailingQuote(text: string): number {
+  const lines = text.split("\n");
+  let start = -1; // index of the first quoted line of the final run
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (!lines[i].trim()) continue;
+    if (/^[ \t]*>/.test(lines[i])) { if (QUOTE_LINE.test(lines[i])) start = i; continue; }
+    break;
+  }
+  if (start < 1) return -1;
+  let at = 0;
+  for (let i = 0; i < start; i++) at += lines[i].length + 1;
+  return at - 1;
+}
 
 // A forwarded email's own content follows this line, so nothing after it is cut as history.
 const FORWARD = /^[ \t]*(?:-{3,}[ \t]*Forwarded message[ \t]*-{3,}|Begin forwarded message:)/im;
@@ -668,6 +692,8 @@ export function splitQuoted(text: string): EmailParts {
     const match = pattern.exec(text);
     if (match && match.index > 0 && match.index < forward && (cut < 0 || match.index < cut)) cut = match.index;
   }
+  const quote = trailingQuote(text);
+  if (quote > 0 && quote < forward && (cut < 0 || quote < cut)) cut = quote;
   if (cut < 0) return { body: text };
   const body = text.slice(0, cut).trim();
   const quoted = text.slice(cut).trim();

@@ -29,6 +29,7 @@ MAX_AGE = timedelta(days=30)
 PER_RUN = 40
 THREADS = 80  # looked at per run, each with its last few messages
 BATCH = 10
+PER_THREAD_MESSAGES = 3  # latest_per_thread needs your last message and the one before it, with one to spare
 MIN_BATCH = 5  # a user is only asked about when this many are due, or the oldest has waited MAX_HOLD past its due time
 MAX_HOLD = timedelta(hours=12)  # still inside the two-day Waiting window: read by about a day and a half
 MESSAGE_CHARS = 500
@@ -151,10 +152,14 @@ class Chasers:
             return 0
         ids = [t["id"] for t in threads]
         seen = {k: r["message_id"] for k, r in checked.items()}
-        messages = self.db.select(
-            "messages",
-            {"select": "id,user_id,thread_id,direction,body_text,body_html,sent_at", "thread_id": in_list(ids), "order": "sent_at.desc", "limit": "1000"},
-        )
+        # One small read per thread: a single capped read across all of them let a busy thread's history crowd out the
+        # latest messages of the ones that had waited longest.
+        messages: list[dict[str, Any]] = []
+        for thread_id in ids:
+            messages += self.db.select(
+                "messages",
+                {"select": "id,user_id,thread_id,direction,body_text,body_html,sent_at", "thread_id": in_list([thread_id]), "order": "sent_at.desc", "limit": str(PER_THREAD_MESSAGES)},
+            )
         owner = {t["id"]: t["user_id"] for t in threads}
         when = {t["id"]: t["last_message_at"] for t in threads}
         todo = [(thread, pair) for thread, pair in latest_per_thread(messages).items() if seen.get(thread) != pair[1]["id"]][:PER_RUN]

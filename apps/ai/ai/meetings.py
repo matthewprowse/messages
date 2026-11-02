@@ -336,7 +336,14 @@ class Meetings:
         self._tries: dict[str, tuple[int, float]] = {}  # meeting id -> (failed tries, monotonic time to try again)
 
     def run_once(self) -> int:
-        return self.transcribe_once() + self.summarise_once()
+        """Each step runs whatever the other did: a recording that keeps failing must not hold the summaries back."""
+        done = 0
+        for name in ("transcribe_once", "summarise_once"):
+            try:
+                done += getattr(self, name)()
+            except Exception as err:
+                log.warn("meeting step failed to run", step=name, code=log.code_of(err))
+        return done
 
     def waiting(self) -> list[str]:
         """Meetings taking a break after failing."""
@@ -350,7 +357,7 @@ class Meetings:
         for m in self.db.select("meetings", recording_query(self.waiting())):
             try:
                 done += self._transcribe(m)
-            except (GeminiError, SupabaseError, OSError) as err:
+            except Exception as err:  # a cut-off download, a bad key or a malformed answer is one meeting's try, not the batch's end
                 self._failed(m, "waiting", NOT_TRANSCRIBED, err)
         if done:
             log.info("meeting recordings transcribed", count=done)
@@ -382,6 +389,8 @@ class Meetings:
             return self._transcribe_held(m, rec, path, parts, usage, seconds, hold)
 
     def _transcribe_held(self, m: dict[str, Any], rec: dict[str, Any], path: str, parts: list[tuple[int, int | None]], usage: UsageContext, seconds: float, hold: Any) -> int:
+        if self.gemini.billing_blocked():  # before the download and upload, which would otherwise be repeated for every refused call
+            raise GeminiError(None, "billing_paused")
         try:
             audio = self.db.download(BUCKET, path, timeout=600)
         except SupabaseError as err:
@@ -396,9 +405,8 @@ class Meetings:
         # here, in memory; a plain legacy object passes through.
         if rec.get("sealed") or is_sealed_bytes(audio):
             opened = self.vault.open_bytes(m["user_id"], RECORDING_DATA, audio)
-            if opened is None:
-                self._finish(m["id"], "waiting", {"status": "failed", "error": NO_RECORDING})
-                return 0
+            if opened is None:  # no key yet, as for voice notes: tried again, and failed only after MAX_TRIES
+                raise OSError("recording could not be opened")
             audio = opened
         mime = audio_type(rec.get("mime_type") or "audio/mp4")
         names = self._names(m)
@@ -472,7 +480,7 @@ class Meetings:
         for m in self.db.select("meetings", summary_query(self.waiting())):
             try:
                 done += self._summarise(m)
-            except (GeminiError, SupabaseError, OSError) as err:
+            except Exception as err:
                 self._failed(m, "transcribed", NOT_SUMMARISED, err)
         if done:
             log.info("meetings summarised", count=done)
@@ -531,7 +539,8 @@ class Meetings:
             self._tries.pop(m["id"], None)
             try:
                 self._finish(m["id"], status, {"status": "failed", "error": reason})
-            except SupabaseError as again:
-                log.warn("meeting not marked failed", meeting=m["id"], code=again.status)
+            except Exception as again:
+                self._tries[m["id"]] = (tries, time.monotonic() + RETRY_S)  # still a try, so it is not asked again at once
+                log.warn("meeting not marked failed", meeting=m["id"], code=log.code_of(again))
         else:
             self._tries[m["id"]] = (tries, time.monotonic() + RETRY_S)

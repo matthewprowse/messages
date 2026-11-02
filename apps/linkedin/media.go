@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +61,18 @@ type attachment struct {
 	mime string
 	kind string
 	size int
+	// file is the file as opened by checkAttachments, so what is uploaded is what was checked and not whatever
+	// the path names by then. Nil (tests) falls back to opening path. closeAttachments closes it.
+	file *os.File
+}
+
+// closeAttachments closes the files checkAttachments opened.
+func closeAttachments(files []attachment) {
+	for _, a := range files {
+		if a.file != nil {
+			a.file.Close()
+		}
+	}
 }
 
 // checkAttachments validates every file before anything is uploaded, so a bad one sends nothing. A path must
@@ -74,29 +87,44 @@ func checkAttachments(args []attachmentArg, root string) ([]attachment, *Error) 
 		return nil, bad
 	}
 	out := make([]attachment, 0, len(args))
+	// A bad file closes the ones already opened: the caller gets nothing to close.
+	fail := func() ([]attachment, *Error) {
+		closeAttachments(out)
+		return nil, bad
+	}
 	for _, a := range args {
 		switch a.Kind {
 		case AttachImage, AttachVideo, AttachFile:
 		default:
-			return nil, bad
+			return fail()
 		}
 		name := strings.TrimSpace(a.Name)
 		if name == "" || !filepath.IsAbs(a.Path) {
-			return nil, bad
+			return fail()
 		}
 		real, err := filepath.EvalSymlinks(filepath.Clean(a.Path))
 		if err != nil || !strings.HasPrefix(real, realRoot+string(filepath.Separator)) {
-			return nil, bad
+			return fail()
 		}
-		info, err := os.Stat(real)
-		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxAttachmentLen {
-			return nil, bad
+		// Opened once and judged by the open file. O_NOFOLLOW refuses a link swapped in at the last step, and the
+		// path must still lead to the same file, so a swapped folder is caught too.
+		f, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return fail()
+		}
+		info, err := f.Stat()
+		again, errAgain := filepath.EvalSymlinks(real)
+		at, errAt := os.Stat(real)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxAttachmentLen ||
+			errAgain != nil || again != real || errAt != nil || !os.SameFile(info, at) {
+			f.Close()
+			return fail()
 		}
 		mime := strings.TrimSpace(a.Mime)
 		if mime == "" {
 			mime = "application/octet-stream"
 		}
-		out = append(out, attachment{path: real, name: name, mime: mime, kind: a.Kind, size: int(info.Size())})
+		out = append(out, attachment{path: real, name: name, mime: mime, kind: a.Kind, size: int(info.Size()), file: f})
 	}
 	return out, nil
 }
@@ -118,11 +146,14 @@ func fileToken(token string, i int) string {
 
 // uploadFile uploads one file and builds the render content that attaches it.
 func uploadFile(ctx context.Context, api mediaAPI, a attachment) (linkedingo.SendRenderContent, error) {
-	f, err := os.Open(a.path)
-	if err != nil {
-		return linkedingo.SendRenderContent{}, err
+	f := a.file
+	if f == nil {
+		var err error
+		if f, err = os.Open(a.path); err != nil {
+			return linkedingo.SendRenderContent{}, err
+		}
+		defer f.Close()
 	}
-	defer f.Close()
 	upload := linkedingo.MediaUploadTypeFileAttachment
 	switch a.kind {
 	case AttachImage:

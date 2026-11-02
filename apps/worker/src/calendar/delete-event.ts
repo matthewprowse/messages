@@ -3,6 +3,7 @@
 
 import type { Tables } from "@messages/db";
 import { db, must, retryWrite } from "../db";
+import { errorCode, log } from "../log";
 
 export type CalendarDeleteRow = Tables<"calendar_deletes">;
 export type StoredCalendarEvent = Tables<"calendar_events">;
@@ -36,18 +37,26 @@ export async function storedEventOf(row: CalendarDeleteRow): Promise<StoredCalen
  */
 export async function settleDeleted(row: CalendarDeleteRow, event: StoredCalendarEvent) {
   const wholeSeries = row.scope === "series" && event.series_id;
-  must(
-    await (wholeSeries
-      ? db.from("calendar_events").delete().eq("account_id", row.account_id).eq("series_id", event.series_id!)
-      : db.from("calendar_events").delete().eq("id", event.id)),
-    "remove deleted event",
-  );
+  // The event is already gone from its calendar. A failed local removal must not leave the row "deleting": the next sync removes the copy.
+  try {
+    must(
+      await (wholeSeries
+        ? db.from("calendar_events").delete().eq("account_id", row.account_id).eq("series_id", event.series_id!)
+        : db.from("calendar_events").delete().eq("id", event.id)),
+      "remove deleted event",
+    );
+  } catch (err) {
+    log.warn("deleted event not removed from the app", { code: errorCode(err) });
+  }
   const saved = await retryWrite(() => db.from("calendar_deletes").update({ status: "done", error: null, done_at: new Date().toISOString() }).eq("id", row.id).eq("status", "deleting"));
   if (!saved) await failDelete(row.id, "The event was deleted, but that could not be recorded. Reload to check.").catch(() => undefined);
 }
 
-export async function queuedDeletes(): Promise<CalendarDeleteRow[]> {
-  return must(await db.from("calendar_deletes").select("*").eq("status", "queued").order("created_at").limit(50), "load calendar deletes");
+/** The oldest queued deletes, of the given accounts when asked (a worker reads only the accounts it runs). */
+export async function queuedDeletes(accountIds?: string[]): Promise<CalendarDeleteRow[]> {
+  if (accountIds && accountIds.length === 0) return [];
+  const query = db.from("calendar_deletes").select("*").eq("status", "queued");
+  return must(await (accountIds ? query.in("account_id", accountIds) : query).order("created_at").limit(50), "load calendar deletes");
 }
 
 /** A delete left "deleting" by a worker that stopped mid-request may or may not have happened, so it is failed rather than sent again. */

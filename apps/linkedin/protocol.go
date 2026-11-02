@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"go.mau.fi/mautrix-linkedin/pkg/linkedingo"
 )
@@ -330,10 +332,28 @@ func ProxyClient(raw string) (*http.Client, error) {
 	default:
 		return nil, fmt.Errorf("proxy scheme %q is not supported", u.Scheme)
 	}
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	// One transport per proxy, reused by the sign-in's next steps; a different proxy closes the old one's idle
+	// connections so they do not pile up across sign-ins.
+	if proxyClient != nil && proxyRaw == raw {
+		return proxyClient, nil
+	}
+	if proxyClient != nil {
+		proxyClient.CloseIdleConnections()
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyURL(u)
-	return &http.Client{Transport: transport}, nil
+	transport.ResponseHeaderTimeout = 30 * time.Second // a proxy that accepts and then says nothing must not hang a sign-in
+	proxyRaw, proxyClient = raw, &http.Client{Transport: transport}
+	return proxyClient, nil
 }
+
+var (
+	proxyMu     sync.Mutex
+	proxyRaw    string
+	proxyClient *http.Client
+)
 
 // CookieHeader is a session's cookies as one Cookie header, the form the login command takes back.
 func CookieHeader(jar *linkedingo.StringCookieJar) string {

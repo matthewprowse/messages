@@ -12,7 +12,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,6 +63,8 @@ type Helper struct {
 	checkpoint *linkedingo.PasswordCheckpoint
 	cancelWait context.CancelFunc
 	waitDone   chan struct{}
+	// inflight ends the command being handled (see interrupt).
+	inflight context.CancelFunc
 }
 
 type loginArgs struct {
@@ -157,6 +158,13 @@ func EventFrom(e *linkedingo.DecoratedEvent) *Event {
 
 // Handle runs one command and returns its response. stop reports whether the helper should exit.
 func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop bool) {
+	// base outlives the command: a login's client and the realtime connection keep running on it. ctx ends with the
+	// command, by its timeout or by interrupt (a stop arriving while it is stuck).
+	base := ctx
+	ctx, cancel := context.WithTimeout(base, commandTimeout(req))
+	defer cancel()
+	h.setInflight(cancel)
+	defer h.setInflight(nil)
 	switch req.Cmd {
 	case "login", "signin", "code", "app", "another_way", "stop":
 	default:
@@ -220,7 +228,7 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 			return Fail(req.ID, &Error{Kind: KindBadCredentials}), false
 		}
 		h.session = newSession(jar, args, me, h.startEndpoint)
-		h.client = linkedingo.NewClient(ctx, linkedingo.NewURN(me.ID), jar, args.PageInstance, args.XLiTrack, args.SyncToken, h.handlers())
+		h.client = linkedingo.NewClient(base, linkedingo.NewURN(me.ID), jar, args.PageInstance, args.XLiTrack, args.SyncToken, h.handlers())
 		h.client.SetBrowserHeaders(args.Headers)
 		return Done(req.ID, map[string]any{"me": me}), false
 
@@ -293,6 +301,7 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 			if bad != nil {
 				return Fail(req.ID, bad), false
 			}
+			defer closeAttachments(files)
 			sent, err := sendFiles(ctx, h.client, linkedingo.NewURN(args.Conversation), args.Text, args.Token, files, 0)
 			if err != nil {
 				return sendFailure(req.ID, sent, err), false
@@ -332,7 +341,7 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 
 	case "connect":
 		if !h.live {
-			if err := h.client.RealtimeConnect(ctx); err != nil {
+			if err := h.client.RealtimeConnect(base); err != nil {
 				return Fail(req.ID, Classify(err)), false
 			}
 			h.live = true
@@ -451,25 +460,5 @@ func main() {
 	h := &Helper{out: out}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	in := bufio.NewScanner(os.Stdin)
-	in.Buffer(make([]byte, 64*1024), maxLine)
-	out.Write(Event{Event: "ready"})
-	for in.Scan() {
-		var req Request
-		if err := json.Unmarshal(in.Bytes(), &req); err != nil {
-			out.Write(Fail(0, &Error{Kind: KindBadRequest}))
-			continue
-		}
-		resp, stop := h.Dispatch(ctx, req)
-		if resp != nil {
-			out.Write(resp)
-		}
-		if stop {
-			return
-		}
-	}
-	// stdin closed: the worker went away, so the session ends with it.
-	h.endWait()
-	h.dropClient()
+	h.Serve(ctx, os.Stdin)
 }

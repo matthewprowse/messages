@@ -14,6 +14,7 @@ import { useApp } from "@/lib/store";
 import { useOnboardingMeta } from "@/lib/onboarding";
 import { useMyTeam } from "@/lib/share";
 import { SyncBar } from "@/components/sync-bar";
+import { UsageRing } from "@/components/usage-ring";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -117,7 +118,8 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
         {isOwner && <RailButton href="/analytics" label="Analytics" icon={ChartColumn} active={pathname.startsWith("/analytics")} />}
         {isOwner && <RailButton href="/updates" label="Updates" icon={Megaphone} active={pathname.startsWith("/updates")} />}
         {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin")} />}
-        <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings")} />
+        <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings") && !pathname.startsWith("/settings/usage")} />
+        <UsageRing />
       </div>
     </nav>
   );

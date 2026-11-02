@@ -4,7 +4,7 @@
 // them to the user's own rows.
 
 import { supabase } from "./supabase";
-import { openAddresses, openNestedThreads } from "./open-rows";
+import { openAddresses, openNestedThreads, openOrganizations } from "./open-rows";
 import { allRows, identities, isUuid, latest } from "./contacts";
 import type { Provider } from "./types";
 
@@ -50,7 +50,7 @@ export interface CompanyDetail extends Omit<CompanySummary, "people" | "addresse
 
 export async function listCompanies(): Promise<CompanySummary[]> {
   const select = "id, name, domain, summary, logo_path, contacts(contact_identities(kind, value), thread_participants(threads(id, status, is_group, last_message_at)))";
-  const data = await openAddresses(await allRows("Load companies", (from, to) => supabase.from("organizations").select(select).order("id").range(from, to)));
+  const data = await openOrganizations(await openAddresses(await allRows("Load companies", (from, to) => supabase.from("organizations").select(select).order("id").range(from, to))));
   return data
     .filter((o) => o.contacts.length > 0)
     .map((o) => {
@@ -84,7 +84,7 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
     .maybeSingle();
   if (error) throw new Error(`Load company failed (${error.code})`);
   if (!o) return null;
-  await Promise.all([openNestedThreads(o.contacts), openAddresses(o)]);
+  await Promise.all([openNestedThreads(o.contacts), openAddresses(o), openOrganizations([o])]);
 
   const people = o.contacts
     .map((c) => ({ id: c.id, name: c.display_name, role: c.role, ...pick(identities(c.contact_identities)), avatarPath: c.avatar_path ?? undefined }))

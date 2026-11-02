@@ -31,6 +31,7 @@ const VIEWS: { key: View; label: string }[] = [
   { key: "priority", label: "Priority" },
   { key: "junk", label: "Junk" },
   { key: "subscriptions", label: "Subscriptions" },
+  { key: "archive", label: "Archive" },
 ];
 
 const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
@@ -45,6 +46,7 @@ const EMPTY: Record<View, { title: string; description: string }> = {
   all: { title: "You're All Caught Up", description: "New messages appear within seconds of arriving." },
   priority: { title: "Nothing Needs You Right Now", description: "Urgent and important conversations appear here." },
   junk: { title: "No Junk", description: "Spam and cold outreach the AI sorts out lands here." },
+  archive: { title: "Nothing Archived", description: "Conversations you archive are kept here until you move them back." },
   subscriptions: { title: "No Subscriptions", description: "Newsletters, promotions and alerts you can unsubscribe from land here." },
 };
 
@@ -67,7 +69,7 @@ function filterOf(raw: string | null): ListFilter {
 function useListState() {
   const params = useSearchParams();
   const viewParam = params.get("view");
-  const view: View = viewParam === "priority" || viewParam === "junk" || viewParam === "subscriptions" ? viewParam : "all";
+  const view: View = viewParam === "priority" || viewParam === "junk" || viewParam === "subscriptions" || viewParam === "archive" ? viewParam : "all";
   const rawFilter = filterOf(params.get("filter"));
   const filter: ListFilter = filtersForView(view).includes(rawFilter) ? rawFilter : "none";
   // Which view and filter people choose (the default is not a choice).
@@ -102,13 +104,18 @@ export type RowAction = ShortcutAction | "read" | "pin";
 
 /** Carries out a row action on one conversation or a selection. */
 export function useRowActions() {
-  const { threads: all, archive, trash, setJunk, markRead, pin } = useApp();
+  const { threads: all, archive, unarchive, trash, setJunk, markRead, pin } = useApp();
+  // Reads the latest threads and store actions through a ref, so the callback is stable and does not rebuild every row's handlers.
+  const latest = useRef({ all, archive, unarchive, trash, setJunk, markRead, pin });
+  latest.current = { all, archive, unarchive, trash, setJunk, markRead, pin };
   return useCallback((ids: string[], action: RowAction) => {
+    const { all, archive, unarchive, trash, setJunk, markRead, pin } = latest.current;
     const wanted = new Set(ids);
     const threads = all.filter((t) => wanted.has(t.id));
     if (threads.length === 0) return;
     const found = threads.map((t) => t.id);
-    if (action === "archive") archive(found);
+    // Archive toggles like Junk: archived conversations come back to the inbox.
+    if (action === "archive") { if (threads.every((t) => t.status === "archived")) unarchive(found); else archive(found); }
     else if (action === "trash") trash(found);
     // Junk toggles: conversations that are all junk come out of it, anything else goes in.
     else if (action === "junk") setJunk(found, !threads.every((t) => t.junk));
@@ -120,7 +127,7 @@ export function useRowActions() {
       const pinned = !threads.every((t) => t.pinned);
       for (const t of threads) if (t.pinned !== pinned) pin(t.id, pinned);
     }
-  }, [all, archive, trash, setJunk, markRead, pin]);
+  }, []);
 }
 
 function RowButton({ label, icon: Icon, onClick, variant = "ghost", className }: { label: string; icon: LucideIcon; onClick: () => void; variant?: "ghost" | "secondary"; className?: string }) {
@@ -161,7 +168,7 @@ export function useSwipedRow() {
 
 // A row's hover actions, in order from the left.
 const ROW_ACTIONS = (thread: Thread): { action: RowAction; label: string; icon: LucideIcon }[] => [
-  { action: "archive", label: "Archive", icon: Archive },
+  { action: "archive", label: thread.status === "archived" ? "Unarchive" : "Archive", icon: Archive },
   { action: "trash", label: "Delete", icon: Trash2 },
   { action: "junk", label: thread.junk ? "Not Junk" : "Move to Junk", icon: thread.junk ? MailCheck : OctagonAlert },
 ];
@@ -348,7 +355,7 @@ export const ThreadRow = memo(function ThreadRow({
       <ContextMenuContent className="w-48">
         <ContextMenuItem onSelect={() => onCheck(thread.id, false)}>{checked ? "Deselect" : "Select"}</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => act("archive")}>Archive<ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
+        <ContextMenuItem onSelect={() => act("archive")}>{thread.status === "archived" ? "Unarchive" : "Archive"}<ContextMenuShortcut>E</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuItem onSelect={() => act("trash")}>Delete<ContextMenuShortcut>#</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuItem onSelect={() => act("junk")}>{thread.junk ? "Not Junk" : "Move to Junk"}<ContextMenuShortcut>!</ContextMenuShortcut></ContextMenuItem>
         <ContextMenuSeparator />

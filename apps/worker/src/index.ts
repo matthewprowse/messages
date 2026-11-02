@@ -12,14 +12,14 @@
 
 import { hostname } from "node:os";
 import { randomBytes } from "node:crypto";
-import { db, must } from "./db";
+import { allRows, db, must } from "./db";
 import { env } from "./env";
 import { log, errorCode } from "./log";
 import { ICloudConnector } from "./connectors/icloud";
 import { ImapConnector } from "./connectors/imap";
 import { IMAP_SERVICE } from "./connectors/mail-service";
 import { GmailConnector } from "./connectors/gmail";
-import { GoogleCalendarConnector, failEvent, queuedEvents } from "./connectors/google-calendar";
+import { GoogleCalendarConnector, failEvent } from "./connectors/google-calendar";
 import type { CalendarOutboxRow } from "./calendar/create-event";
 import { failDelete, queuedDeletes, type CalendarDeleteRow } from "./calendar/delete-event";
 import { failUpdate, queuedUpdates } from "./calendar/update-queue";
@@ -53,11 +53,13 @@ import type { Json, Tables } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { openAddressRows, seal } from "./vault";
 import { failStuckSend, type OutboxRow } from "./send/outbox";
+import { ACCOUNT_ERROR_WAIT_MS, accountVerdict, BROKEN_ACCOUNT_REASON } from "./send/account-wait";
 import { applyClaimed } from "./send/actions";
 import { ownsAccount, isPrimaryShard } from "./shard";
 import { failInterruptedWork, requeueWorkingActions, STALE_ACTION_MS } from "./recovery";
 import { ORPHAN_GRACE_MS } from "./recovery-plan";
 import { Lease } from "./lease";
+import { startEvery } from "./backoff";
 import { startOutboxCleanup, withAttachmentSlot } from "./send/outbox-attachments";
 import {
   NOT_SUPPORTED_TICK, NOT_SUPPORTED_WRITE, TASK_GONE, accountsById, accountsOfTasks, claimTaskUpdate, failTaskUpdates, finishTaskUpdate, planTaskUpdates, queuedTaskUpdates,
@@ -173,9 +175,12 @@ async function reconcileOnce() {
   // Each account with when its credentials last changed, in one light read: only the columns this pass
   // decides on, so nothing is decrypted for an account that is already running and unchanged.
   // Only the accounts this shard owns: a connector for any other account is stopped by the last loop below.
-  const rows = must(
-    await db.from("accounts").select("id, provider, status, account_credentials(updated_at)").in("provider", Object.keys(CONNECTORS)),
-    "load accounts",
+  // Paged and ordered: past 1000 rows the API cuts a plain read off, and the last loop would stop connectors whose rows were cut.
+  const rows = (
+    await allRows(
+      (from, to) => db.from("accounts").select("id, provider, status, account_credentials(updated_at)").in("provider", Object.keys(CONNECTORS)).order("id").range(from, to),
+      "load accounts",
+    )
   ).filter((a) => ownsAccount(a.id));
   const ids = new Set(rows.map((a) => a.id));
 
@@ -259,16 +264,21 @@ type QueuedOutbox = OutboxRow & {
   accounts?: { id: string; status: string } | null;
 };
 
+/**
+ * The oldest queued emails of the accounts this worker runs: new emails name their account, replies reach it through their
+ * conversation. Rows of accounts it does not run are not read, so they cannot fill the window and starve newer ones.
+ */
 async function queuedOutbox(): Promise<QueuedOutbox[]> {
-  return must(
-    await db
-      .from("outbox")
-      .select("*, threads!outbox_thread_id_fkey(account_id, accounts(status)), accounts(id, status)")
-      .eq("status", "queued")
-      .order("created_at")
-      .limit(50),
-    "load outbox",
-  );
+  const accountIds = [...running.keys()];
+  if (accountIds.length === 0) return [];
+  const columns = "*, threads!outbox_thread_id_fkey(account_id, accounts(status)), accounts(id, status)";
+  const [fresh, replies] = await Promise.all([
+    db.from("outbox").select(columns).eq("status", "queued").in("account_id", accountIds).order("created_at").limit(50),
+    db.from("outbox").select(columns.replace("threads!outbox_thread_id_fkey(", "threads!outbox_thread_id_fkey!inner(")).eq("status", "queued").in("threads.account_id", accountIds).order("created_at").limit(50),
+  ]);
+  const byId = new Map<string, QueuedOutbox>();
+  for (const row of [...must(fresh, "load outbox"), ...must(replies, "load outbox replies")] as QueuedOutbox[]) byId.set(row.id, row);
+  return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 50);
 }
 
 /** Which account sends a queued email: its conversation's for a reply, the one it names for a new email. */
@@ -290,6 +300,24 @@ async function failQueuedOutbox(id: string, reason: string) {
   must(await db.from("outbox").update({ status: "failed", error: reason }).eq("id", id).eq("status", "queued"), "fail outbox for account");
 }
 
+/**
+ * Fails emails still queued after the wait for an account that is not running here (disconnected, or its connector
+ * would not start). The poll above only reads running accounts and Realtime can miss the insert, so without this
+ * such an email would show as sending for good.
+ */
+async function failStrandedOutbox() {
+  const cutoff = new Date(Date.now() - ACCOUNT_ERROR_WAIT_MS).toISOString();
+  const rows = must(
+    await db.from("outbox").select("*, threads!outbox_thread_id_fkey(account_id, accounts(status)), accounts(id, status)").eq("status", "queued").lt("created_at", cutoff).order("created_at").limit(200),
+    "load stranded outbox",
+  ) as QueuedOutbox[];
+  for (const row of rows) {
+    const account = await sendingAccount(row);
+    if (!account || !ownsAccount(account.id) || running.has(account.id)) continue; // a running account's email is the poll's
+    if (accountVerdict(account.status, row.created_at) === "fail") await failQueuedOutbox(row.id, BROKEN_ACCOUNT_REASON);
+  }
+}
+
 /** Hands queued replies and new emails to their account's connector. Ones for a broken account fail with a reason. */
 async function dispatchOutbox(rows?: QueuedOutbox[]) {
   const list = rows ?? (await queuedOutbox());
@@ -301,8 +329,10 @@ async function dispatchOutbox(rows?: QueuedOutbox[]) {
       async () => {
         const account = await sendingAccount(queuedRow);
         if (!account || !ownsAccount(account.id)) return null; // another shard's account is left queued for it
-        if (account.status === "error" || account.status === "disconnected") {
-          await failQueuedOutbox(row.id, "This account needs attention. Reconnect it in Settings, then send again.");
+        const verdict = accountVerdict(account.status, row.created_at);
+        if (verdict === "wait") return null; // reconnecting: the poll tries it again, and fails it if the account stays broken
+        if (verdict === "fail") {
+          await failQueuedOutbox(row.id, BROKEN_ACCOUNT_REASON);
           return null;
         }
         const connector = running.get(account.id)?.connector;
@@ -410,6 +440,25 @@ function calendarAccountProblem(account: CalendarAccount, verb: "added to" | "de
   return null;
 }
 
+type CalendarTable = "calendar_outbox" | "calendar_deletes" | "calendar_updates";
+
+/**
+ * Safety net for calendar work that threw after its row was claimed: a row still in flight is failed (only while it is, so
+ * one the connector settled or put back is left alone, and a row that failed to prepare stays queued). The wording admits
+ * the change may have been made. Never throws.
+ */
+async function failStuckCalendar(table: CalendarTable, status: string, id: string) {
+  try {
+    await (db as unknown as { from(t: string): { update(v: object): { eq(c: string, v: string): { eq(c: string, v: string): PromiseLike<unknown> } } } })
+      .from(table)
+      .update({ status: "failed", error: "This change may not have been made. Reload to check, then try again.", done_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", status);
+  } catch (err) {
+    log.error("could not fail stuck calendar row", { code: errorCode(err) });
+  }
+}
+
 /**
  * Hands queued calendar rows (new events, deletes or changes) to their calendar account's connector. Ones for an account that cannot take them fail with a reason.
  */
@@ -419,6 +468,7 @@ async function dispatchCalendar<Row extends { id: string; status: string; accoun
   fail: (id: string, reason: string) => Promise<void>,
   pick: (connector: Connector) => ((row: Row) => Promise<void>) | undefined,
   what: string,
+  inFlight: { table: CalendarTable; status: string },
 ) {
   const queued = list.filter((row) => row.status === "queued");
   const accounts = await calendarAccounts(queued);
@@ -438,24 +488,31 @@ async function dispatchCalendar<Row extends { id: string; status: string; accoun
         if (!handle) return null; // starting up: picked up on the next pass
         return () => handle(row);
       },
-      (err) => log.error(`${what} failed`, { event: row.id, code: errorCode(err) }),
+      (err) => {
+        log.error(`${what} failed`, { event: row.id, code: errorCode(err) });
+        void failStuckCalendar(inFlight.table, inFlight.status, row.id);
+      },
     );
   }
 }
 
+/** The accounts this worker runs: queue polls read only their rows, so rows it ignores cannot fill the window. */
+const runningIds = () => [...running.keys()];
+
 /** Events made in the app. */
 async function dispatchCalendarOutbox(rows?: CalendarOutboxRow[]) {
-  await dispatchCalendar(rows ?? (await queuedEvents()), "added to", failEvent, (c) => c.createEvent?.bind(c), "calendar event");
+  const list = rows ?? (runningIds().length ? must(await db.from("calendar_outbox").select("*").eq("status", "queued").in("account_id", runningIds()).order("created_at").limit(50), "load calendar outbox") : []);
+  await dispatchCalendar(list, "added to", failEvent, (c) => c.createEvent?.bind(c), "calendar event", { table: "calendar_outbox", status: "creating" });
 }
 
 /** Events the app asked to delete. Outlook cannot delete yet. */
 async function dispatchCalendarDeletes(rows?: CalendarDeleteRow[]) {
-  await dispatchCalendar(rows ?? (await queuedDeletes()), "deleted from", failDelete, (c) => c.deleteEvent?.bind(c), "calendar delete");
+  await dispatchCalendar(rows ?? (await queuedDeletes(runningIds())), "deleted from", failDelete, (c) => c.deleteEvent?.bind(c), "calendar delete", { table: "calendar_deletes", status: "deleting" });
 }
 
 /** Changes to events, and answers to invitations, made in the app. */
 async function dispatchCalendarUpdates(rows?: CalendarUpdateRow[]) {
-  await dispatchCalendar(rows ?? (await queuedUpdates()), "changed in", failUpdate, (c) => c.updateEvent?.bind(c), "calendar update");
+  await dispatchCalendar(rows ?? (await queuedUpdates(runningIds())), "changed in", failUpdate, (c) => c.updateEvent?.bind(c), "calendar update", { table: "calendar_updates", status: "updating" });
 }
 
 /** The connector's handler for a queued task change, or undefined when it has none. */
@@ -585,9 +642,9 @@ async function dispatchOriginals(rows?: OriginalRequest[]) {
  * shortened to a preview (50 an hour). Both need their migration, and log until it is applied.
  */
 function startStorageMaintenance() {
-  const guard = (what: string, work: Promise<unknown>) => work.catch((err) => log.error(`${what} failed`, { code: errorCode(err) }));
-  setInterval(() => void guard("thumbnail backfill", backfillThumbnails(20)), THUMBNAIL_BACKFILL_MS);
-  setInterval(() => void guard("shrink bulk mail", shrinkOldBulk(50)), SHRINK_BULK_MS);
+  // startEvery never overlaps two runs of a job, so a slow pass cannot pile up behind itself.
+  startEvery(THUMBNAIL_BACKFILL_MS, THUMBNAIL_BACKFILL_MS, () => backfillThumbnails(20), (err) => log.error("thumbnail backfill failed", { code: errorCode(err) }));
+  startEvery(SHRINK_BULK_MS, SHRINK_BULK_MS, () => shrinkOldBulk(50), (err) => log.error("shrink bulk mail failed", { code: errorCode(err) }));
 }
 
 /** Removes fetched originals after ORIGINAL_KEEP_MS, so an email's HTML is only ever held briefly. */
@@ -641,6 +698,7 @@ function watchQueues() {
   let lastExpire = 0;
   const poll = () => {
     void guard("outbox", dispatchOutbox());
+    void guard("stranded outbox", failStrandedOutbox());
     void guard("mail actions", requeueStaleActions().then(() => dispatchMailActions()));
     void guard("unsubscribes", dispatchUnsubscribes());
     void guard("calendar outbox", dispatchCalendarOutbox());
@@ -682,6 +740,8 @@ async function stopAndExit(code: number, lease?: Lease) {
   stopping = true;
   setTimeout(() => process.exit(1), SHUTDOWN_MS).unref(); // a stop() that hangs must not block exit
   await Promise.all([...running.entries()].map(([id, r]) => stopConnector(id, r)));
+  // Work already handed to a connector gets to finish (bounded by SHUTDOWN_MS above) before the lease goes.
+  while (dispatching.size > 0) await new Promise((resolve) => setTimeout(resolve, 100));
   await lease?.release();
   process.exit(code);
 }

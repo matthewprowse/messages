@@ -24,11 +24,13 @@ RATE_WORDS = ("per minute", "perminute", "per second", "persecond", "requests pe
 def is_billing_error(status: int | None, reason: str = "", detail: str = "") -> bool:
     """True when a Gemini failure is about billing or permission on the account rather than the request.
     status is the HTTP code, reason Google's status string (RESOURCE_EXHAUSTED), detail its message."""
-    if status in (402, 403):
+    if status == 402:
         return True
     text = f"{reason} {detail}".lower()
-    if "permission_denied" in text:
-        return True
+    if status == 403 or "permission_denied" in text:
+        # A 403 is also "no access to this file" or "cachedContents/x not found or not permitted", which is about one
+        # request and must not stop every user's calls for the window. Only wording about the account counts.
+        return any(w in text for w in STRONG) or "billing" in text
     if status not in (429, 400):
         return False
     if any(w in text for w in STRONG):
@@ -65,6 +67,12 @@ class Breaker:
                 return False
             self._probing = True
             return True
+
+    def blocked(self) -> bool:
+        """Whether a call would be refused right now, without taking the probe slot (allow does). For work that would
+        download or upload something before its call: it can wait instead of repeating that every window."""
+        with self._lock:
+            return self._until is not None and (self._clock() < self._until or self._probing)
 
     def trip(self) -> bool:
         """Records a billing failure and opens the window again. True when it was closed before: the moment to log."""

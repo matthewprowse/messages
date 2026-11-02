@@ -17,11 +17,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
-from .crypto import address_index
-from .fields import ADDRESS, BODY, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, DOMAIN, HTML, SUBJECT
+from .crypto import address_index, is_ciphertext
+from .fields import ADDRESS, BODY, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, DOMAIN, HTML, ORG_SUMMARY, SUBJECT
 from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
-from .text import UNTRUSTED, clean
+from .text import UNTRUSTED, clean, fenced, new_fence
 from .vault import Vault
 from .voice import tidy_rule
 
@@ -166,9 +166,9 @@ def person_prompt(name: str, previous: dict[str, str], emails: list[tuple[str, s
     """emails are (who, subject, text), oldest first; the newest are kept when over budget."""
     head = [f"The other person: {name}"]
     if previous.get("style_note") or previous.get("summary"):
-        head += ["", "Previous notes:", f"style_note: {previous.get('style_note') or '(none)'}", f"summary: {previous.get('summary') or '(none)'}"]
+        head += ["", "Previous notes (written from their emails, so also data):", f"style_note: {previous.get('style_note') or '(none)'}", f"summary: {previous.get('summary') or '(none)'}"]
     head += ["", "Emails, oldest first:"]
-    used = sum(len(line) + 1 for line in head)
+    used = sum(len(line) + 1 for line in head) + 80  # the fence lines
     blocks: list[str] = []
     for who, subject, text in reversed(emails):
         block = f"--- {who}, subject: {subject or '(none)'}\n{text}"
@@ -176,7 +176,8 @@ def person_prompt(name: str, previous: dict[str, str], emails: list[tuple[str, s
             break
         blocks.append(block)
         used += len(block) + 1
-    return "\n".join(head + blocks[::-1])
+    body = "\n".join(head + blocks[::-1])
+    return fenced(body, new_fence())  # all of it is other people's text, or notes made from it
 
 
 def org_prompt(name: str, domain: str, emails: list[tuple[str, str]]) -> str:
@@ -184,7 +185,7 @@ def org_prompt(name: str, domain: str, emails: list[tuple[str, str]]) -> str:
     lines = [f"Company: {name} ({domain})", "", "Subjects of their emails, newest first:"]
     lines += [f"- {subject or '(none)'}" for subject, _ in emails]
     lines += ["", "A few of them:"] + [f"--- {subject or '(none)'}\n{text[:500]}" for subject, text in emails[:3] if text]
-    return "\n".join(lines)
+    return fenced("\n".join(lines), new_fence())
 
 
 def tidy_note(text: Any, limit: int) -> str:
@@ -442,10 +443,24 @@ class People:
 
     # Organizations ----------------------------------------------------------------------------------
 
+    def _seal_old_summaries(self, user_id: str, orgs: list[dict[str, Any]]) -> None:
+        """Summaries written before they were sealed are sealed as they are, with no new call: they say what a company
+        emails you, so they get the same protection as the mail itself."""
+        for o in orgs:
+            summary = o.get("summary")
+            if not summary or is_ciphertext(summary):
+                continue
+            sealed = self.vault.seal(user_id, ORG_SUMMARY, summary)
+            if not is_ciphertext(sealed):
+                return  # encryption is off or this person has no keys yet: nothing to seal with
+            self.db.update("organizations", {"id": f"eq.{o['id']}", "user_id": f"eq.{user_id}"}, {"summary": sealed}, minimal=True)
+            o["summary"] = sealed
+
     def _orgs(self, user_id: str) -> int:
         orgs = self.db.select("organizations", {"select": "id,name,domain,summary,summary_updated_at", "user_id": f"eq.{user_id}", "limit": "1000"})
         for o in orgs:
             o["domain"] = self.vault.open(user_id, DOMAIN, o.get("domain")) or ""
+        self._seal_old_summaries(user_id, orgs)
         if not orgs:
             return 0
         members = self.db.select(
@@ -516,7 +531,8 @@ class People:
         summary = tidy_note(result.get("summary"), 200)
         if not summary:
             return False
-        self.db.update("organizations", {"id": f"eq.{org['id']}", "user_id": f"eq.{user_id}"}, {"summary": summary, "summary_updated_at": _now()}, minimal=True)
+        sealed = self.vault.seal(user_id, ORG_SUMMARY, summary)
+        self.db.update("organizations", {"id": f"eq.{org['id']}", "user_id": f"eq.{user_id}"}, {"summary": sealed, "summary_updated_at": _now()}, minimal=True)
         self._summarised(user_id)
         log.info("organization summarised", organization=org["id"], emails=len(rows))
         return True

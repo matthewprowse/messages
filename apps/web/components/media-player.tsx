@@ -40,13 +40,17 @@ export function useMedia(ref: RefObject<HTMLMediaElement | null>) {
       setMuted(el.muted);
     };
     const fail = () => setFailed(true);
+    // A new source starts loading afresh, so an earlier failure no longer applies.
+    const fresh = () => setFailed(false);
     const events = ["play", "pause", "ended", "timeupdate", "durationchange", "loadedmetadata", "volumechange"];
     for (const e of events) el.addEventListener(e, sync);
     el.addEventListener("error", fail);
+    el.addEventListener("loadstart", fresh);
     sync();
     return () => {
       for (const e of events) el.removeEventListener(e, sync);
       el.removeEventListener("error", fail);
+      el.removeEventListener("loadstart", fresh);
     };
   }, [ref]);
 

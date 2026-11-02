@@ -71,6 +71,10 @@ function Setup({ saved, fresh }: { saved: SetupStep; fresh: boolean }) {
   const [role, setRole] = useState<Role | "">("");
   const [extra, setExtra] = useState("");
   const [photo, setPhoto] = useState<string | null>(null);
+  // The chosen photo is a blob URL: free it when the dialog goes away (replacing it is handled where it is picked).
+  const photoRef = useRef<string | null>(null);
+  photoRef.current = photo;
+  useEffect(() => () => { if (photoRef.current) URL.revokeObjectURL(photoRef.current); }, []);
 
   // Remembered from the first moment, so signing in again, or on another device, comes back to it.
   useEffect(() => {

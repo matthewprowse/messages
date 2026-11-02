@@ -536,6 +536,38 @@ export type Database = {
         }
         Relationships: []
       }
+      bulk_reads: {
+        Row: {
+          claimed_at: string | null
+          created_at: string
+          error: string | null
+          message_id: string
+          user_id: string
+        }
+        Insert: {
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          message_id: string
+          user_id?: string
+        }
+        Update: {
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          message_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bulk_reads_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: true
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       calendar_deletes: {
         Row: {
           account_id: string
@@ -1676,6 +1708,7 @@ export type Database = {
       }
       message_ai: {
         Row: {
+          bulk_read: string | null
           category: string
           created_at: string
           junk: boolean
@@ -1691,6 +1724,7 @@ export type Database = {
           workspace_id: string | null
         }
         Insert: {
+          bulk_read?: string | null
           category: string
           created_at?: string
           junk?: boolean
@@ -1706,6 +1740,7 @@ export type Database = {
           workspace_id?: string | null
         }
         Update: {
+          bulk_read?: string | null
           category?: string
           created_at?: string
           junk?: boolean
@@ -2744,6 +2779,7 @@ export type Database = {
       threads: {
         Row: {
           account_id: string
+          answered_at: string | null
           avatar_path: string | null
           avatar_updated_at: string | null
           category: string | null
@@ -2781,6 +2817,7 @@ export type Database = {
         }
         Insert: {
           account_id: string
+          answered_at?: string | null
           avatar_path?: string | null
           avatar_updated_at?: string | null
           category?: string | null
@@ -2818,6 +2855,7 @@ export type Database = {
         }
         Update: {
           account_id?: string
+          answered_at?: string | null
           avatar_path?: string | null
           avatar_updated_at?: string | null
           category?: string | null
@@ -3908,6 +3946,7 @@ export type Database = {
       share_pending_message_ai: {
         Args: { p_after?: string | null; p_direction: string; p_limit: number; p_thread: string }
         Returns: {
+          bulk_read: string | null
           category: string
           created_at: string
           junk: boolean

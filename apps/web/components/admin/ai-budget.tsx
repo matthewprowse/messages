@@ -21,6 +21,7 @@ const FEATURES: { key: string; label: string; note: string }[] = [
   { key: "learn", label: "Learning From Edits", note: "Reads your edits and embeds mail for search." },
   { key: "brief", label: "Daily Brief", note: "The daily brief and its spoken version." },
   { key: "transcribe", label: "Transcripts", note: "Voice note and meeting transcripts." },
+  { key: "bulk_read", label: "Readable Bulk Email", note: "The short readable version of a newsletter or marketing email, made when it is opened." },
 ];
 
 type LimitKey = "regen_per_hour" | "auto_drafts_per_day" | "summaries_per_day" | "flag_multiple" | "flag_day_usd";

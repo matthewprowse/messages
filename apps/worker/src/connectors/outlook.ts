@@ -21,7 +21,7 @@ import { isFailure } from "../ingest/batch-rpc";
 import { MissingFiles, saveFilesQuietly } from "../ingest/attachment-files";
 import { claimReady, composeOutgoing, freshAccount, linkNewEmails, linkThread, markFailed, settleSent, startedHere, type OutboxRow } from "../send/outbox";
 import type { OutgoingAttachment } from "../send/compose";
-import { finishAction } from "../send/actions";
+import { finishAction, NotReady } from "../send/actions";
 import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe-flow";
 import { normAddresses } from "../send/from-address";
 import { undoesNotJunk } from "../ingest/junk-undo";
@@ -48,6 +48,7 @@ const FETCH_AT_ONCE = 4; // Outlook allows four requests at once per mailbox
 const STORE_AT_ONCE = 25; // messages per database call during imports; the next chunk is fetched meanwhile
 const SETTLE_AT_ONCE = 100; // conversations placed together during an import
 const PROGRESS_EVERY = 500;
+const KNOWN_IDS_AT_ONCE = 30; // Graph IDs per lookup query (they go in the URL)
 const FILES_EVERY_MS = 10 * 60_000;
 const FILES_AT_ONCE = 200; // attachment rows checked per catch-up
 const PAGE_SIZE = 200; // messages per delta page
@@ -191,7 +192,6 @@ export class OutlookConnector {
       must(await db.from("accounts").update({ send_addresses: stored }).eq("id", this.id), "save send addresses");
     }
     this.selfAddresses = new Set([...sendable, ...others]);
-    this.backoff.reset();
     log.info("outlook connected", { account: this.id, addresses: this.selfAddresses.size, archive: this.hasArchive });
 
     await setAccountStatus(this.id, "syncing");
@@ -201,6 +201,7 @@ export class OutlookConnector {
       if (state?.sync_token) this.deltaLinks.set(folder, state.sync_token);
     }
     await this.queue.run(() => this.catchUp(this.folders()));
+    this.backoff.reset(); // only once the first sync worked: a sync that always fails must keep backing off
     await setAccountStatus(this.id, "connected");
     this.ready = true;
     this.background(() => this.saveMissingFiles());
@@ -392,7 +393,8 @@ export class OutlookConnector {
   /** Stored messages among these Graph IDs, keyed by Graph ID. */
   private async knownMessages(graphIds: string[]) {
     const out = new Map<string, KnownMessage>();
-    for (const ids of chunks(graphIds, 100)) {
+    // Graph IDs are ~150 characters and go in the URL, so 100 at once is a ~16 KB request line some proxies refuse.
+    for (const ids of chunks(graphIds, KNOWN_IDS_AT_ONCE)) {
       const rows = must(
         await db
           .from("messages")
@@ -594,6 +596,7 @@ export class OutlookConnector {
     }
     let messageId: string;
     let requested = false; // once the email is on its way, a lost answer does not mean it was not sent
+    let draftId: string | null = null;
     try {
       const out = await composeOutgoing(row, this.id, this.selfAddresses, "outlook", undefined, true, true); // Graph reads Bcc from the message and removes it before delivering
       if ("error" in out) {
@@ -608,12 +611,18 @@ export class OutlookConnector {
         await client.request("/me/sendMail", { method: "POST", raw: mime, timeoutMs: SEND_TIMEOUT_MS });
       } else {
         const draft = await client.request<{ id: string }>("/me/messages", { method: "POST", raw: mime });
+        draftId = draft.id;
         for (const file of out.files) await this.attach(draft.id, file);
         requested = true;
         await client.request(`/me/messages/${encodeURIComponent(draft.id)}/send`, { method: "POST", timeoutMs: SEND_TIMEOUT_MS });
       }
     } catch (err) {
       log.warn(`${kind} failed`, { account: this.id, outbox: row.id, code: errorCode(err) });
+      // Failed before the send was asked for: the draft would sit in Drafts for good, so remove it. Once the send
+      // was asked for, the draft may be the sent mail, so it is never touched.
+      if (draftId && !requested) {
+        await this.client?.request(`/me/messages/${encodeURIComponent(draftId)}`, { method: "DELETE" }).catch(() => undefined);
+      }
       const code = err instanceof GraphApiError ? err.graphCode : null;
       await markFailed(
         row.id,
@@ -686,7 +695,7 @@ export class OutlookConnector {
   /** Applies a read, unread, archive, unarchive, delete, undelete, junk or not junk made in the app to the mail in Outlook. */
   async applyAction(row: Tables<"mail_actions">) {
     accountActivity.mark(this.id); // the app is in use: check this mailbox quickly for a while
-    if (!this.ready) return; // still connecting: the next poll retries it
+    if (!this.ready) throw new NotReady(); // still connecting: back to queued, the next poll retries it
     const run = async () => {
       const client = this.need();
       const messages = must(

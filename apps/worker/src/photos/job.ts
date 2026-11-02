@@ -33,8 +33,8 @@ export function startPhotoSync() {
 }
 
 async function runPhotoSync() {
-  const accounts = must(
-    await db.from("accounts").select("id, user_id, provider, status").in("provider", ["icloud", "gmail"]).not("status", "in", "(disconnected,error)"),
+  const accounts = await allRows(
+    (from, to) => db.from("accounts").select("id, user_id, provider, status").in("provider", ["icloud", "gmail"]).not("status", "in", "(disconnected,error)").order("id").range(from, to),
     "load photo accounts",
   );
   for (const account of accounts) {

@@ -29,6 +29,12 @@ export class ThumbCache {
     }
   }
 
+  /** Revokes and forgets every link, for when the person signs out. */
+  clear() {
+    for (const link of this.links.values()) this.revoke(link);
+    this.links.clear();
+  }
+
   get size() {
     return this.links.size;
   }

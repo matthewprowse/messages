@@ -2,7 +2,7 @@
 // so nothing here connects to a private address: a mailbox on 10.0.0.5 or localhost would let anyone probe
 // the network the app or worker runs in.
 
-import { lookup, resolveMx, resolveNs } from "node:dns/promises";
+import { lookup, Resolver as DnsResolver } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
 import type { LookupAddress } from "node:dns";
@@ -51,13 +51,20 @@ export function isPublicAddress(ip: string): boolean {
  * The address to connect to for a host, or null when it does not resolve or any address it resolves to is
  * private. Connecting to this address (with the host name for TLS) means a second lookup cannot swap it.
  */
-export async function publicAddress(host: string): Promise<string | null> {
+export async function publicAddress(host: string, timeoutMs = 5_000): Promise<string | null> {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const found = await lookup(host, { all: true, verbatim: true });
+    // getaddrinfo cannot be aborted, so a slow lookup is abandoned (its result is ignored) rather than cancelled.
+    const found = await Promise.race([
+      lookup(host, { all: true, verbatim: true }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("lookup timeout")), timeoutMs); }),
+    ]);
     if (found.length === 0 || !found.every((a) => isPublicAddress(a.address))) return null;
     return found[0].address;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -155,11 +162,17 @@ export async function fetchText(url: string, timeoutMs: number, resolve?: Resolv
 
 /** Real DNS and HTTPS, each step giving up after timeoutMs. */
 export function nodeLookups(timeoutMs = 5_000): Lookups {
-  const timed = <T>(work: Promise<T>, fallback: T) =>
-    Promise.race([work.catch(() => fallback), new Promise<T>((resolve) => setTimeout(() => resolve(fallback), timeoutMs).unref())]);
+  // A fresh resolver per query so a timeout can cancel it for real (c-ares abandons the socket and the query),
+  // instead of leaving it running behind the race. tries: 1 keeps the resolver's own retries inside timeoutMs.
+  const dns = <T>(query: (r: DnsResolver) => Promise<T>, fallback: T) => {
+    const resolver = new DnsResolver({ timeout: timeoutMs, tries: 1 });
+    const timer = setTimeout(() => resolver.cancel(), timeoutMs).unref();
+    return query(resolver).catch(() => fallback).finally(() => clearTimeout(timer));
+  };
   return {
-    mx: (domain) => timed(resolveMx(domain).then((r) => r.sort((a, b) => a.priority - b.priority).map((x) => bare(x.exchange)).filter(Boolean)), []),
-    ns: (domain) => timed(resolveNs(domain).then((r) => r.map(bare)), []),
-    text: (url) => timed(fetchText(url, timeoutMs), null),
+    mx: (domain) => dns((r) => r.resolveMx(domain).then((m) => m.sort((a, b) => a.priority - b.priority).map((x) => bare(x.exchange)).filter(Boolean)), []),
+    ns: (domain) => dns((r) => r.resolveNs(domain).then((n) => n.map(bare)), []),
+    // fetchText ends by itself: pinnedGet destroys the request at timeoutMs.
+    text: (url) => fetchText(url, timeoutMs),
   };
 }

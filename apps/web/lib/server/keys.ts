@@ -78,12 +78,18 @@ export async function userKeys(userId: string): Promise<UserKeys> {
   }
 }
 
-/** The workspace the user is an active member of, or null. Removed and invited members have no team key. */
+/**
+ * The workspace the user is an active member of, or null. Removed and invited members have no team key. A user active
+ * in more than one gets the oldest membership, always the same one, with a warning (code only) so it is noticed.
+ */
 export async function activeWorkspaceId(userId: string): Promise<string | null> {
   if (!db) throw new Error("The key service is not set up.");
-  const { data, error } = await db.from("workspace_members").select("workspace_id").eq("user_id", userId).eq("status", "active").maybeSingle();
+  // Two rows are enough to know there is more than one; maybeSingle would error on that and the team would silently be none.
+  const { data, error } = await db.from("workspace_members").select("workspace_id").eq("user_id", userId).eq("status", "active")
+    .order("created_at").order("workspace_id").limit(2);
   if (error) throw error;
-  return data?.workspace_id ?? null;
+  if ((data?.length ?? 0) > 1) console.warn("keys: more than one active workspace membership", { code: "MULTIPLE_ACTIVE_MEMBERSHIPS" });
+  return data?.[0]?.workspace_id ?? null;
 }
 
 /**

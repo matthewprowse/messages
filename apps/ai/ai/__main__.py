@@ -6,7 +6,7 @@ Learning keeps layered memory fresh: your voice (re-learned every 10 sent emails
 person and company, rules from the tones, instructions and guided drafting choices you pick, and
 embeddings of every email for finding how you answered similar ones. The spoken daily brief is written
 in a thread of its own, and so are meetings (recordings transcribed, transcripts summarised), as an hour's
-recording can take minutes."""
+recording can take minutes. A readable version of a newsletter is made, in a thread of its own, when someone opens it."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import time
 
 from . import config, log
 from .brief import IDLE_S as BRIEF_IDLE_S, POLL_S as BRIEF_POLL_S, Brief
+from .bulk_read import BulkRead
 from .chasers import Chasers
 from .drafts import Drafts
 from .embed import Embeddings
@@ -49,6 +50,10 @@ LOGOS_EVERY_S = 30  # the sync worker hands over a sheet to judge as soon as it 
 # to its interval above once it finds work. Jobs not listed keep their interval.
 IDLE_CEILING_S = {"transcribe": 15, "learn": 300, "embed": 60, "logos": 120, "follow_ups": 3600}
 MEETINGS_IDLE_S = 60
+BULK_READ_EVERY_S = 1.5  # someone is waiting on a readable version they just opened: this is the cadence once a request is found
+# Idle, it looks 1.5s, 3s, 6s ... up to this. 30s keeps an idle worker to 2 looks a minute; a request made after a
+# long quiet spell can wait that long for its first look, then the readable version takes a few seconds.
+BULK_READ_IDLE_S = 30
 
 
 def main() -> None:
@@ -56,6 +61,11 @@ def main() -> None:
         from .connectors.instagram.run import main as instagram
 
         instagram()
+        return
+    if sys.argv[1:2] == ["linkedin"]:  # the LinkedIn helper the sync worker starts per account, JSON lines on stdin and stdout
+        from .connectors.linkedin.run import main as linkedin
+
+        linkedin()
         return
     if sys.argv[1:2] == ["icloud-reminders"]:  # iCloud Reminders through iCloud.com's web sign-in, a process of its own
         from .connectors.icloud_reminders.run import main as icloud_reminders
@@ -138,6 +148,23 @@ def main() -> None:
                 log.error("brief loop failed", code=log.code_of(err))
             stop.wait(wait.next(found))
 
+    bulk_read = BulkRead(db, gemini, cfg.triage_model, vault)
+
+    def bulk_reads() -> None:
+        """A readable version is asked for by someone looking at the email, so it has a thread of its own and is
+        looked for quickly, then every BULK_READ_IDLE_S while nothing is asked."""
+        wait = Backoff(BULK_READ_EVERY_S, BULK_READ_IDLE_S)
+        while not stop.is_set():
+            found = True
+            try:
+                found = bulk_read.run_once() > 0
+            except Exception as err:
+                if missing_relation(err):  # the bulk_reads migration is not applied yet
+                    stop.wait(600)
+                    continue
+                log.error("bulk read loop failed", code=log.code_of(err))
+            stop.wait(wait.next(found))
+
     meetings = Meetings(db, gemini, cfg.model, vault, transcribe_model=cfg.transcribe_model)
 
     def meeting_steps() -> None:
@@ -160,6 +187,7 @@ def main() -> None:
     threading.Thread(target=background, name="triage", daemon=True).start()
     threading.Thread(target=briefs, name="brief", daemon=True).start()
     threading.Thread(target=meeting_steps, name="meetings", daemon=True).start()
+    threading.Thread(target=bulk_reads, name="bulk_read", daemon=True).start()
     log.info(
         "ai worker starting",
         model=cfg.model,

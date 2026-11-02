@@ -27,9 +27,11 @@ import { AppContext, Ctx, DraftPhase } from "./app-store/context";
 import { DRAFT_TIMEOUT_MS, PRE_DRAFT_QUIET_MS, VOICE_DRAFT_TIMEOUT_MS, mayPreDraft, uploadRecording } from "./app-store/draft-helpers";
 import { Action, initial, reducer } from "./app-store/reducer";
 import { useRealtimeSync } from "./app-store/use-realtime";
+import { touchHeld } from "./app-store/recent-threads";
 import { followTaskUpdate } from "./app-store/task-follow";
 import { recordAction, recordCorrection } from "./app-store/telemetry";
 import { MailAction, NO_MESSAGES, emailIds, inFilter, inView, isPriority, listState, rank, threadsIn } from "./app-store/thread-filters";
+import { memoLast, perSource } from "./app-store/memo-last";
 
 export type { DraftPhase } from "./app-store/context";
 export type { ComposeDraft, ComposeDraftRequest, ComposeStatus, NewEmail } from "./app-store/compose";
@@ -68,6 +70,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const moreRef = useRef(new Map<string, boolean>());
   const loadingRef = useRef(new Map<string, Promise<void>>());
   const olderRef = useRef(new Set<string>());
+  // Conversations with messages held, least recently used first, and the one on screen. Past a cap the oldest are dropped
+  // (see recent-threads.ts), so a long session does not keep every conversation it ever opened.
+  const heldRef = useRef<string[]>([]);
+  const openRef = useRef<string | null>(null);
   const contactsForRef = useRef<string | null>(null);
   // Whether the store holds every contact (not just those in the listed threads): see contactsReady in the context.
   const [contactsReady, setContactsReady] = useState(false);
@@ -125,15 +131,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setPending([]);
       setComposed({});
       moreRef.current.clear();
+      heldRef.current = [];
+      openRef.current = null;
       contactsForRef.current = null;
       setContactsReady(false);
       return;
     }
     let cancelled = false;
+    // Applied on top of whatever Realtime delivered while this loaded, with the state as it is now as the base for what changed meanwhile.
+    const base = stateRef.current;
     loadEverything()
       .then((data) => {
         if (cancelled) return;
-        rawDispatch({ type: "loaded", data });
+        rawDispatch({ type: "merged", base, data });
         if (data.contactsLoaded) { contactsForRef.current = userId; setContactsReady(true); }
       })
       .catch(() => {
@@ -167,7 +177,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [state.loading, userId, contactsTries]);
 
   // Live updates: see app-store/use-realtime.ts.
-  useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending });
+  const evictHeld = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    heldRef.current = heldRef.current.filter((id) => !gone.has(id));
+    for (const id of ids) moreRef.current.delete(id);
+    rawDispatch({ type: "evictMessages", ids });
+    setLoadedThreadIds((prev) => { const next = new Set(prev); for (const id of ids) next.delete(id); return next; });
+  }, []);
+  useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, heldRef, openRef, evictHeld, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending });
 
   /**
    * Applies a change on screen straight away, then saves it. Components call dispatch as before;
@@ -240,7 +258,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
   const threadById = useCallback((id: string) => threadMap.get(id), [threadMap]);
 
-  const messages = useMemo(() => Object.values(state.byThread).flat(), [state.byThread]);
+  // Only search reads every loaded message, so the flat list is built on first read (a getter in the context value)
+  // instead of copying them all on each realtime change to any one conversation.
+  const flatMessages = useMemo(() => memoLast((byThread: typeof state.byThread) => Object.values(byThread).flat()), []);
   // Queued replies follow the stored messages. A conversation without any keeps its stored list as is.
   const messagesByThread = useMemo(() => {
     const queued = new Map<string, Message[]>();
@@ -264,7 +284,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const messagesFor = useCallback((threadId: string) => messagesByThread.get(threadId) ?? NO_MESSAGES, [messagesByThread]);
   const messagesLoaded = useCallback((threadId: string) => loadedThreadIds.has(threadId), [loadedThreadIds]);
 
-  const loadMessages = useCallback((threadId: string, aroundMessageId?: string) => {
+  // explicit is a conversation being opened; a prefetch (a hover) loads without becoming the one that is protected from eviction.
+  const loadThreadInto = useCallback((threadId: string, aroundMessageId: string | undefined, explicit: boolean) => {
+    if (explicit) openRef.current = threadId;
     const key = aroundMessageId ? `${threadId}:${aroundMessageId}` : threadId;
     const running = loadingRef.current.get(key);
     if (running) return running;
@@ -278,6 +300,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // A jump keeps what is loaded; a fresh load replaces it.
         rawDispatch({ type: from ? "mergeMessages" : "setThreadMessages", threadId, messages: page.messages });
         moreRef.current.set(threadId, page.more);
+        const { order, evict } = touchHeld(heldRef.current, threadId, openRef.current);
+        heldRef.current = order;
+        evictHeld(evict);
         setLoadedThreadIds((prev) => (prev.has(threadId) ? prev : new Set(prev).add(threadId)));
       } catch {
         toast("Could not load this conversation.");
@@ -287,7 +312,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     })();
     loadingRef.current.set(key, task);
     return task;
-  }, []);
+  }, [evictHeld]);
+  const loadMessages = useCallback((threadId: string, aroundMessageId?: string) => loadThreadInto(threadId, aroundMessageId, true), [loadThreadInto]);
 
   const loadOlderMessages = useCallback(async (threadId: string) => {
     const oldest = stateRef.current.byThread[threadId]?.[0];
@@ -314,26 +340,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const removePending = useCallback((outboxId: string) => setPending((p) => p.filter((x) => x.id !== outboxId)), []);
 
   const prefetchMessages = useCallback((threadId: string) => {
-    if (!loadedRef.current.has(threadId)) void loadMessages(threadId);
-  }, [loadMessages]);
+    if (!loadedRef.current.has(threadId)) void loadThreadInto(threadId, undefined, false);
+  }, [loadThreadInto]);
 
+  // Filtered and sorted once per (view, filter) until the threads change. "Waiting" depends on the clock, so it is not cached.
+  const listCache = useMemo(() => perSource((threads: Thread[], key: string) => {
+    const [view, filter] = key.split(":") as [View, ListFilter];
+    return threads
+      .filter((t) => t.status === (view === "archive" ? "archived" : "inbox") && inView(t, view) && (view !== "priority" || isPriority(t)) && inFilter(t, filter))
+      .sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        if (view === "priority" && rank[a.priority] !== rank[b.priority]) return rank[a.priority] - rank[b.priority];
+        return b.lastMessageAt.localeCompare(a.lastMessageAt);
+      });
+  }), []);
   const listThreads = useCallback(
-    (view: View, filter: ListFilter) =>
-      state.threads
-        .filter((t) => t.status === "inbox" && inView(t, view) && (view !== "priority" || isPriority(t)) && inFilter(t, filter))
-        .sort((a, b) => {
-          if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-          if (view === "priority" && rank[a.priority] !== rank[b.priority]) return rank[a.priority] - rank[b.priority];
-          return b.lastMessageAt.localeCompare(a.lastMessageAt);
-        }),
-    [state.threads],
+    (view: View, filter: ListFilter) => listCache(state.threads, `${view}:${filter}`, filter !== "waiting"),
+    [state.threads, listCache],
   );
 
   // Changes the mail server should know about are queued for the sync worker, which applies them there.
-  const queueMailAction = useCallback((threadId: string | string[], action: MailAction) => {
+  // Resolves once the rows are written, so a follow-up action can be queued after it and the worker sees them in order.
+  const queueMailAction = useCallback(async (threadId: string | string[], action: MailAction) => {
     const ids = Array.isArray(threadId) ? threadId : [threadId];
     if (ids.length === 0) return;
-    supabase.from("mail_actions").insert(ids.map((thread_id) => ({ thread_id, action }))).then(({ error }) => { if (error) saveFailed(); });
+    const { error } = await supabase.from("mail_actions").insert(ids.map((thread_id) => ({ thread_id, action })));
+    if (error) saveFailed();
   }, [saveFailed]);
 
   // Read state is saved here and sent back to the mail server.
@@ -396,6 +428,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, [notify, saveStatus, restoreStatus, queueMailAction]);
 
+  const unarchive = useCallback((ids: string | string[]) => {
+    const before = threadsIn(stateRef.current.threads, ids).filter((t) => t.status === "archived");
+    if (before.length === 0) return;
+    recordAction(before, "unarchive");
+    saveStatus(before.map((t) => t.id), "inbox");
+    queueMailAction(emailIds(before), "unarchive");
+    notify(before.length === 1 ? "Moved to Inbox" : `Moved ${before.length} conversations to Inbox`, () => {
+      restoreStatus(before);
+      queueMailAction(emailIds(before), "archive");
+    });
+  }, [notify, saveStatus, restoreStatus, queueMailAction]);
+
   // Delete moves email to the provider's Bin, so Undo, or the provider itself, can bring it back.
   const trash = useCallback((ids: string | string[]) => {
     const before = threadsIn(stateRef.current.threads, ids).filter((t) => t.status !== "trash");
@@ -405,7 +449,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     queueMailAction(emailIds(before), "trash");
     notify(before.length === 1 ? "Deleted" : `Deleted ${before.length} conversations`, () => {
       restoreStatus(before);
-      queueMailAction(emailIds(before), "untrash");
+      // Untrash brings a conversation back to the inbox at the provider, so one that was archived is archived again after it.
+      void queueMailAction(emailIds(before), "untrash").then(() => queueMailAction(emailIds(before.filter((t) => t.status === "archived")), "archive"));
     });
   }, [notify, saveStatus, restoreStatus, queueMailAction]);
 
@@ -427,20 +472,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       copies ? Promise.all(copies.to.map((a) => sealAddress(a))) : Promise.resolve(null),
       copies ? Promise.all(copies.cc.map((a) => sealAddress(a))) : Promise.resolve(null),
     ]).catch(() => null);
+    // The placeholder is in before the insert resolves: a fast worker can update the row first, and the outbox
+    // handler (use-realtime.ts) only updates placeholders that already exist. Its id is chosen here for the same reason.
+    const outboxId = crypto.randomUUID();
+    const attachments = files.length ? pendingAttachments(files) : undefined;
+    const dropPlaceholder = () => setPending((p) => p.filter((x) => x.id !== outboxId));
+    if (sealed !== null && addresses !== null) setPending((p) => [...p, { id: outboxId, threadId, body, createdAt: new Date().toISOString(), status: "queued", attachments }]);
     const { data, error } = sealed === null || addresses === null ? { data: null, error: true } : await supabase.from("outbox")
-      .insert({ thread_id: threadId, body: sealed, draft_id: draftId, from_address: addresses[0], reply_to_message_id: replyToId, attachment_count: files.length,
+      .insert({ id: outboxId, thread_id: threadId, body: sealed, draft_id: draftId, from_address: addresses[0], reply_to_message_id: replyToId, attachment_count: files.length,
         // Reply All: the worker sends to exactly these. Sealed like any address.
         ...(copies ? { to_addresses: addresses[1] ?? [], cc_addresses: addresses[2] ?? [] } : {}) })
       .select("id, created_at").single();
     if (error || !data) {
+      dropPlaceholder();
       toast("Could not send. Your reply is still in the box.");
       return false;
     }
     if (!(await attachToOutbox(data.id, files).catch(() => false))) {
+      dropPlaceholder();
       toast("Could not attach the files. Your reply is still in the box.");
       return false;
     }
-    const attachments = files.length ? pendingAttachments(files) : undefined;
     if (!standalone) {
       const t = threadMapRef.current.get(threadId);
       if (t) {
@@ -461,7 +513,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       }
     }
-    setPending((p) => [...p, { id: data.id, threadId, body, createdAt: data.created_at, status: "queued", attachments }]);
+    // The server's clock decides when the reply was made, as the imported copy is compared with it.
+    setPending((p) => p.map((x) => (x.id === data.id ? { ...x, createdAt: data.created_at } : x)));
     if (draftId) rawDispatch({ type: "setDraft", id: threadId });
     if (replyToId) setReplyTo(threadId, null);
     return true;
@@ -924,13 +977,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // One value per change, so components that read the store redraw only when something changed.
   const value = useMemo<Ctx>(() => ({
-    ...listState(state), dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
-    listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
+    ...listState(state), dispatch, contactById, threadById, get messages() { return flatMessages(state.byThread); }, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
+    listThreads, notify, markRead, archive, unarchive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   }), [
-    state, dispatch, contactById, threadById, messages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
-    listThreads, notify, markRead, archive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
+    state, dispatch, contactById, threadById, flatMessages, messagesByThread, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, hasOlder, removePending, prefetchMessages,
+    listThreads, notify, markRead, archive, unarchive, trash, pin, send, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
     saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   ]);

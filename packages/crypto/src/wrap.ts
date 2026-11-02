@@ -74,6 +74,9 @@ export async function localWrapper(masterKeyBase64: string): Promise<KeyWrapper>
 /** How long an unwrapped key stays in memory. Keeps KMS calls (and their cost) low without holding keys for long. */
 export const KEY_CACHE_MS = 10 * 60_000;
 
+/** A KMS or token call that takes longer than this is abandoned: a hung request must not hold every unwrap behind it. */
+export const KMS_TIMEOUT_MS = 10_000;
+
 export interface KmsOptions {
   /** projects/<project>/locations/<region>/keyRings/<ring>/cryptoKeys/<key>. Decrypt picks the version itself. */
   keyName: string;
@@ -91,12 +94,15 @@ export function kmsWrapper(opts: KmsOptions): KeyWrapper {
   const endpoint = (opts.endpoint ?? "https://cloudkms.googleapis.com").replace(/\/$/, "");
   const now = opts.now ?? Date.now;
   const cache = new Map<string, { until: number; key: Uint8Array<ArrayBuffer> }>();
+  // One decrypt per key at a time: a page of N concurrent unwraps of the same key makes one KMS call.
+  const inflight = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
 
   async function call(op: "encrypt" | "decrypt", body: Record<string, string>): Promise<Record<string, string>> {
     const res = await doFetch(`${endpoint}/v1/${opts.keyName}:${op}`, {
       method: "POST",
       headers: { authorization: `Bearer ${await opts.token()}`, "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(KMS_TIMEOUT_MS),
     });
     // Only the status is reported: a response body could echo parts of a request.
     if (!res.ok) throw Object.assign(new Error(`KMS ${op} failed (${res.status}).`), { code: `kms_${res.status}` });
@@ -114,12 +120,23 @@ export function kmsWrapper(opts: KmsOptions): KeyWrapper {
       const id = `${scope}:${ownerId}:${wrapped}`;
       const hit = cache.get(id);
       if (hit && hit.until > now()) return hit.key.slice();
-      const out = await call("decrypt", { ciphertext: wrapped, additionalAuthenticatedData: toB64(aad(scope, ownerId)) });
-      const key = fromB64(out.plaintext ?? "");
-      if (key.length !== 32) throw new Error("KMS returned a key of the wrong size.");
-      for (const [k, v] of cache) if (v.until <= now()) cache.delete(k);
-      cache.set(id, { until: now() + KEY_CACHE_MS, key: key.slice() });
-      return key;
+      let pending = inflight.get(id);
+      if (!pending) {
+        pending = (async () => {
+          const out = await call("decrypt", { ciphertext: wrapped, additionalAuthenticatedData: toB64(aad(scope, ownerId)) });
+          const key = fromB64(out.plaintext ?? "");
+          if (key.length !== 32) throw new Error("KMS returned a key of the wrong size.");
+          for (const [k, v] of cache) if (v.until <= now()) cache.delete(k);
+          cache.set(id, { until: now() + KEY_CACHE_MS, key: key.slice() });
+          return key;
+        })();
+        inflight.set(id, pending);
+        // Cleared on success and failure alike, so a failed call is retried by the next caller.
+        const clear = () => { inflight.delete(id); };
+        pending.then(clear, clear);
+      }
+      // Every caller gets its own copy, since callers zero the key they are given.
+      return (await pending).slice();
     },
   };
 }
@@ -154,6 +171,7 @@ export function googleAccessToken(env: Env = process.env, doFetch: typeof fetch 
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${unsigned}.${b64url(sig)}` }),
+        signal: AbortSignal.timeout(KMS_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`Google token request failed (${res.status}).`);
       const out = (await res.json()) as { access_token: string; expires_in?: number };
@@ -161,16 +179,19 @@ export function googleAccessToken(env: Env = process.env, doFetch: typeof fetch 
     }
     if (env.KMS_ACCESS_TOKEN) return { token: env.KMS_ACCESS_TOKEN, ttlS: 300 };
     const host = env.GCE_METADATA_HOST || "metadata.google.internal";
-    const res = await doFetch(`http://${host}/computeMetadata/v1/instance/service-accounts/default/token`, { headers: { "Metadata-Flavor": "Google" } });
+    const res = await doFetch(`http://${host}/computeMetadata/v1/instance/service-accounts/default/token`, { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(KMS_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`Metadata server token request failed (${res.status}).`);
     const out = (await res.json()) as { access_token: string; expires_in?: number };
     return { token: out.access_token, ttlS: out.expires_in ?? 300 };
   };
+  let refreshing: Promise<string> | null = null; // concurrent callers share one refresh
   return async () => {
     if (cached && cached.until > Date.now()) return cached.token;
-    const { token, ttlS } = await fetchToken();
-    cached = { token, until: Date.now() + Math.max(0, ttlS - 60) * 1000 };
-    return token;
+    refreshing ??= fetchToken().then(({ token, ttlS }) => {
+      cached = { token, until: Date.now() + Math.max(0, ttlS - 60) * 1000 };
+      return token;
+    }).finally(() => { refreshing = null; });
+    return refreshing;
   };
 }
 

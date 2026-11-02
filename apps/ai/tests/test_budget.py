@@ -58,9 +58,29 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(db.calls, 0)
 
     def test_a_used_up_week_pauses_a_weekly_feature(self):
-        g, _ = self.gemini({"draft": 10}, week={"draft": 100})
+        g, _ = self.gemini({"draft": 10, "triage": 10}, week={"draft": 100})
         with self.assertRaises(GeminiError):
             g._check_budget(UsageContext("u", "draft"))
+        g._check_budget(UsageContext("u", "triage"))
+
+    def test_a_feature_missing_from_the_month_is_exhausted(self):
+        g, _ = self.gemini({"draft": 10})
+        with self.assertRaises(GeminiError) as raised:
+            g._check_budget(UsageContext("u", "triage"))
+        self.assertIn("budget_paused", str(raised.exception))
+
+    def test_an_empty_allowance_pauses_every_feature_but_the_exempt_ones(self):
+        g, _ = self.gemini({})
+        with self.assertRaises(GeminiError):
+            g._check_budget(UsageContext("u", "draft"))
+        g._check_budget(UsageContext("u", "logos"))
+
+    def test_a_feature_missing_from_the_week_has_no_weekly_cap(self):
+        g, _ = self.gemini({"draft": 10}, week={"triage": 100})
+        g._check_budget(UsageContext("u", "draft"))
+
+    def test_a_missing_feature_still_goes_ahead_on_the_setup_allowance(self):
+        g, _ = self.gemini({}, setup=2.0)
         g._check_budget(UsageContext("u", "triage"))
 
     def test_setup_allowance_lets_sorting_through_a_used_up_month(self):

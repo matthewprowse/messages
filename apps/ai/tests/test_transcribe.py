@@ -46,3 +46,35 @@ class BudgetErrors(unittest.TestCase):
         self.assertEqual(worker.waiting(), ["m1"])  # waits RETRY_S before the next look
         worker._failed(m, GeminiError(500, "boom"))
         self.assertEqual(worker._tries["m1"][0], 1)  # a real failure still counts
+
+
+class AnyFailure(unittest.TestCase):
+    def test_an_unexpected_error_is_a_try_and_the_next_note_still_runs(self):
+        from unittest import mock
+
+        from ai.transcribe import Transcribe as Worker
+
+        def row(n):
+            return {"id": f"a{n}", "filename": "Voice Note.ogg", "messages": {"id": f"m{n}", "user_id": "u"}}
+
+        db = mock.Mock()
+        db.select.return_value = [row(1), row(2)]
+        worker = Worker(db, mock.Mock(), "m", mock.Mock())
+        worker.is_voice_note = lambda user_id, filename: True
+        worker._one = mock.Mock(side_effect=[KeyError("no key"), 1])
+        self.assertEqual(worker.run_once(), 1)
+        self.assertEqual(worker._tries["m1"][0], 1)
+        self.assertEqual(worker.waiting(), ["m1"])  # left out of the next query, so it cannot sit at the head
+
+    def test_paused_billing_downloads_nothing(self):
+        from unittest import mock
+
+        from ai.gemini import GeminiError
+        from ai.transcribe import Transcribe as Worker
+
+        db, gemini = mock.Mock(), mock.Mock()
+        gemini.billing_blocked.return_value = True
+        worker = Worker(db, gemini, "m", mock.Mock())
+        with self.assertRaises(GeminiError):
+            worker._one({"id": "a1", "storage_path": "p"}, {"id": "m1", "user_id": "u"})
+        db.download.assert_not_called()

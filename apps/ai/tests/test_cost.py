@@ -149,7 +149,7 @@ class Db:
         self.rows = []
 
     def rpc(self, function, args):
-        return {"features": {}}
+        return None if function == "ai_allowance_shares_for" else {"features": {"triage": 0, "draft": 0, "learn": 0, "brief": 0, "transcribe": 0, "bulk_read": 0}}
 
     def insert(self, table, row):
         self.rows.append(row)
@@ -290,6 +290,9 @@ class VoiceNoteCap(unittest.TestCase):
     def job(self, audio):
         class Gem:
             calls = []
+
+            def billing_blocked(self):
+                return False
 
             def json(self, *a, **k):
                 Gem.calls.append(k)

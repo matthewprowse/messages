@@ -601,3 +601,17 @@ func TestSessionRequestWithoutLogin(t *testing.T) {
 		t.Errorf("an unreachable endpoint fails")
 	}
 }
+
+func TestProxyClientReusesItsTransportAndTimesOut(t *testing.T) {
+	a, _ := ProxyClient("http://127.0.0.1:8081")
+	b, _ := ProxyClient("http://127.0.0.1:8081")
+	if a != b {
+		t.Error("the same proxy shares one client, so connections are not left behind per sign-in")
+	}
+	if a.Transport.(*http.Transport).ResponseHeaderTimeout <= 0 {
+		t.Error("a silent proxy times out")
+	}
+	if c, _ := ProxyClient("http://127.0.0.1:8082"); c == a {
+		t.Error("another proxy gets its own client")
+	}
+}

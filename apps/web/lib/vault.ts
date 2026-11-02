@@ -85,25 +85,23 @@ supabase.auth.onAuthStateChange((_event, session) => {
  * Opens one stored value: encrypted text is decrypted, anything else (older plaintext, null) comes back as
  * it is, so rows written before and after encryption read the same way. A user's value (e1:) opens with
  * their keys, a team's (t1:) with the team's. A value that cannot be opened (a t1: value without team keys
- * included) reads as an empty string rather than breaking the screen.
+ * included) reads as an empty string rather than breaking the screen; failing to fetch the keys rejects instead.
  */
 export async function open(field: Field, value: string | null | undefined): Promise<string | null> {
   if (value == null || !isCiphertext(value)) return value ?? null;
+  // A key request that fails rejects: the caller shows a load error or keeps what it had. Turning it into "" would
+  // blank every sealed column at once with no sign anything went wrong.
+  const h = await held();
   try {
-    const h = await held();
-    try {
-      return await decryptAny(h, field, value);
-    } catch (err) {
-      for (const team of h.teamOlds) {
-        try {
-          return await decryptAny({ team }, field, value);
-        } catch {
-          // another version
-        }
-      }
-      throw err;
-    }
+    return await decryptAny(h, field, value);
   } catch {
+    for (const team of h.teamOlds) {
+      try {
+        return await decryptAny({ team }, field, value);
+      } catch {
+        // another version
+      }
+    }
     return "";
   }
 }

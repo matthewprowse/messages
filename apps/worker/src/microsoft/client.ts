@@ -5,6 +5,7 @@
 
 import { sleep } from "../backoff";
 import { retryDelay } from "../google/client";
+import { errorCode, log } from "../log";
 import { MicrosoftAuthError, refreshAccessToken } from "./oauth";
 
 export const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -46,6 +47,8 @@ export class GraphClient {
   private accessToken: string | null = null;
   private expiresAt = 0;
   private refreshing: Promise<string> | null = null;
+  /** A rotated refresh token the last onRotate could not save: kept in memory (opts) and saved again at the next refresh. */
+  private unsaved = false;
 
   constructor(
     /** extraScopes: the optional scopes the sign-in granted, asked for again on each refresh. */
@@ -63,7 +66,17 @@ export class GraphClient {
         this.expiresAt = Date.now() + result.expires_in * 1000;
         if (result.refresh_token && result.refresh_token !== this.opts.refreshToken) {
           this.opts.refreshToken = result.refresh_token;
-          await this.onRotate(result.refresh_token);
+          this.unsaved = true;
+        }
+        // The access token is good whether or not saving the new refresh token works, so a save failure must not
+        // fail the request. The new token stays in memory and the save is tried again at the next refresh.
+        if (this.unsaved) {
+          try {
+            await this.onRotate(this.opts.refreshToken);
+            this.unsaved = false;
+          } catch (err) {
+            log.warn("microsoft refresh token not saved", { code: errorCode(err) });
+          }
         }
         return result.access_token;
       })

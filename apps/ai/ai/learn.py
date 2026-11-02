@@ -16,6 +16,7 @@ from typing import Any
 from . import log
 from .fields import BODY, DRAFT, HTML, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
+from .retry import Backoff, billing_paused
 from .supabase import Supabase, in_list
 from .text import clean
 from .vault import Vault
@@ -91,6 +92,7 @@ def rewrite_pairs(
 
 SENT_LOOKED_AT = 100  # sent replies checked per run for ones not learned from yet
 SENT_PER_RUN = 20  # of those, how many have their bodies read and learned from in one run
+UNFILED_LOOKS = 10  # passes a reply with no conversation yet is waited on before it is given up on
 
 
 class Learn:
@@ -100,6 +102,14 @@ class Learn:
         self.model = model
         self.vault = vault or Vault(db)  # without one, plaintext passes through and nothing is encrypted
         self._rewrites_at = 0.0
+        # In memory, so a restart gives everything one more look. draft_outcomes.thread_id is not null, so a reply with
+        # no conversation to point at cannot be marked seen in the database and would sit in the window for good.
+        self._skip: set[str] = set()
+        self._unfiled: dict[str, int] = {}
+        self._backoff = Backoff()  # drafts whose model step keeps failing
+
+    def _held(self) -> set[str]:
+        return self._skip | set(self._backoff.waiting(time.monotonic()))
 
     def run_once(self) -> int:
         # Ids first, bodies only for the replies not learned from yet: usually there are none.
@@ -110,7 +120,8 @@ class Learn:
         if sent:
             seen = {o["draft_id"] for o in self.db.select("draft_outcomes", {"select": "draft_id", "draft_id": in_list([s["draft_id"] for s in sent])})}
             # Ids are cheap, so many are looked at: an older reply that failed once is not hidden behind newer ones.
-            new = [s["id"] for s in sent if s["draft_id"] not in seen][:SENT_PER_RUN]
+            held = self._held()
+            new = [s["id"] for s in sent if s["draft_id"] not in seen and s["draft_id"] not in held][:SENT_PER_RUN]
             todo = (
                 self.db.select("outbox", {"select": "id,user_id,thread_id,body,draft_id,drafts(body,status)", "id": in_list(new), "order": "sent_at.desc"})
                 if new
@@ -118,13 +129,17 @@ class Learn:
             )
             todo = [s for s in todo if s.get("drafts")]
             for row in todo:
-                if not row.get("thread_id"):  # a new email or chat whose conversation is not filed yet: next time
+                if not row.get("thread_id"):  # a new email or chat whose conversation is not filed yet: next time, a few times
+                    looks = self._unfiled[row["draft_id"]] = self._unfiled.get(row["draft_id"], 0) + 1
+                    if looks >= UNFILED_LOOKS:
+                        self._skip.add(row["draft_id"])
                     continue
                 try:  # one row that fails must not hold up the ones behind it
                     self.vault.open_row(row["user_id"], row, [("body", BODY)])
                     self.vault.open_row(row["user_id"], row["drafts"], [("body", DRAFT)])
                     done += self._learn(row["user_id"], row["draft_id"], row["thread_id"], row["drafts"]["body"] or "", row["body"], mark_sent=True)
                 except Exception as err:
+                    self._backoff.failed(row["draft_id"], time.monotonic())
                     log.warn("draft outcome not learned", draft=row["draft_id"], code=log.code_of(err))
         if time.monotonic() - self._rewrites_at >= REWRITES_EVERY_S:
             self._rewrites_at = time.monotonic()
@@ -155,7 +170,8 @@ class Learn:
         if not discarded:
             return 0
         seen = {o["draft_id"] for o in self.db.select("draft_outcomes", {"select": "draft_id", "draft_id": in_list([d["id"] for d in discarded])})}
-        discarded = [d for d in discarded if d["id"] not in seen]
+        held = self._held()
+        discarded = [d for d in discarded if d["id"] not in seen and d["id"] not in held]
         if not discarded:
             return 0
         thread_ids = sorted({d["thread_id"] for d in discarded})
@@ -187,6 +203,7 @@ class Learn:
                 try:
                     done += self._learn(d["user_id"], d["id"], d["thread_id"], d["body"], sent_body, mark_sent=False)
                 except Exception as err:
+                    self._backoff.failed(d["id"], time.monotonic())
                     log.warn("rewrite not learned", draft=d["id"], code=log.code_of(err))
         return done
 
@@ -196,7 +213,8 @@ class Learn:
         ratio = edit_ratio(draft_body, sent_body)
         row = {"user_id": user_id, "draft_id": draft_id, "thread_id": thread_id, "body": sent_body}
         thread = self.db.first("threads", {"select": "account_id,user_id", "id": f"eq.{thread_id}"})
-        if not thread or thread["user_id"] != user_id:
+        if not thread or thread["user_id"] != user_id:  # gone or not theirs: nothing to learn from now or later
+            self._skip.add(draft_id)
             return 1
         latest_in = self.db.first(
             "messages",
@@ -229,6 +247,8 @@ class Learn:
                     max_output=LEARN_MAX_OUTPUT,
                 )
             except GeminiError as err:
+                if not (billing_paused(err) or "budget_" in str(err)):  # a pause is not this draft's fault
+                    self._backoff.failed(draft_id, time.monotonic())
                 log.warn("learning failed", draft=row["draft_id"], status=err.status)
                 return 0
 
@@ -246,6 +266,7 @@ class Learn:
         )
         if mark_sent:
             self.db.update("drafts", {"id": f"eq.{draft_id}"}, {"status": "sent"})
+        self._backoff.succeeded(draft_id)
         log.info("draft outcome", draft=draft_id, edit_ratio=ratio, rewritten=not mark_sent)
         if ratio < LEARN_FROM_RATIO:
             return 1

@@ -246,10 +246,13 @@ export function Bars({ data, format = num, label }: { data: { label: string; val
         <span>{data[0]?.label}</span>
         <span>{data.at(-1)?.label}</span>
       </div>
-      <table className="sr-only">
-        <caption>{label}</caption>
-        <tbody>{data.map((d) => <tr key={d.label}><th scope="row">{d.label}</th><td>{format(d.value)}</td></tr>)}</tbody>
-      </table>
+      {/* The hiding sits on a wrapper: browsers ignore sr-only's clip on a table, so its caption painted over the page. */}
+      <div className="sr-only">
+        <table>
+          <caption>{label}</caption>
+          <tbody>{data.map((d) => <tr key={d.label}><th scope="row">{d.label}</th><td>{format(d.value)}</td></tr>)}</tbody>
+        </table>
+      </div>
     </div>
   );
 }

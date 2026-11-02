@@ -3,7 +3,7 @@
 // The /onboarding page: one dialog that can't be closed, stepping from joining to ready. Every step runs on
 // mock data and saves nothing; docs/PLAN.md ("Onboarding Flow") says what each step becomes when it is real.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CircleCheck, ImagePlus, Mail, RefreshCw } from "lucide-react";
 import { ROLES, type Role } from "@/lib/onboarding-demo";
@@ -60,6 +60,10 @@ export function OnboardingFlow() {
     briefTime: "07:30", briefSpoken: true, notifyUrgent: true, notifyDigest: false,
   });
   const patch = (p: Partial<State>) => setS((cur) => ({ ...cur, ...p }));
+  // The chosen photo is a blob URL: free it when the flow ends (replacing it is handled where it is picked).
+  const photoRef = useRef<string | null>(null);
+  photoRef.current = s.photo;
+  useEffect(() => () => { if (photoRef.current) URL.revokeObjectURL(photoRef.current); }, []);
   const at = STEPS.indexOf(step);
   const next = () => setStep(STEPS[at + 1]);
   const back = at > 0 ? () => setStep(STEPS[at - 1]) : undefined;
@@ -240,7 +244,9 @@ function About(f: FrameProps) {
   const initials = s.name.trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
   const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) patch({ photo: URL.createObjectURL(file) });
+    if (!file) return;
+    if (s.photo) URL.revokeObjectURL(s.photo);
+    patch({ photo: URL.createObjectURL(file) });
   };
   return (
     <Frame f={f} title="Tell Konva About You" description="While your messages come in, a little about you helps Konva sort what matters and write like you." footer={<Nav f={f} />}>

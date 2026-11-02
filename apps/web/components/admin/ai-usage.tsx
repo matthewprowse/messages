@@ -22,11 +22,11 @@ type Row = {
   setup_usd: number;
   calls: number;
   month_pct: number;
-  by_feature: Record<string, number>;
+  by_feature: Record<string, number | null>; // null for a feature whose only spend this month was setup work
   flag: string | null;
 };
 
-const FEATURE_LABEL: Record<string, string> = { triage: "Sorting", draft: "Drafts", learn: "Learning", brief: "Brief", transcribe: "Transcripts" };
+const FEATURE_LABEL: Record<string, string> = { triage: "Sorting", draft: "Drafts", learn: "Learning", brief: "Brief", transcribe: "Transcripts", bulk_read: "Readable Bulk Email" };
 const PROVIDER_LABEL: Record<string, string> = {
   gmail: "Gmail", icloud: "iCloud Mail", outlook: "Outlook", imap: "Other Email", whatsapp: "WhatsApp", google_calendar: "Google Calendar",
   outlook_calendar: "Outlook Calendar", icloud_calendar: "iCloud Calendar", teams: "Teams", zoom: "Zoom", google_meet: "Google Meet",
@@ -64,7 +64,7 @@ export function AiUsage({ version, onBusy }: { version: number; onBusy: (busy: b
       ) : (
         <div>
           {rows.map((r, i) => {
-            const features = Object.entries(r.by_feature).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${FEATURE_LABEL[k] ?? k} ${money(v)}`).join(", ");
+            const features = Object.entries(r.by_feature).filter((e): e is [string, number] => e[1] != null).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${FEATURE_LABEL[k] ?? k} ${money(v)}`).join(", ");
             return (
               <div key={r.user_id}>
                 {i > 0 && <Separator className="ml-3" />}

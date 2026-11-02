@@ -24,17 +24,21 @@ class Clock:
 class Classify(unittest.TestCase):
     def test_billing(self):
         self.assertTrue(is_billing_error(402))
-        self.assertTrue(is_billing_error(403, "PERMISSION_DENIED"))
+        self.assertTrue(is_billing_error(403, "PERMISSION_DENIED", "Billing account is disabled for this project"))
+        self.assertTrue(is_billing_error(403, "", "Your account is suspended"))
         self.assertTrue(is_billing_error(400, "FAILED_PRECONDITION", "Billing is not enabled for this project"))
         self.assertTrue(is_billing_error(429, "RESOURCE_EXHAUSTED", "Your prepayment credits are depleted"))
         self.assertTrue(is_billing_error(429, "RESOURCE_EXHAUSTED", "check your plan and billing details"))
-        self.assertTrue(is_billing_error(400, "PERMISSION_DENIED"))
+        self.assertTrue(is_billing_error(400, "PERMISSION_DENIED", "billing is not enabled"))
 
     def test_ordinary_limits_are_not(self):
         self.assertFalse(is_billing_error(429, "RESOURCE_EXHAUSTED", "Quota exceeded for requests per minute. Please retry in 37s"))
         self.assertFalse(is_billing_error(429, "RESOURCE_EXHAUSTED", "exceeded your quota per minute, check plan and billing details"))
         self.assertFalse(is_billing_error(429, "RESOURCE_EXHAUSTED"))
         self.assertFalse(is_billing_error(500, "INTERNAL", "billing"))
+        self.assertFalse(is_billing_error(403, "PERMISSION_DENIED"))
+        self.assertFalse(is_billing_error(403, "PERMISSION_DENIED", "Permission denied on file files/abc or it may not exist"))
+        self.assertFalse(is_billing_error(403, "PERMISSION_DENIED", "CachedContent not found (or permission denied)"))
         self.assertFalse(is_billing_error(400, "INVALID_ARGUMENT", "bad schema"))
         self.assertFalse(is_billing_error(None, "ConnectionError"))
 

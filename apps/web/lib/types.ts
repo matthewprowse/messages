@@ -14,7 +14,7 @@ export type Provider = "icloud" | "gmail" | "outlook" | "whatsapp" | "google_cal
 export type Priority = "urgent" | "important" | "normal" | "low";
 export type Category = "personal" | "work" | "needs_reply" | "fyi" | "newsletter" | "notification";
 export type ThreadStatus = "inbox" | "archived" | "trash";
-export type View = "priority" | "all" | "junk" | "subscriptions";
+export type View = "priority" | "all" | "junk" | "subscriptions" | "archive";
 export type ListFilter = "none" | "unread" | "email" | "whatsapp" | "waiting";
 export type AccountStatus = "connecting" | "syncing" | "connected" | "disconnected" | "error";
 

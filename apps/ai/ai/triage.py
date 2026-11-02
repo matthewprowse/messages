@@ -34,7 +34,7 @@ from .analytics import Analytics, event, prompt_id, traits as message_traits
 from .fields import ADDRESS, BODY, CHOICES, CONTACT_RELATIONSHIP, FILENAME, HTML, SUBJECT, SUMMARY, TRANSCRIPT, UNSUBSCRIBE
 from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
-from .retry import Backoff, not_in
+from .retry import Backoff, billing_paused, not_in
 from .supabase import Supabase, in_list
 from .text import UNTRUSTED, clean, new_fence
 from .vault import Vault
@@ -498,37 +498,43 @@ class Triage:
         if not done:
             log.info("triage batch", messages=len(rows), triaged=0)
             return 0
-        stored = {
-            m["id"]: message_traits(
-                m,
-                sources[m["id"]],
-                chars=len((m.get("_email") or {}).get("body") or "") if m.get("_email") else None,
-                known=bool((m.get("_email") or {}).get("known")),
-                timezone=contexts[m["user_id"]].timezone,
-            )
-            for m in done
-        }
-        final = {m["id"]: apply_signals(results[m["id"]][0], (m.get("sender_address") or "").lower(), contexts[m["user_id"]], feedback.get(m["thread_id"], [])) for m in done}
-        self.db.upsert(
-            "message_ai",
-            [
-                {
-                    "message_id": m["id"],
-                    "user_id": m["user_id"],
-                    "priority": final[m["id"]]["priority"],
-                    "category": final[m["id"]]["category"],
-                    "summary": self.vault.seal(m["user_id"], SUMMARY, final[m["id"]]["summary"]),
-                    "needs_reply": bool(final[m["id"]]["needs_reply"]),
-                    "junk": bool(final[m["id"]]["junk"]),
-                    "reply_choices": self.vault.seal(m["user_id"], CHOICES, final[m["id"]]["choices"]),
-                    "model": results[m["id"]][1],
-                    "prompt_version": prompt_id(SYSTEM) if results[m["id"]][1] else None,
-                    "traits": stored[m["id"]],
-                }
+        try:  # the answers are paid for: whatever fails from here on is backed off, or the next poll asks and pays again
+            stored = {
+                m["id"]: message_traits(
+                    m,
+                    sources[m["id"]],
+                    chars=len((m.get("_email") or {}).get("body") or "") if m.get("_email") else None,
+                    known=bool((m.get("_email") or {}).get("known")),
+                    timezone=contexts[m["user_id"]].timezone,
+                )
                 for m in done
-            ],
-            on_conflict="message_id",
-        )
+            }
+            final = {m["id"]: apply_signals(results[m["id"]][0], (m.get("sender_address") or "").lower(), contexts[m["user_id"]], feedback.get(m["thread_id"], [])) for m in done}
+            self.db.upsert(
+                "message_ai",
+                [
+                    {
+                        "message_id": m["id"],
+                        "user_id": m["user_id"],
+                        "priority": final[m["id"]]["priority"],
+                        "category": final[m["id"]]["category"],
+                        "summary": self.vault.seal(m["user_id"], SUMMARY, final[m["id"]]["summary"]),
+                        "needs_reply": bool(final[m["id"]]["needs_reply"]),
+                        "junk": bool(final[m["id"]]["junk"]),
+                        "reply_choices": self.vault.seal(m["user_id"], CHOICES, final[m["id"]]["choices"]),
+                        "model": results[m["id"]][1],
+                        "prompt_version": prompt_id(SYSTEM) if results[m["id"]][1] else None,
+                        "traits": stored[m["id"]],
+                    }
+                    for m in done
+                ],
+                on_conflict="message_id",
+            )
+        except Exception as err:
+            paid = [m for m in done if sources[m["id"]] in ("model", "copied")] or done
+            log.warn("triage answers not saved", messages=len(paid), code=log.code_of(err))
+            self._failed(paid, None)
+            return 0
         # The conversation takes the triage of its latest incoming message.
         updates = [m for m in done if latest[m["id"]][0]]
         list(self._pool.map(lambda m: self._update_thread_safely(m, final[m["id"]], latest[m["id"]][1]), updates))
@@ -804,6 +810,9 @@ class Triage:
             # again one by one. A paused budget or a timeout would fail every single call too (a timeout was already billed).
             if len(chunk) > 1 and not is_billing_paused(err) and (err.status == 400 or "was not JSON" in str(err) or "no candidates" in str(err)):
                 return {k: v for m in chunk for k, v in self._ask(ctx, [m]).items()}
+            if billing_paused(err) or "budget_" in str(err):  # not the row's fault: it stays queued, and backing it off would hold it for hours
+                log.info("triage paused", messages=len(chunk), reason="billing" if billing_paused(err) else "budget")
+                return {}
             self._failed(chunk, err.status)
             return {}
         got = read_results(result, len(chunk))
