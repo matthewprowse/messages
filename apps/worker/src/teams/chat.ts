@@ -239,7 +239,7 @@ export function markChatRead(client: Pick<GraphClient, "request">, chatId: strin
  * (a timeout, a dropped connection, a server error) may still mean it went out.
  */
 export function sendFailure(err: unknown, requested: boolean): string {
-  if (signInRevoked(err)) return "Microsoft sign-in expired, so the message was not sent. Run pnpm connect:microsoft to reconnect, then send again.";
+  if (signInRevoked(err)) return "Microsoft sign-in expired, so the message was not sent. Reconnect Microsoft in Settings, Accounts, then send again.";
   if (err instanceof GraphApiError) {
     if (err.status === 403) return "Teams would not send this message. You may no longer be in this chat.";
     if (err.status === 404) return "This Teams chat no longer exists, so the message was not sent.";
@@ -253,7 +253,7 @@ export function sendFailure(err: unknown, requested: boolean): string {
 
 /** Shown in Settings when Microsoft needs an IT admin before Teams can be read. */
 export const ADMIN_APPROVAL =
-  "Your organisation's IT admin needs to approve Teams access for Messages. Ask them to grant admin consent in Microsoft Entra, then run pnpm connect:microsoft again.";
+  "Your organisation's IT admin needs to approve Teams access for Messages. Ask them to grant admin consent in Microsoft Entra, then reconnect Microsoft in Settings, Accounts.";
 
 /**
  * The account status for a session failure that only you or your IT admin can fix, or null when it is
@@ -262,7 +262,7 @@ export const ADMIN_APPROVAL =
 export function teamsAccessProblem(err: unknown, listing: boolean): string | null {
   if (err instanceof MicrosoftAuthError && err.code === "consent_required") return ADMIN_APPROVAL;
   if (listing && err instanceof GraphApiError && (err.status === 401 || err.status === 403)) {
-    return "Microsoft would not open your Teams chats. Teams needs a work or school account, and your organisation's IT admin may need to approve Messages first. Then run pnpm connect:microsoft again.";
+    return "Microsoft would not open your Teams chats. Teams needs a work or school account, and your organisation's IT admin may need to approve Messages first. Then reconnect Microsoft in Settings, Accounts.";
   }
   return null;
 }

@@ -318,7 +318,7 @@ export function pendingEvent(id: string, row: CalendarOutboxInsert, date: string
 
 /** True when a failed event needs Google or iCloud to be connected again. */
 export function needsReconnect(error: string | null | undefined) {
-  return !!error && /reconnect google|pnpm connect:icloud-calendar/i.test(error);
+  return !!error && /reconnect google|reconnect icloud calendar in settings|pnpm connect:icloud-calendar/i.test(error);
 }
 
 /** The linked WhatsApp account that can send, if any. */

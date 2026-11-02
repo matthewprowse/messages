@@ -200,6 +200,7 @@ test("buildEventRow names the first thing to fix", () => {
 test("needsReconnect spots the worker's reconnect message", () => {
   assert.equal(needsReconnect("Reconnect Google to allow creating events. Run pnpm connect:google."), true);
   assert.equal(needsReconnect("iCloud rejected the sign-in. Run pnpm connect:icloud-calendar to reconnect."), true);
+  assert.equal(needsReconnect("iCloud rejected the sign-in. Reconnect iCloud Calendar in Settings, Accounts."), true);
   assert.equal(needsReconnect("Google Calendar could not be reached."), false);
   assert.equal(needsReconnect(undefined), false);
 });

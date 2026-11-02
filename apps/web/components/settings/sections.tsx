@@ -234,7 +234,7 @@ export function DataSection() {
   );
 }
 
-export function TourSection() {
+export function RunSetupSection() {
   const { notify } = useApp();
   const failed = () => notify("Could not start that. Try again.");
   const setup = () => saveOnboarding({ onboarding: "accounts", tour: "done" }).catch(failed);

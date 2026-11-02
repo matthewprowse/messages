@@ -4,16 +4,14 @@
 // View, date and open event live in the address (?view, ?date, ?event), so a reload or shared link opens the same place.
 
 
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { toast } from "sonner";
 import { ArrowLeft, ArrowRight, CalendarDays } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { visibleEvents } from "@/lib/event-filter";
-import { buildResponse, dayKey, daysOf, followUpdate, loadEventDetail, loadEvents, withPatch, type CalendarEvent, type EventPatch, type EventResponse, type UpdateScope } from "@/lib/calendar";
-import { supabase } from "@/lib/supabase";
+import { dayKey, daysOf, type CalendarEvent } from "@/lib/calendar";
 import { tasksByDay, type DayTask } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -22,7 +20,7 @@ import { PaneControls, PaneHeader, SearchBand, ViewButtons } from "@/components/
 import { EmptyState, providerLabel } from "@/components/primitives";
 import { NewEventDialog } from "@/components/new-event-dialog";
 import { NewTaskDialog } from "@/components/new-task-dialog";
-import { DeleteEventDialog, type DeleteScope } from "@/components/delete-event-dialog";
+import { DeleteEventDialog } from "@/components/delete-event-dialog";
 
 import { DAY_MIN, LABELS, View, addDays, byTime, fromKey, parseKey, rangeLabel, startOfDay, startOfMonth, startOfWeek } from "@/components/calendar/dates";
 import { EventDialog } from "@/components/calendar/event-details";
@@ -30,13 +28,11 @@ import { EventList } from "@/components/calendar/event-list";
 import { MonthView } from "@/components/calendar/month-view";
 import { Page, PageContext, useWide } from "@/components/calendar/page-context";
 import { TaskDialog } from "@/components/calendar/task-parts";
+import { useCalendarData } from "@/components/calendar/use-calendar-data";
+import { useCalendarKeys, useWheelNavigation } from "@/components/calendar/use-calendar-input";
+import { usePendingChanges } from "@/components/calendar/use-pending-changes";
+import { useReload } from "@/components/calendar/use-reload";
 import { WeekView } from "@/components/calendar/week-view";
-
-/** Keys that would be typed into something are left alone. */
-function isTyping(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || !!target.closest('input, textarea, select, [role="tablist"], [role="listbox"], [role="menu"], [role="slider"], [role="dialog"], [role="alertdialog"]');
-}
 
 function CalendarPageContent() {
   const { session } = useAuth();
@@ -89,23 +85,10 @@ function CalendarPageContent() {
   const length = view === "day" ? 1 : view === "week" ? weekDays : Math.max(42, Math.round((listEnd.getTime() - start.getTime()) / 86_400_000));
   const startKey = dayKey(start);
   const rangeKey = `${startKey}+${length}`;
-  // undefined while loading, null if it failed.
-  const [loaded, setLoaded] = useState<{ key: string; events: CalendarEvent[] | null } | undefined>(undefined);
-  // Goes up when the days shown should load again.
-  const [version, setVersion] = useState(0);
-  // Events saved in the dialog that the worker has not created yet, shown as if they were. One leaves this list when
-  // the days reload after it was created, or when it failed.
-  const [queued, setQueued] = useState<CalendarEvent[]>([]);
-  const created = useRef(new Set<string>());
-  // Events being deleted, hidden at once (a whole series when that is what was asked for). Each goes when the days
-  // reload after the worker has deleted it, or straight away when it could not.
-  const [hidden, setHidden] = useState<{ token: string; id: string; seriesId: string | null; scope: DeleteScope }[]>([]);
-  const deleted = useRef(new Set<string>());
+  const { version, setVersion, mounted, reload, later } = useReload();
+  const pending = usePendingChanges(reload);
+  const { queued, setQueued, hidden, setHidden, edits, setEdits, created, deleted, updated, applyEdits } = pending;
   const [deleteFor, setDeleteFor] = useState<{ event: CalendarEvent; error?: string } | null>(null);
-  // Changes and answers saved but not yet made in the calendar, laid over the events as if they were. One goes when the
-  // days reload after the worker made it, or straight away when it could not.
-  const [edits, setEdits] = useState<{ token: string; id: string; seriesId: string | null; scope: UpdateScope; patch: EventPatch }[]>([]);
-  const updated = useRef(new Set<string>());
   // The event being edited stays set while the editor is closed, so a failed change can open it again as it was.
   const [editFor, setEditFor] = useState<CalendarEvent | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -113,38 +96,13 @@ function CalendarPageContent() {
   const [newDay, setNewDay] = useState<string | undefined>(undefined);
   const [newTime, setNewTime] = useState<string | undefined>(undefined);
   const [newUntil, setNewUntil] = useState<string | undefined>(undefined);
-  const [openKey, setOpenKey] = useState<string | null>(null);
   // ?task=<id> opens that task, such as from the Summary. The address then drops it with the rest it does not follow.
   const [openTaskId, setOpenTaskId] = useState<string | null>(() => searchParams.get("task"));
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // The task being changed in the New Task dialog, or null when it makes a new one.
   const [editTarget, setEditTarget] = useState<Task | null>(null);
-  const [details, setDetails] = useState<Map<string, CalendarEvent>>(() => new Map());
-  const [detailsFailed, setDetailsFailed] = useState<Set<string>>(() => new Set());
-  const requested = useRef(new Set<string>());
-  const loadedVersion = useRef(0);
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-
-  // Several things can ask for the days to load again at once (Realtime, the dialog and a delete): they load once.
-  const reloadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const reload = useCallback(() => {
-    clearTimeout(reloadTimer.current);
-    reloadTimer.current = setTimeout(() => setVersion((v) => v + 1), 300);
-  }, []);
-  useEffect(() => () => clearTimeout(reloadTimer.current), []);
-  // A change the worker has not confirmed after a minute may still land: the days load again a while later, and what
-  // is still missing from them is then dropped from the page.
-  const later = useCallback((settle: () => void) => {
-    setTimeout(() => {
-      if (!mounted.current) return;
-      settle();
-      reload();
-    }, 30_000);
-  }, [reload]);
+  const { loaded, setLoaded, loadedEvents, openKey, setOpenKey, openId, details, detailsFailed } = useCalendarData({ userId, view, setAnchor, paneWidth, startKey, length, rangeKey, version, mounted, reload, pending });
+  const loadingMore = view === "agenda" && loaded?.key !== rangeKey && !!loadedEvents;
 
   // The time line and today move on while the page is left open.
   useEffect(() => {
@@ -159,126 +117,7 @@ function CalendarPageContent() {
     if (query !== next) router.replace(`${pathname}?${next}`, { scroll: false });
   }, [view, anchorKey, eventParam, query, pathname, router]);
 
-  // ?event=<id> opens that event on its day, such as from the Summary.
-  const handledEvent = useRef<string | null>(null);
-  useEffect(() => {
-    if (!eventParam || !userId || handledEvent.current === eventParam) return;
-    handledEvent.current = eventParam;
-    loadEventDetail(eventParam)
-      .then((event) => {
-        if (!mounted.current) return;
-        if (!event) {
-          toast.error("That event could not be found.");
-          router.replace(pathname, { scroll: false });
-          return;
-        }
-        const day = event.allDay ? event.startsAt.slice(0, 10) : dayKey(new Date(event.startsAt));
-        requested.current.add(event.id);
-        setDetails((map) => new Map(map).set(event.id, event));
-        setAnchor(fromKey(day));
-        setOpenKey(`${event.id}|${day}`);
-        router.replace(`${pathname}?${new URLSearchParams({ view, date: day }).toString()}`, { scroll: false });
-      })
-      .catch((err) => {
-        console.error(err instanceof Error ? err.message : "Load event failed");
-        if (!mounted.current) return;
-        toast.error("That event did not load.");
-        router.replace(pathname, { scroll: false });
-      });
-  }, [eventParam, userId, pathname, router, view]);
-
-  useEffect(() => {
-    // The week view waits to know how many days fit.
-    if (!userId || (view === "week" && paneWidth === 0)) return;
-    let cancelled = false;
-    const from = fromKey(startKey);
-    loadEvents(from, addDays(from, length), { details: false })
-      .then((events) => {
-        if (cancelled) return;
-        setLoaded({ key: rangeKey, events });
-        if (created.current.size) setQueued((list) => list.filter((e) => !created.current.has(e.id)));
-        if (deleted.current.size) setHidden((list) => list.filter((h) => !deleted.current.has(h.token)));
-        if (updated.current.size) setEdits((list) => list.filter((e) => !updated.current.has(e.token)));
-        // Opened events are fetched again after a reload, as they may have changed.
-        if (loadedVersion.current !== version) {
-          loadedVersion.current = version;
-          requested.current.clear();
-          setDetails(new Map());
-        }
-      })
-      .catch((err) => {
-        console.error(err instanceof Error ? err.message : "Load events failed");
-        if (cancelled) return;
-        // A failed refresh keeps the events already shown; only a first load with nothing to show reports the error.
-        setLoaded((prev) => ({ key: rangeKey, events: prev?.events ?? null }));
-        toast.error("Events did not load. Try again in a moment.");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [rangeKey, startKey, length, userId, version, view, paneWidth]);
-
-  // The worker stores a new event in calendar_events before it marks the queued row created.
-  useEffect(() => {
-    if (!userId) return;
-    const channel = supabase
-      .channel(`calendar-page-${userId}`)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "calendar_outbox", filter: `user_id=eq.${userId}` }, (payload) => {
-        const row = payload.new as { id?: string; status?: string };
-        if (row.status !== "created") return;
-        if (row.id) created.current.add(row.id);
-        reload();
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [userId, reload]);
-
-  // Guests, notes and the link are fetched for an event once it is opened.
-  const openId = openKey ? openKey.split("|")[0] : null;
-  // The days before stay on screen while the next ones load, so moving through time never flashes a skeleton.
-  const loadedEvents = loaded?.key === rangeKey ? loaded.events : (loaded?.events ?? undefined);
-  const loadingMore = view === "agenda" && loaded?.key !== rangeKey && !!loadedEvents;
-  // Closing an event (or opening another) forgets a failed load, so opening it again tries again.
-  useEffect(() => {
-    setDetailsFailed((set) => {
-      const stale = [...set].filter((id) => id !== openId);
-      if (!stale.length) return set;
-      for (const id of stale) requested.current.delete(id);
-      return new Set([...set].filter((id) => id === openId));
-    });
-  }, [openId]);
-  useEffect(() => {
-    if (!openId || requested.current.has(openId)) return;
-    const base = loadedEvents?.find((e) => e.id === openId) ?? queued.find((e) => e.id === openId);
-    if (queued.some((e) => e.id === openId)) return;
-    if (base?.detailed) return;
-    requested.current.add(openId);
-    loadEventDetail(openId)
-      .then((event) => {
-        if (!mounted.current) return;
-        if (event) setDetails((map) => new Map(map).set(openId, event));
-        else setDetailsFailed((set) => new Set(set).add(openId));
-      })
-      .catch((err) => {
-        console.error(err instanceof Error ? err.message : "Load event failed");
-        if (mounted.current) setDetailsFailed((set) => new Set(set).add(openId));
-      });
-  }, [openId, loadedEvents, queued]);
-
   const days = useMemo(() => Array.from({ length }, (_, i) => dayKey(addDays(fromKey(startKey), i))), [startKey, length]);
-  // An event with the changes saved for it laid over it. A change to a whole series shows on the rest of the series
-  // too, except its time, which moves each occurrence by its own amount once the days reload.
-  const applyEdits = (event: CalendarEvent) => {
-    let patch: EventPatch | undefined;
-    for (const edit of edits) {
-      if (edit.id === event.id) patch = { ...patch, ...edit.patch };
-      else if (edit.scope === "series" && edit.seriesId && edit.seriesId === event.seriesId) {
-        const { startsAt: _s, endsAt: _e, allDay: _a, ...rest } = edit.patch;
-        patch = { ...patch, ...rest };
-      }
-    }
-    return withPatch(event, patch);
-  };
   // The loaded days with the events still being created, unless they have already loaded.
   const events = useMemo(() => {
     if (!loadedEvents) return loadedEvents;
@@ -338,75 +177,8 @@ function CalendarPageContent() {
     setNewOpen(true);
   };
 
-  // Scrolling moves through time: down past the end of a day for the next one, sideways across a week for the next.
-  // Scrolling inside a view that still has room to scroll is left alone.
-  const moveRef = useRef(move);
-  moveRef.current = move;
-  useEffect(() => {
-    const el = paneRef.current;
-    if (!el) return;
-    if (view === "agenda") {
-      // Scrolling the month grid scrolls the agenda list, and the grid follows it.
-      const forward = (e: WheelEvent) => {
-        const list = document.querySelector<HTMLElement>('[data-calendar-list] [data-slot="scroll-area-viewport"]');
-        if (list && list.scrollHeight > list.clientHeight) list.scrollTop += e.deltaY;
-      };
-      el.addEventListener("wheel", forward, { passive: true });
-      return () => el.removeEventListener("wheel", forward);
-    }
-    let travelled = 0;
-    let lastAt = 0;
-    let cooldown = 0;
-    const onWheel = (e: WheelEvent) => {
-      const stamp = performance.now();
-      if (stamp < cooldown) return;
-      if (stamp - lastAt > 300) travelled = 0;
-      lastAt = stamp;
-      let delta = 0;
-      if (view === "week") {
-        // Mostly sideways: a trackpad swipe, or the wheel with Shift held.
-        delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.shiftKey ? e.deltaY : 0;
-      } else {
-        let node = e.target as HTMLElement | null;
-        let room = false;
-        while (node && node !== el) {
-          if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) {
-            const atEdge = e.deltaY > 0 ? node.scrollTop + node.clientHeight >= node.scrollHeight - 1 : node.scrollTop <= 0;
-            if (!atEdge) room = true;
-            break;
-          }
-          node = node.parentElement;
-        }
-        delta = room || Math.abs(e.deltaX) > Math.abs(e.deltaY) ? 0 : e.deltaY;
-      }
-      if (!delta) { travelled = 0; return; }
-      travelled += delta;
-      if (Math.abs(travelled) < 160) return;
-      moveRef.current(travelled > 0 ? 1 : -1);
-      travelled = 0;
-      cooldown = stamp + 700;
-    };
-    el.addEventListener("wheel", onWheel, { passive: true });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [view]);
-
-  // T is today, the arrows move a day, A, D and W switch the view.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || isTyping(e.target) || newOpen || editOpen || deleteFor || openKey || openTask || newTaskOpen) return;
-      const key = e.key.toLowerCase();
-      if (key === "t") setAnchor(today);
-      else if (key === "a") setView("agenda");
-      else if (key === "d") setView("day");
-      else if (key === "w") setView("week");
-      else if (e.key === "ArrowLeft") setAnchor((d) => addDays(d, -1));
-      else if (e.key === "ArrowRight") setAnchor((d) => addDays(d, 1));
-      else return;
-      e.preventDefault();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [today, newOpen, editOpen, deleteFor, openKey, openTask, newTaskOpen]);
+  useWheelNavigation(paneRef, view, move);
+  useCalendarKeys({ today, blocked: newOpen || editOpen || !!deleteFor || !!openKey || !!openTask || newTaskOpen, setAnchor, setView });
 
   // With no account connected at all, the first step is connecting one.
   const noAccounts = !accounts.some((a) => a.status !== "disconnected");
@@ -443,32 +215,6 @@ function CalendarPageContent() {
   );
 
   const deletedFrom = accounts.find((a) => a.id === deleteFor?.event.accountId)?.provider === "icloud_calendar" ? "iCloud Calendar" : "Google Calendar";
-  // Answers an invitation. The answer shows at once, marked as saving, while the worker sends it to the calendar.
-  const answer = useCallback(
-    async (event: CalendarEvent, response: EventResponse) => {
-      if (!event.accountId) return;
-      const pending = { token: `answer-${event.id}-${Date.now()}`, id: event.id, seriesId: null, scope: "occurrence" as const, patch: { response } };
-      setEdits((list) => [...list, pending]);
-      const dropPending = (token: string) => setEdits((list) => list.filter((e) => e.token !== token));
-      const { data, error } = await supabase.from("calendar_updates").insert(buildResponse(event, response)).select("id").single();
-      if (error || !data) {
-        dropPending(pending.token);
-        toast.error("Could not save your answer. Try again.");
-        return;
-      }
-      const token = data.id;
-      setEdits((list) => list.map((e) => (e.token === pending.token ? { ...e, token } : e)));
-      const result = await followUpdate(token);
-      if (result.status === "done") {
-        updated.current.add(token);
-        reload();
-        return;
-      }
-      dropPending(token);
-      toast.error(result.error ?? "Your answer could not be sent.");
-    },
-    [reload],
-  );
   const context = useMemo<PageContext>(
     () => ({
       wide,
@@ -482,14 +228,14 @@ function CalendarPageContent() {
         setEditFor(event);
         setEditOpen(true);
       },
-      answer: (event, response) => void answer(event, response),
+      answer: (event, response) => void pending.answer(event, response),
       openTask: setOpenTaskId,
       sourceOf: (task) => {
         const provider = accounts.find((a) => a.id === task.accountId)?.provider;
         return provider ? providerLabel[provider] : undefined;
       },
     }),
-    [wide, now, openKey, shownDetails, detailsFailed, answer, accounts],
+    [wide, now, openKey, shownDetails, detailsFailed, pending.answer, accounts],
   );
 
   // The same split as Conversations and Summary: the header and the list on the left, what they are about

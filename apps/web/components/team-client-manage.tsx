@@ -86,7 +86,7 @@ function RenameDialog({ client, onClose, onDone }: { client: TeamClient; onClose
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="rename_team_client" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="rename_team_client" className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Rename Client</DialogTitle>
@@ -122,7 +122,7 @@ function CompanyDialog({ client, onClose, onDone }: { client: TeamClient; onClos
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="set_team_client_company" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="set_team_client_company" className="sm:max-w-md">
         <form onSubmit={(e) => { e.preventDefault(); if (!busy && company.trim()) void save(company); }} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Set Company</DialogTitle>
@@ -165,7 +165,7 @@ function AgentDialog({ client, onClose, onDone }: { client: TeamClient; onClose:
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="set_team_client_agent" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="set_team_client_agent" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Change Agent</DialogTitle>
           <DialogDescription>
@@ -210,7 +210,7 @@ function MergeDialog({ client, onClose, onDone }: { client: TeamClient; onClose:
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="merge_team_clients" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="merge_team_clients" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Merge Clients</DialogTitle>
           <DialogDescription>
@@ -350,7 +350,7 @@ function ExportDialog({ client, onClose }: { client: TeamClient; onClose: () => 
   const pct = progress && progress.messagesTotal > 0 ? Math.min(100, Math.round((progress.messages / progress.messagesTotal) * 100)) : 0;
   return (
     <Dialog open onOpenChange={(open) => !open && !working && onClose()}>
-      <DialogContent track="compliance_export" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="compliance_export" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Export Work History</DialogTitle>
           <DialogDescription>

@@ -7,7 +7,7 @@ import { usePathname } from "next/navigation";
 import { SummaryList } from "@/components/summary-list";
 import { cn } from "@/lib/utils";
 
-export default function BriefingLayout({ children }: { children: React.ReactNode }) {
+export default function SummaryLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isDetail = /^\/summary\/[^/]+/.test(pathname);
   return (

@@ -60,7 +60,7 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
-      <DialogContent track="invite_member" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="invite_member" className="sm:max-w-md">
         {link ? (
           <>
             <DialogHeader>

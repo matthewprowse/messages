@@ -1,0 +1,174 @@
+"""Triage rules that need no model: the constants shared by the triage modules, the per-user context, your own
+signals (rules, unsubscribes, corrections) that win over the model, and how a batch is grouped and queried. Pure:
+no network. Split out of triage.py, which re-exports every name here."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any
+
+from .retry import not_in
+
+PRIORITIES = ["urgent", "important", "normal", "low"]
+CATEGORIES = ["personal", "work", "needs_reply", "fyi", "newsletter", "notification"]
+LOOKBACK_DAYS = 30
+VOICE_WAIT_S = 15 * 60  # how long a voice note waits for its transcript before it is triaged without one
+VOICE_RECHECK_S = 20
+BATCH = 24
+GROUP = 8  # emails per model call
+BODY_CHARS = 2500
+BULK_BODY_CHARS = 1200  # bulk mail (a list-unsubscribe header) fills 2500 characters but classifies the same from 800 to 1200
+CONTEXT_MESSAGES = 4  # earlier messages of the conversation shown with the one being judged
+CONTEXT_CHARS = 300  # each of them is cut to this, so a long thread stays cheap
+SUBJECT_CHARS = 300  # a subject is not a second body: a long one is cut before the prompt
+CONTEXT_TTL_S = 60  # what is known about a user (rules, unsubscribes, corrections) is reread this often
+LATEST_ROWS = 1000
+OPTION_KINDS = ["accept", "decline", "other_time", "answer"]
+MAX_OPTIONS = 4
+SENDER_KEEP = 2  # the model's last answers about a bulk sender that must all agree before it is skipped
+SENDER_RECHECK_DAYS = 30  # the model looks at a skipped sender again once its last answer is this old
+BULK_CATEGORIES = ("newsletter", "notification")
+NO_CHOICES = json.dumps({"options": []})  # looked at, nothing to offer: the backfill skips it
+
+@dataclass
+class UserContext:
+    name: str = ""  # profiles.display_name, so summaries can say "you" instead of it
+    own_addresses: list[str] = field(default_factory=list)  # their accounts' addresses, for the same reason
+    about: str = ""
+    important_people: str = ""
+    always: list[str] = field(default_factory=list)
+    never: list[str] = field(default_factory=list)
+    unsubscribed: set[str] = field(default_factory=set)
+    corrections: list[str] = field(default_factory=list)
+    accounts: list[str] = field(default_factory=list)  # every connected account, for finding the same email twice
+    timezone: str = ""  # profiles.timezone, for the time of day in a message's traits
+    language: str = ""  # profiles.language: en-GB, en-US or af; empty follows how they write
+
+
+def matches(address: str, targets: list[str]) -> bool:
+    """A rule target is a whole address or a domain (with or without @)."""
+    address = address.lower()
+    domain = address.split("@")[-1]
+    for t in targets:
+        t = t.strip().lower()
+        if not t:
+            continue
+        if t == address or t.lstrip("@") == domain or domain.endswith("." + t.lstrip("@")):
+            return True
+    return False
+
+
+def apply_signals(result: dict[str, Any], sender: str, ctx: UserContext, thread_feedback: list[str]) -> dict[str, Any]:
+    """Your own signals override the model. thread_feedback is newest first."""
+    out = dict(result)
+    if out.get("priority") not in PRIORITIES:
+        out["priority"] = "normal"
+    if out.get("category") not in CATEGORIES:
+        out["category"] = "fyi"
+    out["summary"] = str(out.get("summary") or "")[:200]
+
+    if sender and sender.lower() in ctx.unsubscribed:
+        out.update(junk=True, priority="low", needs_reply=False)
+    if sender and matches(sender, ctx.never):
+        out.update(priority="low")
+    if sender and matches(sender, ctx.always):
+        out.update(junk=False, priority="urgent" if out["priority"] == "urgent" else "important")
+
+    for value in thread_feedback:  # the latest correction on this conversation wins per kind
+        if value in ("junk", "not_junk"):
+            out["junk"] = value == "junk"
+            break
+    for value in thread_feedback:
+        if value in ("important", "not_important"):
+            out["priority"] = ("urgent" if out["priority"] == "urgent" else "important") if value == "important" else "low"
+            break
+    if out["junk"]:
+        out["needs_reply"] = False
+    # Choices only while a reply is needed. None leaves reply_choices empty; NO_CHOICES means looked at.
+    out["choices"] = (out.get("choices") or NO_CHOICES) if out["needs_reply"] else None
+    return out
+
+
+def known_outcome(m: dict[str, Any], ctx: UserContext, thread_feedback: list[str]) -> dict[str, Any] | None:
+    """A result your own signals already settle, so no model call is needed: a sender you unsubscribed
+    from, or a conversation whose latest junk correction is Junk. thread_feedback is newest first."""
+    sender = (m.get("sender_address") or "").lower()
+    unsubscribed = bool(sender) and sender in ctx.unsubscribed
+    junk_mark = next((v for v in thread_feedback if v in ("junk", "not_junk")), None)
+    if not unsubscribed and junk_mark != "junk":
+        return None
+    category = "newsletter" if unsubscribed or m.get("list_unsubscribe") else "fyi"
+    return {"priority": "low", "category": category, "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
+
+
+def sender_outcome(m: dict[str, Any], history: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
+    """A bulk sender the model has settled on: its last SENDER_KEEP answers (history, newest first, from
+    public.sender_history) were all junk newsletters or notifications of low or normal priority that
+    wanted no reply, none of their conversations was ever corrected, and the newest answer is under
+    SENDER_RECHECK_DAYS old, so the model still looks at each sender now and then. The result is the
+    newest answer with the subject as its summary, as known_outcome has it. None when any of that fails."""
+    if not (m.get("is_bulk") or m.get("list_unsubscribe")) or len(history) < SENDER_KEEP:
+        return None
+    for h in history:
+        if h["corrected"] or not h["junk"] or h["needs_reply"] or h["category"] not in BULK_CATEGORIES or h["priority"] not in ("low", "normal"):
+            return None
+    newest = history[0]
+    try:
+        decided = datetime.fromisoformat(str(newest["decided_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if now - decided > timedelta(days=SENDER_RECHECK_DAYS):
+        return None
+    return {"priority": newest["priority"], "category": newest["category"], "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
+
+
+def superseded_outcome(m: dict[str, Any]) -> dict[str, Any]:
+    """For an older message in a conversation with a newer incoming one. Only the latest decides the
+    conversation, so this is a placeholder that marks the message as done."""
+    return {"priority": "normal", "category": "fyi", "junk": False, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
+
+
+def latest_incoming(rows: list[dict[str, Any]], batch: list[dict[str, Any]]) -> dict[str, tuple[bool, bool] | None]:
+    """For each message in batch: (is the latest incoming message of its conversation, the conversation's
+    latest message of all is incoming), or None when rows cannot tell. rows are messages of those
+    conversations, newest first, cut off at some point: a message is decided only when it is among them,
+    as then everything newer is too."""
+    seen = {r["id"] for r in rows}
+    first_in: dict[str, str] = {}
+    first_any: dict[str, str] = {}
+    for r in rows:
+        first_any.setdefault(r["thread_id"], r["direction"])
+        if r["direction"] == "inbound":
+            first_in.setdefault(r["thread_id"], r["id"])
+    return {
+        m["id"]: (first_in.get(m["thread_id"]) == m["id"], first_any.get(m["thread_id"]) == "inbound") if m["id"] in seen else None
+        for m in batch
+    }
+
+def groups(messages: list[dict[str, Any]], size: int = GROUP) -> list[list[dict[str, Any]]]:
+    """Messages split per user and account (usage is filed per account), at most size each."""
+    by: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for m in messages:
+        by.setdefault((m["user_id"], m["account_id"]), []).append(m)
+    return [batch[i : i + size] for batch in by.values() for i in range(0, len(batch), size)]
+
+
+def pending_query(since: str, skip: list[str] | None = None) -> dict[str, str]:
+    """Incoming messages since `since` with no triage yet, in conversations where triage is on.
+    threads!inner makes the thread filter part of the same query (an inner join), so conversations
+    with triage off, such as WhatsApp groups until you opt in, are never fetched at all. `skip` leaves
+    out messages waiting out a back-off after failing, so the ones behind them still get their turn."""
+    return {
+        **not_in(skip or []),
+        # Bodies are fetched later, only for the messages the model is asked about.
+        "select": "id,user_id,account_id,thread_id,provider_message_id,subject,sender_address,sender_contact_id,"
+        "list_unsubscribe,is_bulk,sender_index,sent_at,transcript,transcript_status,message_ai(message_id),threads!inner(triage_enabled,channel,is_group),attachments(filename)",
+        "direction": "eq.inbound",
+        "message_ai": "is.null",
+        "threads.triage_enabled": "eq.true",
+        "sent_at": f"gte.{since}",
+        "order": "sent_at.desc",
+        "limit": str(BATCH),
+    }

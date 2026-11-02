@@ -157,7 +157,7 @@ function SplitForm({ contact, onDone }: { contact: ContactDetail; onDone: () => 
 function SplitDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="split_contact" className="sm:max-w-md">
+      <DialogContent track="split_contact" showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Split Contact</DialogTitle>
           <DialogDescription>Choose what belongs to someone else. Their messages and conversations move with them.</DialogDescription>

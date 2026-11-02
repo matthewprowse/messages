@@ -78,7 +78,7 @@ export function UpdateDialog({ open, onOpenChange, editing, onSaved, onDeleted }
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
+        <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Update" : "New Update"}</DialogTitle>
             <DialogDescription>What changed in a release. It stays private to you until updates are made public.</DialogDescription>

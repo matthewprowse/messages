@@ -63,7 +63,7 @@ function Candidates({ logo, onClose, onChanged }: { logo: CompanyLogo; onClose: 
     }
   };
   return (
-    <DialogContent className="sm:max-w-2xl">
+    <DialogContent showCloseButton={false} className="sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>{logo.name}</DialogTitle>
         <DialogDescription>
@@ -273,7 +273,7 @@ function Logos() {
       </Dialog>
       <Dialog open={!!rejecting} onOpenChange={(o) => !o && setRejecting(null)}>
         {rejecting && (
-          <DialogContent>
+          <DialogContent showCloseButton={false}>
             <DialogHeader>
               <DialogTitle>Reject This Logo?</DialogTitle>
               <DialogDescription>

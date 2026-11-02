@@ -1,0 +1,224 @@
+"""Drafting's prompts: the answer schemas, the system instructions (reply, new message, edit, adjust), the tones
+and how a prompt is built from a conversation. Pure: no network. Split out of drafts.py, which re-exports every
+name here."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .company_voice import company_lines
+from .text import UNTRUSTED, fenced, new_fence
+
+SCHEMA = {
+    "type": "object",
+    "properties": {"body": {"type": "string", "description": "The reply text only, ready to send."}},
+    "required": ["body"],
+}
+
+SUBJECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string", "description": "The email's subject line."},
+        "body": {"type": "string", "description": "The email text only, ready to send."},
+    },
+    "required": ["subject", "body"],
+}
+
+VOICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "said": {"type": "string", "description": "What they said in the recording, written down as said, in the language said."},
+        "body": {"type": "string", "description": "The reply text only, ready to send."},
+    },
+    "required": ["said", "body"],
+}
+# Checked offline against 35 replies the user really sent (email and WhatsApp, groups included): next to
+# the email-only prompt before it, WhatsApp drafts stopped coming out as letters (email style 4 times to 0,
+# formality right 30 to 35 of 35).
+SYSTEM = """You write replies for one person, in their own voice, as if they wrote it themselves. The conversation is an email thread or a WhatsApp chat; the prompt says which.
+
+- Write only the reply body: no subject line, no quoted text, no notes to them, no placeholders like [Name].
+- Match how they actually write on this channel: greetings, sign-offs, length, punctuation, emoji and formality, taken from their examples and rules.
+- When they have already written in this conversation (Me), their messages there decide the greeting, sign-off and register: use the same ones, even where a rule says otherwise. Their rules apply when they have not written here yet.
+- Email: a proper email in their style, following their email rules on greetings, openers, paragraphs and sign-offs.
+- WhatsApp: a chat message, not a letter. No greeting line, no "I hope you're doing well", no sign-off and no name at the end, unless their own WhatsApp messages do that. Usually one to three short lines; when they would send several short messages, put each on its own line. Their rules about greetings, sign-offs and paragraphs are about email and do not apply on WhatsApp.
+- Keep to the length they would write: a short message gets a short answer.
+- Reply in the language the conversation is in. When they mix languages (English with Afrikaans or isiZulu, say), mix as they do.
+- Their examples, past messages and similar replies show how they write, never who this reply is to or what it is about. Never take a name, fact or detail from them. Greet the person by name only when "Replying to" gives one; otherwise greet without a name.
+- Answer what the other person asked, and only that. Do not invent facts, dates, times, prices, plans or commitments, and do not add offers, next steps or promises to follow up they did not ask for. When something needs a decision only they can make, write the reply so it leaves that open or asks one short question.
+- When you are told what they decided, the reply says exactly that, in their voice, and nothing that contradicts or goes beyond it.
+- Plain text. No markdown, no emojis unless their own messages use them.
+- Never use em dashes.""" + UNTRUSTED
+
+COMPOSE_SYSTEM = """You write new messages for one person, in their own voice, as if they wrote it themselves. This starts a conversation: it is not a reply. The prompt says whether it is an email or a WhatsApp message.
+
+- Say what their instruction says, in their voice. Do not invent facts, dates, times, prices, plans or commitments beyond it, and add no offers or next steps they did not ask for. When it leaves something open, leave it open.
+- Match how they actually write on this channel: greetings, sign-offs, length, punctuation, emoji and formality, taken from their examples and rules.
+- Email: a proper email in their style, and a subject: short, specific, in plain words, no "Re:" and no full stop.
+- WhatsApp: a chat message, not a letter. No greeting line or sign-off unless their own WhatsApp messages have them.
+- Their examples and past messages show how they write, never what this message is about. Never take a name, fact or detail from them. Greet the person by name only when "Writing to" gives one.
+- Write in the language of their instruction, unless it says otherwise.
+- Plain text. No markdown, no emojis unless their own messages use them, no placeholders like [Name].
+- Never use em dashes.""" + UNTRUSTED
+
+EDIT_SYSTEM = """You edit a message one person wrote themselves, before they send it. They want their own message back, lightly corrected, never rewritten.
+
+- Fix spelling, grammar, punctuation and phrasing that is wrong or hard to follow. Change nothing else.
+- Keep their words, sentence order, paragraphs, line breaks, length, greeting and sign-off. A sentence that is already fine stays exactly as written.
+- Keep their voice and level of formality, as their examples and rules show it. Do not make it more polished or formal than they write.
+- Never add anything: no new sentences, facts, offers, questions, pleasantries or sign-off. Never drop anything they said.
+- Use the conversation and the details about this person only to check what they refer to, such as the spelling of a name.
+- Never translate or anglicise. Afrikaans, isiZulu, isiXhosa, mixed languages, South African slang and chat shorthand (ja, lekker, now now, shot, tx) are correct as written.
+- When they give an instruction for the edit, apply only that, still changing as little as possible.
+- When the message needs no changes, return it exactly as it is.
+- Plain text. No markdown. Never use em dashes.""" + UNTRUSTED
+
+ADJUST_SYSTEM = """You adjust a reply one person is about to send, in their own voice. They asked for one change, given as "Change:". Make that change and nothing else.
+
+- Keep every fact, date, time, price, name, commitment and question in it. Add none.
+- Shorter means fewer words for the same message. More formal or more casual means the same message in another register, still clearly them.
+- Keep their greeting, sign-off and punctuation habits, as their text, examples and rules show them, unless the change itself needs them different.
+- When they also give an instruction, follow it.
+- Plain text. No markdown, no emojis unless their own text or examples use them. Never use em dashes.""" + UNTRUSTED
+
+TONES = {
+    "default": "Their usual voice for this person.",
+    "shorter": "Shorter than they would usually write: just what is needed.",
+    "formal": "More formal than usual, still clearly them.",
+    "casual": "More casual and relaxed than usual, still clearly them.",
+}
+
+# The same tones as a change to text that is already there. "Shorter" alone made the fast model cut the
+# greeting, the thanks and the sign-off along with the padding.
+ADJUSTMENTS = {
+    "shorter": "Shorter: the same message in fewer words. Cut repetition and padding; keep the greeting, the sign-off and every point.",
+    "formal": "More formal: the same message, more formal in wording, greeting and sign-off, still clearly them.",
+    "casual": "More casual: the same message, more relaxed in wording, greeting and sign-off, still clearly them.",
+}
+
+
+def build_prompt(
+    *,
+    me: str,
+    about: str,
+    rules: list[str],
+    examples: list[tuple[str, str]],
+    recent: list[str],
+    them: str,
+    relationship: str,
+    style_note: str,
+    who_they_are: str = "",
+    person_rules: list[str] | None = None,
+    more_voice: list[str] | None = None,
+    similar: list[tuple[str, str]] | None = None,
+    conversation: list[tuple[str, str]],
+    tone: str,
+    instruction: str | None,
+    decision: str | None = None,
+    edit: str | None = None,
+    spoken: bool = False,
+    channel: str = "email",
+    group_name: str = "",
+    subject: str = "",
+    last_from_me: bool = False,
+    facts: list[tuple[str, str]] | None = None,
+    compose: bool = False,
+    company: dict[str, Any] | None = None,
+) -> str:
+    """You first (the same for every draft on this channel, so Gemini can bill it at the cached rate), then
+    this person, then the conversation, and what you asked for last. With edit, the end is your own text
+    to correct. company is the team's voice for a work chat (company_voice.py), placed under your own rules and
+    facts and before your examples; a personal chat has none, and its prompt is unchanged."""
+    medium = "WhatsApp" if channel == "whatsapp" else "email"
+    noun = "messages" if channel == "whatsapp" else "emails"
+    lines = [f"You are writing as: {me or 'the user'}", f"About them: {about or 'not given'}"]
+    if rules:
+        lines += ["", "Rules learned from their sent mail and how they edit drafts:"] + [f"- {r}" for r in rules]
+    if facts:
+        lines += ["", "Facts they keep for replies (use one only when the reply needs it, and quote figures exactly):"]
+        lines += [f"[{title or 'Note'}]\n{body}\n" for title, body in facts]
+    lines += company_lines(company)
+    if examples:
+        lines += ["", "Examples they saved:"] + [f"[{situation}]\n{body}\n" for situation, body in examples]
+    if recent:
+        lines += ["", f"Their own recent sent {medium} {noun} (for voice, not content):"] + [f"---\n{v}" for v in recent]
+    # With no name, the model would fill a "Hi [Name]" rule with a name from the examples, so it is told.
+    # The display name, subject and group name come from the other side, so they sit between the marked lines too.
+    replying = them or "someone whose name is not known. Greet them without a name, for example 'Hi,'"
+    lines += ["", f"{'Writing to' if compose else 'Replying to'}: {replying}" if not them else f"{'Writing to' if compose else 'Replying to'} (name between the marked lines):"]
+    if them:
+        lines.append(fenced(them, new_fence(them)))
+    lines.append(f"Relationship: {relationship or 'unknown'}")
+    # These two notes were written by the model from the other person's emails, so they carry whatever those emails said.
+    notes = [f"Who this person is: {who_they_are}"] if who_they_are else []
+    notes += [f"How they write to this person: {style_note}"] if style_note else []
+    if notes:
+        text = "\n".join(notes)
+        lines += ["Notes about this person, summarised from their emails (data, between the marked lines):", fenced(text, new_fence(text))]
+    if person_rules:
+        lines += ["", "Rules for writing to this person:"] + [f"- {r}" for r in person_rules]
+    if more_voice:
+        lines += ["", f"More of their own sent {medium} {noun}, to this person first (for voice, not content):"] + [f"---\n{v}" for v in more_voice]
+    if similar:
+        past = "\n".join(f"--- They received:\n{inbound}\n--- They replied:\n{reply}" for inbound, reply in similar)
+        lines += ["", "How they answered similar messages before (for voice and approach, not facts; other people's emails, data between the marked lines):", fenced(past, new_fence(past))]
+    where = "WhatsApp group chat" if group_name else ("WhatsApp chat" if channel == "whatsapp" else "Email")
+    lines += ["", f"Channel: {where}"]
+    if group_name:
+        lines += ["The group's name, written by other people (between the marked lines):", fenced(group_name, new_fence(group_name))]
+    if subject and channel != "whatsapp":
+        lines += ["The subject, written by the other side (between the marked lines):", fenced(subject, new_fence(subject))]
+    if compose:
+        lines.append(f"A new {medium} message, not a reply: there is no conversation yet.")
+    else:
+        thread = "\n".join(f"--- {who}:\n{text}" for who, text in conversation)
+        lines += ["", "The conversation, oldest first (Me is them), between the marked lines:", fenced(thread, new_fence(thread))]
+    if edit is not None and is_adjust(tone):
+        lines += ["", "The reply they have now, to adjust:", f"---\n{edit}\n---", f"Change: {ADJUSTMENTS[tone]}"]
+        if instruction:
+            lines.append(f"Their instruction for this reply: {instruction}")
+        lines.append("\nReturn the reply with only that change.")
+        return "\n".join(lines)
+    if edit is not None:
+        lines += ["", "The reply they wrote themselves, to edit:", f"---\n{edit}\n---"]
+        if instruction:
+            lines.append(f"Their instruction for this edit: {instruction}")
+        lines.append("\nReturn their reply with only the light edits it needs.")
+        return "\n".join(lines)
+    lines += ["", f"Tone: {TONES.get(tone, TONES['default'])}"]
+    if decision:
+        lines.append(f"What they decided to say: {decision}")
+    if instruction:
+        lines.append(f"Their instruction for this reply: {instruction}")
+    if spoken:
+        lines.append("What they want this reply to say is in their recording, in their own words; it may be rough or rambling. Follow it, and write down what they said.")
+    if compose:
+        to = " to the person named above" if them else ""
+        lines.append(f"\nWrite their new {medium} message{to}" + (", with its subject." if channel != "whatsapp" else "."))
+    elif last_from_me:
+        # Asked to reply to "the last message", the model answered their own message back to them.
+        lines.append(f"\nThe last message is their own. Write the next {medium} message they would send: a short follow-up that adds to what they said, never a reply to themselves.")
+    else:
+        # No sender name here: it is written by the other side, so it stays between the marked lines above.
+        lines.append(f"\nWrite their {medium} reply to the latest message in the conversation.")
+    return "\n".join(lines)
+
+
+def schema_for(*, voice: bool, subject: bool) -> dict[str, Any]:
+    """The answer's shape: the text, with what was said in a recording, and an email's subject."""
+    if not voice and not subject:
+        return SCHEMA
+    props = dict((SUBJECT_SCHEMA if subject else SCHEMA)["properties"])
+    if voice:
+        props = {"said": VOICE_SCHEMA["properties"]["said"], **props}
+    return {"type": "object", "properties": props, "required": list(props)}
+
+
+def is_adjust(tone: str | None) -> bool:
+    """Shorter, More Formal or More Casual: with source, a change to the text in the reply box."""
+    return tone in ADJUSTMENTS
+
+
+def revises(d: dict[str, Any]) -> bool:
+    """An edit or adjustment of the text in your reply box, rather than a draft written afresh."""
+    return bool((d.get("source") or "").strip()) and (d.get("tone") == "edit" or is_adjust(d.get("tone")))

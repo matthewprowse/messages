@@ -21,12 +21,9 @@ is nothing new to triage (backfill_choices), only while they still need a reply.
 
 from __future__ import annotations
 
-import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Callable
 
 from . import log
@@ -36,365 +33,54 @@ from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, billing_paused, not_in
 from .supabase import Supabase, in_list
-from .text import UNTRUSTED, clean, fenced, new_fence
+from .text import clean
+from .triage_context import ContextMixin
+from .triage_prompt import (  # noqa: F401  re-exported: other modules and tests import these from here
+    LANGUAGE_NAMES,
+    SCHEMA,
+    SYSTEM,
+    earlier_lines,
+    earlier_messages,
+    read_choices,
+    read_results,
+    sent_label,
+    triage_prompt,
+)
+from .triage_signals import (  # noqa: F401  re-exported: other modules and tests import these from here
+    BATCH,
+    BODY_CHARS,
+    BULK_BODY_CHARS,
+    BULK_CATEGORIES,
+    CATEGORIES,
+    CONTEXT_CHARS,
+    CONTEXT_MESSAGES,
+    CONTEXT_TTL_S,
+    GROUP,
+    LATEST_ROWS,
+    LOOKBACK_DAYS,
+    MAX_OPTIONS,
+    NO_CHOICES,
+    OPTION_KINDS,
+    PRIORITIES,
+    SENDER_KEEP,
+    SENDER_RECHECK_DAYS,
+    SUBJECT_CHARS,
+    VOICE_RECHECK_S,
+    VOICE_WAIT_S,
+    UserContext,
+    apply_signals,
+    groups,
+    known_outcome,
+    latest_incoming,
+    matches,
+    pending_query,
+    sender_outcome,
+    superseded_outcome,
+)
 from .vault import Vault
 
-PRIORITIES = ["urgent", "important", "normal", "low"]
-CATEGORIES = ["personal", "work", "needs_reply", "fyi", "newsletter", "notification"]
-LOOKBACK_DAYS = 30
-VOICE_WAIT_S = 15 * 60  # how long a voice note waits for its transcript before it is triaged without one
-VOICE_RECHECK_S = 20
-BATCH = 24
-GROUP = 8  # emails per model call
-BODY_CHARS = 2500
-BULK_BODY_CHARS = 1200  # bulk mail (a list-unsubscribe header) fills 2500 characters but classifies the same from 800 to 1200
-CONTEXT_MESSAGES = 4  # earlier messages of the conversation shown with the one being judged
-CONTEXT_CHARS = 300  # each of them is cut to this, so a long thread stays cheap
-SUBJECT_CHARS = 300  # a subject is not a second body: a long one is cut before the prompt
-CONTEXT_TTL_S = 60  # what is known about a user (rules, unsubscribes, corrections) is reread this often
-LATEST_ROWS = 1000
-OPTION_KINDS = ["accept", "decline", "other_time", "answer"]
-MAX_OPTIONS = 4
-SENDER_KEEP = 2  # the model's last answers about a bulk sender that must all agree before it is skipped
-SENDER_RECHECK_DAYS = 30  # the model looks at a skipped sender again once its last answer is this old
-BULK_CATEGORIES = ("newsletter", "notification")
-NO_CHOICES = json.dumps({"options": []})  # looked at, nothing to offer: the backfill skips it
 
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "results": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "email": {"type": "integer", "description": "The number of the email this result is for."},
-                    "priority": {"type": "string", "enum": PRIORITIES},
-                    "category": {"type": "string", "enum": CATEGORIES},
-                    "junk": {"type": "boolean"},
-                    "needs_reply": {"type": "boolean"},
-                    "summary": {"type": "string", "description": "One plain sentence, at most 120 characters."},
-                    "choices": {
-                        "type": "array",
-                        "description": "One-tap reply choices, or empty.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "label": {"type": "string", "description": "Button text, 1 to 4 words, Title Case."},
-                                "decision": {"type": "string", "description": "What they decided, one short first-person sentence."},
-                                "kind": {"type": "string", "enum": OPTION_KINDS},
-                            },
-                            "required": ["label", "decision", "kind"],
-                        },
-                    },
-                    "asked_time": {"type": "string", "description": "YYYY-MM-DDTHH:MM, or empty."},
-                    "asked_minutes": {"type": "integer", "description": "Length in minutes, or 0."},
-                },
-                "required": ["email", "priority", "category", "junk", "needs_reply", "summary", "choices", "asked_time", "asked_minutes"],
-            },
-        }
-    },
-    "required": ["results"],
-}
-
-SYSTEM = """You sort one person's incoming email. For each numbered email, decide:
-
-priority
-- urgent: needs them within hours (a deadline today, a real security or money problem, a person waiting on them now).
-- important: a real person writing to them personally, work they are part of, appointments, bills and anything with consequences.
-- normal: useful but not pressing.
-- low: everything else.
-Routine login codes, sign-in links, verification and welcome emails are normal, not urgent: they are only useful the moment they were asked for. A security alert about something they did not do is urgent.
-
-category: personal, work, needs_reply (a person is asking them something), fyi, newsletter, notification (automated account or service messages).
-
-junk: true for mail that is not written for them: marketing, promotions, sales, cold outreach, mass newsletters, generic automated alerts and digests, surveys, spam. False for anything personal, any reply in a conversation they took part in, receipts, bookings, security codes, bills and notices about accounts they hold. Bulk mail (it has an unsubscribe header) is junk unless it clearly matters to them personally.
-
-needs_reply: true when a real person is waiting on them to say or do something: a question, a request, an invitation or a proposal to answer, plans being made that they have not settled, or a follow-up on something they have not answered. It is also true when the message is phrased as a statement but moves plans forward and a friend or colleague would expect a response (for example "turns out there are student tickets" after they agreed to go). Read the earlier messages of the conversation when they are shown: a question they already answered is not open, and a closing thanks or an acknowledgement ends it. When unsure about a person they know, lean towards true, since a missed message costs more than a false flag. False for automated senders, newsletters, receipts and notices, and for a message that only informs with nothing to respond to.
-
-summary: one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email". Write it to them: call them "you" and never use their own name, even when the email addresses them by name (write "Cindy wants to set up an interview with you", not "with Matthew Prowse"). Their name and own addresses are given; when no name is given, the name in an email's greeting or the name matching their address is theirs. An email from one of their own addresses is one they sent (a copy, or to themselves): summarise it as theirs, such as "Your application for the Business Analyst role, copied to your inbox."
-
-choices: only when needs_reply is true and the answer needs a decision only they can make: whether they are free at a time, whether they will do or send something, a yes or no, which option, a price or an offer. Give 2 to 4 options they would realistically pick, each with:
-- label: button text, 1 to 4 words in Title Case, such as "Yes, Available", "Not Available", "Sending Today", "Which Documents?".
-- decision: what they decided, as one short first-person sentence the reply will say, such as "I am free on Thursday at 15:00 and will be there." Never add facts, prices or promises the option does not state.
-- kind: accept (yes, agree, will do), decline (no, can't), other_time (offer a different time), answer (anything else, such as asking what they need).
-When they are asked about a meeting, call or viewing time, include an other_time option labelled "Suggest Another Time". Otherwise, and whenever needs_reply is false, choices is empty.
-
-asked_time: when the message asks whether they are free at a specific date and time, that time as YYYY-MM-DDTHH:MM, as written in the message (the sender's local time), working out the date from when it was sent. Otherwise empty. asked_minutes: how long it would take in minutes when stated or obvious, otherwise 0.
-
-Use what you are told about them and their past corrections. Mail styled to look personal but sent to a list is still junk.
-
-Judge each email on its own, though an email may show the earlier messages of its conversation (oldest first, "You" is them, "Them" is the other side): use those only as context. Return one result for every email, with its number.""" + UNTRUSTED
-
-
-# Spelling and language for what is written about their mail. Never American by default: they write British.
-LANGUAGE_NAMES = {"en-GB": "British English (colour, organise, cheque)", "en-US": "American English", "af": "Afrikaans"}
-
-
-@dataclass
-class UserContext:
-    name: str = ""  # profiles.display_name, so summaries can say "you" instead of it
-    own_addresses: list[str] = field(default_factory=list)  # their accounts' addresses, for the same reason
-    about: str = ""
-    important_people: str = ""
-    always: list[str] = field(default_factory=list)
-    never: list[str] = field(default_factory=list)
-    unsubscribed: set[str] = field(default_factory=set)
-    corrections: list[str] = field(default_factory=list)
-    accounts: list[str] = field(default_factory=list)  # every connected account, for finding the same email twice
-    timezone: str = ""  # profiles.timezone, for the time of day in a message's traits
-    language: str = ""  # profiles.language: en-GB, en-US or af; empty follows how they write
-
-
-def matches(address: str, targets: list[str]) -> bool:
-    """A rule target is a whole address or a domain (with or without @)."""
-    address = address.lower()
-    domain = address.split("@")[-1]
-    for t in targets:
-        t = t.strip().lower()
-        if not t:
-            continue
-        if t == address or t.lstrip("@") == domain or domain.endswith("." + t.lstrip("@")):
-            return True
-    return False
-
-
-def apply_signals(result: dict[str, Any], sender: str, ctx: UserContext, thread_feedback: list[str]) -> dict[str, Any]:
-    """Your own signals override the model. thread_feedback is newest first."""
-    out = dict(result)
-    if out.get("priority") not in PRIORITIES:
-        out["priority"] = "normal"
-    if out.get("category") not in CATEGORIES:
-        out["category"] = "fyi"
-    out["summary"] = str(out.get("summary") or "")[:200]
-
-    if sender and sender.lower() in ctx.unsubscribed:
-        out.update(junk=True, priority="low", needs_reply=False)
-    if sender and matches(sender, ctx.never):
-        out.update(priority="low")
-    if sender and matches(sender, ctx.always):
-        out.update(junk=False, priority="urgent" if out["priority"] == "urgent" else "important")
-
-    for value in thread_feedback:  # the latest correction on this conversation wins per kind
-        if value in ("junk", "not_junk"):
-            out["junk"] = value == "junk"
-            break
-    for value in thread_feedback:
-        if value in ("important", "not_important"):
-            out["priority"] = ("urgent" if out["priority"] == "urgent" else "important") if value == "important" else "low"
-            break
-    if out["junk"]:
-        out["needs_reply"] = False
-    # Choices only while a reply is needed. None leaves reply_choices empty; NO_CHOICES means looked at.
-    out["choices"] = (out.get("choices") or NO_CHOICES) if out["needs_reply"] else None
-    return out
-
-
-def known_outcome(m: dict[str, Any], ctx: UserContext, thread_feedback: list[str]) -> dict[str, Any] | None:
-    """A result your own signals already settle, so no model call is needed: a sender you unsubscribed
-    from, or a conversation whose latest junk correction is Junk. thread_feedback is newest first."""
-    sender = (m.get("sender_address") or "").lower()
-    unsubscribed = bool(sender) and sender in ctx.unsubscribed
-    junk_mark = next((v for v in thread_feedback if v in ("junk", "not_junk")), None)
-    if not unsubscribed and junk_mark != "junk":
-        return None
-    category = "newsletter" if unsubscribed or m.get("list_unsubscribe") else "fyi"
-    return {"priority": "low", "category": category, "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
-
-
-def sender_outcome(m: dict[str, Any], history: list[dict[str, Any]], now: datetime) -> dict[str, Any] | None:
-    """A bulk sender the model has settled on: its last SENDER_KEEP answers (history, newest first, from
-    public.sender_history) were all junk newsletters or notifications of low or normal priority that
-    wanted no reply, none of their conversations was ever corrected, and the newest answer is under
-    SENDER_RECHECK_DAYS old, so the model still looks at each sender now and then. The result is the
-    newest answer with the subject as its summary, as known_outcome has it. None when any of that fails."""
-    if not (m.get("is_bulk") or m.get("list_unsubscribe")) or len(history) < SENDER_KEEP:
-        return None
-    for h in history:
-        if h["corrected"] or not h["junk"] or h["needs_reply"] or h["category"] not in BULK_CATEGORIES or h["priority"] not in ("low", "normal"):
-            return None
-    newest = history[0]
-    try:
-        decided = datetime.fromisoformat(str(newest["decided_at"]).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if now - decided > timedelta(days=SENDER_RECHECK_DAYS):
-        return None
-    return {"priority": newest["priority"], "category": newest["category"], "junk": True, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
-
-
-def superseded_outcome(m: dict[str, Any]) -> dict[str, Any]:
-    """For an older message in a conversation with a newer incoming one. Only the latest decides the
-    conversation, so this is a placeholder that marks the message as done."""
-    return {"priority": "normal", "category": "fyi", "junk": False, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
-
-
-def latest_incoming(rows: list[dict[str, Any]], batch: list[dict[str, Any]]) -> dict[str, tuple[bool, bool] | None]:
-    """For each message in batch: (is the latest incoming message of its conversation, the conversation's
-    latest message of all is incoming), or None when rows cannot tell. rows are messages of those
-    conversations, newest first, cut off at some point: a message is decided only when it is among them,
-    as then everything newer is too."""
-    seen = {r["id"] for r in rows}
-    first_in: dict[str, str] = {}
-    first_any: dict[str, str] = {}
-    for r in rows:
-        first_any.setdefault(r["thread_id"], r["direction"])
-        if r["direction"] == "inbound":
-            first_in.setdefault(r["thread_id"], r["id"])
-    return {
-        m["id"]: (first_in.get(m["thread_id"]) == m["id"], first_any.get(m["thread_id"]) == "inbound") if m["id"] in seen else None
-        for m in batch
-    }
-
-
-def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]], fence: str | None = None) -> str:
-    """What is known about them first (the same on every call of theirs), then the numbered emails.
-    Each email has name, sender, relationship, known, bulk, subject and body. Each sits between lines carrying
-    a random code (fence), so one email's text cannot pass for instructions or for another email."""
-    fence = fence or new_fence()
-    lines = [
-        f"Their name: {ctx.name or 'not given'}",
-        "Their own addresses: " + (", ".join(ctx.own_addresses) or "not given"),
-        f"About them: {ctx.about or 'not given'}",
-        f"People who matter to them: {ctx.important_people or 'not given'}",
-        f"Write summaries in: {LANGUAGE_NAMES.get(ctx.language, 'the language and spelling they write in themselves (judge by their own sent emails and the email thread), British English when unclear')}",
-    ]
-    # Each correction names a conversation's subject, written by someone else, so the list sits between marked lines.
-    if ctx.corrections:
-        listed = "\n".join(ctx.corrections[:12])
-        lines += ["Their recent corrections (subjects written by other people, between the marked lines):", fenced(listed, new_fence(listed))]
-    else:
-        lines.append("Their recent corrections: none")
-    for i, e in enumerate(emails, 1):
-        lines += [
-            "",
-            f"<<<{fence}",
-            f"=== Email {i}",
-            f"From: {e['name']} <{e['sender']}>",
-            f"Relationship: {e['relationship'] or 'unknown'}",
-            f"They have written to this sender before: {'yes' if e['known'] else 'no'}",
-            f"Bulk mail with an unsubscribe header: {'yes' if e['bulk'] else 'no'}",
-            f"Sent: {sent_label(e.get('sent'), ctx.timezone)}",
-            f"Subject: {e['subject'] or '(none)'}",
-            *earlier_lines(e.get("earlier") or []),
-            "",
-            e["body"],
-            f"{fence}>>>",
-        ]
-    return "\n".join(lines)
-
-
-def earlier_lines(earlier: list[dict[str, Any]]) -> list[str]:
-    """The conversation so far as lines for the prompt, oldest first: "You" is the person whose mail it is."""
-    if not earlier:
-        return []
-    return ["", "Earlier in this conversation, oldest first:"] + [f"{'You' if e['from_me'] else 'Them'}: {e['text']}" for e in earlier] + ["", "Newest message:"]
-
-
-def earlier_messages(rows: list[dict[str, Any]], m: dict[str, Any], count: int = CONTEXT_MESSAGES) -> list[dict[str, Any]]:
-    """The up to `count` messages of m's conversation sent before m, oldest first. rows are messages of
-    several conversations, newest first, with thread_id, id, direction and sent_at."""
-    try:
-        before = datetime.fromisoformat(str(m["sent_at"]).replace("Z", "+00:00"))
-        older = [r for r in rows if r["thread_id"] == m["thread_id"] and r["id"] != m["id"] and datetime.fromisoformat(str(r["sent_at"]).replace("Z", "+00:00")) < before]
-    except (KeyError, ValueError, TypeError):
-        return []
-    return older[:count][::-1]
-
-
-def sent_label(sent_at: str | None, tz: str = "") -> str:
-    """"Thursday 29 October 2026, 15:05 SAST", in their time zone (UTC when it is not known or not valid), so
-    the model can work out "tomorrow at 3"."""
-    if not sent_at:
-        return "unknown"
-    try:
-        at = datetime.fromisoformat(sent_at.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        return "unknown"
-    try:
-        at = at.astimezone(ZoneInfo(tz)) if tz else at
-    except (ZoneInfoNotFoundError, ValueError):
-        pass
-    return at.strftime("%A %d %B %Y, %H:%M %Z")
-
-
-def read_choices(item: dict[str, Any]) -> str:
-    """The choices from one model answer as JSON for message_ai.reply_choices: NO_CHOICES when there are
-    none or they are unusable. Options need a label and a decision; a known kind; at most MAX_OPTIONS."""
-    options = []
-    for o in item.get("choices") if isinstance(item.get("choices"), list) else []:
-        if not isinstance(o, dict):
-            continue
-        label = " ".join(str(o.get("label") or "").split())[:40]
-        decision = " ".join(str(o.get("decision") or "").split())[:300]
-        kind = o.get("kind") if o.get("kind") in OPTION_KINDS else "answer"
-        if label and decision and label.lower() not in {x["label"].lower() for x in options}:
-            options.append({"label": label, "decision": decision, "kind": kind})
-    options = options[:MAX_OPTIONS]
-    if len(options) < 2:
-        return NO_CHOICES
-    asked = str(item.get("asked_time") or "").strip()
-    try:
-        asked = datetime.strptime(asked[:16], "%Y-%m-%dT%H:%M").strftime("%Y-%m-%dT%H:%M") if asked else None
-    except ValueError:
-        asked = None
-    minutes = item.get("asked_minutes")
-    minutes = minutes if isinstance(minutes, int) and 5 <= minutes <= 24 * 60 else None
-    return json.dumps({"asked": asked, "minutes": minutes, "options": options})
-
-
-def read_results(result: Any, count: int) -> dict[int, dict[str, Any]]:
-    """The model's answers by email number, 1 to count. A missing or malformed answer is left out."""
-    out: dict[int, dict[str, Any]] = {}
-    items = result.get("results") if isinstance(result, dict) else None
-    for item in items if isinstance(items, list) else []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            n = int(item.get("email"))
-        except (TypeError, ValueError):
-            continue
-        if not 1 <= n <= count or n in out or not isinstance(item.get("junk"), bool):
-            continue
-        out[n] = {
-            "priority": item.get("priority"),
-            "category": item.get("category"),
-            "junk": item["junk"],
-            "needs_reply": item.get("needs_reply") is True,
-            "summary": str(item.get("summary") or ""),
-            "choices": read_choices(item),
-        }
-    return out
-
-
-def groups(messages: list[dict[str, Any]], size: int = GROUP) -> list[list[dict[str, Any]]]:
-    """Messages split per user and account (usage is filed per account), at most size each."""
-    by: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for m in messages:
-        by.setdefault((m["user_id"], m["account_id"]), []).append(m)
-    return [batch[i : i + size] for batch in by.values() for i in range(0, len(batch), size)]
-
-
-def pending_query(since: str, skip: list[str] | None = None) -> dict[str, str]:
-    """Incoming messages since `since` with no triage yet, in conversations where triage is on.
-    threads!inner makes the thread filter part of the same query (an inner join), so conversations
-    with triage off, such as WhatsApp groups until you opt in, are never fetched at all. `skip` leaves
-    out messages waiting out a back-off after failing, so the ones behind them still get their turn."""
-    return {
-        **not_in(skip or []),
-        # Bodies are fetched later, only for the messages the model is asked about.
-        "select": "id,user_id,account_id,thread_id,provider_message_id,subject,sender_address,sender_contact_id,"
-        "list_unsubscribe,is_bulk,sender_index,sent_at,transcript,transcript_status,message_ai(message_id),threads!inner(triage_enabled,channel,is_group),attachments(filename)",
-        "direction": "eq.inbound",
-        "message_ai": "is.null",
-        "threads.triage_enabled": "eq.true",
-        "sent_at": f"gte.{since}",
-        "order": "sent_at.desc",
-        "limit": str(BATCH),
-    }
-
-
-class Triage:
+class Triage(ContextMixin):
     def __init__(self, db: Supabase, gemini: Gemini, model: str, vault: Vault | None = None):
         self.db = db
         self.gemini = gemini
@@ -595,127 +281,6 @@ class Triage:
 
     # What is known --------------------------------------------------------------------------------
 
-    def _contexts(self, user_ids: list[str]) -> dict[str, UserContext]:
-        """Each user's context, reread when older than CONTEXT_TTL_S. Runs in the pool: reads in sequence."""
-        now = time.monotonic()
-        out = {}
-        for uid in user_ids:
-            cached = self._users.get(uid)
-            if cached is None or now - cached[0] > CONTEXT_TTL_S:
-                cached = (now, self._user_context(uid))
-                self._users[uid] = cached
-            out[uid] = cached[1]
-        return out
-
-    def _user_context(self, user_id: str) -> UserContext:
-        profile = self.db.first("profiles", {"select": "display_name,about,important_people,timezone,language", "user_id": f"eq.{user_id}"}) or {}
-        rules = self.db.select("priority_rules", {"select": "kind,target", "user_id": f"eq.{user_id}"})
-        unsubs = self.db.select("unsubscribes", {"select": "sender_address", "user_id": f"eq.{user_id}"})
-        accounts = self.db.select("accounts", {"select": "id,address", "user_id": f"eq.{user_id}"})
-        feedback = self.db.select(
-            "feedback",
-            {"select": "value,threads(subject)", "user_id": f"eq.{user_id}", "order": "created_at.desc", "limit": "20"},
-        )
-        corrections = [
-            f'"{self.vault.open(user_id, SUBJECT, (f.get("threads") or {}).get("subject")) or "(no subject)"}" marked {f["value"].replace("_", " ")}'
-            for f in feedback
-        ]
-        return UserContext(
-            name=profile.get("display_name") or "",
-            own_addresses=sorted({a for a in ((self.vault.open(user_id, ADDRESS, r.get("address")) or "").lower() for r in accounts) if "@" in a}),
-            about=profile.get("about") or "",
-            important_people=profile.get("important_people") or "",
-            always=[self.vault.open(user_id, ADDRESS, r["target"]) or "" for r in rules if r["kind"] == "always_important"],
-            never=[self.vault.open(user_id, ADDRESS, r["target"]) or "" for r in rules if r["kind"] == "never_important"],
-            unsubscribed={(self.vault.open(user_id, ADDRESS, u["sender_address"]) or "").lower() for u in unsubs},
-            corrections=corrections,
-            accounts=[a["id"] for a in accounts],
-            timezone=profile.get("timezone") or "",
-            language=profile.get("language") or "",
-        )
-
-    def _latest(self, batch: list[dict[str, Any]]) -> dict[str, tuple[bool, bool]]:
-        """For each message: (latest incoming in its conversation, conversation waiting on them). One read
-        for the batch, and two per conversation only for messages that read could not settle."""
-        since = min(m["sent_at"] for m in batch)
-        rows = self.db.select(
-            "messages",
-            {
-                "select": "id,thread_id,direction",
-                "thread_id": in_list(sorted({m["thread_id"] for m in batch})),
-                "sent_at": f"gte.{since}",
-                "order": "sent_at.desc,id.desc",
-                "limit": str(LATEST_ROWS),
-            },
-        )
-        out: dict[str, tuple[bool, bool]] = {}
-        decided_all = latest_incoming(rows, batch)
-        for m in batch:
-            decided = decided_all[m["id"]]
-            if decided is None:
-                latest_in = self.db.first(
-                    "messages", {"select": "id", "thread_id": f"eq.{m['thread_id']}", "direction": "eq.inbound", "order": "sent_at.desc,id.desc"}
-                )
-                latest_any = self.db.first("messages", {"select": "direction", "thread_id": f"eq.{m['thread_id']}", "order": "sent_at.desc,id.desc"})
-                decided = (bool(latest_in) and latest_in["id"] == m["id"], bool(latest_any) and latest_any["direction"] == "inbound")
-            out[m["id"]] = decided
-        return out
-
-    def _settled_senders(self, messages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        """Results by message id for bulk mail from a sender the model has settled on (sender_outcome). One
-        read per user for the batch. Without the sender_history migration, or when it fails, nothing is
-        settled and the model is asked as before."""
-        wanted: dict[str, set[str]] = {}
-        for m in messages:
-            if (m.get("is_bulk") or m.get("list_unsubscribe")) and m.get("sender_index"):
-                wanted.setdefault(m["user_id"], set()).add(m["sender_index"])
-        history: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        for user_id, senders in wanted.items():
-            try:
-                rows = self.db.rpc("sender_history", {"p_user": user_id, "p_senders": sorted(senders), "p_keep": SENDER_KEEP}) or []
-            except Exception as err:
-                log.warn("sender history not read", code=log.code_of(err))
-                continue
-            for r in rows:
-                history.setdefault((user_id, r["sender_index"]), []).append(r)
-        now = datetime.now(timezone.utc)
-        out = {}
-        for m in messages:
-            outcome = sender_outcome(m, history.get((m["user_id"], m.get("sender_index") or ""), []), now)
-            if outcome is not None:
-                out[m["id"]] = outcome
-        return out
-
-    def _twins(self, messages: list[dict[str, Any]], contexts: dict[str, UserContext]) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]]:
-        """Triage already done for the same email (Message-ID) in another of the user's accounts."""
-        users = sorted({m["user_id"] for m in messages if len(contexts[m["user_id"]].accounts) > 1 and m.get("provider_message_id")})
-        if not users:
-            return {}
-        ids = sorted({m["provider_message_id"] for m in messages if m["user_id"] in users and m.get("provider_message_id")})
-        accounts = sorted({a for u in users for a in contexts[u].accounts})
-        rows = self.db.select(
-            "messages",
-            {
-                "select": "user_id,provider_message_id,message_ai!inner(priority,category,summary,needs_reply,junk,reply_choices,model)",
-                "account_id": in_list(accounts),  # with the Message-ID, this is the (account_id, provider_message_id) index
-                "provider_message_id": in_list(ids),
-                "direction": "eq.inbound",
-                "limit": "200",
-            },
-        )
-        out = {}
-        for r in rows:
-            ai = r.get("message_ai")
-            ai = ai[0] if isinstance(ai, list) and ai else ai
-            if r["user_id"] in users and isinstance(ai, dict):
-                copied = {k: ai[k] for k in ("priority", "category", "summary", "needs_reply", "junk")}
-                copied["summary"] = self.vault.open(r["user_id"], SUMMARY, copied["summary"])  # sealed again when written
-                copied["choices"] = self.vault.open(r["user_id"], CHOICES, ai.get("reply_choices"))
-                out[(r["user_id"], r["provider_message_id"])] = (copied, ai.get("model"))
-        return out
-
-    # Asking the model -----------------------------------------------------------------------------
-
     def _prepare(self, ask: list[dict[str, Any]], contexts: dict[str, UserContext]) -> list[list[dict[str, Any]]]:
         """Bodies, senders' contacts and who you have written to, for the messages the model is asked about,
         then the groups to send. Adds name, relationship, known and body to each message."""
@@ -753,53 +318,6 @@ class Triage:
                 ],
             }
         return groups(ask)
-
-    def _earlier(self, ask: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Recent messages of the conversations being judged, newest first, each with its text opened and
-        cut to CONTEXT_CHARS. Bulk mail gets none: a newsletter is judged on its own. One read for the group."""
-        threads = sorted({m["thread_id"] for m in ask if not (m.get("list_unsubscribe") or m.get("is_bulk"))})
-        if not threads:
-            return []
-        # One read per thread: a single capped read across all of them let a busy thread's history use up the cap
-        # and leave the others with no context.
-        newest: dict[str, str] = {}
-        for m in ask:
-            newest[m["thread_id"]] = max(newest.get(m["thread_id"], m["sent_at"]), m["sent_at"])
-        rows: list[dict[str, Any]] = []
-        for thread in threads:
-            rows += self.db.select(
-                "messages",
-                {
-                    "select": "id,user_id,thread_id,direction,sent_at,transcript,body_text,body_html",
-                    "thread_id": in_list([thread]),
-                    "sent_at": f"lte.{newest[thread]}",
-                    "order": "sent_at.desc,id.desc",
-                    "limit": str(CONTEXT_MESSAGES + 2),
-                },
-            )
-        users = {m["thread_id"]: m["user_id"] for m in ask}
-        for r in rows:
-            user_id = users[r["thread_id"]]
-            opened = self.vault.open_row(user_id, r, [("body_text", BODY), ("body_html", HTML)])
-            said = self.vault.open(user_id, TRANSCRIPT, r.get("transcript"))
-            text = f"Voice note: {said}" if said else clean((opened or r).get("body_text"), (opened or r).get("body_html"), limit=CONTEXT_CHARS)
-            r["text"] = " ".join(text.split())[:CONTEXT_CHARS]
-        return rows
-
-    def _known_senders(self, contact_ids: list[str]) -> set[str]:
-        """The contacts they have written to before, a strong sign the mail is personal: contacts in a
-        conversation where they sent something."""
-        if not contact_ids:
-            return set()
-        parts = self.db.select("thread_participants", {"select": "thread_id,contact_id", "contact_id": in_list(contact_ids), "limit": "2000"})
-        threads = sorted({p["thread_id"] for p in parts})
-        if not threads:
-            return set()
-        replied: set[str] = set()
-        for i in range(0, len(threads), 100):
-            sent = self.db.select("messages", {"select": "thread_id", "thread_id": in_list(threads[i : i + 100]), "direction": "eq.outbound", "limit": "1000"})
-            replied.update(s["thread_id"] for s in sent)
-        return {p["contact_id"] for p in parts if p["thread_id"] in replied}
 
     def _ask(self, ctx: UserContext, chunk: list[dict[str, Any]]) -> dict[str, tuple[dict[str, Any], str | None]]:
         """The model's results by message id for one group (one user and account). An email it would

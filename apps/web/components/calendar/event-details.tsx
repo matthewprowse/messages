@@ -157,7 +157,7 @@ export function EventDialog({ event, onClose }: { event: CalendarEvent | null; o
   const shown = event ?? last.current;
   return (
     <Dialog open={!!event} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent track="event_details" showCloseButton closeVariant="secondary" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="event_details" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         {shown && <EventDialogBody event={shown} onClose={onClose} />}
       </DialogContent>
     </Dialog>
@@ -169,12 +169,13 @@ export function EventDialogBody({ event, onClose }: { event: CalendarEvent; onCl
   const { full, loading, canDelete, canEdit, link } = useEventState(event);
   return (
     <>
-      <DialogHeader className="pr-10">
+      <DialogHeader>
         <DialogTitle className="break-words">{full.title}</DialogTitle>
         <DialogDescription className="tabular-nums">{eventWhen(full)}</DialogDescription>
       </DialogHeader>
       <EventDetails event={event} />
       <div className={DIALOG_BUTTONS}>
+        <Button variant="ghost" onClick={onClose}>Close</Button>
         {link && (
           <Button variant="ghost" asChild>
             <a href={link} target="_blank" rel="noopener noreferrer">Open in Google Calendar</a>

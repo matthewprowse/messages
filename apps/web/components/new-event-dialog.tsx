@@ -3,20 +3,15 @@
 // The New Event dialog, which also edits an existing event. Saving closes it at once and the worker creates or changes the event in the calendar.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { markSubmitted } from "@/lib/analytics";
 import { toast } from "sonner";
-import { ChevronDownIcon } from "lucide-react";
-import type { Tables } from "@messages/db";
 import { useApp } from "@/lib/store";
-import { followRow } from "@/lib/follow-row";
 import { supabase } from "@/lib/supabase";
-import type { Account } from "@/lib/types";
 import { buildUpdate, followUpdate, formOf, GAVE_UP, type CalendarEvent, type EventPatch, type UpdateScope } from "@/lib/calendar";
-import { describeRule, repeatChoices, sameRepeat } from "@/lib/recurrence";
+import { repeatOptionsFor, repeatSelectValue } from "@/lib/event-form";
+import { sameRepeat } from "@/lib/recurrence";
 import {
   buildEventRow,
-  dateKey,
   defaultEventTimes,
   endsNextDay,
   MAX_GUESTS,
@@ -27,86 +22,16 @@ import {
   shiftEnd,
   type EventField,
 } from "@/lib/new-items";
-import { ContactAvatar } from "@/components/primitives";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { followEvent, type Row } from "@/components/new-event/follow-event";
+import { DateField, RepeatField, Reconnect, SwitchRow, TimeSelect } from "@/components/new-event/event-fields";
+import { GuestPicker } from "@/components/new-event/guest-picker";
+import { ScopeDialog } from "@/components/new-event/scope-dialog";
 import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-const POLL_MS = 1500; // in case a Realtime update is missed
-const GIVE_UP_MS = 60_000; // how long the worker is waited for once the dialog has closed
-const ITEM = "p-2";
-const STEP = 15; // minutes between the times offered
-
-/** Every time of day STEP minutes apart, plus the one already chosen when it falls between them. */
-function timesWith(value: string) {
-  const times = Array.from({ length: 1440 / STEP }, (_, i) => `${String(Math.floor((i * STEP) / 60)).padStart(2, "0")}:${String((i * STEP) % 60).padStart(2, "0")}`);
-  return value && !times.includes(value) ? [...times, value].sort() : times;
-}
-
-function fromDateKey(key: string) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
-}
-
-// The Repeat list's values for no repeat, and for a series whose rule is not known yet: a Select item needs a value.
-const NO_REPEAT = "none";
-const UNKNOWN_REPEAT = "unknown";
-
-function TimeSelect({ id, value, onChange, invalid, disabled }: { id: string; value: string; onChange: (v: string) => void; invalid: boolean; disabled: boolean }) {
-  const times = useMemo(() => timesWith(value), [value]);
-  return (
-    <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger id={id} className="w-full tabular-nums" aria-invalid={invalid}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent className="max-h-72">
-        {times.map((t) => <SelectItem key={t} value={t} className="tabular-nums">{t}</SelectItem>)}
-      </SelectContent>
-    </Select>
-  );
-}
-
-type Row = Pick<Tables<"calendar_outbox">, "status" | "error" | "html_link">;
-
-const isFinal = (r: Row) => r.status === "created" || r.status === "failed";
-// Not a failure: the worker may still create it, so the dialog does not invite a second try.
-const GIVE_UP: Row = { status: GAVE_UP, error: null, html_link: null };
-
-/** Resolves when the worker has created the queued event or given up, or after GIVE_UP_MS. */
-const followEvent = (id: string) => followRow<Row>("calendar_outbox", id, "status, error, html_link", isFinal, GIVE_UP, { giveUpMs: GIVE_UP_MS, pollMs: POLL_MS });
-
-function Reconnect({ provider, change = false }: { provider?: Account["provider"]; change?: boolean }) {
-  const verb = change ? "changing" : "creating";
-  const title = !provider ? `Connect a calendar to ${change ? "change" : "create"} events` : provider === "icloud_calendar" ? `Reconnect iCloud Calendar to allow ${verb} events` : `Reconnect Google to allow ${verb} events`;
-  return (
-    <Alert>
-      <AlertTitle>{title}</AlertTitle>
-      <AlertDescription>
-        <p>
-          Open <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Connected Accounts</Link>, {provider ? "reconnect it" : "connect Google or iCloud Calendar"}, then try again.
-        </p>
-      </AlertDescription>
-    </Alert>
-  );
-}
-
-function SwitchRow({ id, label, checked, onChange, disabled }: { id: string; label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <Label htmlFor={id}>{label}</Label>
-      <Switch id={id} checked={checked} onCheckedChange={onChange} disabled={disabled} />
-    </div>
-  );
-}
 
 const CALENDARS = ["google_calendar", "icloud_calendar"] as const;
 
@@ -250,18 +175,9 @@ export function NewEventDialog({
   const unchanged = !!update?.ok && !update.row;
   const editableTime = editing ? formOf(editing).editableTime : true;
   const repeating = !!editing?.seriesId;
-  // The repeat choices for the chosen date, with the event's own rule when it is none of them. A series whose rule
-  // has not been read yet shows that it repeats until one is picked.
-  const repeatOptions = useMemo(() => {
-    const options: { value: string; label: string }[] = repeatChoices(fromDateKey(date) ?? new Date()).map((c) => ({ value: c.value || NO_REPEAT, label: c.label }));
-    if (repeat && !options.some((o) => sameRepeat(o.value, repeat, fromDateKey(date)))) {
-      const words = describeRule(repeat, fromDateKey(date));
-      options.push({ value: repeat, label: words === "Repeats" ? "Custom Schedule" : `Custom: ${words}` });
-    }
-    if (repeating && !repeat) options.push({ value: UNKNOWN_REPEAT, label: "Repeats" });
-    return options;
-  }, [date, repeat, repeating]);
-  const repeatValue = repeat ? (repeatOptions.find((o) => sameRepeat(o.value, repeat, fromDateKey(date)))?.value ?? repeat) : repeating ? UNKNOWN_REPEAT : NO_REPEAT;
+  // The repeat choices for the chosen date, with the event's own rule when it is none of them.
+  const repeatOptions = useMemo(() => repeatOptionsFor(date, repeat, repeating), [date, repeat, repeating]);
+  const repeatValue = repeatSelectValue(repeatOptions, date, repeat, repeating);
   // A new rule is for the whole series.
   const repeatChanged = !!repeat && !sameRepeat(repeat, editing?.recurrence ?? "", editing ? new Date(editing.startsAt) : undefined);
   // Anything else changed alongside the repeat still gets the choice of this event or every one.
@@ -394,8 +310,8 @@ export function NewEventDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track={edit ? "edit_event" : "new_event"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton closeVariant="secondary">
-        <DialogHeader className="pr-10">
+      <DialogContent track={edit ? "edit_event" : "new_event"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
+        <DialogHeader>
           <DialogTitle>{edit ? "Edit Event" : "New Event"}</DialogTitle>
           <DialogDescription>{edit ? "Changed" : "Created"} in your {google ? "Google" : "iCloud"} Calendar, then shown on the Calendar page.</DialogDescription>
         </DialogHeader>
@@ -420,33 +336,7 @@ export function NewEventDialog({
               {errorFor("title") && <p className="text-xs text-destructive">{errorFor("title")}</p>}
             </div>
             {!editableTime && <p className="text-xs text-muted-foreground">This event runs over several days. Change its time in your calendar.</p>}
-            {editableTime && (
-            <div className="grid gap-2">
-              <Label htmlFor="event-date">Date</Label>
-              <Popover open={dateOpen} onOpenChange={setDateOpen}>
-                <PopoverTrigger asChild>
-                  <Button id="event-date" type="button" variant="outline" className="w-full justify-between font-normal" aria-invalid={!!errorFor("date")} disabled={locked}>
-                    {fromDateKey(date)?.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) ?? "Pick a Date"}
-                    <ChevronDownIcon className="text-muted-foreground" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto overflow-hidden p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={fromDateKey(date)}
-                    defaultMonth={fromDateKey(date)}
-                    weekStartsOn={1}
-                    captionLayout="dropdown"
-                    onSelect={(d) => {
-                      if (d) setDate(dateKey(d));
-                      setDateOpen(false);
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
-              {errorFor("date") && <p className="text-xs text-destructive">{errorFor("date")}</p>}
-            </div>
-            )}
+            {editableTime && <DateField date={date} onChange={setDate} open={dateOpen} onOpenChange={setDateOpen} error={errorFor("date")} disabled={locked} />}
             {editableTime && <SwitchRow id="event-all-day" label="All Day" checked={allDay} onChange={setAllDay} disabled={locked} />}
             {editableTime && !allDay && (
               <div className="grid gap-2">
@@ -467,21 +357,7 @@ export function NewEventDialog({
                 ) : null}
               </div>
             )}
-            {repeats && (
-              <div className="grid gap-2">
-                <Label htmlFor="event-repeat">Repeat</Label>
-                <Select value={repeatValue} onValueChange={(v) => setRepeat(v === NO_REPEAT || v === UNKNOWN_REPEAT ? "" : v)} disabled={locked}>
-                  <SelectTrigger id="event-repeat" className="w-full"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {repeatOptions.map((o) => (
-                      // A series cannot be turned back into one event from here: delete it, or change it in your calendar.
-                      <SelectItem key={o.value} value={o.value} disabled={(repeating && o.value === NO_REPEAT) || o.value === UNKNOWN_REPEAT}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {repeating && repeatChanged && <p className="text-xs text-muted-foreground">A new repeat is saved to every event in the series{othersChanged ? ", whichever you save" : ""}.</p>}
-              </div>
-            )}
+            {repeats && <RepeatField value={repeatValue} options={repeatOptions} onChange={setRepeat} repeating={repeating} repeatChanged={repeatChanged} othersChanged={othersChanged} disabled={locked} />}
             <div className="grid gap-2">
               <Label htmlFor="event-location">Location</Label>
               <Input id="event-location" value={location} onChange={(e) => setLocation(e.target.value)} aria-invalid={!!errorFor("location")} disabled={locked} />
@@ -492,68 +368,7 @@ export function NewEventDialog({
               <Textarea id="event-description" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} aria-invalid={!!errorFor("description")} disabled={locked} className="max-h-60" />
               {errorFor("description") && <p className="text-xs text-destructive">{errorFor("description")}</p>}
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="event-guests">Guests</Label>
-              <Popover open={guestsOpen} onOpenChange={onGuestsOpen}>
-                <PopoverTrigger asChild>
-                  <Button id="event-guests" type="button" variant="outline" className="w-full justify-between font-normal" aria-invalid={!!errorFor("guests")} disabled={locked}>
-                    <span className={guestLabel ? "truncate" : "truncate text-muted-foreground"}>{guestLabel ?? "Name or Email Address"}</span>
-                    <ChevronDownIcon className="text-muted-foreground" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
-                  <Command shouldFilter={false}>
-                    <CommandInput
-                      value={guestQuery}
-                      onValueChange={setGuestQuery}
-                      onKeyDown={(e) => {
-                        // A comma or semicolon ends an address, so several can be typed or pasted at once.
-                        if ((e.key === "," || e.key === ";") && guestQuery.trim()) { e.preventDefault(); addGuests(guestQuery); }
-                      }}
-                      placeholder="Name or Email Address"
-                      groupClassName="h-8!"
-                    />
-                    <CommandList className="max-h-80">
-                      <CommandEmpty className="py-4 text-muted-foreground">{guestQuery.trim() ? "No contacts found." : "Type a Name or Email Address."}</CommandEmpty>
-                      {typed.length > 0 && (
-                        <CommandGroup>
-                          <CommandItem value={`add ${typed.join(" ")}`} className={ITEM} onSelect={() => addGuests(typed.join(" "))}>
-                            <span className="min-w-0 truncate">Add {typed.join(", ")}</span>
-                          </CommandItem>
-                        </CommandGroup>
-                      )}
-                      {suggestions.length > 0 && (
-                        <CommandGroup heading="Contacts">
-                          {suggestions.map(({ contact, email }) => (
-                            <CommandItem key={`${contact.id} ${email}`} value={`${contact.id} ${email}`} className={ITEM} onSelect={() => { addGuests(email); setGuestQuery(""); }}>
-                              <ContactAvatar contact={contact} className="size-6" />
-                              <span className="flex min-w-0 flex-col">
-                                <span className="truncate">{contact.name}</span>
-                                <span className="truncate text-xs text-muted-foreground">{email}</span>
-                              </span>
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      )}
-                      {/* Picking a guest again takes them off. */}
-                      {guests.length > 0 && !guestQuery.trim() && (
-                        <CommandGroup heading="Guests">
-                          {guests.map((g) => (
-                            <CommandItem key={g} value={`guest ${g}`} data-checked className={ITEM} onSelect={() => setGuests((list) => list.filter((x) => x !== g))}>
-                              <span className="flex min-w-0 flex-col">
-                                <span className="truncate">{nameOf(g)}</span>
-                                {nameOf(g) !== g && <span className="truncate text-xs text-muted-foreground">{g}</span>}
-                              </span>
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      )}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              {errorFor("guests") && <p className="text-xs text-destructive">{errorFor("guests")}</p>}
-            </div>
+            <GuestPicker open={guestsOpen} onOpenChange={onGuestsOpen} query={guestQuery} onQuery={setGuestQuery} guests={guests} setGuests={setGuests} suggestions={suggestions} typed={typed} nameOf={nameOf} label={guestLabel} addGuests={addGuests} error={errorFor("guests")} disabled={locked} />
             {(!edit || hadGuests || guests.length > 0) && <SwitchRow id="event-invites" label={edit ? "Send Updates" : "Send Invites"} checked={sendInvites} onChange={setSendInvites} disabled={locked} />}
             {!edit && google && <SwitchRow id="event-meet" label="Add Google Meet" checked={addMeet} onChange={setAddMeet} disabled={locked} />}
             {failed && (reconnect ? <Reconnect provider={account.provider} change={edit} /> : <p className="text-xs text-destructive">{row?.error ?? (edit ? "The event could not be changed." : "The event could not be created.")}</p>)}
@@ -567,19 +382,7 @@ export function NewEventDialog({
             </div>
           </form>
         )}
-        <AlertDialog open={scopeOpen} onOpenChange={setScopeOpen}>
-          <AlertDialogContent track="save_event_scope">
-            <AlertDialogHeader>
-              <AlertDialogTitle>Save Changes?</AlertDialogTitle>
-              <AlertDialogDescription>This event repeats. Save the changes to only this one, or to every event in the series.</AlertDialogDescription>
-            </AlertDialogHeader>
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant="ghost" onClick={saveOn("occurrence")}>Save This Event</AlertDialogAction>
-              <AlertDialogAction variant="secondary" onClick={saveOn("series")}>Save All Events</AlertDialogAction>
-            </div>
-          </AlertDialogContent>
-        </AlertDialog>
+        <ScopeDialog open={scopeOpen} onOpenChange={setScopeOpen} saveOn={saveOn} />
       </DialogContent>
     </Dialog>
   );

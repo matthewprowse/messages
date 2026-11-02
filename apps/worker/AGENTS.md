@@ -8,8 +8,9 @@ every query must scope by account or user explicitly. Read `../../AGENTS.md` and
 | Path | Contents |
 | --- | --- |
 | `src/index.ts` | Entry. Every 30 s reconciles running connectors with the `accounts` table, and hands queued work to them. |
+| `src/runtime/` | What `index.ts` runs: `reconcile.ts` (connectors vs accounts), `queues.ts` (Realtime and poll) with the `dispatch-*.ts` handlers, `registry.ts` (provider to connector), `state.ts`, `maintenance.ts`, `shutdown.ts`. |
 | `src/connectors/<name>.ts` | One connector per provider (gmail, outlook, imap, icloud, whatsapp, linkedin, teams, zoom, google-*, outlook-calendar, icloud-calendar, microsoft-todo). A connector does I/O and scheduling only. |
-| `src/google/`, `microsoft/`, `whatsapp/`, `linkedin/`, `caldav/`, `teams/`, `zoom/` | Each provider's client, OAuth, mapping and parsing: the pure, tested parts a connector calls. |
+| `src/google/`, `microsoft/`, `whatsapp/`, `imap/`, `linkedin/`, `caldav/`, `teams/`, `zoom/` | Each provider's client, OAuth, mapping and parsing: the pure, tested parts a connector calls. |
 | `src/ingest/` | Normalising and storing incoming email, attachments and folder status. |
 | `src/send/` | The outbox: composing, sending, unsubscribe flow, attachment rules. |
 | `src/calendar/`, `src/tasks/` | Queued calendar event and task writes (create, update, delete, tick). |

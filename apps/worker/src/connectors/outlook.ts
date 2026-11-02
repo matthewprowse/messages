@@ -591,7 +591,7 @@ export class OutlookConnector {
     if (!row) return;
     const kind = row.thread_id ? "reply" : "email";
     if (!this.canSend) {
-      await markFailed(row.id, `Sending was not allowed when Microsoft was connected, so the ${kind} was not sent. Run pnpm connect:microsoft again.`);
+      await markFailed(row.id, `Sending was not allowed when Microsoft was connected, so the ${kind} was not sent. Reconnect Microsoft in Settings, Accounts.`);
       return;
     }
     let messageId: string;

@@ -67,8 +67,6 @@ function UnreadDot() {
   return <span aria-hidden className="absolute top-1 right-1 size-2 rounded-full bg-primary" />;
 }
 
-/** The data-tour name of a navigation item: the first part of its path, which the tour and page hints point at. */
-const tourOf = (href: string) => href.split("/")[1];
 
 function RailButton({ href, onClick, label, icon: Icon, active, dot, dotLabel = "Unread", hint }: { href?: string; onClick?: () => void; label: string; icon: LucideIcon; active: boolean; dot?: boolean; dotLabel?: string; hint?: string }) {
   return (
@@ -76,7 +74,7 @@ function RailButton({ href, onClick, label, icon: Icon, active, dot, dotLabel = 
       <TooltipTrigger asChild>
         {href ? (
           <Button asChild variant={active ? "secondary" : "ghost"} size="icon" className="relative">
-            <Link href={href} aria-label={dot ? `${label}, ${dotLabel}` : label} aria-current={active ? "page" : undefined} data-tour={tourOf(href)} data-tour-side="right">
+            <Link href={href} aria-label={dot ? `${label}, ${dotLabel}` : label} aria-current={active ? "page" : undefined}>
               <Icon />
               {dot && <UnreadDot />}
             </Link>
@@ -102,7 +100,7 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
     <nav aria-label="Main" className="hidden h-full shrink-0 flex-col gap-3 overflow-y-auto border-r p-3 md:flex">
       <RailButton onClick={onSearch} label="Search" icon={Search} active={searchOpen} hint="⌘K" />
       <div className="flex flex-col gap-1">
-        <div data-tour="new" data-tour-side="right"><NewMenu /></div>
+        <div><NewMenu /></div>
         {NAV.map((item) => (
           <RailButton
             key={item.href}
@@ -142,8 +140,6 @@ function BottomBar({ hidden }: { hidden: boolean }) {
               href={href}
               aria-label={dot ? `${label}, Unread` : label}
               aria-current={active ? "page" : undefined}
-              data-tour={tourOf(href)}
-              data-tour-side="top"
               className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-xs", active ? "text-foreground" : "text-muted-foreground")}
             >
               <span className="relative">
@@ -158,8 +154,6 @@ function BottomBar({ hidden }: { hidden: boolean }) {
           href="/more"
           aria-label="More"
           aria-current={pathname === "/more" ? "page" : undefined}
-          data-tour="more"
-          data-tour-side="top"
           className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-xs", moreActive ? "text-foreground" : "text-muted-foreground")}
         >
           <Ellipsis className="size-5" />

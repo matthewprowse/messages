@@ -10,16 +10,11 @@
 
 import makeWASocket, {
   Browsers,
-  WAMessageStubType,
-  fetchLatestWaWebVersion,
   isJidBroadcast,
   isJidGroup,
   isJidNewsletter,
-  isLidUser,
-  isPnUser,
   jidNormalizedUser,
   makeCacheableSignalKeyStore,
-  type AnyMessageContent,
   type BaileysEventMap,
   type Chat,
   type Contact,
@@ -29,81 +24,53 @@ import makeWASocket, {
   type WASocket,
   type proto,
 } from "baileys";
-import type { Json, Tables } from "@messages/db";
+import type { Tables } from "@messages/db";
 import { Backoff, SerialQueue, sleep } from "../backoff";
-import { finishAction, NotReady } from "../send/actions";
-import { allRows, db, getSyncState, must, recordEvent, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
+import { NotReady } from "../send/actions";
+import { db, getSyncState, must, recordEvent, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { MAX_FILE_BYTES } from "../file-store";
-import { isFailure } from "../ingest/batch-rpc";
-import { claimReady, linkThread, markFailed, onInboxList, settleSent, type OutboxRow } from "../send/outbox";
-import { replyFor } from "../send/inbox";
-import { loadAttachmentFiles } from "../send/outbox-attachments";
-import { newChatNumber, outgoingMessages } from "../whatsapp/outgoing";
-import { prepareVoiceNotes } from "../whatsapp/voice-note";
+import type { OutboxRow } from "../send/outbox";
 import { isLinked, useDbAuthState, type DbAuthState } from "../whatsapp/auth-state";
 import { silentLogger } from "../whatsapp/logger";
 import { BoundedMap } from "../whatsapp/bounded-map";
-import { messageFromRef, mediaRef, saveMedia, type MediaRow, type StoredMedia } from "../whatsapp/media";
-import { describe, e164, formatPairingCode, nameMentions, oneLine, pairingDigits, unreadInHistory } from "../whatsapp/normalize";
+import { messageFromRef, saveMedia, type MediaRow } from "../whatsapp/media";
+import { describe, e164, formatPairingCode, nameMentions, pairingDigits } from "../whatsapp/normalize";
 import { quietSignalLogs } from "../whatsapp/quiet-signal";
+import { ingestWhatsApp, type WhatsAppStored } from "../whatsapp/ingest";
+import { retryStore } from "../whatsapp/retry";
 import { decideClose, noCloses } from "../whatsapp/close-policy";
 import { ownsAccount } from "../shard";
-import { HISTORY_PER_CALL, ingestWhatsApp, ingestWhatsAppHistory, type WhatsAppStored } from "../whatsapp/ingest";
-import { retryStore } from "../whatsapp/retry";
-import { saveContactPhoto, saveGroupPhoto } from "../photos/store";
-import { chunks, mapLimit } from "../util";
+import { applyWhatsAppAction } from "../whatsapp/actions";
+import { importHistory } from "../whatsapp/history";
+import { missingMediaJobs } from "../whatsapp/missing-media";
+import { People, MAX_LIDS } from "../whatsapp/people";
+import { sendQueued } from "../whatsapp/send";
+import { buildPayload, type Quoted } from "../whatsapp/message-payload";
+import { markChatsRead, saveContactNames, saveGroupNames, saveLidMappings } from "../whatsapp/names";
+import { syncPhotos } from "../whatsapp/photos";
+import { SELF } from "../whatsapp/reactions";
+import { applyUpdates } from "../whatsapp/updates";
+import { latestWebVersion } from "../whatsapp/web-version";
+import type { AccountCtx, Person, Prepared } from "../whatsapp/person";
 import { FIELD } from "@messages/crypto/fields";
-import { addressIndex, chatIndex } from "@messages/crypto/addresses";
-import type { UserKeys } from "@messages/crypto";
-import { keysFor, open, openAddresses, seal, sealAddress } from "../vault";
+import { addressIndex } from "@messages/crypto/addresses";
+import { keysFor, open, seal, sealAddress } from "../vault";
 
 quietSignalLogs();
 
 const MEDIA_CATCH_UP_MS = 10 * 60_000;
-const STICKER_PASS_IDLE_MS = 60 * 60_000; // old stickers are looked for this rarely once a pass finds none missing
-const SPENT_IN_QUERY = 300; // files past their tries named in the catch-up query, newest first, to keep the URL short
 // Memory bounds for the per-account Maps below (least recently used goes first). All of it is worked out again
 // from the database or the socket when needed, so a dropped entry costs a lookup, not correctness.
-const MAX_NAMES = 20_000;
 const MAX_CHATS = 5_000;
 const MAX_GROUPS = 2_000;
-const MAX_LIDS = 20_000;
 const MAX_FILE_TRY_ENTRIES = 5_000;
 const TOUCH_MS = 60_000;
-const SELF = "me"; // who you are in provider_meta.reactions; anyone else is their number's or privacy ID's index
-const MAX_FILE_TRIES = 3; // per file, per worker run
 const NAMES_RESYNC_DELAY_MS = 30_000;
 const PHOTO_REFRESH_MS = 24 * 60 * 60_000; // look for new profile pictures once a day
-const PHOTO_STALE_MS = 7 * 24 * 60 * 60_000;
-const PHOTO_PAUSE_MS = 2_000; // one lookup at a time, like WhatsApp Web loading pictures as you scroll
-
-/** A WhatsApp person: phone number in E.164 and privacy ID, whichever are known, and the best name. */
-interface Person {
-  phone: string | null;
-  lid: string | null;
-  /** Preferred JID: the phone number's, else the privacy ID's. */
-  jid: string;
-  display_name: string;
-  push_name: string | null;
-}
-
-interface StoredMeta {
-  chat: string;
-  from_me: boolean;
-  participant: string | null;
-  media?: StoredMedia;
-  receipt?: string;
-}
 
 type Outcome = "reconnect" | "restart" | "stop";
-
-/** A message ready to store, and what to do once it is stored (returns true when it was new). */
-interface Prepared {
-  payload: Json;
-  finish: (stored: WhatsAppStored) => boolean;
-}
 
 export class WhatsAppConnector {
   private sock: WASocket | null = null;
@@ -119,24 +86,25 @@ export class WhatsAppConnector {
   /** File downloads, one at a time, apart from message storage so a slow file never holds up messages. */
   private readonly media = new SerialQueue();
   private timers: NodeJS.Timeout[] = [];
-  /** Names by JID: saved on your phone (wins) or set by the person. Also by privacy ID. */
-  private savedNames = new BoundedMap<string, string>(MAX_NAMES);
-  private pushNames = new BoundedMap<string, string>(MAX_NAMES);
+  /** Names, privacy ID mappings and "is this me" (../whatsapp/people.ts). */
+  private readonly people = new People(() => this.sock);
   private groups = new BoundedMap<string, GroupMetadata>(MAX_GROUPS);
   private chats = new BoundedMap<string, { name?: string | null; archived?: boolean | null }>(MAX_CHATS);
   /** Download attempts per file this run, so one that cannot be fetched is not retried forever. */
   private fileTries = new BoundedMap<string, number>(MAX_FILE_TRY_ENTRIES);
-  /** Phone JIDs by privacy ID, as the link reports them; null when it did not know one yet. */
-  private pnByLid = new BoundedMap<string, string | null>(MAX_LIDS);
   /** Privacy IDs already mapped in the database this run, so repeated history batches skip the write. */
   private mappedLids = new BoundedMap<string, string>(MAX_LIDS);
   private historyBatches = 0;
   private photosRunning = false;
   private lastMediaCatchUp = 0;
   /** When the sticker pass of the media catch-up last found nothing missing; it then waits STICKER_PASS_IDLE_MS. */
-  private stickersIdleSince = 0;
+  private readonly stickers = { idleSince: 0 };
 
   constructor(private readonly account: AccountRow) {}
+
+  private get ctx(): AccountCtx {
+    return { accountId: this.account.id, userId: this.account.user_id };
+  }
 
   get id() {
     return this.account.id;
@@ -193,7 +161,7 @@ export class WhatsAppConnector {
       ? null
       : pairingDigits(must(await db.from("accounts").select("pairing_phone").eq("id", this.id).single(), "load whatsapp account").pairing_phone);
     await setAccountStatus(this.id, "connecting", linked ? null : "Getting a code from WhatsApp.");
-    for (const [lid, pn] of this.pnByLid) if (!pn) this.pnByLid.delete(lid);
+    for (const [lid, pn] of this.people.pnByLid) if (!pn) this.people.pnByLid.delete(lid);
     // Both are rebuilt by the link on open (group list) or by the next history batch (database mapping writes).
     this.groups.clear();
     this.mappedLids.clear();
@@ -253,12 +221,12 @@ export class WhatsAppConnector {
           const lidMapping = events["lid-mapping.update"];
           if (history) this.background(() => this.onHistory(history));
           if (upsert) this.background(() => this.onMessages(upsert.messages, upsert.type === "notify"));
-          if (updates) this.background(() => this.onUpdates(updates));
+          if (updates) this.background(() => applyUpdates(this.ctx, updates));
           if (reactions) this.background(() => this.onReactions(reactions));
           if (newContacts) this.background(() => this.onContacts(newContacts));
           if (contactUpdates) this.background(() => this.onContacts(contactUpdates));
           if (events["chats.upsert"]) this.rememberChats(events["chats.upsert"]);
-          if (chatUpdates) this.background(() => this.onChatUpdates(chatUpdates));
+          if (chatUpdates) this.background(() => markChatsRead(this.ctx, chatUpdates));
           if (newGroups) this.background(() => this.onGroups(newGroups));
           if (groupUpdates) this.background(() => this.onGroups(groupUpdates));
           if (lidMapping) this.background(() => this.onLidMapping([lidMapping]));
@@ -367,82 +335,12 @@ export class WhatsAppConnector {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // People and chats
-  // ---------------------------------------------------------------------------
-
-  private nameOf(...jids: (string | null | undefined)[]): string | null {
-    for (const jid of jids) if (jid && this.savedNames.has(jid)) return this.savedNames.get(jid)!;
-    for (const jid of jids) if (jid && this.pushNames.has(jid)) return this.pushNames.get(jid)!;
-    return null;
-  }
-
-  /** Works out who a JID is: phone number and privacy ID where WhatsApp has told us both. */
-  private async person(jid: string, alt?: string | null, pushName?: string | null): Promise<Person> {
-    const ids = [jid, alt].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j));
-    let pn = ids.find((j) => isPnUser(j)) ?? null;
-    const lid = ids.find((j) => isLidUser(j)) ?? null;
-    if (lid && pn) this.pnByLid.set(lid, pn);
-    else if (lid) {
-      if (!this.pnByLid.has(lid)) {
-        const found = await this.sock?.signalRepository.lidMapping.getPNForLID(lid).catch(() => null);
-        this.pnByLid.set(lid, found ? jidNormalizedUser(found) : null);
-      }
-      pn = this.pnByLid.get(lid) ?? null;
-    }
-    const phone = e164(pn);
-    if (pushName) for (const j of [pn, lid]) if (j && !this.pushNames.has(j)) this.pushNames.set(j, pushName);
-    return {
-      phone,
-      lid,
-      jid: pn ?? lid ?? jidNormalizedUser(jid),
-      display_name: this.nameOf(pn, lid) ?? pushName ?? phone ?? lid ?? jid,
-      push_name: pushName ?? (pn && this.pushNames.get(pn)) ?? (lid && this.pushNames.get(lid)) ?? null,
-    };
-  }
-
-  private isMe(person: Person): boolean {
-    const me = this.sock?.user;
-    if (!me) return false;
-    const mine = [me.id, me.lid].filter(Boolean).map((j) => jidNormalizedUser(j!));
-    return mine.includes(person.jid) || (!!person.lid && mine.includes(person.lid));
-  }
-
   private rememberChats(chats: Chat[]) {
     for (const c of chats) if (c.id) this.chats.set(jidNormalizedUser(c.id), { name: c.name, archived: c.archived });
   }
 
-  private async onContacts(contacts: Partial<Contact>[]) {
-    const people: Awaited<ReturnType<typeof personJson>>[] = [];
-    const keys = await keysFor(this.account.user_id);
-    for (const c of contacts) {
-      if (!c.id) continue;
-      const jids = [c.id, c.lid, c.phoneNumber].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j));
-      for (const j of jids) {
-        if (c.name) this.savedNames.set(j, c.name);
-        if (c.notify) this.pushNames.set(j, c.notify);
-      }
-      // A saved name wins. A name the person set for themselves only replaces a bare number (decided in SQL).
-      const name = c.name ?? c.verifiedName ?? c.notify ?? null;
-      if (!name) continue;
-      people.push(
-        await personJson(keys, {
-          phone: e164(jids.find((j) => isPnUser(j))),
-          lid: jids.find((j) => isLidUser(j)) ?? null,
-          display_name: name,
-          push_name: c.notify ?? null,
-        }, this.account.user_id),
-      );
-    }
-    if (people.length === 0) {
-      log.info("whatsapp names received", { account: this.id, contacts: contacts.length, names: 0, known: 0 });
-      return;
-    }
-    let known = 0;
-    for (const batch of chunks(people, 200)) {
-      known += must(await db.rpc("whatsapp_contact_names", { p_account_id: this.id, p_people: batch }), "save whatsapp names");
-    }
-    log.info("whatsapp names received", { account: this.id, contacts: contacts.length, names: people.length, known });
+  private onContacts(contacts: Partial<Contact>[]) {
+    return saveContactNames(this.ctx, contacts, { saved: this.people.savedNames, push: this.people.pushNames });
   }
 
   /**
@@ -460,7 +358,7 @@ export class WhatsAppConnector {
     log.info("whatsapp contact names refreshed", { account: this.id });
   }
 
-  /** Keeps group metadata for sending, and stores group names that changed. One read, then only the writes needed. */
+  /** Keeps group metadata for sending, and stores group names that changed (./names.ts). */
   private async onGroups(groups: Partial<GroupMetadata>[]) {
     const named = new Map<string, string>();
     for (const g of groups) {
@@ -468,130 +366,25 @@ export class WhatsAppConnector {
       if (g.subject !== undefined && "participants" in g) this.groups.set(g.id, g as GroupMetadata);
       if (g.subject) named.set(g.id, g.subject);
     }
-    if (named.size === 0) return;
-
-    // Conversations are found by their chat's index: the database matches on that, not the JID.
-    const keys = await keysFor(this.account.user_id);
-    const indexes = new Map(await Promise.all([...named.keys()].map(async (id) => [id, await chatIndex(keys, id)] as const)));
-    const stored = new Map<string, string | null>();
-    for (const batch of chunks([...indexes.values()], 100)) {
-      const rows = must(
-        await db.from("threads").select("provider_thread_index, group_name").eq("account_id", this.id).in("provider_thread_index", batch),
-        "load group names",
-      );
-      for (const r of rows) if (r.provider_thread_index) stored.set(r.provider_thread_index, r.group_name);
-    }
-    let renamed = 0;
-    for (const [id, subject] of named) {
-      const index = indexes.get(id)!;
-      if (!stored.has(index) || stored.get(index) === subject) continue; // no conversation yet, or unchanged
-      must(await db.from("threads").update({ group_name: subject }).eq("account_id", this.id).eq("provider_thread_index", index), "save group name");
-      renamed++;
-    }
-    if (renamed > 0) log.info("whatsapp group names saved", { account: this.id, renamed });
+    await saveGroupNames(this.ctx, named);
   }
 
-  private async onLidMapping(pairs: { lid: string; pn: string }[]) {
-    // A history batch can carry thousands of pairs, so a few are saved at a time.
-    await mapLimit(pairs, 4, async (pair) => {
-      const phone = e164(pair.pn);
-      if (!phone) return;
-      const lid = jidNormalizedUser(pair.lid);
-      const pn = jidNormalizedUser(pair.pn);
-      this.pnByLid.set(lid, pn);
-      if (this.mappedLids.get(lid) === pn) return;
-      const keys = await keysFor(this.account.user_id);
-      must(
-        await db.rpc("whatsapp_map_lid", {
-          p_account_id: this.id,
-          p_lid_jid: await sealAddress(this.account.user_id, lid),
-          p_pn_jid: await sealAddress(this.account.user_id, pn),
-          p_phone: await sealAddress(this.account.user_id, phone),
-          p_lid_index: await addressIndex(keys, lid),
-          p_phone_index: await addressIndex(keys, phone),
-          p_lid_chat_index: await chatIndex(keys, lid),
-          p_pn_chat_index: await chatIndex(keys, pn),
-        }),
-        "map privacy id",
-      );
-      this.mappedLids.set(lid, pn);
-    });
+  private onLidMapping(pairs: { lid: string; pn: string }[]) {
+    return saveLidMappings(this.ctx, pairs, { pnByLid: this.people.pnByLid, mappedLids: this.mappedLids });
   }
 
-  /** Chats read on your phone are marked read here too. No receipt is sent: the phone already did. */
-  private async onChatUpdates(updates: Partial<Chat>[]) {
-    const read = updates.filter((u) => u.id && u.unreadCount === 0).map((u) => jidNormalizedUser(u.id!));
-    if (read.length === 0) return;
-    const keys = await keysFor(this.account.user_id);
-    const indexes = await Promise.all(read.map((jid) => chatIndex(keys, jid)));
-    const changed = must(await db.rpc("whatsapp_mark_read", { p_account_id: this.id, p_chat_jids: read, p_chat_indexes: indexes }), "mark chats read");
-    if (changed > 0) log.info("whatsapp chats read on phone", { account: this.id, threads: changed });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Messages
-  // ---------------------------------------------------------------------------
-
-  private async onHistory(batch: BaileysEventMap["messaging-history.set"]) {
-    const n = ++this.historyBatches;
-    await setAccountStatus(this.id, "syncing", "Importing the history from your phone.").catch(() => undefined);
-    if (batch.lidPnMappings?.length) await this.onLidMapping(batch.lidPnMappings);
-    if (batch.contacts.length) await this.onContacts(batch.contacts);
-    this.rememberChats(batch.chats);
-
-    const unreadByChat = new Map(batch.chats.filter((c) => c.id).map((c) => [jidNormalizedUser(c.id!), c.unreadCount ?? 0]));
-    const sorted = [...batch.messages].sort((a, b) => Number(a.messageTimestamp ?? 0) - Number(b.messageTimestamp ?? 0));
-    const unread = unreadInHistory(
-      sorted.map((m) => ({ id: m.key.id ?? "", chat: jidNormalizedUser(m.key.remoteJid ?? ""), fromMe: !!m.key.fromMe, at: Number(m.messageTimestamp ?? 0) })),
-      unreadByChat,
+  private onHistory(batch: BaileysEventMap["messaging-history.set"]) {
+    return importHistory(
+      {
+        accountId: this.id,
+        onLidMapping: (pairs) => this.onLidMapping(pairs),
+        onContacts: (contacts) => this.onContacts(contacts),
+        rememberChats: (chats) => this.rememberChats(chats),
+        prepare: (msg, opts) => this.prepare(msg, opts),
+      },
+      batch,
+      ++this.historyBatches,
     );
-
-    // Stored a chunk per database call, in order. A chunk or message that still fails after retries is logged and skipped.
-    let inserted = 0;
-    let pending: Prepared[] = [];
-    const flush = async () => {
-      const chunk = pending;
-      pending = [];
-      if (chunk.length === 0) return;
-      let results: Awaited<ReturnType<typeof ingestWhatsAppHistory.run>>;
-      try {
-        results = await retryStore(() => ingestWhatsAppHistory.run(this.id, chunk.map((p) => p.payload)), sleep);
-      } catch (err) {
-        // History is not redelivered, but one lost chunk must not abort the rest of the batch.
-        log.warn("whatsapp history chunk failed", { account: this.id, code: errorCode(err), messages: chunk.length });
-        return;
-      }
-      for (const [i, stored] of results.entries()) {
-        if (isFailure(stored)) log.warn("whatsapp history message failed", { account: this.id, code: stored.code });
-        else if (chunk[i].finish(stored)) inserted++;
-      }
-    };
-    for (const msg of sorted) {
-      try {
-        const item = await this.prepare(msg, { live: false, unread: unread.has(msg.key.id ?? "") });
-        if (!item) continue;
-        if ("react" in item) {
-          // A reaction is saved on the message it reacts to, so the messages before it are stored first.
-          await flush();
-          await item.react();
-          continue;
-        }
-        pending.push(item);
-        if (pending.length >= HISTORY_PER_CALL) await flush();
-      } catch (err) {
-        log.warn("whatsapp history message failed", { account: this.id, code: errorCode(err) });
-      }
-    }
-    await flush();
-    log.info("whatsapp history batch", {
-      account: this.id,
-      batch: n,
-      chats: batch.chats.length,
-      messages: batch.messages.length,
-      inserted,
-      progress: batch.progress ?? null,
-    });
-    await setAccountStatus(this.id, "connected").catch(() => undefined);
   }
 
   private async onMessages(messages: WAMessage[], live: boolean) {
@@ -641,22 +434,22 @@ export class WhatsAppConnector {
     const participants: Person[] = [];
     if (group) {
       chatJid = jidNormalizedUser(remote);
-      if (!fromMe && key.participant) sender = await this.person(key.participant, key.participantAlt, msg.pushName);
+      if (!fromMe && key.participant) sender = await this.people.person(key.participant, key.participantAlt, msg.pushName);
     } else {
-      const other = await this.person(remote, key.remoteJidAlt, fromMe ? null : msg.pushName);
-      if (this.isMe(other)) return null; // "Message yourself" notes are not conversations
+      const other = await this.people.person(remote, key.remoteJidAlt, fromMe ? null : msg.pushName);
+      if (this.people.isMe(other)) return null; // "Message yourself" notes are not conversations
       chatJid = other.jid;
       chatAlt = other.lid && other.lid !== other.jid ? other.lid : null;
       participants.push(other);
       if (!fromMe) sender = other;
     }
 
-    const body = nameMentions(d.text, d.mentions, (jid) => this.nameOf(jidNormalizedUser(jid)));
+    const body = nameMentions(d.text, d.mentions, (jid) => this.people.nameOf(jidNormalizedUser(jid)));
     // A quoted reply keeps what it quotes in provider_meta.quoted, which the app shows as a quote block.
-    let quoted: { id: string; author: string; from_me: boolean; text: string } | null = null;
+    let quoted: Quoted | null = null;
     if (d.quoted) {
-      const author = d.quoted.participant ? await this.person(d.quoted.participant) : null;
-      const mine = author ? this.isMe(author) : false;
+      const author = d.quoted.participant ? await this.people.person(d.quoted.participant) : null;
+      const mine = author ? this.people.isMe(author) : false;
       quoted = {
         id: d.quoted.id,
         from_me: mine,
@@ -664,47 +457,8 @@ export class WhatsAppConnector {
         text: (await seal(this.account.user_id, FIELD.quote, d.quoted.text)) ?? "",
       };
     }
-    const preview = group && sender ? `${sender.display_name}: ${d.preview}` : d.preview;
-
-    const content = msg.message ? this.mediaContent(msg.message, d.media?.type) : null;
-    const meta: StoredMeta & Record<string, unknown> = {
-      chat: await sealAddress(this.account.user_id, remote),
-      from_me: fromMe,
-      participant: await sealAddress(this.account.user_id, key.participant ?? null),
-      type: d.type,
-      ...(d.media && content ? { media: mediaRef(d.media.type, content) } : {}),
-      ...(opts.unread ? { receipt: "pending" } : {}),
-      ...(quoted ? { quoted } : {}),
-      ...(msg.reactions?.length ? await this.historyReactions(msg.reactions) : {}),
-    };
-
-    const chat = this.chats.get(chatJid) ?? (chatAlt ? this.chats.get(chatAlt) : undefined);
-    const keys = await keysFor(this.account.user_id);
-    const senderAddress = sender ? (sender.phone ?? sender.lid) : null;
-    const payload = {
-      provider_message_id: id,
-      chat_jid: await sealAddress(this.account.user_id, chatJid),
-      chat_alt_jid: await sealAddress(this.account.user_id, chatAlt),
-      chat_index: await chatIndex(keys, chatJid),
-      chat_alt_index: chatAlt ? await chatIndex(keys, chatAlt) : null,
-      is_group: group,
-      group_name: group ? (this.groups.get(chatJid)?.subject ?? chat?.name ?? null) : null,
-      status: chat?.archived && !opts.live ? "archived" : "inbox",
-      resurface: opts.live && !fromMe,
-      sent_at: sentAt.toISOString(),
-      direction: fromMe ? "outbound" : "inbound",
-      is_read: !opts.unread,
-      sender: sender ? await personJson(keys, sender, this.account.user_id) : null,
-      sender_address: await sealAddress(this.account.user_id, senderAddress),
-      sender_index: senderAddress ? await addressIndex(keys, senderAddress) : null,
-      participants: await Promise.all(participants.map((p) => personJson(keys, p, this.account.user_id))),
-      preview: await seal(this.account.user_id, FIELD.preview, oneLine(preview)),
-      body_text: await seal(this.account.user_id, FIELD.body, body || null),
-      provider_meta: meta as Json,
-      attachments: d.media
-        ? [{ filename: (await seal(this.account.user_id, FIELD.filename, d.media.filename))!, mime_type: d.media.mimeType, kind: d.media.kind, size_bytes: d.media.sizeBytes }]
-        : [],
-    } satisfies Record<string, Json>;
+    const chat = () => ({ chat: this.chats.get(chatJid) ?? (chatAlt ? this.chats.get(chatAlt) : undefined), groupSubject: this.groups.get(chatJid)?.subject });
+    const { payload, meta } = await buildPayload(this.ctx, { msg, key, remote, id, d, group, fromMe, sentAt, chatJid, chatAlt, sender, participants, quoted, body, live: opts.live, unread: opts.unread, known: chat });
 
     const finish = (stored: WhatsAppStored): boolean => {
       if (stored.result !== "inserted" || !stored.message_id) return false;
@@ -726,45 +480,6 @@ export class WhatsAppConnector {
     return { payload, finish };
   }
 
-  /** The media part of a message, after unwrapping disappearing, view once and captioned documents. */
-  private mediaContent(message: proto.IMessage, type: string | undefined) {
-    if (!type) return null;
-    let content: proto.IMessage | null | undefined = message;
-    for (let i = 0; i < 5 && content; i++) {
-      const inner: proto.IMessage | null | undefined =
-        content.ephemeralMessage?.message ??
-        content.viewOnceMessage?.message ??
-        content.viewOnceMessageV2?.message ??
-        content.viewOnceMessageV2Extension?.message ??
-        content.documentWithCaptionMessage?.message;
-      if (!inner) break;
-      content = inner;
-    }
-    return (content as Record<string, unknown> | null | undefined)?.[type] as Parameters<typeof mediaRef>[1] | null;
-  }
-
-  /**
-   * Reactions a message arrived with, as provider_meta keeps them: reactions by who reacted, which is "me"
-   * or the index of their number or privacy ID, and reactors, who each index is, encrypted.
-   */
-  private async historyReactions(list: proto.IReaction[]): Promise<{ reactions: Record<string, string>; reactors: Record<string, string> }> {
-    const reactions: Record<string, string> = {};
-    const reactors: Record<string, string> = {};
-    for (const r of list) {
-      if (!r.text) continue;
-      if (r.key?.fromMe) {
-        reactions[SELF] = r.text;
-        continue;
-      }
-      const who = e164(r.key?.participant ?? r.key?.remoteJid) ?? jidNormalizedUser(r.key?.participant ?? r.key?.remoteJid ?? "");
-      if (!who) continue;
-      const key = await addressIndex(await keysFor(this.account.user_id), who);
-      reactions[key] = r.text;
-      reactors[key] = await sealAddress(this.account.user_id, who);
-    }
-    return { reactions, reactors };
-  }
-
   /** A reaction is kept on the message it reacts to. `reactor` is the key of the reaction itself. */
   private async react(reactor: WAMessageKey, targetId: string, emoji: string) {
     let who = SELF;
@@ -772,7 +487,7 @@ export class WhatsAppConnector {
     if (!reactor.fromMe) {
       const jid = reactor.participant ?? reactor.remoteJid;
       if (!jid) return;
-      const p = await this.person(jid, reactor.participantAlt ?? reactor.remoteJidAlt);
+      const p = await this.people.person(jid, reactor.participantAlt ?? reactor.remoteJidAlt);
       const address = p.phone ?? p.lid ?? p.jid;
       who = await addressIndex(await keysFor(this.account.user_id), address);
       sealed = await sealAddress(this.account.user_id, address);
@@ -794,51 +509,6 @@ export class WhatsAppConnector {
     }
   }
 
-  /** Edits and deletions made in WhatsApp, and the delivery and read ticks of messages you sent. */
-  private async onUpdates(updates: BaileysEventMap["messages.update"]) {
-    for (const { key, update } of updates) {
-      if (!key.id) continue;
-      try {
-        if (update.messageStubType === WAMessageStubType.REVOKE) {
-          const text = "This message was deleted.";
-          const [body, preview] = await Promise.all([seal(this.account.user_id, FIELD.body, text), seal(this.account.user_id, FIELD.preview, text)]);
-          must(
-            await db.rpc("whatsapp_update_message", { p_account_id: this.id, p_provider_message_id: key.id, p_body: body!, p_preview: preview!, p_meta: { deleted: true } }),
-            "save deletion",
-          );
-          continue;
-        }
-        if (key.fromMe && typeof update.status === "number") {
-          // Baileys' statuses: 2 reached WhatsApp's server, 3 delivered, 4 read, 5 played (a voice note heard).
-          const receipt = update.status >= 4 ? "read" : update.status === 3 ? "delivered" : update.status === 2 ? "sent" : null;
-          if (receipt) must(await db.rpc("whatsapp_message_status", { p_account_id: this.id, p_provider_message_id: key.id, p_status: receipt }), "save receipt");
-        }
-        const edited = update.message?.editedMessage?.message;
-        if (!edited) continue;
-        // The new content, sometimes still inside the edit's protocol message.
-        const d = describe(edited.protocolMessage?.editedMessage ?? edited);
-        if (d.kind !== "message") continue;
-        const text = d.text;
-        must(
-          await db.rpc("whatsapp_update_message", {
-            p_account_id: this.id,
-            p_provider_message_id: key.id,
-            p_body: (await seal(this.account.user_id, FIELD.body, text))!,
-            p_preview: (await seal(this.account.user_id, FIELD.preview, d.preview))!,
-            p_meta: { edited: true },
-          }),
-          "save edit",
-        );
-      } catch (err) {
-        log.warn("whatsapp update failed", { account: this.id, code: errorCode(err) });
-      }
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Files
-  // ---------------------------------------------------------------------------
-
   private downloadLater(work: () => Promise<void>) {
     this.media.background(work, (err) => {
       const status = (err as { output?: { statusCode?: number } }).output?.statusCode ?? null;
@@ -858,47 +528,10 @@ export class WhatsAppConnector {
 
   /** Files not saved yet (a failed download, or one the phone had to upload again), within the import window. */
   private async saveMissingMedia() {
-    const since = new Date(Date.now() - env.initialSyncDays * 86_400_000).toISOString();
-    // Files already past their tries are left out of the query, or they would fill the limit and starve the rest.
-    const spent = [...this.fileTries].filter(([, tries]) => tries >= MAX_FILE_TRIES).map(([id]) => id).slice(-SPENT_IN_QUERY);
-    const missing = () => {
-      const query = db
-        .from("attachments")
-        .select("id, mime_type, kind, filename, size_bytes, message_id, messages!inner(account_id, provider_message_id, provider_meta, sent_at)")
-        .is("storage_path", null)
-        // A video kept as a link is not fetched; a file refused for a full seat is tried again once there is room.
-        .or("not_kept.is.null,not_kept.eq.over_cap")
-        .eq("messages.account_id", this.id)
-        .lte("size_bytes", MAX_FILE_BYTES);
-      return (spent.length > 0 ? query.not("id", "in", `(${spent.join(",")})`) : query).limit(100);
-    };
     // Nothing to fetch with, nothing to ask the database for.
     if (!this.sock || !this.open) return;
-    const recent = await missing().gte("messages.sent_at", since).then((r) => must(r, "load missing whatsapp files"));
-    // Stickers are kept at any age, but a new one is inside the window above, so older ones are only looked
-    // for when the recent pass found work, or once an hour after a pass that found none.
-    let stickers: typeof recent = [];
-    if (recent.length > 0 || Date.now() - this.stickersIdleSince >= STICKER_PASS_IDLE_MS) {
-      stickers = await missing().eq("is_sticker", true).then((r) => must(r, "load missing whatsapp stickers"));
-      this.stickersIdleSince = stickers.length === 0 ? Date.now() : 0;
-    }
-    if (recent.length === 0 && stickers.length === 0) return;
-    const rows = await openAddresses(this.account.user_id, [...new Map([...recent, ...stickers].map((r) => [r.id, r])).values()]);
-    for (const r of rows) {
-      const tries = this.fileTries.get(r.id) ?? 0;
-      if (tries >= MAX_FILE_TRIES) continue;
-      this.fileTries.set(r.id, tries + 1);
-      const meta = r.messages.provider_meta as unknown as StoredMeta;
-      if (!meta?.media) continue;
-      const key = { remoteJid: meta.chat, fromMe: meta.from_me, id: r.messages.provider_message_id, participant: meta.participant ?? undefined };
-      const msg = messageFromRef(key, meta.media);
-      this.downloadLater(() => this.fetchFile(msg, { messageId: r.message_id, attachmentId: r.id, mimeType: r.mime_type ?? "application/octet-stream", kind: r.kind, filename: r.filename, sizeBytes: r.size_bytes }));
-    }
+    for (const { msg, row } of await missingMediaJobs(this.ctx, this.fileTries, this.stickers)) this.downloadLater(() => this.fetchFile(msg, row));
   }
-
-  // ---------------------------------------------------------------------------
-  // Sending and read receipts
-  // ---------------------------------------------------------------------------
 
   /** Message text WhatsApp may ask for again when a recipient could not decrypt a reply the first time. */
   private async storedMessage(key: WAMessageKey): Promise<proto.IMessage | undefined> {
@@ -911,125 +544,11 @@ export class WhatsAppConnector {
     return text ? { conversation: text } : undefined;
   }
 
-  /**
-   * Sends one queued reply over the linked device, then stores it so it shows in the conversation. A
-   * reply with files goes as one message per file, the text as the first one's caption, and a voice
-   * note recorded in the app is converted to the format WhatsApp needs first. Claimed first
-   * (once its files have arrived), so it can never go out twice; while disconnected it waits in the queue.
-   */
+  /** Sends one queued reply or new message over the link (./send.ts). While disconnected it waits in the queue. */
   async send(queuedRow: OutboxRow) {
     const sock = this.sock;
     if (!sock || !this.open) return; // not connected: picked up again on the next pass
-    const row = await claimReady(queuedRow); // waits for its files, then claims it
-    if (!row) return;
-    if (this.sock !== sock || !this.open) {
-      // The link dropped while the files arrived. Nothing has gone out, so this is safe to send again.
-      await markFailed(row.id, "WhatsApp is not connected, so nothing was sent. Try again.");
-      return;
-    }
-    let chatJid: string;
-    try {
-      const target = row.thread_id ? await this.replyTarget(row) : await this.newChatTarget(row, sock);
-      if ("error" in target) {
-        await markFailed(row.id, target.error);
-        return;
-      }
-      chatJid = target.jid;
-    } catch (err) {
-      log.warn("whatsapp send target failed", { account: this.id, outbox: row.id, code: errorCode(err) });
-      await markFailed(row.id, "WhatsApp could not be reached, so nothing was sent. Try again.").catch(() => undefined);
-      return;
-    }
-
-    let parts: AnyMessageContent[];
-    try {
-      const files = row.attachment_count > 0 ? await loadAttachmentFiles(row, "whatsapp") : [];
-      if ("error" in files) {
-        await markFailed(row.id, files.error);
-        return;
-      }
-      const ready = await prepareVoiceNotes(files, { account: this.id, outbox: row.id });
-      if ("error" in ready) {
-        await markFailed(row.id, ready.error);
-        return;
-      }
-      parts = outgoingMessages((await open(row.user_id, FIELD.body, row.body)) ?? "", ready);
-    } catch (err) {
-      log.warn("whatsapp attachments failed", { account: this.id, outbox: row.id, code: errorCode(err) });
-      await markFailed(row.id, "The attachments could not be read. Try again.").catch(() => undefined);
-      return;
-    }
-    if (parts.length === 0) {
-      await markFailed(row.id, "There is nothing to send.");
-      return;
-    }
-
-    const sent: WAMessage[] = [];
-    try {
-      const quoted = row.thread_id && row.reply_to_message_id ? await this.quotable(row.reply_to_message_id, row.thread_id, chatJid) : undefined;
-      for (const [i, part] of parts.entries()) {
-        const message = await sock.sendMessage(chatJid, part, i === 0 && quoted ? { quoted } : undefined);
-        if (!message?.key.id) throw Object.assign(new Error("no message id"), { code: "NO_ID" });
-        sent.push(message);
-      }
-    } catch (err) {
-      log.warn("whatsapp reply failed", { account: this.id, outbox: row.id, code: errorCode(err), sentParts: sent.length, parts: parts.length });
-      await markFailed(
-        row.id,
-        sent.length > 0
-          ? `Only ${sent.length} of ${parts.length} parts were sent. Check WhatsApp before sending the rest.`
-          : "The message may not have been sent. Check WhatsApp before sending again.",
-      ).catch(() => undefined);
-      await this.storeSent(sent, row.id);
-      return;
-    }
-    if (!(await settleSent(row.id, sent[0].key.id!))) log.warn("whatsapp reply sent but not recorded", { account: this.id, outbox: row.id });
-    else log.info(row.thread_id ? "whatsapp reply sent" : "whatsapp new chat sent", { account: this.id, outbox: row.id, parts: sent.length });
-    await this.storeSent(sent, row.id);
-    if (!row.thread_id) await this.linkNewChat(row.id, sent[0].key.id!);
-  }
-
-  /** The chat a reply goes to: its conversation's, which must be a WhatsApp chat on this account and yours. */
-  private async replyTarget(row: OutboxRow): Promise<{ jid: string } | { error: string }> {
-    const thread = must(
-      await db.from("threads").select("account_id, user_id, channel, provider_thread_id").eq("id", row.thread_id!).maybeSingle(),
-      "load whatsapp thread",
-    );
-    await openAddresses(this.account.user_id, thread);
-    // The chat's own person's reply, or a member of the shared inbox it is in (this account's, which they cannot replace).
-    const via = thread ? replyFor(thread.user_id, row.user_id, thread.user_id !== row.user_id && (await onInboxList(row.thread_id!, row.user_id))) : "nobody";
-    if (!thread || thread.account_id !== this.id || via === "nobody" || thread.channel !== "whatsapp") {
-      return { error: "This message belongs to another account." };
-    }
-    return { jid: thread.provider_thread_id };
-  }
-
-  /**
-   * The chat a new message starts: one number in E.164, checked with WhatsApp first so nothing is sent to
-   * a number without an account. A chat that already exists with that number is simply continued.
-   */
-  private async newChatTarget(row: OutboxRow, sock: WASocket): Promise<{ jid: string } | { error: string }> {
-    if (row.account_id !== this.id || row.user_id !== this.account.user_id) return { error: "This message belongs to another account." };
-    const digits = newChatNumber(row.to_addresses);
-    if (!digits) return { error: "Enter one phone number with its country code, like +44 7700 900123." };
-    const [found] = (await sock.onWhatsApp(digits)) ?? [];
-    if (!found?.exists) return { error: "This number is not on WhatsApp." };
-    // WhatsApp may answer with the number's own JID or a privacy ID; a chat is addressed by the number.
-    return { jid: isPnUser(found.jid) ? jidNormalizedUser(found.jid) : `${digits}@s.whatsapp.net` };
-  }
-
-  /** Points a sent new chat at its conversation, once stored, so the app can open it. */
-  private async linkNewChat(outboxId: string, providerMessageId: string) {
-    try {
-      const stored = must(
-        await db.from("messages").select("thread_id").eq("account_id", this.id).eq("provider_message_id", providerMessageId).maybeSingle(),
-        "find new chat",
-      );
-      if (stored) await linkThread(outboxId, stored.thread_id);
-      else log.warn("whatsapp new chat not stored yet", { account: this.id, outbox: outboxId });
-    } catch (err) {
-      log.warn("whatsapp link new chat failed", { account: this.id, outbox: outboxId, code: errorCode(err) });
-    }
+    await sendQueued(this.ctx, sock, queuedRow, () => this.sock === sock && this.open, (sent, outboxId) => this.storeSent(sent, outboxId));
   }
 
   /** Stores what went out, so it shows in the conversation at once. Files are fetched back like any other. */
@@ -1041,131 +560,19 @@ export class WhatsAppConnector {
     }
   }
 
-  /**
-   * A 'read' action means you opened the chat in the app. Only then, and only with read receipts on in
-   * Settings, does WhatsApp hear that you read the messages. A 'react' action sends your reaction (an
-   * empty emoji removes it). Archive and unarchive are app-only here.
-   */
+  /** An app action on a chat (a reaction, read receipts): see ./actions.ts. Not connected means back to queued. */
   async applyAction(row: Tables<"mail_actions">) {
     const sock = this.sock;
     if (!sock || !this.open) throw new NotReady(); // not connected: back to queued, the next poll retries it
-    try {
-      if (row.action === "react" && row.message_id) {
-        const target = must(
-          await db.from("messages").select("provider_message_id, direction, provider_meta, thread_id, threads(provider_thread_id)").eq("id", row.message_id).eq("account_id", this.id).maybeSingle(),
-          "load reaction target",
-        );
-        await openAddresses(this.account.user_id, target);
-        if (!target || target.thread_id !== row.thread_id || !target.threads) throw Object.assign(new Error("no target"), { code: "NO_TARGET" });
-        const meta = target.provider_meta as unknown as StoredMeta;
-        const key = { remoteJid: target.threads.provider_thread_id, id: target.provider_message_id, fromMe: target.direction === "outbound", participant: meta.participant ?? undefined };
-        await sock.sendMessage(target.threads.provider_thread_id, { react: { text: row.emoji ?? "", key } });
-        must(await db.rpc("whatsapp_react", { p_account_id: this.id, p_provider_message_id: target.provider_message_id, p_sender: SELF, p_emoji: row.emoji ?? "" }), "save my reaction");
-        log.info("whatsapp reaction sent", { account: this.id, action: row.id });
-      }
-      if (row.action === "read") {
-        const pending = must(
-          await db
-            .from("messages")
-            .select("id, provider_message_id, provider_meta")
-            .eq("thread_id", row.thread_id)
-            .eq("account_id", this.id)
-            .eq("direction", "inbound")
-            .eq("provider_meta->>receipt", "pending")
-            .limit(500),
-          "load unread whatsapp messages",
-        );
-        await openAddresses(this.account.user_id, pending);
-        if (pending.length > 0) {
-          const profile = must(await db.from("profiles").select("whatsapp_read_receipts").eq("user_id", row.user_id).maybeSingle(), "load profile");
-          const on = profile?.whatsapp_read_receipts === true;
-          if (on) {
-            const keys = pending.map((m) => {
-              const meta = m.provider_meta as unknown as StoredMeta;
-              return { remoteJid: meta.chat, id: m.provider_message_id, participant: meta.participant ?? undefined, fromMe: false };
-            });
-            await sock.readMessages(keys);
-          }
-          must(
-            await db.rpc("whatsapp_set_receipt", { p_account_id: this.id, p_message_ids: pending.map((m) => m.id), p_state: on ? "sent" : "skipped" }),
-            "record receipts",
-          );
-          log.info("whatsapp read receipts", { account: this.id, messages: pending.length, sent: on });
-        }
-      }
-      await finishAction(row.id);
-    } catch (err) {
-      log.warn("whatsapp action failed", { account: this.id, action: row.action, code: errorCode(err) });
-      await finishAction(row.id, row.action === "react" ? "Could not send your reaction to WhatsApp." : "Could not tell WhatsApp you read this chat.");
-    }
+    await applyWhatsAppAction(this.ctx, sock, row);
   }
 
-  /** A stored message in this chat, in the shape Baileys needs to quote it in a reply. */
-  private async quotable(messageId: string, threadId: string | null, chatJid: string): Promise<WAMessage | undefined> {
-    const m = must(
-      await db.from("messages").select("provider_message_id, direction, body_text, provider_meta, thread_id").eq("id", messageId).eq("account_id", this.id).maybeSingle(),
-      "load quoted message",
-    );
-    await openAddresses(this.account.user_id, m);
-    if (!m || m.thread_id !== threadId) return undefined;
-    const meta = m.provider_meta as unknown as StoredMeta;
-    return {
-      key: { remoteJid: chatJid, id: m.provider_message_id, fromMe: m.direction === "outbound", participant: meta.participant ?? undefined },
-      message: { conversation: (await open(this.account.user_id, FIELD.body, m.body_text)) ?? "" },
-    };
-  }
-
-  /**
-   * Profile pictures for people and groups in your chats, looked up one at a time with a pause between,
-   * and again after a week. A picture from your own address book is never replaced.
-   */
+  /** Profile pictures: one lookup at a time (./photos.ts). A second pass is not started while one runs. */
   private async syncPhotos(sock: WASocket) {
     if (this.photosRunning) return;
     this.photosRunning = true;
     try {
-      const stale = new Date(Date.now() - PHOTO_STALE_MS).toISOString();
-      const threads = await allRows(
-        (from, to) =>
-          db
-            .from("threads")
-            .select("id, is_group, provider_thread_id, avatar_updated_at, thread_participants(contact_id, contacts(avatar_source, avatar_updated_at))")
-            .eq("account_id", this.id)
-            .order("id")
-            .range(from, to),
-        "load chats for photos",
-      ).then((rows) => openAddresses(this.account.user_id, rows));
-      const due = (at: string | null) => !at || at < stale;
-      const jobs: { jid: string; save: (bytes: Buffer | null) => Promise<boolean> }[] = [];
-      const seen = new Set<string>();
-      for (const t of threads) {
-        if (t.is_group) {
-          if (due(t.avatar_updated_at)) jobs.push({ jid: t.provider_thread_id, save: (b) => saveGroupPhoto(this.account.user_id, t.id, b) });
-          continue;
-        }
-        const p = t.thread_participants[0];
-        if (!p?.contacts || seen.has(p.contact_id)) continue;
-        seen.add(p.contact_id);
-        const source = p.contacts.avatar_source;
-        if ((source === null || source === "whatsapp") && due(p.contacts.avatar_updated_at)) {
-          const known = { avatar_source: source };
-          jobs.push({ jid: t.provider_thread_id, save: (b) => saveContactPhoto(this.account.user_id, p.contact_id, "whatsapp", b, known) });
-        }
-      }
-
-      let saved = 0;
-      for (const job of jobs) {
-        if (sock !== this.sock || !this.open || this.stopped) break;
-        // No picture, or hidden by the person's privacy settings, comes back as an error or nothing.
-        const url = await sock.profilePictureUrl(job.jid, "preview").catch(() => undefined);
-        let bytes: Buffer | null = null;
-        if (url) {
-          const res = await fetch(url).catch(() => null);
-          if (res?.ok) bytes = Buffer.from(await res.arrayBuffer());
-        }
-        if (await job.save(bytes)) saved++;
-        await sleep(PHOTO_PAUSE_MS);
-      }
-      if (jobs.length) log.info("whatsapp photos checked", { account: this.id, checked: jobs.length, saved });
+      await syncPhotos(this.ctx, sock, () => sock === this.sock && this.open && !this.stopped);
     } finally {
       this.photosRunning = false;
     }
@@ -1176,30 +583,4 @@ export class WhatsAppConnector {
   private background(step: () => Promise<void>) {
     this.queue.background(step, (err) => log.warn("whatsapp background step failed", { account: this.id, code: errorCode(err) }));
   }
-}
-
-const VERSION_TTL_MS = 6 * 60 * 60_000;
-let cachedVersion: { at: number; value: Awaited<ReturnType<typeof fetchLatestWaWebVersion>> } | null = null;
-
-/** WhatsApp Web's current version, asked for at most every few hours. Null when it cannot be fetched. */
-async function latestWebVersion() {
-  if (cachedVersion && Date.now() - cachedVersion.at < VERSION_TTL_MS) return cachedVersion.value;
-  const value = await fetchLatestWaWebVersion().catch(() => null);
-  if (value?.isLatest) cachedVersion = { at: Date.now(), value };
-  return value;
-}
-
-/**
- * A person as public.whatsapp_contact takes them: their number and privacy ID as stored (encrypted once
- * addresses are), with the indexes it matches them on.
- */
-async function personJson(keys: UserKeys, p: Pick<Person, "phone" | "lid" | "display_name" | "push_name">, userId: string) {
-  return {
-    phone: await sealAddress(userId, p.phone),
-    lid: await sealAddress(userId, p.lid),
-    phone_index: p.phone ? await addressIndex(keys, p.phone) : null,
-    lid_index: p.lid ? await addressIndex(keys, p.lid) : null,
-    display_name: p.display_name,
-    push_name: p.push_name,
-  };
 }

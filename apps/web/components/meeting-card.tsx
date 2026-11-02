@@ -131,7 +131,7 @@ function TranscriptDialog({ meeting: m, place, open, onOpenChange }: { meeting: 
   const searching = query.trim().length > 0;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="meeting_transcript" className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl">
+      <DialogContent showCloseButton={false} track="meeting_transcript" className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="break-words">{meetingTitle(m)}</DialogTitle>
           <DialogDescription className="tabular-nums">{meetingWhen(m)}</DialogDescription>

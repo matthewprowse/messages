@@ -51,9 +51,9 @@ export async function openGraphClient(accountId: string, scopes: string[]): Prom
  * `product` names what was not granted, e.g. "Mail" or "Calendar".
  */
 export function microsoftFatalDetail(err: unknown, product: string): string | null {
-  if (signInRevoked(err)) return "Microsoft sign-in expired or was removed. Run pnpm connect:microsoft to reconnect.";
+  if (signInRevoked(err)) return "Microsoft sign-in expired or was removed. Reconnect Microsoft in Settings, Accounts.";
   const code = (err as { code?: string }).code;
   if (code === "NO_CLIENT") return "Add MICROSOFT_CLIENT_ID to apps/worker/.env, then restart the worker.";
-  if (code === "NOT_GRANTED") return `${product} access was not granted. Run pnpm connect:microsoft and accept every permission.`;
+  if (code === "NOT_GRANTED") return `${product} access was not granted. Reconnect Microsoft in Settings, Accounts and accept every permission.`;
   return null;
 }

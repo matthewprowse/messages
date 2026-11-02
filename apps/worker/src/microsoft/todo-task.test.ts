@@ -174,7 +174,7 @@ test("ticking off and reopening send the status To Do knows", () => {
   assert.deepEqual(statusPatch("reopen"), { status: "notStarted" });
   assert.equal(statusPatch("delete"), null);
   assert.equal(todoUpdateFailure(404), "This task is no longer in Microsoft To Do.");
-  assert.match(todoUpdateFailure(403), /connect:microsoft/);
+  assert.match(todoUpdateFailure(403), /Reconnect Microsoft in Settings/);
   assert.equal(todoUpdateFailure(null), "Microsoft To Do could not be reached. Try again.");
   assert.equal(todoUpdateFailure(500), "Microsoft To Do could not be reached. Try again.");
 });

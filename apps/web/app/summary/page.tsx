@@ -5,6 +5,6 @@
 import { MessageSquare } from "lucide-react";
 import { EmptyState } from "@/components/primitives";
 
-export default function BriefingIndex() {
+export default function SummaryIndex() {
   return <EmptyState icon={MessageSquare} title="Select a Conversation" description="Choose one from the Summary to read it here." />;
 }

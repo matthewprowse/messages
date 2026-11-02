@@ -255,7 +255,7 @@ function setGuests(block: Block, wanted: string[], u: IcsUpdate): Block | { erro
   const add = wanted.filter((e) => !kept.has(e) && !selfAddresses.has(e));
   const lead: string[] = [];
   if (!organizer && (add.length > 0 || wanted.length > 0)) {
-    if (!u.organizer) return { error: "iCloud did not say which address to invite from. Remove the guests, or reconnect with pnpm connect:icloud-calendar." };
+    if (!u.organizer) return { error: "iCloud did not say which address to invite from. Remove the guests, or reconnect iCloud Calendar in Settings, Accounts." };
     lead.push(`ORGANIZER:mailto:${u.organizer}`, `ATTENDEE;PARTSTAT=ACCEPTED:mailto:${u.organizer}`);
     kept.add(u.organizer);
   }
@@ -420,7 +420,7 @@ export function updateIcs(ics: string, u: IcsUpdate): { ics: string } | { error:
 
 /** What a refused change means. */
 export function icloudUpdateFailure(status: number | null): string {
-  if (status === 401) return "iCloud rejected the sign-in. Run pnpm connect:icloud-calendar to reconnect.";
+  if (status === 401) return "iCloud rejected the sign-in. Reconnect iCloud Calendar in Settings, Accounts.";
   if (status === 403) return "You cannot change this event.";
   if (status === 404) return "This event no longer exists.";
   if (status === 412) return "This event was changed somewhere else. Try again.";

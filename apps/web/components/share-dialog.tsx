@@ -111,7 +111,7 @@ export function MarkWorkDialog({ threadId, open, strict, suggested = false, onOp
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent track="mark_work" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="mark_work" className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Mark as Work</DialogTitle>

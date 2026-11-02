@@ -105,7 +105,7 @@ function ItemDialog({ kind, item, open, onClose, onSaved }: { kind: "template" |
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
-      <DialogContent track={template ? "company_template" : "company_fact"} className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track={template ? "company_template" : "company_fact"} className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-3">
           <DialogHeader>
             <DialogTitle>{item ? (template ? "Edit Template" : "Edit Fact") : template ? "Add Template" : "Add Fact"}</DialogTitle>

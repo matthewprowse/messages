@@ -102,7 +102,7 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="new_whatsapp" showCloseButton className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent showCloseButton={false} track="new_whatsapp" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New WhatsApp Message</DialogTitle>
           <DialogDescription>Sent from your linked WhatsApp, then shown in the Inbox.</DialogDescription>

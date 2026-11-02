@@ -19,7 +19,7 @@ import { ContactFields, useContactFields } from "@/components/contact-list";
 export function EditContactDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="edit_contact" className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
+      <DialogContent track="edit_contact" showCloseButton={false} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit Contact</DialogTitle>
           <DialogDescription>A name you set here stays, even when their address book or WhatsApp name changes.</DialogDescription>

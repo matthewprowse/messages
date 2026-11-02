@@ -137,6 +137,7 @@ function Setup({ saved, fresh }: { saved: SetupStep; fresh: boolean }) {
     <SetupContext.Provider value={state}>
       <Dialog open>
         <DialogContent
+          showCloseButton={false}
           track="onboarding"
           className="flex h-[min(44rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
           onEscapeKeyDown={(e) => e.preventDefault()}

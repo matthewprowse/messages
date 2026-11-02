@@ -143,7 +143,7 @@ export function statusPatch(action: string): { status: "completed" | "notStarted
 export function todoUpdateFailure(status: number | null): string {
   if (status === 404) return "This task is no longer in Microsoft To Do.";
   if (status === 400) return "Microsoft To Do did not accept this task. Check its title and date, then try again.";
-  if (status === 403) return "Microsoft To Do did not allow this change. Run pnpm connect:microsoft and accept every permission.";
+  if (status === 403) return "Microsoft To Do did not allow this change. Reconnect Microsoft in Settings, Accounts and accept every permission.";
   return "Microsoft To Do could not be reached. Try again.";
 }
 

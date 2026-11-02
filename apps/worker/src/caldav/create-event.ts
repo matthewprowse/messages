@@ -15,8 +15,8 @@ import { BAD_RULE, validRule } from "../calendar/recurrence";
 import { wallMs, wallString } from "../calendar/update-event";
 
 export const MAYBE_CREATED = "The event may have been created. Check iCloud Calendar before trying again.";
-export const SIGN_IN_REJECTED = "iCloud rejected the sign-in. Run pnpm connect:icloud-calendar to reconnect.";
-export const NO_ORGANIZER = "iCloud did not say which address to invite from. Remove the guests, or reconnect with pnpm connect:icloud-calendar.";
+export const SIGN_IN_REJECTED = "iCloud rejected the sign-in. Reconnect iCloud Calendar in Settings, Accounts.";
+export const NO_ORGANIZER = "iCloud did not say which address to invite from. Remove the guests, or reconnect iCloud Calendar in Settings, Accounts.";
 
 /** Text as iCalendar wants it: backslash, semicolon, comma and line breaks escaped. */
 function escapeText(s: string): string {

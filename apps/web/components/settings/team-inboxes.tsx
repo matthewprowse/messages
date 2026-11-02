@@ -42,7 +42,7 @@ function AccessDialog({ inbox, team, onClose, onSaved }: { inbox: SharedInbox | 
   };
   return (
     <Dialog open={!!inbox} onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="inbox_access" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="inbox_access" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Who Uses {inbox?.name}</DialogTitle>
           <DialogDescription>
@@ -91,7 +91,7 @@ function ShareDialog({ open, onClose, onShared }: { open: boolean; onClose: () =
   };
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
-      <DialogContent track="share_account" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="share_account" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Make a Shared Inbox</DialogTitle>
           <DialogDescription>

@@ -106,7 +106,7 @@ test("a refusal says why; anything else may have been created", () => {
   assert.equal(createFailure(null), MAYBE_CREATED);
   assert.equal(createFailure(503), MAYBE_CREATED);
   assert.equal(createFailure(412), MAYBE_CREATED);
-  assert.match(createFailure(401), /pnpm connect:icloud-calendar/);
+  assert.match(createFailure(401), /Reconnect iCloud Calendar in Settings/);
   assert.match(createFailure(403), /cannot add events/);
   assert.match(createFailure(429), /busy/);
   assert.match(createFailure(400), /did not accept/);

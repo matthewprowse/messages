@@ -86,7 +86,7 @@ export function CompanyView({ company: loaded }: { company: CompanyDetail | null
           </div>
           <Button variant="secondary" onClick={() => setRenaming(true)}>Rename</Button>
           <Dialog open={renaming} onOpenChange={setRenaming}>
-            <DialogContent track="rename_company" className="sm:max-w-sm">
+            <DialogContent track="rename_company" showCloseButton={false} className="sm:max-w-sm">
               <DialogHeader>
                 <DialogTitle>Rename Company</DialogTitle>
                 <DialogDescription>Everyone at {company.domain} stays filed under it.</DialogDescription>

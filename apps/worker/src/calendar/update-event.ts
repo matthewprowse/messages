@@ -310,7 +310,7 @@ export function graphBody(change: Change, current: GraphGuest[]): { body: Record
 export const GRAPH_RESPONSE: Record<UpdateResponse, string> = { accepted: "accept", tentative: "tentativelyAccept", declined: "decline" };
 
 export function graphUpdateFailure(status: number | null): string {
-  if (status === 401) return "Microsoft sign-in expired or was removed. Run pnpm connect:microsoft to reconnect.";
+  if (status === 401) return "Microsoft sign-in expired or was removed. Reconnect Microsoft in Settings, Accounts.";
   if (status === 403) return "You cannot change this event.";
   if (status === 404) return GONE;
   if (status === 429) return "Outlook Calendar is busy. Try again in a minute.";

@@ -77,8 +77,8 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track={edit ? "edit_task" : "new_task"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton closeVariant="secondary">
-        <DialogHeader className="pr-10">
+      <DialogContent track={edit ? "edit_task" : "new_task"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
+        <DialogHeader>
           <DialogTitle>{edit ? "Edit Task" : "New Task"}</DialogTitle>
           {(edit || choices.length > 0) && <DialogDescription>{edit ? "Changed" : "Created"} in your task list, then shown on the Calendar page.</DialogDescription>}
         </DialogHeader>

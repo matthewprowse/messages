@@ -194,7 +194,7 @@ function ReassignDialog({ agent, members, onClose, onDone }: { agent: { id: stri
   };
   return (
     <Dialog open={!!agent} onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="reassign_agent_chats" className="sm:max-w-md">
+      <DialogContent showCloseButton={false} track="reassign_agent_chats" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Reassign {agent?.name}&apos;s Chats</DialogTitle>
           <DialogDescription>

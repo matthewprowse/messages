@@ -15,24 +15,15 @@ import { track } from "@/lib/analytics";
 import { useAuth } from "@/lib/auth";
 import { createNote, deleteNote, loadNoteBodies, loadNotes, pinNote, prefetchNoteFiles, removeNoteFiles, saveNote, useNoteInDrafts, type Note, type NoteFile } from "@/lib/notes";
 import { isBlankNote, noteExcerpt, sortNotes, unusedFiles } from "@/lib/note-text";
+import { NoteSaver, noteReady, trackCreating, type SaveState } from "@/lib/note-saver";
 
-const SAVE_IDLE_MS = 2500;
-const SAVE_MAX_MS = 30_000;
-/** How long typing must pause (ms) before the note's edited time moves it in the list. */
-const BUMP_IDLE_MS = 1000;
+// The save and race logic lives in lib/note-saver.ts; this file is the React side: state, loading and the context.
+export { noteReady };
+export type { SaveState };
+
 const OPEN_BATCH = 20;
 // The newest notes are opened as soon as the list loads, so the ones most likely to be clicked open at once.
 const WARM_NEWEST = 8;
-
-// Notes made here whose row is still being written, by id. A save, a delete or a file waits for it.
-const creating = new Map<string, Promise<void>>();
-
-/** Settles once a new note's row exists in the database (at once for any other note). */
-export const noteReady = (id: string): Promise<void> => creating.get(id) ?? Promise.resolve();
-
-const keyOf = (n: { title: string; body: string }) => JSON.stringify([n.title, n.body]);
-
-export type SaveState = "saving" | "saved" | "failed";
 
 interface NotesValue {
   notes: Note[];
@@ -82,17 +73,6 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   const [states, setStates] = useState<Record<string, SaveState>>({});
   const notesRef = useRef(notes);
   notesRef.current = notes;
-  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  // Pending "edited just now" updates for notes whose list-visible fields did not change.
-  const bumps = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  // Notes changed since their last save, when each first changed, and the save running for each.
-  const dirty = useRef(new Set<string>());
-  const firstDirty = useRef(new Map<string, number>());
-  const running = useRef(new Map<string, Promise<void>>());
-  // Text still to be read from the editor, the newest text read from it, and what was last saved.
-  const getters = useRef(new Map<string, () => string>());
-  const latest = useRef(new Map<string, string>());
-  const lastSaved = useRef(new Map<string, string>());
   const opening = useRef(new Map<string, Promise<void>>());
 
   const commit = useCallback((next: Note[] | ((prev: Note[]) => Note[])) => {
@@ -103,23 +83,9 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  /** Reads the text waiting in the editor into the note. */
-  const resolve = useCallback((id: string) => {
-    const read = getters.current.get(id);
-    if (!read) return;
-    getters.current.delete(id);
-    let body: string;
-    try { body = read(); } catch { return; }
-    latest.current.set(id, body);
-    commit((prev) => prev.map((n) => (n.id === id ? { ...n, body } : n)));
-  }, [commit]);
-
-  /** The note as it stands now, including text read from the editor but not yet shown in state. */
-  const current = useCallback((id: string): Note | undefined => {
-    const note = notesRef.current.find((n) => n.id === id);
-    const body = latest.current.get(id);
-    return note && body !== undefined ? { ...note, body } : note;
-  }, []);
+  const setState = useCallback((id: string, state: SaveState) => setStates((s) => (s[id] === state ? s : { ...s, [id]: state })), []);
+  const [saver] = useState(() => new NoteSaver({ notes: () => notesRef.current, update: commit, setState, persist: saveNote, ready: noteReady }));
+  const { save, upgrade, edit, current, resolve } = saver;
 
   const load = useCallback(async (isCancelled: () => boolean = () => false) => {
     setError(false);
@@ -131,8 +97,8 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
         return rows.map((row) => {
           const old = before.get(row.id);
           // Notes being edited are left as they are, and text already opened is not closed again.
-          if (old && (dirty.current.has(row.id) || getters.current.has(row.id))) return old;
-          latest.current.delete(row.id);
+          if (old && saver.isEditing(row.id)) return old;
+          saver.dropLatest(row.id);
           if (old && !old.unloaded && old.updatedAt === row.updatedAt) {
             return { ...row, body: old.body, unloaded: false, excerpt: row.excerpt ?? noteExcerpt(old.body), stale: row.stale && old.stale };
           }
@@ -146,7 +112,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     } finally {
       if (!isCancelled()) setLoading(false);
     }
-  }, [commit]);
+  }, [commit, saver]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,7 +146,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
           }));
           for (const [id, got] of bodies) {
             const note = notesRef.current.find((n) => n.id === id);
-            if (note && !dirty.current.has(id)) lastSaved.current.set(id, keyOf({ title: note.title, body: got.body }));
+            if (note) saver.opened(id, { title: note.title, body: got.body });
           }
         })
         .catch(() => { commit((prev) => prev.map((n) => (need.includes(n.id) && n.unloaded ? { ...n, failed: true } : n))); })
@@ -189,7 +155,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       waits.push(run);
     }
     return Promise.all(waits).then(() => {});
-  }, [commit]);
+  }, [commit, saver]);
 
   const ensureBody = useCallback((id: string) => ensureBodies([id]), [ensureBodies]);
   const warm = useCallback((id: string) => {
@@ -241,130 +207,36 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     if (!loading && needsExcerpt) loadMore();
   }, [loading, needsExcerpt, loadMore]);
 
-  /** Saves the note, resolving to false when the save failed (the note is then still changed). */
-  const save = useCallback(async (id: string): Promise<boolean> => {
-    resolve(id);
-    clearTimeout(timers.current.get(id));
-    timers.current.delete(id);
-    // A new note is saved only once its row exists.
-    await noteReady(id).catch(() => {});
-    // One save at a time per note; a change made during it is saved after.
-    await running.current.get(id);
-    resolve(id);
-    if (!dirty.current.has(id)) return true;
-    const note = current(id);
-    if (!note) { dirty.current.delete(id); return true; }
-    dirty.current.delete(id);
-    firstDirty.current.delete(id);
-    if (note.unloaded) return true;
-    // Typing that ended where it began costs nothing.
-    const key = keyOf(note);
-    if (lastSaved.current.get(id) === key) {
-      setStates((s) => ({ ...s, [id]: dirty.current.has(id) ? "saving" : "saved" }));
-      return true;
-    }
-    setStates((s) => ({ ...s, [id]: "saving" }));
-    let saved = true;
-    const run = saveNote(id, { title: note.title, body: note.body })
-      .then((updatedAt) => {
-        lastSaved.current.set(id, key);
-        if (!dirty.current.has(id)) commit((prev) => prev.map((n) => (n.id === id ? { ...n, updatedAt, stale: false } : n)));
-        setStates((s) => ({ ...s, [id]: dirty.current.has(id) ? "saving" : "saved" }));
-      })
-      .catch(() => {
-        saved = false;
-        dirty.current.add(id);
-        setStates((s) => ({ ...s, [id]: "failed" }));
-      })
-      .finally(() => running.current.delete(id));
-    running.current.set(id, run);
-    await run;
-    return saved;
-  }, [commit, resolve, current]);
-
-  // A note stored as plaintext, or without an excerpt, is rewritten sealed when it is opened. The save
-  // joins the note's queue, so a change typed meanwhile is saved after it.
-  const upgrade = useCallback(async (id: string): Promise<void> => {
-    const note = current(id);
-    if (!note || !note.stale || note.unloaded || dirty.current.has(id) || running.current.has(id)) return;
-    const key = keyOf(note);
-    const run = saveNote(id, { title: note.title, body: note.body })
-      .then((updatedAt) => {
-        lastSaved.current.set(id, key);
-        commit((prev) => prev.map((n) => (n.id === id ? { ...n, updatedAt: dirty.current.has(id) ? n.updatedAt : updatedAt, stale: false } : n)));
-      })
-      .catch(() => {})
-      .finally(() => running.current.delete(id));
-    running.current.set(id, run);
-    await run;
-  }, [commit, current]);
-
   // Leaving Notes, or the page, saves what is still waiting. Closing the tab with a save still to finish
   // asks first, so the change is not lost.
   useEffect(() => {
-    const flushAll = () => { for (const id of dirty.current) void save(id); };
     const warn = (e: BeforeUnloadEvent) => {
-      if (dirty.current.size === 0 && running.current.size === 0) return;
-      flushAll();
+      if (!saver.busy) return;
+      saver.flushAll();
       e.preventDefault();
     };
-    window.addEventListener("pagehide", flushAll);
+    window.addEventListener("pagehide", saver.flushAll);
     window.addEventListener("beforeunload", warn);
     return () => {
-      window.removeEventListener("pagehide", flushAll);
+      window.removeEventListener("pagehide", saver.flushAll);
       window.removeEventListener("beforeunload", warn);
-      flushAll();
+      saver.flushAll();
     };
-  }, [save]);
+  }, [saver]);
 
-  const edit = useCallback<NotesValue["edit"]>((id, fields) => {
-    const { body, ...rest } = fields;
-    if (typeof body === "function") getters.current.set(id, body);
-    else if (body !== undefined) { getters.current.delete(id); latest.current.set(id, body); }
-    // The list shows the title, excerpt and order, none of which move while only the editor's text changes (it is read
-    // lazily). Committing then would re-sort and re-render every consumer per keystroke, so only a real change commits,
-    // and the "edited" time catches up once typing pauses.
-    const note = notesRef.current.find((n) => n.id === id);
-    const shown = (Object.keys(rest) as (keyof typeof rest)[]).some((k) => note?.[k] !== rest[k]) || (typeof body === "string" && body !== note?.body);
-    clearTimeout(bumps.current.get(id));
-    if (shown) {
-      const updatedAt = new Date().toISOString();
-      commit((prev) => prev.map((n) => (n.id === id ? { ...n, ...rest, ...(typeof body === "string" ? { body } : {}), updatedAt } : n)));
-    } else {
-      bumps.current.set(id, setTimeout(() => {
-        bumps.current.delete(id);
-        const updatedAt = new Date().toISOString();
-        commit((prev) => prev.map((n) => (n.id === id ? { ...n, updatedAt } : n)));
-      }, BUMP_IDLE_MS));
-    }
-    dirty.current.add(id);
-    setStates((s) => (s[id] === "saving" ? s : { ...s, [id]: "saving" }));
-    // Saves once typing has paused, and in any case within the longest wait after the first change.
-    const now = Date.now();
-    const first = firstDirty.current.get(id) ?? now;
-    firstDirty.current.set(id, first);
-    clearTimeout(timers.current.get(id));
-    timers.current.set(id, setTimeout(() => void save(id), Math.max(0, Math.min(SAVE_IDLE_MS, first + SAVE_MAX_MS - now))));
-  }, [commit, save]);
-
-  // The note opens at once; its row is written meanwhile, and if that fails the note is taken back out.
   const create = useCallback(async () => {
     const { note, saved } = createNote();
-    lastSaved.current.set(note.id, keyOf(note));
-    creating.set(note.id, saved);
+    saver.setSaved(note.id, note);
+    trackCreating(note.id, saved);
     commit((prev) => [note, ...prev]);
     track("feature_used", { feature: "note_created" });
-    saved.then(
-      () => { creating.delete(note.id); },
-      () => {
-        creating.delete(note.id);
-        dirty.current.delete(note.id);
-        commit((prev) => prev.filter((n) => n.id !== note.id));
-        toast.error("Could not create a note.");
-      },
-    );
+    saved.catch(() => {
+      saver.abandon(note.id);
+      commit((prev) => prev.filter((n) => n.id !== note.id));
+      toast.error("Could not create a note.");
+    });
     return note;
-  }, [commit]);
+  }, [commit, saver]);
 
   const pin = useCallback((id: string, pinned: boolean) => {
     commit((prev) => prev.map((n) => (n.id === id ? { ...n, pinned } : n)));
@@ -385,20 +257,10 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
 
   const remove = useCallback(async (id: string) => {
     const note = current(id);
-    clearTimeout(timers.current.get(id));
-    timers.current.delete(id);
-    clearTimeout(bumps.current.get(id));
-    bumps.current.delete(id);
-    dirty.current.delete(id);
-    firstDirty.current.delete(id);
-    getters.current.delete(id);
-    latest.current.delete(id);
+    saver.forget(id);
     commit((prev) => prev.filter((n) => n.id !== id));
     try {
-      await noteReady(id).catch(() => {});
-      await running.current.get(id);
-      // A save that failed meanwhile marks the note changed again; it is going, so nothing is left to save.
-      dirty.current.delete(id);
+      await saver.settle(id);
       await deleteNote(id);
       track("feature_used", { feature: "note_deleted" });
     } catch {
@@ -406,7 +268,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       if (note) commit((prev) => (prev.some((n) => n.id === id) ? prev : [...prev, note]));
       toast.error("Could not delete the note.");
     }
-  }, [commit, current]);
+  }, [commit, current, saver]);
 
   const close = useCallback((id: string, files: NoteFile[]) => {
     resolve(id);

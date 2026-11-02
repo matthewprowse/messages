@@ -192,7 +192,7 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="compose" showCloseButton className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent showCloseButton={false} track="compose" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Email</DialogTitle>
           <DialogDescription>Sent from your own account, then filed in the Inbox.</DialogDescription>

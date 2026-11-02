@@ -150,7 +150,7 @@ export default function AccountsPage() {
       </AlertDialog>
 
       <Dialog open={renaming !== null} onOpenChange={(open) => { if (!open) setRenaming(null); }}>
-        <DialogContent>
+        <DialogContent showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>Rename Account</DialogTitle>
             <DialogDescription>

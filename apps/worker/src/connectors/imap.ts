@@ -10,16 +10,13 @@
 // sync batch is stored when it holds 25 messages or about 16 MB of attachments, whichever comes first, and each
 // message's file Buffers are dropped as soon as it is stored.
 
-import { ImapFlow, ImapFlowErrorCode } from "imapflow";
+import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import { Backoff, SerialQueue, sleep, supervise } from "../backoff";
-import { allRows, db, getSyncState, loadCredentials, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
-import { env } from "../env";
+import { db, getSyncState, loadCredentials, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
-import { chunks, mapLimit, push } from "../util";
-import { parseEmail, type EmailAttachment, type NormalizedEmail } from "../ingest/normalize-email";
-import { applyReadState, storeEmail, storeEmails, type FolderRole } from "../ingest/store-email";
-import { isFailure } from "../ingest/batch-rpc";
+import { parseEmail, type EmailAttachment } from "../ingest/normalize-email";
+import { applyReadState, storeEmail } from "../ingest/store-email";
 import { sideFolderDue, type FolderCheck, type FolderStatus } from "../ingest/folder-status";
 import { saveFilesQuietly } from "../ingest/attachment-files";
 import { BackoffMissingFiles } from "../missing-files";
@@ -27,39 +24,23 @@ import { claimReady, composeOutgoing, freshAccount, linkNewEmails, linkThread, m
 import { normAddresses } from "../send/from-address";
 import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe-flow";
 import type { Json, Tables } from "@messages/db";
-import { imapMove, imapThreadPlace, type FolderPaths } from "../ingest/imap-place";
-import { undoesNotJunk } from "../ingest/junk-undo";
+import type { FolderPaths } from "../ingest/imap-place";
 import { finishAction, NotReady } from "../send/actions";
 import { pickFolders } from "../ingest/imap-folders";
 import { sealAddress } from "../vault";
-import { uidSet } from "./uid-set";
 import { reconcileDue, type InboxMark } from "./inbox-check";
 import type { ImapCredentials, MailCredentials, MailService } from "./mail-service";
-
-interface Folder {
-  path: string;
-  role: FolderRole;
-}
+import { applyMessageAction } from "../imap/apply-action";
+import { actionFailureReason, isImapError, maybeSent, sendFailureReason } from "../imap/errors";
+import { saveMissingFiles } from "../imap/missing-files";
+import { placeThreads } from "../imap/place-threads";
+import { reconcileInboxFully } from "../imap/reconcile-inbox";
+import { syncFolder, type Folder, type SyncCtx } from "../imap/sync-folder";
 
 const SIDE_FOLDER_POLL_MS = 60_000; // every folder is checked each minute (the others by STATUS); the Inbox is also live through IDLE
-const CHECKPOINT_EVERY = 25; // messages stored per database call, then progress saved, so a restart resumes, not repeats
-const CHECKPOINT_BYTES = 16 * 1024 * 1024; // ...or sooner when the parsed messages held in memory (attachments mostly) reach this size
-const LOCATE_AT_ONCE = 25; // Message-IDs looked up in one search of Trash or Junk
 const RECONCILE_EVERY_TICKS = 5; // the Inbox is checked every 5 minutes (a full pass only when its numbers moved, see ./inbox-check.ts); expunge events cover quick changes
 const FILES_EVERY_TICKS = 10;
 const SELF_EVERY_TICKS = 10; // ticks (minutes) between reads of the account for edited send addresses
-const WRITE_AT_ONCE = 6; // row updates in flight together
-const THREADS_AT_ONCE = 100; // thread ids in one .in() filter, to keep the request URL short
-
-const IMAP_CODES = new Set<string>(Object.values(ImapFlowErrorCode));
-
-/** Whether a failure came from the IMAP connection (an ImapFlow code, or a NO or BAD reply) rather than the database. */
-function isImapError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const e = err as { code?: unknown; responseStatus?: unknown };
-  if (e.responseStatus !== undefined) return true;
-  return typeof e.code === "string" && (IMAP_CODES.has(e.code) || e.code.startsWith("ParserError"));
-}
 
 export class ImapConnector<C extends MailCredentials = ImapCredentials> {
   private client: ImapFlow | null = null;
@@ -265,105 +246,20 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     await client.mailboxOpen("INBOX");
   }
 
-  /** Imports anything in this folder newer than where the last sync stopped. */
-  private async syncFolder(client: ImapFlow, folder: Folder) {
-    const lock = await client.getMailboxLock(folder.path);
-    try {
-      const box = client.mailbox;
-      if (!box) return;
-      const uidValidity = Number(box.uidValidity);
-      const newestUid = box.uidNext - 1;
-      const state = await this.folderState(folder.path);
+  /** What the folder sync (../imap/sync-folder.ts) reads from this session. */
+  private syncCtx(): SyncCtx {
+    return {
+      account: this.account,
+      tag: this.service.tag,
+      selfAddresses: () => this.selfAddresses,
+      folderState: (path) => this.folderState(path),
+      saveFolderState: (path, uidValidity, lastUid) => this.saveFolderState(path, uidValidity, lastUid),
+      placeThreads: (ids, untrash) => this.placeThreads(ids, untrash),
+    };
+  }
 
-      // A changed UIDVALIDITY means the server renumbered the folder, so start it again.
-      const fresh = !state || state.uid_validity !== uidValidity || state.last_uid === null;
-      let range: number[] | string;
-      if (fresh) {
-        const since = new Date(Date.now() - env.initialSyncDays * 86_400_000);
-        const found = await client.search({ since }, { uid: true });
-        if (!found || found.length === 0) {
-          await this.saveFolderState(folder.path, uidValidity, newestUid);
-          return;
-        }
-        range = found;
-      } else {
-        // Ask the server which messages are newer than the last one stored. The cached UIDNEXT is not
-        // enough: when IDLE reports new mail in the folder that is already open, imapflow updates the
-        // message count but not UIDNEXT, so trusting it left new mail waiting for the next minute's poll.
-        const newer = ((await client.search({ uid: `${state.last_uid! + 1}:*` }, { uid: true })) || []).filter((uid) => uid > state.last_uid!);
-        if (newer.length === 0) return;
-        range = newer;
-      }
-
-      const floor = fresh ? 0 : state!.last_uid!;
-      let lastUid = floor; // progress: every message up to here is stored
-      let savedUid = floor;
-      let inserted = 0;
-      let failed = 0;
-      let failure: string | null = null; // the first message that could not be stored: progress stops before it
-      const movedOut = new Set<string>(); // known mail found outside the Inbox: moved on another device
-      let seenCount = 0;
-      let pending: { uid: number; mail: NormalizedEmail; seen: boolean }[] = [];
-      let pendingBytes = 0; // attachment bytes held by pending
-
-      // Stores what has been fetched so far in one call (a first sync), or alone (new mail), in order.
-      const flush = async () => {
-        const batch = pending;
-        pending = [];
-        pendingBytes = 0;
-        if (batch.length === 0) return;
-        const results = await storeEmails(
-          this.account,
-          batch.map((m) => ({
-            mail: m.mail,
-            ctx: { role: folder.role, meta: { folder: folder.path, uid: m.uid, uid_validity: uidValidity }, seen: m.seen, selfAddresses: this.selfAddresses },
-          })),
-        );
-        for (const [i, stored] of results.entries()) {
-          const { uid, mail } = batch[i];
-          if (isFailure(stored)) {
-            failed++;
-            failure ??= stored.code;
-            continue;
-          }
-          // Mail moved back into the Inbox on another device brings its conversation back too.
-          if (stored.result === "updated" && folder.role === "inbox" && stored.threadId) {
-            must(await db.from("threads").update({ status: "inbox" }).eq("id", stored.threadId).in("status", ["archived", "trash"]), "restore thread");
-          }
-          if (stored.result === "updated" && folder.role === "archive" && stored.threadId) movedOut.add(stored.threadId);
-          if (stored.result === "inserted") {
-            inserted++;
-            if (stored.messageId) await saveFilesQuietly(this.id, this.account.user_id, stored.messageId, mail.attachments);
-          }
-          mail.attachments = []; // stored (or skipped): release the file Buffers now, not when the batch array goes
-          if (failure === null) lastUid = Math.max(lastUid, uid);
-        }
-      };
-
-      for await (const msg of client.fetch(range, { uid: true, flags: true, source: true }, { uid: true })) {
-        // "N:*" always returns the newest message, even when it is older than N.
-        if (msg.uid <= floor || !msg.source) continue;
-        const mail = await parseEmail(msg.source, `${folder.path}:${uidValidity}:${msg.uid}`);
-        pending.push({ uid: msg.uid, mail, seen: msg.flags?.has("\\Seen") ?? false });
-        seenCount++;
-        pendingBytes += mail.attachments.reduce((n, a) => n + a.content.length, 0);
-        if (pending.length >= CHECKPOINT_EVERY || pendingBytes >= CHECKPOINT_BYTES) {
-          await flush();
-          if (lastUid > savedUid) await this.saveFolderState(folder.path, uidValidity, (savedUid = lastUid));
-        }
-      }
-      await flush();
-
-      // After a failure, progress stops before the message that failed, so the next sync tries it again.
-      // A first sync that stored nothing saves nothing, so it stays a first sync.
-      if (failure === null) await this.saveFolderState(folder.path, uidValidity, Math.max(lastUid, fresh ? newestUid : lastUid));
-      else if (lastUid > savedUid) await this.saveFolderState(folder.path, uidValidity, lastUid);
-      if (movedOut.size) await this.placeThreads([...movedOut], true);
-      if (seenCount > 0) log.info(`${this.service.tag} folder synced`, { account: this.id, role: folder.role, processed: seenCount, inserted, failed });
-      if (failure !== null) throw Object.assign(new Error("message not stored"), { code: failure });
-    } finally {
-      lock.release();
-    }
+  private syncFolder(client: ImapFlow, folder: Folder) {
+    return syncFolder(this.syncCtx(), client, folder);
   }
 
   /**
@@ -400,40 +296,9 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     this.syncStates.set(path, { uid_validity: uidValidity, last_uid: lastUid });
   }
 
-  /**
-   * Catch-up for files that are not in storage yet: mail synced before files were saved, or an upload
-   * that failed. Each message is fetched again from the folder and UID it was stored from.
-   */
+  /** Catch-up for files that are not in storage yet (../imap/missing-files.ts). */
   private async saveMissingFiles(client: ImapFlow) {
-    const todo = await this.missingFiles.next();
-    if (todo.length === 0) return;
-
-    const byFolder = new Map<string, { uidValidity: number; messages: Map<number, string> }>();
-    for (const r of todo) {
-      const meta = r.provider_meta as { folder?: string; uid?: number; uid_validity?: number };
-      if (!meta.folder || !meta.uid || !meta.uid_validity) continue;
-      const entry = byFolder.get(meta.folder) ?? { uidValidity: meta.uid_validity, messages: new Map() };
-      if (entry.uidValidity === meta.uid_validity) entry.messages.set(meta.uid, r.message_id);
-      byFolder.set(meta.folder, entry);
-    }
-
-    let saved = 0;
-    for (const [folder, entry] of byFolder) {
-      const lock = await client.getMailboxLock(folder);
-      try {
-        // A renumbered folder means these UIDs point at other messages now.
-        if (Number(client.mailbox && client.mailbox.uidValidity) !== entry.uidValidity) continue;
-        for await (const msg of client.fetch([...entry.messages.keys()], { uid: true, source: true }, { uid: true })) {
-          const messageId = entry.messages.get(msg.uid);
-          if (!messageId || !msg.source) continue;
-          const mail = await parseEmail(msg.source, `${folder}:${entry.uidValidity}:${msg.uid}`);
-          saved += await saveFilesQuietly(this.id, this.account.user_id, messageId, mail.attachments);
-        }
-      } finally {
-        lock.release();
-      }
-    }
-    if (saved > 0) log.info("attachment files saved", { account: this.id, saved });
+    await saveMissingFiles(client, this.id, this.account.user_id, await this.missingFiles.next());
   }
 
   /**
@@ -467,24 +332,9 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
         transport.close();
       }
     } catch (err) {
-      const { code, command, responseCode } = err as { code?: string; command?: string; responseCode?: number };
-      // A dropped connection or timeout with no reply from the server can come after the message was
-      // handed over, so it may have gone out. Saying "try again" would invite a second copy.
-      const maybeSent = responseCode === undefined && (command === "DATA" || ["ETIMEDOUT", "ESOCKET", "ECONNECTION"].includes(code ?? ""));
-      log.warn(`${kind} failed`, { account: this.id, outbox: row.id, code: errorCode(err), maybeSent });
-      const { name, password } = this.service;
-      await markFailed(
-        row.id,
-        responseCode === 552
-          ? `${name} refused the ${kind} because it is too large. Remove an attachment, then send again.`
-          : code === "EAUTH"
-          ? `${name} rejected the ${password}, so the ${kind} was not sent.`
-          : code === "EENVELOPE"
-            ? `${name} refused the From address or a recipient, so the ${kind} was not sent.`
-            : maybeSent
-              ? `The ${kind} may have been sent. Check your Sent folder before sending again.`
-              : `The ${kind} could not be sent. Try again.`,
-      ).catch(() => undefined);
+      const failure = err as { code?: string; command?: string; responseCode?: number };
+      log.warn(`${kind} failed`, { account: this.id, outbox: row.id, code: errorCode(err), maybeSent: maybeSent(failure) });
+      await markFailed(row.id, sendFailureReason(failure, kind, this.service)).catch(() => undefined);
       return;
     }
     if (!(await settleSent(row.id, messageId))) log.warn(`${kind} sent but not recorded`, { account: this.id, outbox: row.id });
@@ -570,127 +420,16 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     }
   }
 
-  private async reconcileInboxFully(client: ImapFlow) {
-    const rows = await allRows(
-      (from, to) =>
-        db
-          .from("messages")
-          .select("id, thread_id, provider_message_id, provider_meta")
-          .eq("account_id", this.id)
-          .eq("provider_meta->>folder", "INBOX")
-          .order("id")
-          .range(from, to),
-      "load inbox messages",
+  private reconcileInboxFully(client: ImapFlow) {
+    return reconcileInboxFully(
+      { accountId: this.id, tag: this.service.tag, paths: () => this.paths, selectInbox: (c) => this.selectInbox(c), placeThreads: (ids) => this.placeThreads(ids) },
+      client,
     );
-    if (rows.length === 0) return;
-
-    const lock = await client.getMailboxLock("INBOX");
-    let gone: typeof rows;
-    try {
-      const uidValidity = Number(client.mailbox && client.mailbox.uidValidity);
-      // Rows from an older UIDVALIDITY count as gone: their UIDs now point at other messages, if any.
-      // Rows with no recorded UIDVALIDITY are unknown, not gone: they are left alone.
-      const validityOf = (r: (typeof rows)[number]) => (r.provider_meta as { uid_validity?: number } | null)?.uid_validity;
-      const current = new Set(rows.filter((r) => validityOf(r) === uidValidity));
-      const uids = [...current].map((r) => (r.provider_meta as { uid: number }).uid);
-      const present = new Set<number>(uids.length ? ((await client.search({ uid: uidSet(uids) }, { uid: true })) || []) : []);
-      gone = rows.filter((r) => validityOf(r) !== undefined && (!current.has(r) || !present.has((r.provider_meta as { uid?: number }).uid ?? -1)));
-    } finally {
-      lock.release();
-    }
-    if (gone.length === 0) return;
-
-    const found = await this.locate(client, gone);
-    const unknown = gone.filter((r) => !found.has(r.id)).map((r) => r.id);
-    for (const ids of chunks(unknown, 200)) {
-      must(await db.from("messages").update({ provider_meta: { left: "INBOX" } }).in("id", ids), "mark messages gone");
-    }
-    await mapLimit([...found], WRITE_AT_ONCE, async ([id, meta]) => {
-      must(await db.from("messages").update({ provider_meta: meta }).eq("id", id), "save found message");
-    });
-
-    const moved = await this.placeThreads([...new Set(gone.map((r) => r.thread_id))]);
-    log.info(`${this.service.tag} inbox reconciled`, { account: this.id, left: gone.length, found: found.size, moved });
   }
 
-  /**
-   * Looks for mail that left the Inbox in Trash and Junk, by Message-ID, a batch at a time.
-   * Mail not found there was archived or moved to another folder. Leaves the Inbox selected again.
-   */
-  private async locate(client: ImapFlow, gone: { id: string; provider_message_id: string }[]) {
-    const found = new Map<string, { folder: string; uid: number; uid_validity: number }>();
-    const byMessageId = new Map(gone.filter((r) => r.provider_message_id.startsWith("<")).map((r) => [r.provider_message_id, r.id]));
-    if (byMessageId.size === 0) return found;
-    try {
-      for (const path of [this.paths.trash, this.paths.junk]) {
-        if (!path) continue;
-        const todo = [...byMessageId.keys()].filter((mid) => !found.has(byMessageId.get(mid)!));
-        if (todo.length === 0) break;
-        const lock = await client.getMailboxLock(path);
-        try {
-          const uidValidity = Number(client.mailbox && client.mailbox.uidValidity);
-          for (const batch of chunks(todo, LOCATE_AT_ONCE)) {
-            const query = batch.length === 1 ? { header: { "message-id": batch[0] } } : { or: batch.map((mid) => ({ header: { "message-id": mid } })) };
-            const uids = (await client.search(query, { uid: true })) || [];
-            if (uids.length === 0) continue;
-            for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
-              const id = msg.envelope?.messageId && byMessageId.get(msg.envelope.messageId.trim());
-              if (id) found.set(id, { folder: path, uid: msg.uid, uid_validity: uidValidity });
-            }
-          }
-        } finally {
-          lock.release();
-        }
-      }
-    } finally {
-      await this.selectInbox(client);
-    }
-    return found;
-  }
-
-  /**
-   * Moves conversations with nothing left in the Inbox to where their mail is: archived, deleted, or
-   * the app's Junk for mail in Junk. Conversations with a change from the app still on its way are
-   * left alone. untrash: mail just turned up in Archive, so a deleted conversation is archived again.
-   */
-  private async placeThreads(threadIds: string[], untrash = false): Promise<number> {
-    if (threadIds.length === 0) return 0;
-    // Every message of every thread is read, a chunk of threads and a page of rows at a time, so no
-    // thread is judged on part of its mail and archived by mistake.
-    const byThread = new Map<string, { folder?: string; direction: string }[]>();
-    const waiting = new Set<string>();
-    for (const chunk of chunks(threadIds, THREADS_AT_ONCE)) {
-      const rows = await allRows(
-        (from, to) =>
-          db.from("messages").select("id, thread_id, direction, provider_meta").in("thread_id", chunk).eq("account_id", this.id).order("id").range(from, to),
-        "check thread folders",
-      );
-      for (const r of rows) push(byThread, r.thread_id, { folder: (r.provider_meta as { folder?: string }).folder, direction: r.direction });
-      const queued = await allRows(
-        (from, to) => db.from("mail_actions").select("id, thread_id").in("thread_id", chunk).in("status", ["queued", "working"]).order("id").range(from, to),
-        "check queued actions",
-      );
-      for (const r of queued) waiting.add(r.thread_id);
-    }
-    const place = new Map(threadIds.filter((id) => !waiting.has(id)).map((id) => [id, imapThreadPlace(byThread.get(id) ?? [], this.paths)]));
-    const at = (wanted: string) => [...place].filter(([, p]) => p === wanted).map(([id]) => id);
-
-    let changed = 0;
-    const count = (rows: { id: string }[]) => (changed += rows.length);
-    const threads = () => db.from("threads");
-    const archive = at("archived");
-    if (archive.length) {
-      count(must(await threads().update({ status: "archived" }).in("id", archive).eq("status", "inbox").select("id"), "archive threads"));
-      if (untrash) count(must(await threads().update({ status: "archived" }).in("id", archive).eq("status", "trash").select("id"), "untrash threads"));
-    }
-    const binned = at("trash");
-    if (binned.length) count(must(await threads().update({ status: "trash" }).in("id", binned).in("status", ["inbox", "archived"]).select("id"), "bin threads"));
-    const junk = at("spam");
-    if (junk.length) {
-      count(must(await threads().update({ status: "inbox" }).in("id", junk).neq("status", "inbox").select("id"), "show junk threads"));
-      count(must(await threads().update({ junk: true }).in("id", junk).eq("junk", false).select("id"), "mark junk threads"));
-    }
-    return changed;
+  /** Moves conversations with nothing left in the Inbox to where their mail is (../imap/place-threads.ts). */
+  private placeThreads(threadIds: string[], untrash = false): Promise<number> {
+    return placeThreads(this.id, this.paths, threadIds, untrash);
   }
 
   /** Applies a read, unread, archive, unarchive, delete, undelete, junk or not junk made in the app to the messages on the server. */
@@ -742,69 +481,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     const run = async () => {
       const client = this.client;
       if (!client) throw Object.assign(new Error("not connected"), { code: "NOT_CONNECTED" });
-      const messages = must(
-        await db
-          .from("messages")
-          .select("id, direction, provider_meta")
-          .eq("thread_id", row.thread_id)
-          .eq("account_id", this.id),
-        "load action messages",
-      );
-      const located = messages
-        .map((m) => ({ id: m.id, direction: m.direction, meta: m.provider_meta as { folder?: string; uid?: number; uid_validity?: number; from?: string } }))
-        .filter((m) => m.meta.folder && m.meta.uid);
-
-      const pick = (want: (m: (typeof located)[number]) => boolean) => {
-        const byFolder = new Map<string, typeof located>();
-        for (const m of located.filter(want)) push(byFolder, m.meta.folder!, m);
-        return byFolder;
-      };
-
-      if (row.action === "read" || row.action === "unread") {
-        for (const [folder, list] of pick((m) => m.direction === "inbound")) {
-          const lock = await client.getMailboxLock(folder);
-          try {
-            const uids = list.map((m) => m.meta.uid!);
-            if (row.action === "read") await client.messageFlagsAdd(uids, ["\\Seen"], { uid: true });
-            // Unread marks only the latest message, as in Mail.
-            else await client.messageFlagsRemove([Math.max(...uids)], ["\\Seen"], { uid: true });
-          } finally {
-            lock.release();
-          }
-          if (row.action === "unread") break;
-        }
-        return;
-      }
-
-      const move = imapMove(row.action, this.paths);
-      if (!move) throw Object.assign(new Error("unknown action"), { code: "UNKNOWN_ACTION" });
-      if ("missing" in move) throw Object.assign(new Error("missing folder"), { code: `NO_${move.missing.toUpperCase()}` });
-      // Undoing Not Junk only puts back mail that Not Junk took out of Junk; junk the AI sorted out stays put.
-      const undo = await undoesNotJunk(db, row);
-      const wanted = (m: (typeof located)[number]) =>
-        move.from.includes(m.meta.folder!) && (!undo || (!!this.paths.junk && m.meta.from === this.paths.junk));
-      for (const [folder, list] of pick(wanted)) {
-        // Undoing a delete can send messages from one folder to different places.
-        const byDestination = new Map<string, typeof list>();
-        for (const m of list) push(byDestination, move.to(m.meta.from), m);
-        for (const [to, group] of byDestination) {
-          if (to === folder) continue;
-          const lock = await client.getMailboxLock(folder);
-          try {
-            const moved = await client.messageMove(group.map((m) => m.meta.uid!), to, { uid: true });
-            if (!moved) continue;
-            await mapLimit(group, WRITE_AT_ONCE, async (m) => {
-              const newUid = moved.uidMap?.get(m.meta.uid!);
-              const meta = newUid
-                ? { folder: to, uid: newUid, uid_validity: Number(moved.uidValidity ?? 0), ...(move.remember ? { from: folder } : {}) }
-                : { left: folder }; // the server did not say where it went: the next sync finds it
-              must(await db.from("messages").update({ provider_meta: meta }).eq("id", m.id), "save moved message");
-            });
-          } finally {
-            lock.release();
-          }
-        }
-      }
+      await applyMessageAction(client, this.id, row, this.paths);
     };
 
     try {
@@ -812,16 +489,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
       await finishAction(row.id);
     } catch (err) {
       log.warn("mail action failed", { account: this.id, action: row.action, code: errorCode(err) });
-      const code = (err as { code?: string }).code;
-      const { name, object, trashName } = this.service;
-      const reason =
-        code === "NO_ARCHIVE"
-          ? `${name} has no Archive folder.`
-          : code === "NO_TRASH"
-            ? `${name} has no ${trashName} folder.`
-            : code === "NO_JUNK"
-              ? `${name} has no Junk folder.`
-              : `Could not update ${object}. It will match on the next change.`;
+      const reason = actionFailureReason((err as { code?: string }).code, this.service);
       await finishAction(row.id, reason);
     }
   }
