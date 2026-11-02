@@ -29,7 +29,7 @@ const SETUP = {
   google_calendar: "/settings/accounts/google",
   outlook: "/settings/accounts/microsoft",
   outlook_calendar: "/settings/accounts/microsoft",
-  icloud_calendar: "/settings/accounts/icloud-calendar",
+  icloud_calendar: "/settings/accounts/icloud",
   whatsapp: "/settings/accounts/whatsapp",
   imap: "/settings/accounts/imap",
   teams: "/settings/accounts/microsoft",

@@ -8,7 +8,6 @@ import { track } from "@/lib/analytics";
 import { SettingsHeader } from "@/components/settings-header";
 import { SettingsHeading, SettingsSection } from "@/components/settings/sections";
 import { useWhatsAppLink, WhatsAppLinkPanel } from "@/components/whatsapp-link";
-import { Command } from "../setup-steps";
 
 export default function WhatsAppSetup() {
   useEffect(() => { track("account_connect", { provider: "whatsapp", step: "setup", outcome: "start" }); }, []);
@@ -44,10 +43,6 @@ export default function WhatsAppSetup() {
           </>} />
           <SettingsHeading level={3} title="Groups" description={<>
             <p>Group chats are imported, but AI triage is off for them unless you turn it on.</p>
-          </>} />
-          <SettingsHeading level={3} title="From the Terminal" description={<>
-            <p>You can also link from the project folder. The QR code then shows in the terminal:</p>
-            <Command>pnpm connect:whatsapp</Command>
           </>} />
           <SettingsHeading level={3} title="Unlinking" description={<>
             <p>

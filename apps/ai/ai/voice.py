@@ -22,7 +22,7 @@ from . import log
 from .fields import BODY, HTML, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
-from .text import clean
+from .text import clean, plain_dashes
 from .vault import Vault
 
 MIN_EMAILS = 10  # fewer than this says too little about how someone writes
@@ -88,8 +88,7 @@ def rule_key(text: str) -> str:
 
 def tidy_rule(text: str) -> str:
     """The app never shows dashes; the model sometimes writes them anyway."""
-    text = re.sub(r"\s*\u2014\s*", ", ", text or "").replace("\u2013", "-")
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", plain_dashes(text)).strip()
 
 
 def same_rule(a: str, b: str) -> bool:

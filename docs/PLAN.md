@@ -499,7 +499,7 @@ team (see Teams) and shows an invite link for its owner, and Teams lists each te
 | Notes | Private notes with live markdown formatting and attachments, under Attachments in the rail (see below) | Built, not yet checked in the browser |
 | Clients | Client timeline across every channel | To do |
 | Leads | Property24 and Private Property enquiry emails turned into clients, through Automations (see Full App Review, 2 November 2026) | To do |
-| Onboarding | Sign up, a setup dialog over the app (connect, about you, what Konva found, contacts, a practice reply) and a page by page tour (see below) | Built on mock data for the findings, contacts and drafts; not yet checked end to end with a new account |
+| Onboarding | Sign up, a setup dialog over the app (connect, about you, what Konva found, contacts, a practice reply). The page by page tour was removed on 2 November 2026 (see below) | Built on mock data for the findings, contacts and drafts; not yet checked end to end with a new account |
 
 ## How the Key Features Work
 
@@ -1135,9 +1135,9 @@ they left off:
 
 Steps 3 and 4 drop out when no account is connected.
 
-Part B, the tour (`components/tour.tsx`): a card over the app that opens each page behind it and marks it in
-the navigation: Summary, Conversations, Contacts, Calendar, Attachments and Notes, New and Search, and
-Personalisation. Settings, General, Getting Started runs the tour or the whole setup again.
+Part B, the page by page tour, was removed on 2 November 2026: the owner's rule is that onboarding shows value
+in dialogs, not a popover tour. Settings, General, Getting Started runs the whole setup again. The setup dialog now
+shows only real counts and contacts, labels its demo steps as examples, and saves nothing it made up.
 
 For now steps 2 to 5 run on mock data (`lib/onboarding-demo.ts`): the import counts, the profile the AI
 writes, the contact suggestions and the practice drafts. To make them real: the workers report import
@@ -2611,3 +2611,29 @@ merged by hand. Migrations get a timestamp block per agent, and `database.types.
 - **The official WhatsApp Business Cloud API** next to Baileys, with Coexistence and Embedded Signup in the web page.
   It is also what a regulated compliance archive needs.
 - **Billing:** Paystack subscriptions, trials, seats, EFT invoices for firms, VAT, and a plan page in Settings.
+
+### Built: Wave 1, Fix First and Security (2 November 2026)
+
+- The LinkedIn helper gets an allow-listed environment, not every secret.
+- Baileys stays pinned exactly (7.0.0-rc14). CI checks its version and the sha256 of the WhatsApp WASM bridge
+  (`scripts/check-baileys.mjs`), refuses packages younger than 7 days (`minimumReleaseAge`), and fails on high
+  advisories in production dependencies. Next's postcss is overridden to clear two. Nothing in Baileys sends WAM
+  telemetry and there is no switch for it, so that is documented. Building the WASM from source needs a Rust
+  toolchain: written up in `apps/worker/README.md`, not done yet.
+- The worker reads accounts and queues in slices of 100 ids, starts connectors in small staggered groups, wipes a
+  WhatsApp session only on a real logout, and drops every log line from the signal libraries.
+- Enter never sends from a single-line field. A failure that may have gone out shows May Have Been Sent with no
+  Retry. A retry reuses the same outbox id, so it cannot send twice, and keeps Reply All and the From address.
+  Queued and failed replies come back after a reload.
+- Merging contacts carries tasks, meeting participants, drafts and last senders along, and Undo brings them back
+  (`20261116100000_merge_repoints_links.sql`, written, not applied yet). Local numbers ("082 ...") find contacts
+  stored as "27...", and a sole trader writing from their own domain stays a person.
+- The setup dialog saves nothing invented; the tour, the `/onboarding` mock and every terminal setup step in
+  Settings are gone (developer steps are in `docs/CONNECTOR-SETUP.md`).
+- AI: quotes are cut line by line (inline replies survive), Afrikaans and Outlook reply headers are cut, dashes become
+  commas, all third-party text sits inside the untrusted fences, meeting summaries know who "you" are, follow the
+  meeting's language and bill under transcribe, and a cut-short Gemini answer is logged as truncated.
+- Two-factor sign-in (TOTP) in Settings, General, with a code step at sign-in. The key route refuses a session that
+  has a factor but has not passed it. The owner must turn on TOTP in Supabase, Authentication, MFA. The CSP keeps
+  `img-src https:` because email images load straight from senders; closing it needs an image proxy.
+

@@ -63,7 +63,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const backHref = withQuery(basePath);
   const {
     threadById, contactById, contacts, messagesFor, messagesLoaded, loadMessages, loadOlderMessages, loading, markRead, archive, trash, pin, giveFeedback,
-    send, generateDraft, discardDraft, requestAutoDraft, setJunk, drafting, hydrated, setReplyTo, react, hasOlder, removePending,
+    send, generateDraft, discardDraft, requestAutoDraft, setJunk, drafting, hydrated, setReplyTo, react, hasOlder, removePending, retryPending,
   } = useApp();
   const thread = threadById(threadId);
   const { session } = useAuth();
@@ -243,9 +243,11 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
     setDismissed((d) => new Set(d).add(m.id));
     if (m.id.startsWith("outbox:")) removePending(m.id.slice("outbox:".length));
   }, [removePending]);
+  // The store re-queues it with the same From address and Reply All recipients and removes the failed one itself.
   const onRetry = useCallback(async (m: Message) => {
-    if (await send(threadId, m.body, undefined, [], true)) onDismiss(m);
-  }, [send, threadId, onDismiss]);
+    if (!m.id.startsWith("outbox:")) return;
+    if (await retryPending(m.id.slice("outbox:".length))) setDismissed((d) => new Set(d).add(m.id));
+  }, [retryPending]);
 
   // A message opened from search is scrolled to the middle and briefly ringed, once it is loaded: one older
   // than the loaded pages is loaded first. The param is then dropped so later sends still scroll to the
@@ -708,9 +710,11 @@ const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderContact, 
       {(me || !showMeta) && <ReactionChips m={m} me={me} nameOf={nameOf} onReact={onReact} />}
       {m.sendState === "failed" ? (
         <div className="flex flex-wrap items-center gap-1 px-3 text-xs text-destructive">
-          <span>{m.sendError ?? "Not Sent"}</span>
+          {/* A failure that may have gone out never offers Retry: check the Sent folder, or copy the text to send it by hand. */}
+          <span>{m.sendRecovery === "unsure" ? `May Have Been Sent. ${m.sendError ?? ""}`.trim() : m.sendError ?? "Not Sent"}</span>
           {/* Files cannot be re-queued from here, so a failed send with files can only be deleted. */}
-          {!m.attachments?.length && <Button variant="ghost" size="xs" onClick={() => onRetry(m)}>Retry</Button>}
+          {m.sendRecovery === "retry" && <Button variant="ghost" size="xs" onClick={() => onRetry(m)}>Retry</Button>}
+          {m.sendRecovery === "unsure" && <Button variant="ghost" size="xs" onClick={() => { navigator.clipboard?.writeText(m.body).then(() => toast("Copied")).catch(() => toast("Could not copy")); }}>Copy Text</Button>}
           <Button variant="ghost" size="xs" onClick={() => onDismiss(m)}>Delete</Button>
         </div>
       ) : m.sendState === "sending" ? (

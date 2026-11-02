@@ -48,6 +48,18 @@ test("people stay people", () => {
   assert.equal(isCompanySender(contact("Newsletter", ["noreply@gmail.com"], null)), true);
 });
 
+test("sole traders writing from their own domain are people", () => {
+  assert.equal(isCompanySender(contact("Thandi Mokoena", ["thandi@thandimokoena.co.za"], "Thandimokoena")), false);
+  assert.equal(isCompanySender(contact("Thandi Mokoena", ["thandi.mokoena@mokoena.co.za"], "Mokoenathandi")), false);
+  assert.equal(isCompanySender(contact("T Mokoena", ["tmokoena@tmokoena.co.za"], "Tmokoena")), false);
+  assert.equal(isCompanySender(contact("Pieter van der Merwe", ["pieter@pietervandermerwe.co.za"], "Pietervandermerwe")), false);
+  // A two word brand, a shared inbox or a company word does not qualify.
+  assert.equal(isCompanySender(contact("Virgin Active", ["news@virginactive.co.za"], "Virginactive")), true);
+  assert.equal(isCompanySender(contact("Thandi Mokoena", ["info@thandimokoena.co.za"], "Thandimokoena")), true);
+  assert.equal(isCompanySender(contact("Mokoena Consulting", ["thandi@mokoenaconsulting.co.za"], "Mokoenaconsulting")), true);
+  assert.equal(isCompanySender(contact("Pick n Pay", ["specials@picknpay.co.za"], "Picknpay")), true);
+});
+
 test("a company's logo stands in only for senders that write as that company", () => {
   const logo = "user/org-1";
   assert.equal(companyLogo(contact("LinkedIn", ["messages-noreply@linkedin.com"], "LinkedIn"), logo), logo);

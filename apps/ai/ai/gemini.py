@@ -81,7 +81,7 @@ class UsageContext:
     """Who a call was for, so its cost is filed against the right person and account."""
 
     user_id: str
-    feature: str  # triage, draft, learn (learning includes embeddings and summaries), brief, transcribe, bulk_read or logos
+    feature: str  # triage, draft, learn (learning includes embeddings and people summaries), brief, transcribe (recordings and meeting summaries), bulk_read or logos
     account_id: str | None = None
     thread_id: str | None = None
 
@@ -459,6 +459,9 @@ class Gemini:
         try:
             answer = json.loads(text)
         except ValueError:
+            if candidates[0].get("finishReason") == "MAX_TOKENS":  # cut short, not malformed: max_output was too small for this input
+                self._failed(model, usage, code, started, stats, None, "truncated", used)
+                raise GeminiError(None, "response was cut short (max tokens)") from None
             self._failed(model, usage, code, started, stats, None, "not_json", used)
             raise GeminiError(None, "response was not JSON") from None
         self._emit(model, usage, code, started, stats, used)

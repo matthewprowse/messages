@@ -1,3 +1,11 @@
 packages:
   - "apps/*"
   - "packages/*"
+# Supply chain: refuse versions published in the last 7 days (minutes), so a hijacked release is usually pulled
+# before we can install it. Never lower it for Baileys (see apps/worker/README.md, "Updating Baileys").
+minimumReleaseAge: 10080
+# No dependency runs install scripts (esbuild, protobufjs and baileys only have optional ones; sharp ships prebuilt binaries).
+onlyBuiltDependencies: []
+# Next pins postcss 8.4.31, which has two high advisories (file read, source map path traversal). Drop when Next moves on.
+overrides:
+  "next>postcss": "^8.5.18"

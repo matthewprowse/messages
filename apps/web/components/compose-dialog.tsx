@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useApp } from "@/lib/store";
 import { MAX_RECIPIENTS, parseAddresses, sendAddressesOf } from "@/lib/send-from";
 import { attachProvider } from "@/lib/outbox-files";
+import { enterSubmitsByAccident } from "@/lib/send-safety";
 import { cn } from "@/lib/utils";
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
 import { ComposeAi, type Composed } from "@/components/compose-ai";
@@ -22,6 +23,12 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 
 const POLL_MS = 4000; // in case a Realtime update is missed
 const LINK_WAIT_MS = 30_000; // after it is sent, how long to wait for the conversation before giving up on opening it
+
+/** Stops Enter in a single-line field from submitting the form. Shared with New WhatsApp. */
+export function noEnterSubmit(e: React.KeyboardEvent<HTMLFormElement>) {
+  const t = e.target as HTMLElement;
+  if (enterSubmitsByAccident(e.key, t.tagName, (t as HTMLInputElement).type)) e.preventDefault();
+}
 
 /**
  * Sending a new email or WhatsApp message from a dialog: queue it, follow its outbox row, and once the
@@ -195,7 +202,8 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
             Connect iCloud+ Mail, Gmail, Outlook or another mailbox to send email. <Link href="/settings/accounts" className="underline underline-offset-4" onClick={() => onOpenChange(false)}>Connected Accounts</Link>
           </p>
         ) : (
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }} {...files.dropProps}>
+          // Enter in To, Cc, Bcc or Subject must never send: only the Send button or Cmd/Ctrl Enter in the message does.
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }} onKeyDown={noEnterSubmit} {...files.dropProps}>
             <div className="grid gap-2">
               <Label htmlFor="compose-from">From</Label>
               <Select value={from} onValueChange={setFromKey} disabled={locked}>

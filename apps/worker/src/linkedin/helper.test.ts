@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Helper, HelperError, helperEnv, vettedProxy, type HelperEvent, type Transport } from "./helper";
+import { Helper, HelperError, allowedEnv, helperEnv, vettedProxy, type HelperEvent, type Transport } from "./helper";
 
 // A stand-in for the helper process: it records what the worker writes and answers as the Go program would.
 class FakeHelper implements Transport {
@@ -143,6 +143,14 @@ test("a proxy reaches the helper as the standard proxy variables, and an old one
   assert.equal(without.https_proxy, undefined);
   assert.equal(without.PATH, "/bin");
   assert.equal(base.HTTP_PROXY, "http://elsewhere:1", "the environment given is not changed");
+});
+
+test("the helper gets an allow-listed environment and no secrets", () => {
+  const base = { PATH: "/bin", HOME: "/h", LC_ALL: "C", LANG: "en", SUPABASE_SERVICE_ROLE_KEY: "s", KEY_WRAPPING_KEY: "k", ENCRYPTION_KEY: "e", GEMINI_API_KEY: "g", HTTPS_PROXY: "http://old:1" };
+  assert.deepEqual(allowedEnv(base), { PATH: "/bin", HOME: "/h", LC_ALL: "C", LANG: "en" });
+  const env = helperEnv("http://p.example:1", base);
+  for (const name of ["SUPABASE_SERVICE_ROLE_KEY", "KEY_WRAPPING_KEY", "ENCRYPTION_KEY", "GEMINI_API_KEY"]) assert.equal(env[name], undefined);
+  assert.equal(env.HTTPS_PROXY, "http://p.example:1");
 });
 
 test("a proxy is vetted at connect time: public hosts pass, names that resolve privately do not", async () => {

@@ -18,6 +18,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The installed WhatsApp library must be the reviewed one (version and WASM hash), and no high advisory in production deps.
+      - run: node --test scripts/check-baileys.test.mjs
+      - run: node scripts/check-baileys.mjs
+      - run: pnpm audit --prod --audit-level high
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

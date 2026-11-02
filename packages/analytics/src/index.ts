@@ -83,9 +83,8 @@ export interface Events {
   // Accounts and reliability
   account_connect: { provider: string; step: string; outcome: "start" | "done" | "failed"; code?: string };
   first_sync_done: { provider: string; secs: number };
-  // Onboarding: the setup dialog's steps and the tour of the app
+  // Onboarding: the setup dialog's steps
   onboarding_step: { step: string; outcome: "start" | "done" | "skipped" };
-  tour_step: { step: string; outcome: "next" | "skipped" | "done" };
   sync_error: { provider: string; code: string };
   send_result: { provider: string; outcome: "sent" | "failed"; attempts: number; code?: string };
   wa_reconnect: { reason: string };

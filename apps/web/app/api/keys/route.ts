@@ -12,6 +12,7 @@
 // Asking also makes the next version first when a member has been removed since the current one was made.
 
 import { activeWorkspaceId, dataKey, keysReady, teamKeys } from "@/lib/server/keys";
+import { keyAccess, tokenAal } from "@/lib/server/key-policy";
 import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
 
 export const runtime = "nodejs";
@@ -27,6 +28,9 @@ export async function POST(request: Request) {
   if (!user) return fail(401, "Sign in first.");
   const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many requests. Try again shortly.", { "Retry-After": String(wait) });
+  // A user with a verified second factor needs an aal2 session: a password or email link alone must not open their messages.
+  const access = keyAccess(user.factors, tokenAal(request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1] ?? ""));
+  if (!access.ok) return fail(access.status, access.message);
   try {
     const [key, team] = await Promise.all([dataKey(user.id), teamOf(user.id)]);
     return Response.json({ key: Buffer.from(key).toString("base64"), team }, { headers: noStore });

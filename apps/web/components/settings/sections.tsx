@@ -1,6 +1,6 @@
 "use client";
 
-// The Settings page sections (About, Writing, Priorities, Appearance, Language, Data, Tour, Sign In) and the heading and row components every Settings page uses.
+// The Settings page sections (About, Writing, Priorities, Appearance, Language, Data, Getting Started, Sign In) and the heading and row components every Settings page uses.
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -14,7 +14,6 @@ import { supabase } from "@/lib/supabase";
 import { PHOTO_BUCKET, photoPathFor, squareJpeg } from "@/lib/profile-photo";
 import { MyAvatar } from "@/components/my-avatar";
 import { saveOnboarding } from "@/lib/onboarding";
-import { resetMockImport } from "@/lib/onboarding-demo";
 import type { Rule } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -238,14 +237,10 @@ export function DataSection() {
 export function TourSection() {
   const { notify } = useApp();
   const failed = () => notify("Could not start that. Try again.");
-  const tour = () => saveOnboarding({ tour: "pending" }).catch(failed);
-  const setup = () => { resetMockImport(); saveOnboarding({ onboarding: "accounts", tour: "done" }).catch(failed); };
+  const setup = () => saveOnboarding({ onboarding: "accounts", tour: "done" }).catch(failed);
   return (
     <SettingsSection id="tour" title="Getting Started">
       <SettingsRows>
-        <SettingsRow title="Take the Tour" description="A page by page look at Summary, Conversations, Contacts and the rest.">
-          <Button variant="secondary" onClick={tour}>Start Tour</Button>
-        </SettingsRow>
         <SettingsRow title="Run Setup Again" description="Accounts, what Konva knows about you, contacts and a practice reply.">
           <Button variant="secondary" onClick={setup}>Run Setup</Button>
         </SettingsRow>

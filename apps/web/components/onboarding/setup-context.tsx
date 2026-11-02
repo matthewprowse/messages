@@ -5,7 +5,7 @@
 import { createContext, useContext } from "react";
 import { CircleCheck, RefreshCw } from "lucide-react";
 import type { SetupStep } from "@/lib/onboarding";
-import type { ImportCounts, Role } from "@/lib/onboarding-demo";
+import type { FoundCounts, Role } from "@/lib/onboarding-findings";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 
@@ -27,7 +27,8 @@ export interface SetupState {
   setPhoto: (url: string | null) => void;
   /** Which kinds of account are connected (or connecting). */
   channels: { mail: boolean; whatsapp: boolean };
-  imported: { started: boolean; done: boolean; progress: number; counts: ImportCounts };
+  /** The first import as it really stands: what has arrived so far, and whether the accounts have finished syncing. */
+  imported: { started: boolean; done: boolean; counts: FoundCounts };
 }
 
 export const SetupContext = createContext<SetupState | null>(null);
@@ -75,13 +76,13 @@ function ImportStatus() {
     );
   }
   const parts = [
-    channels.mail && `${imported.counts.emails.toLocaleString()} emails`,
-    channels.whatsapp && `${imported.counts.whatsapp.toLocaleString()} WhatsApp messages`,
+    channels.mail && `${imported.counts.emailConversations.toLocaleString()} email conversations`,
+    channels.whatsapp && `${imported.counts.whatsappConversations.toLocaleString()} WhatsApp chats`,
   ].filter(Boolean);
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" role="status">
       <RefreshCw className="size-3.5 shrink-0 animate-spin" />
-      <span className="truncate">Importing {parts.join(" and ")}</span>
+      <span className="truncate">Importing: {parts.length ? `${parts.join(" and ")} so far` : "waiting for your accounts"}</span>
     </span>
   );
 }

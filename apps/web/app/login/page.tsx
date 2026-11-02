@@ -1,12 +1,14 @@
 "use client";
 
 // One page to sign in and to sign up. No password to make up: Google, or a code sent to your email (the
-// email's link works too). An account with a password set can still use it.
+// email's link works too). An account with a password set can still use it. An account with two-factor sign-in on
+// is asked for its authenticator code after that first step (useAuth().mfaRequired), before it counts as signed in.
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { useAuth } from "@/lib/auth";
+import { signOut, useAuth } from "@/lib/auth";
+import { cleanCode, verifiedTotp } from "@/lib/mfa";
 import { INVITE_KEY } from "@/lib/team";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +30,7 @@ function pendingInvite(): string | null {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, mfaRequired } = useAuth();
   const [mode, setMode] = useState<Mode>("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -41,6 +43,19 @@ export default function LoginPage() {
     if (!session) return;
     router.replace(pendingInvite() ?? "/summary");
   }, [session, router]);
+
+  const challenge = () => run(async () => {
+    const digits = cleanCode(code);
+    if (!digits) return "Enter the six digit code from your authenticator app.";
+    const { data: list } = await supabase.auth.mfa.listFactors();
+    const factor = verifiedTotp(list?.all)[0];
+    if (!factor) return "No authenticator app was found. Sign out and try again.";
+    const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId: factor.id, code: digits });
+    return error ? "That code did not match. Wait for a new one and try again." : null;
+  });
+
+  // The email code just used must not sit in the field when the authenticator code is asked for.
+  useEffect(() => { if (mfaRequired) { setCode(""); setError(null); } }, [mfaRequired]);
 
   const run = async (work: () => Promise<string | null>) => {
     setBusy(true);
@@ -79,7 +94,8 @@ export default function LoginPage() {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (mode === "email") void sendCode();
+    if (mfaRequired) void challenge();
+    else if (mode === "email") void sendCode();
     else if (mode === "code") void verify();
     else void signInWithPassword();
   };
@@ -89,7 +105,12 @@ export default function LoginPage() {
       <form onSubmit={submit} className="w-full max-w-sm space-y-6">
         <div>
           <p className="text-sm font-semibold tracking-tight">Konva</p>
-          {mode === "code" ? (
+          {mfaRequired ? (
+            <>
+              <h1 className="flex h-10 items-center text-lg font-medium">Two-Factor Sign-In</h1>
+              <p className="text-sm text-muted-foreground">Enter the six digit code from your authenticator app.</p>
+            </>
+          ) : mode === "code" ? (
             <>
               <h1 className="flex h-10 items-center text-lg font-medium">Check Your Email</h1>
               <p className="text-sm text-muted-foreground">We sent a code to {email.trim()}. Enter it here, or open the link in the email.</p>
@@ -102,7 +123,7 @@ export default function LoginPage() {
           )}
         </div>
 
-        {mode !== "code" && (
+        {!mfaRequired && mode !== "code" && (
           <>
             <Button type="button" variant="secondary" className="w-full" disabled={busy} onClick={google}>
               <GoogleLogo /> Continue With Google
@@ -115,14 +136,14 @@ export default function LoginPage() {
           </>
         )}
 
-        {mode === "code" && (
+        {(mode === "code" || mfaRequired) && (
           <div className="grid gap-2">
             <Label htmlFor="code">Code</Label>
             <Input id="code" inputMode="numeric" autoComplete="one-time-code" autoFocus value={code} onChange={(e) => setCode(e.target.value)} required />
           </div>
         )}
 
-        {mode === "password" && (
+        {!mfaRequired && mode === "password" && (
           <div className="grid gap-2">
             <Label htmlFor="password">Password</Label>
             <Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
@@ -133,9 +154,11 @@ export default function LoginPage() {
 
         <div className="space-y-2">
           <Button type="submit" className="w-full" disabled={busy}>
-            {mode === "email" ? (busy ? "Sending…" : "Continue With Email") : mode === "code" ? (busy ? "Checking…" : "Continue") : busy ? "Signing In…" : "Sign In"}
+            {mfaRequired ? (busy ? "Checking…" : "Verify") : mode === "email" ? (busy ? "Sending…" : "Continue With Email") : mode === "code" ? (busy ? "Checking…" : "Continue") : busy ? "Signing In…" : "Sign In"}
           </Button>
-          {mode === "code" ? (
+          {mfaRequired ? (
+            <Button type="button" variant="link" size="sm" className="w-full" onClick={() => { setCode(""); setError(null); void signOut(); }}>Sign Out</Button>
+          ) : mode === "code" ? (
             <div className="flex justify-between">
               <Button type="button" variant="link" size="sm" className="px-0" onClick={() => { setMode("email"); setError(null); }}>Use a Different Email</Button>
               <Button type="button" variant="link" size="sm" className="px-0" disabled={busy} onClick={sendCode}>Send a New Code</Button>

@@ -18,7 +18,8 @@ from .fields import BODY, DRAFT, HTML, STYLE_RULE
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, billing_paused
 from .supabase import Supabase, in_list
-from .text import clean
+from .text import clean, plain_dashes
+from .voice import same_rule
 from .vault import Vault
 
 LEARN_FROM_RATIO = 0.1  # below this the draft was sent more or less as written
@@ -228,7 +229,14 @@ class Learn:
             # The model step comes before the outcome is recorded: the outcome row is what marks this edit as
             # seen, so a failed call must leave it out and the edit is learned from on a later pass.
             existing = self.db.select(
-                "style_rules", {"select": "id,rule,scope,contact_id,support_count", "user_id": f"eq.{row['user_id']}", "limit": "100"}
+                "style_rules",
+                {
+                    "select": "id,rule,scope,contact_id,support_count",
+                    "user_id": f"eq.{row['user_id']}",
+                    "enabled": "eq.true",  # a rule they turned off is not one to prompt with or to count again
+                    "order": "support_count.desc,updated_at.desc",  # the strongest first, so the limit drops the weakest
+                    "limit": "100",
+                },
             )
             for r in existing:  # rules written sealed are opened here; plain ones pass through
                 r["rule"] = self.vault.open(row["user_id"], STYLE_RULE, r.get("rule")) or ""
@@ -271,16 +279,17 @@ class Learn:
         if ratio < LEARN_FROM_RATIO:
             return 1
 
-        by_text = {(r["rule"].strip().lower(), r["contact_id"]): r for r in existing}
         for item in (result.get("rules") or [])[:3]:
-            text = (item.get("rule") or "").strip().replace("—", ", ")
+            text = plain_dashes(item.get("rule")).strip()
             if not text or len(text) > 200:
                 continue
             scope = "contact" if item.get("scope") == "contact" and contact_id else "global"
-            key = (text.lower(), contact_id if scope == "contact" else None)
-            if key in by_text:
-                r = by_text[key]
+            owner = contact_id if scope == "contact" else None
+            # The model rewords a rule it has seen, so the match is fuzzy, as in voice learning.
+            r = next((e for e in existing if e["contact_id"] == owner and same_rule(e["rule"], text)), None)
+            if r:
                 self.db.update("style_rules", {"id": f"eq.{r['id']}"}, {"support_count": r["support_count"] + 1})
+                r["support_count"] += 1  # two rules of one answer that match the same old rule count twice
             else:
                 self.db.insert(
                     "style_rules",

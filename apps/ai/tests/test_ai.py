@@ -750,8 +750,8 @@ class FollowUps(unittest.TestCase):
 
     def test_prompt_marks_whose_message_is_last(self):
         p = follow_up_prompt([("1", "Can you send the plans?", "Will do tomorrow"), ("2", "", "Are you free Friday?")])
-        self.assertIn("Conversation 1:\n--- Them:\nCan you send the plans?\n--- Me (last):\nWill do tomorrow", p)
-        self.assertIn("Conversation 2:\n--- Me (last):\nAre you free Friday?", p)
+        self.assertRegex(p, r"Conversation 1:\n<<<UNTRUSTED-[0-9a-f]+\n--- Them:\nCan you send the plans\?\n--- Me \(last\):\nWill do tomorrow\nUNTRUSTED-")
+        self.assertRegex(p, r"Conversation 2:\n<<<UNTRUSTED-[0-9a-f]+\n--- Me \(last\):\nAre you free Friday\?\nUNTRUSTED-")
 
 
 class Hedging(unittest.TestCase):
@@ -802,8 +802,8 @@ class DraftOrder(unittest.TestCase):
         a, b = self.prompt(), self.prompt(tone="shorter", instruction="Say yes")
         common = len(a.split("Tone:")[0])
         self.assertEqual(a[:common], b[:common])
-        self.assertLess(a.index("Signs off with Matt"), a.index("Replying to: Sam"))
-        self.assertLess(a.index("Cheers, Matt"), a.index("Replying to: Sam"))
+        self.assertLess(a.index("Signs off with Matt"), a.index("Replying to (name"))
+        self.assertLess(a.index("Cheers, Matt"), a.index("Replying to (name"))
 
     def test_an_edit_shares_the_start_and_ends_with_your_text(self):
         a, e = self.prompt(), self.prompt(tone="edit", edit="hey sam, lunch sounds grate", instruction="Keep it short")
@@ -834,11 +834,11 @@ class DraftOrder(unittest.TestCase):
     def test_the_channel_shapes_the_prompt(self):
         email = self.prompt(subject="Lunch plans")
         self.assertIn("Their own recent sent email emails", email)
-        self.assertIn("Channel: Email\nSubject: Lunch plans", email)
-        self.assertTrue(email.rstrip().endswith("Write their email reply to the latest message from Sam."))
+        self.assertRegex(email, r"Channel: Email\nThe subject, written by the other side[^\n]*\n<<<UNTRUSTED-[0-9a-f]+\nLunch plans\nUNTRUSTED-[0-9a-f]+>>>")
+        self.assertTrue(email.rstrip().endswith("Write their email reply to the latest message in the conversation."))
         chat = self.prompt(channel="whatsapp", subject="ignored", group_name="Braai Crew")
         self.assertIn("Their own recent sent WhatsApp messages", chat)
-        self.assertIn("Channel: WhatsApp group chat: Braai Crew", chat)
+        self.assertRegex(chat, r"Channel: WhatsApp group chat\n[^\n]*\n<<<UNTRUSTED-[0-9a-f]+\nBraai Crew\nUNTRUSTED-[0-9a-f]+>>>")
         self.assertNotIn("Subject:", chat)
 
     def test_a_follow_up_when_you_wrote_last(self):
@@ -855,7 +855,7 @@ class DraftOrder(unittest.TestCase):
     def test_facts_sit_with_you_before_the_person(self):
         p = self.prompt(facts=[("Fees", "Commission is 7.5% plus VAT")])
         self.assertIn("[Fees]\nCommission is 7.5% plus VAT", p)
-        self.assertLess(p.index("Commission is 7.5%"), p.index("Replying to: Sam"))
+        self.assertLess(p.index("Commission is 7.5%"), p.index("Replying to (name"))
         self.assertEqual(pick_facts([("A", "  "), ("B", "x" * 5000), ("C", "y" * 5000), ("D", "z" * 5000), ("E", "w" * 5000), ("F", "v")]),
                          [("B", "x" * 1500), ("C", "y" * 1500), ("D", "z" * 1500), ("E", "w" * 1500)])
 
@@ -865,7 +865,7 @@ class DraftOrder(unittest.TestCase):
 
     def test_person_rules_and_voice_come_after_you(self):
         p = self.prompt(person_rules=["Calls him mate"], more_voice=["Hey Sam"])
-        self.assertLess(p.index("Replying to: Sam"), p.index("Rules for writing to this person:\n- Calls him mate"))
+        self.assertLess(p.index("Replying to (name"), p.index("Rules for writing to this person:\n- Calls him mate"))
         self.assertLess(p.index("Hey Sam"), p.index("The conversation, oldest first"))
 
     def test_unknown_recipient_is_greeted_without_a_name(self):

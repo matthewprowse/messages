@@ -72,7 +72,7 @@ export function DraftStep() {
   return (
     <StepFrame
       title="Try a Reply"
-      description="This is how replying works in Konva. Try each way on a practice message. Nothing here is sent."
+      description="This is how replying works in Konva, on an example message from an example person. Nothing here is sent or saved."
       footer={
         <>
           {back && <Button variant="ghost" disabled={busy} onClick={back}>Back</Button>}

@@ -31,6 +31,7 @@ import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Badge } from "@/components/ui/badge";
 import { useContactsData } from "@/components/contacts-data";
 import { TeamClientsRow } from "@/components/team-clients";
+import { phoneQueryMatches, searchDigits } from "@/lib/phone-search";
 
 export function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
@@ -545,8 +546,7 @@ function haystack(parts: (string | null | undefined)[], phones: string[] = []) {
 function matchesQuery(q: string, hay: string, phoneDigits: string) {
   if (!q) return true;
   if (hay.includes(q)) return true;
-  const digits = q.replace(/\D/g, "");
-  return digits.length >= 3 && /^[\d\s+().-]+$/.test(q) && phoneDigits.includes(digits);
+  return phoneQueryMatches(q, phoneDigits);
 }
 
 /** Sort choices, in the same small select as the Inbox's filter. */
@@ -588,7 +588,7 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
     () => (contacts ?? []).filter((c) => !isCompanySender(c) && c.hidden === (view === "hidden")).map((c) => ({
       c,
       hay: haystack([c.name, c.company, c.organizationName, c.role, ...c.emails], c.phones),
-      digits: c.phones.map((p) => p.replace(/\D/g, "")).join(" "),
+      digits: c.phones.map(searchDigits).join(" "),
     })),
     [contacts, view],
   );

@@ -1,7 +1,6 @@
 "use client";
 
-// Settings page for connecting Microsoft (Outlook, Calendar, To Do, Teams): in-app sign-in, per-part status from the worker,
-// and a collapsed owner-only section for the one-time Entra app setup.
+// Settings page for connecting Microsoft (Outlook, Calendar, To Do, Teams): in-app sign-in, per-part status from the worker,.
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
@@ -38,7 +37,6 @@ export default function MicrosoftSetup() {
       />
       <div className="mb-3"><Suspense><ConnectMicrosoft /></Suspense></div>
       <Status />
-      <OwnerSetup />
     </>
   );
 }
@@ -161,39 +159,5 @@ function Status() {
         })}
       </SettingsRows>
     </section>
-  );
-}
-
-/** What the server owner does once, in Microsoft Entra and the two .env files. Collapsed, as it is not for users. */
-function OwnerSetup() {
-  const [origin, setOrigin] = useState("your app address");
-  useEffect(() => setOrigin(window.location.origin), []);
-  return (
-    <details className="group mt-3">
-      <summary className="cursor-pointer rounded-lg p-3 text-sm font-medium hover:bg-muted/50">Setup for the Server Owner</summary>
-      <ol className="list-decimal space-y-3 p-3 pl-9 text-sm text-muted-foreground">
-        <li>
-          At entra.microsoft.com, open App Registrations and choose New Registration. Name it Konva. Under Supported Account Types, choose
-          Accounts in Any Organizational Directory and Personal Microsoft Accounts.
-        </li>
-        <li>
-          Under Authentication, choose Add a Platform, then Mobile and Desktop Applications (Public Client/Native), and add both redirect
-          addresses: <code className="text-foreground">http://localhost</code> for the worker and{" "}
-          <code className="break-all text-foreground">{origin}/api/connect/microsoft/callback</code> for this page. Microsoft needs the second one
-          to match exactly. No client secret is needed.
-        </li>
-        <li>
-          Under API Permissions, add these Microsoft Graph delegated permissions: Mail.ReadWrite, Mail.Send, Calendars.Read, Tasks.ReadWrite,
-          User.Read and offline_access. For Teams, also add Chat.ReadWrite, OnlineMeetings.Read and OnlineMeetingTranscript.Read.All. Users
-          agree to them when they sign in. Many organisations let only an IT admin approve the Teams ones; the page then shows a link for the
-          admin.
-        </li>
-        <li>
-          Copy the Application (Client) ID from the app&apos;s Overview into both apps/web/.env.local and apps/worker/.env as
-          MICROSOFT_CLIENT_ID. Set MICROSOFT_TENANT in both only to limit sign-in to one organisation. Then restart the app and the worker so
-          they read it.
-        </li>
-      </ol>
-    </details>
   );
 }

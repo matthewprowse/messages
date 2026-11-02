@@ -3,6 +3,7 @@
 
 import type { Tables } from "@messages/db";
 import { db, must, retryWrite } from "../db";
+import { readQueued } from "../in-chunks";
 import { errorCode, log } from "../log";
 
 export type CalendarDeleteRow = Tables<"calendar_deletes">;
@@ -55,8 +56,9 @@ export async function settleDeleted(row: CalendarDeleteRow, event: StoredCalenda
 /** The oldest queued deletes, of the given accounts when asked (a worker reads only the accounts it runs). */
 export async function queuedDeletes(accountIds?: string[]): Promise<CalendarDeleteRow[]> {
   if (accountIds && accountIds.length === 0) return [];
-  const query = db.from("calendar_deletes").select("*").eq("status", "queued");
-  return must(await (accountIds ? query.in("account_id", accountIds) : query).order("created_at").limit(50), "load calendar deletes");
+  const query = () => db.from("calendar_deletes").select("*").eq("status", "queued");
+  if (!accountIds) return must(await query().order("created_at").limit(50), "load calendar deletes");
+  return readQueued(accountIds, (slice) => query().in("account_id", slice).order("created_at").limit(50), "load calendar deletes", 50);
 }
 
 /** A delete left "deleting" by a worker that stopped mid-request may or may not have happened, so it is failed rather than sent again. */

@@ -1,6 +1,6 @@
 "use client";
 
-// Settings page for connecting Zoom: in-app sign-in via ConnectZoom, with terminal steps below as the developer route.
+// Settings page for connecting Zoom: in-app sign-in via ConnectZoom.
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -10,68 +10,7 @@ import { track } from "@/lib/analytics";
 import { postAsUser } from "@/lib/onboarding";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
-import { Command, SetupSteps, type SetupStep } from "../setup-steps";
-
-const STEPS: SetupStep[] = [
-  {
-    title: "Create a Zoom App",
-    body: (
-      <p>
-        At marketplace.zoom.us, choose Develop, then Build App, and pick General App. Under Basic Information, choose User-Managed, so each
-        person signs in with their own Zoom account.
-      </p>
-    ),
-  },
-  {
-    title: "Add the Redirect Address",
-    body: (
-      <p>
-        Under OAuth Information, enter http://localhost:3000/api/connect/zoom/callback as the OAuth Redirect URL, and add it to the OAuth Allow
-        List too. On a server, use its own address in place of http://localhost:3000.
-      </p>
-    ),
-  },
-  {
-    title: "Choose the Scopes",
-    body: (
-      <p>
-        Under Scopes, add user:read:user, cloud_recording:read:list_user_recordings, meeting:read:meeting, meeting:read:list_past_participants,
-        team_chat:read:list_user_sessions, team_chat:read:list_user_messages and team_chat:write:user_message. To read Team Chat, also turn on
-        Team Chat under Features, then Surface.
-      </p>
-    ),
-  },
-  {
-    title: "Copy the Client ID and Secret",
-    body: (
-      <p>
-        From App Credentials, copy the client ID and secret into apps/web/.env.local and apps/worker/.env as ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET.
-        Then restart the app.
-      </p>
-    ),
-  },
-  {
-    title: "Turn On Transcripts in Zoom",
-    body: (
-      <p>
-        Transcripts come from cloud recordings, which need a paid Zoom plan. In Zoom, open Settings, then Recording, turn on Cloud Recording and
-        Create Audio Transcript. Meetings recorded without a transcript are transcribed from their audio instead.
-      </p>
-    ),
-  },
-  {
-    title: "Restart the Worker",
-    body: (
-      <>
-        <Command>pnpm worker</Command>
-        <p className="mt-2">
-          It reads the app from .env when it starts. Then choose Connect Zoom above. Team Chat imports the last 30 days and checks for new messages
-          every minute; recorded meetings are checked every 10 minutes.
-        </p>
-      </>
-    ),
-  },
-];
+import { SetupSteps } from "../setup-steps";
 
 export default function ZoomSetup() {
   return (
@@ -79,7 +18,6 @@ export default function ZoomSetup() {
       provider="zoom"
       title="Connect Zoom"
       description="Your Zoom meetings with their transcripts, and your Team Chat conversations. The sign-in is stored encrypted and only used to sync and to send the replies you write."
-      steps={STEPS}
       label="Zoom"
       watch={["zoom"]}
       connect={<Suspense><ConnectZoom /></Suspense>}

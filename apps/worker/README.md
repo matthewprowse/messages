@@ -433,3 +433,29 @@ One worker is the default and needs nothing below. To spread the accounts over s
 - Outlook: contact photos and names from Outlook contacts, sending from other addresses on the account,
   and creating events in Outlook Calendar.
 - WhatsApp: status updates, calls and channels.
+
+## Updating Baileys
+
+Baileys holds the WhatsApp session keys, so it is the most trusted third-party code we run. It is pinned to an exact
+version in `apps/worker/package.json`, and `scripts/baileys-lock.json` records the version of Baileys, libsignal and
+`whatsapp-rust-bridge` plus the sha256 of the bridge's `dist/index.js` (the WASM is inlined in it). CI runs
+`node scripts/check-baileys.mjs` and fails on any difference. `pnpm-workspace.yaml` sets `minimumReleaseAge` to seven
+days, and CI runs `pnpm audit --prod --audit-level high`.
+
+To update:
+
+1. Take it from the official repository (github.com/WhiskeySockets/Baileys, npm package `baileys`) only. Never install a
+   fork or a lookalike: the 2025 malicious "lotusbail" package copied Baileys and stole WhatsApp sessions.
+2. Wait out the release age (seven days), then read the whole diff between the pinned tag and the new one, including
+   `whatsapp-rust-bridge` and libsignal. Look for new network hosts, `eval`, `child_process`, and anything that reads
+   `creds` or keys.
+3. Rebuild the WASM from the bridge's source at the matching tag (Rust with `wasm-pack`, following its README) and
+   compare it with the published one. If they differ, do not update.
+4. Set the new exact version (no `^` or `~`), run `pnpm install`, and commit `pnpm-lock.yaml`.
+5. Put the new versions and the new hash in `scripts/baileys-lock.json` (`shasum -a 256` on the bridge's `dist/index.js`)
+   and run `node scripts/check-baileys.mjs`.
+6. Log in with a spare number first, never your own, and watch the network before rolling out.
+
+WAM telemetry: Baileys 7.0.0-rc14 has a `sendWAMBuffer` function on the socket, but nothing in the library calls it and
+there is no socket option to switch it off, so no WAM statistics are sent as long as our code never calls
+`sock.sendWAMBuffer`. Re-check this at every update (`grep -rn sendWAMBuffer lib`).

@@ -425,9 +425,10 @@ class Summarising(unittest.TestCase):
         gemini = FakeGemini([{"summary": "They reviewed the offer — it goes out Friday.", "action_items": ["Send the signed offer by Friday", " ", 3]}])
         self.assertEqual(Meetings(db, gemini, "model", FakeVault()).summarise_once(), 1)
         call = gemini.calls[0]
-        self.assertIn("Meeting on Microsoft Teams: Offer review", call["prompt"])
+        self.assertIn("Meeting on Microsoft Teams", call["prompt"])
+        self.assertIn("Title: Offer review", call["prompt"])
         self.assertIn("[00:04] Me Myself: Yes, I will.", call["prompt"])
-        self.assertEqual(call["usage"].feature, "learn")
+        self.assertEqual(call["usage"].feature, "transcribe")
         self.assertEqual(call["max_output"], 4096)
         _, filters, patch = db.updates[-1]
         self.assertEqual(filters["status"], "eq.transcribed")

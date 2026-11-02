@@ -103,6 +103,8 @@ export interface Message {
   /** Set on a reply you just sent until the real message arrives from the mail server. */
   sendState?: "sending" | "failed";
   sendError?: string;
+  /** For a failed send: "retry" is definitely not sent, "unsure" may have gone out (no Retry), "none" cannot be re-queued. */
+  sendRecovery?: "retry" | "unsure" | "none";
 }
 
 export interface Draft {

@@ -25,3 +25,18 @@ test("nonces are fresh and base64", () => {
   assert.notEqual(a, makeNonce());
   assert.match(a, /^[A-Za-z0-9+/]{22}==$/);
 });
+
+test("img-src is https only: no http, no wildcards, no other schemes than data and blob", () => {
+  const img = buildCsp("n", false, "https://proj.supabase.co").split("; ").find((d) => d.startsWith("img-src"))!;
+  assert.equal(img, "img-src 'self' data: blob: https:");
+  assert.doesNotMatch(img, /\shttp:|\*|unsafe/);
+});
+
+test("every fetch directive other than img-src stays narrow", () => {
+  const csp = buildCsp("n", false, "https://proj.supabase.co");
+  for (const d of ["default-src", "connect-src", "media-src", "font-src", "frame-src", "object-src"]) {
+    const line = csp.split("; ").find((x) => x.startsWith(d))!;
+    assert.doesNotMatch(line, /\shttps:(\s|$)|\*/, d);
+  }
+  assert.match(csp, /frame-ancestors 'none'/);
+});

@@ -13,6 +13,8 @@
 import { hostname } from "node:os";
 import { randomBytes } from "node:crypto";
 import { allRows, db, must } from "./db";
+import { readByIds, readQueued } from "./in-chunks";
+import { startStaggered } from "./staggered-start";
 import { env } from "./env";
 import { log, errorCode } from "./log";
 import { ICloudConnector } from "./connectors/icloud";
@@ -193,10 +195,11 @@ async function reconcileOnce() {
   const startIds = rows.filter(wantedStart).map((a) => a.id);
   const full = new Map<string, AccountRow>();
   if (startIds.length > 0) {
-    const opened = await openAddressRows(must(await db.from("accounts").select("*").in("id", startIds), "load accounts to start"));
+    const opened = await openAddressRows(await readByIds(startIds, (slice) => db.from("accounts").select("*").in("id", slice), "load accounts to start"));
     for (const account of opened) full.set(account.id, account);
   }
 
+  const toStart: { account: AccountRow; updatedAt: string }[] = [];
   for (const { account_credentials: credentials, ...summary } of rows) {
     const current = running.get(summary.id);
     const updatedAt = credentials?.updated_at;
@@ -217,16 +220,23 @@ async function reconcileOnce() {
       if (!(await stopConnector(account.id, current))) continue; // new credentials: restart with them
       running.delete(account.id);
     }
-    // One account that fails to start must not stop the rest: it is tried again on the next pass.
-    try {
+    toStart.push({ account, updatedAt: updatedAt! });
+  }
+
+  // Started a few at a time with a little jitter, WhatsApp fewest, so a restart does not open every session in one second.
+  // One account that fails to start must not stop the rest: it is tried again on the next pass.
+  await startStaggered(
+    toStart,
+    ({ account }) => account.provider,
+    ({ account, updatedAt }) => {
       const connector = CONNECTORS[account.provider](account);
       connector.start();
-      running.set(account.id, { connector, credentialsUpdatedAt: updatedAt! });
+      running.set(account.id, { connector, credentialsUpdatedAt: updatedAt });
       log.info("connector started", { account: account.id, provider: account.provider });
-    } catch (err) {
-      log.error("connector start failed", { account: account.id, provider: account.provider, code: errorCode(err) });
-    }
-  }
+    },
+    ({ account }, err) => log.error("connector start failed", { account: account.id, provider: account.provider, code: errorCode(err) }),
+    { limits: { whatsapp: 2, linkedin: 2, instagram: 2 }, defaultLimit: 10 },
+  );
 
   for (const [id, entry] of running) {
     if (!ids.has(id) && (await stopConnector(id, entry))) running.delete(id);
@@ -272,12 +282,14 @@ async function queuedOutbox(): Promise<QueuedOutbox[]> {
   const accountIds = [...running.keys()];
   if (accountIds.length === 0) return [];
   const columns = "*, threads!outbox_thread_id_fkey(account_id, accounts(status)), accounts(id, status)";
+  const replyColumns = columns.replace("threads!outbox_thread_id_fkey(", "threads!outbox_thread_id_fkey!inner(");
   const [fresh, replies] = await Promise.all([
-    db.from("outbox").select(columns).eq("status", "queued").in("account_id", accountIds).order("created_at").limit(50),
-    db.from("outbox").select(columns.replace("threads!outbox_thread_id_fkey(", "threads!outbox_thread_id_fkey!inner(")).eq("status", "queued").in("threads.account_id", accountIds).order("created_at").limit(50),
+    // The select strings are built at run time, so the client cannot type the rows: they are cast to the shape they have.
+    readQueued<QueuedOutbox>(accountIds, async (slice) => (await db.from("outbox").select(columns).eq("status", "queued").in("account_id", slice).order("created_at").limit(50)) as unknown as { data: QueuedOutbox[] | null; error: { code?: string } | null }, "load outbox", 50),
+    readQueued<QueuedOutbox>(accountIds, async (slice) => (await db.from("outbox").select(replyColumns).eq("status", "queued").in("threads.account_id", slice).order("created_at").limit(50)) as unknown as { data: QueuedOutbox[] | null; error: { code?: string } | null }, "load outbox replies", 50),
   ]);
   const byId = new Map<string, QueuedOutbox>();
-  for (const row of [...must(fresh, "load outbox"), ...must(replies, "load outbox replies")] as QueuedOutbox[]) byId.set(row.id, row);
+  for (const row of [...fresh, ...replies] as QueuedOutbox[]) byId.set(row.id, row);
   return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 50);
 }
 
@@ -361,16 +373,12 @@ async function dispatchMailActions(rows?: QueuedAction[]) {
   if (!rows && accountIds.length === 0) return;
   const list =
     rows ??
-    must(
-      await db
-        .from("mail_actions")
-        .select("*, threads!inner(account_id)")
-        .eq("status", "queued")
-        .in("threads.account_id", accountIds)
-        .order("created_at")
-        .limit(100),
+    (await readQueued(
+      accountIds,
+      (slice) => db.from("mail_actions").select("*, threads!inner(account_id)").eq("status", "queued").in("threads.account_id", slice).order("created_at").limit(100),
       "load mail actions",
-    );
+      100,
+    ));
   for (const queuedRow of list) {
     if (queuedRow.status !== "queued") continue;
     const { threads: _thread, ...row } = queuedRow;
@@ -396,10 +404,7 @@ async function dispatchUnsubscribes(rows?: Tables<"unsubscribes">[]) {
   if (!rows && accountIds.length === 0) return;
   const list =
     rows ??
-    must(
-      await db.from("unsubscribes").select("*").eq("status", "queued").in("account_id", accountIds).order("created_at").limit(50),
-      "load unsubscribes",
-    );
+    (await readQueued(accountIds, (slice) => db.from("unsubscribes").select("*").eq("status", "queued").in("account_id", slice).order("created_at").limit(50), "load unsubscribes", 50));
   for (const row of list) {
     if (row.status !== "queued") continue;
     await dispatchOnce(
@@ -421,7 +426,7 @@ type CalendarAccount = { id: string; provider: string; status: string };
 async function calendarAccounts(rows: { account_id: string }[]): Promise<Map<string, CalendarAccount>> {
   const ids = [...new Set(rows.map((row) => row.account_id))];
   if (ids.length === 0) return new Map();
-  const accounts = must(await db.from("accounts").select("id, provider, status").in("id", ids), "load calendar accounts");
+  const accounts = await readByIds(ids, (slice) => db.from("accounts").select("id, provider, status").in("id", slice), "load calendar accounts");
   return new Map(accounts.map((account) => [account.id, account]));
 }
 
@@ -501,7 +506,7 @@ const runningIds = () => [...running.keys()];
 
 /** Events made in the app. */
 async function dispatchCalendarOutbox(rows?: CalendarOutboxRow[]) {
-  const list = rows ?? (runningIds().length ? must(await db.from("calendar_outbox").select("*").eq("status", "queued").in("account_id", runningIds()).order("created_at").limit(50), "load calendar outbox") : []);
+  const list = rows ?? (runningIds().length ? await readQueued(runningIds(), (slice) => db.from("calendar_outbox").select("*").eq("status", "queued").in("account_id", slice).order("created_at").limit(50), "load calendar outbox", 50) : []);
   await dispatchCalendar(list, "added to", failEvent, (c) => c.createEvent?.bind(c), "calendar event", { table: "calendar_outbox", status: "creating" });
 }
 

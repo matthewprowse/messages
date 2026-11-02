@@ -12,7 +12,7 @@ import { CircleCheck, ImagePlus, Mail, RefreshCw } from "lucide-react";
 import { track } from "@/lib/analytics";
 import { useAuth } from "@/lib/auth";
 import { connectGoogle, googleErrorText, postAsUser, saveOnboarding, SETUP_STEPS, useOnboardingMeta, useSignInName, type SetupStep } from "@/lib/onboarding";
-import { ROLES, useMockImport, type Role } from "@/lib/onboarding-demo";
+import { foundCounts, importSettled, ROLES, type Role } from "@/lib/onboarding-findings";
 import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import type { Account, Provider } from "@/lib/types";
@@ -62,7 +62,7 @@ export function SetupDialog() {
 }
 
 function Setup({ saved, fresh }: { saved: SetupStep; fresh: boolean }) {
-  const { accounts, profile, dispatch, loading } = useApp();
+  const { accounts, profile, dispatch, loading, threads, contacts } = useApp();
   const signInName = useSignInName();
   const router = useRouter();
   const [step, setStep] = useState<SetupStep>(saved);
@@ -87,17 +87,18 @@ function Setup({ saved, fresh }: { saved: SetupStep; fresh: boolean }) {
   const live = (providers: Provider[]) => accounts.some((a) => providers.includes(a.provider) && a.status !== "disconnected" && a.status !== "error" && !(a.provider === "whatsapp" && a.status === "connecting"));
   const channels = { mail: live(["gmail", "icloud", "outlook", "imap"]), whatsapp: live(["whatsapp"]) };
   const connected = channels.mail || channels.whatsapp || live(["google_calendar", "icloud_calendar", "outlook_calendar"]);
-  const imported = useMockImport(connected, channels);
+  // Real numbers: what the workers have brought in so far. Done once no mail or WhatsApp account is still syncing.
+  const imported = { started: connected, done: connected && !loading && importSettled(accounts), counts: foundCounts(threads, contacts.length) };
 
   // Nothing to learn from or tidy without an account, so those steps drop out.
   const steps = useMemo<SetupStep[]>(() => SETUP_STEPS.filter((s) => connected || (s !== "learned" && s !== "contacts")), [connected]);
   const at = Math.max(0, steps.indexOf(step));
 
-  const go = async (to: SetupStep | "done", outcome: "done" | "skipped" = "done", tour?: "pending" | "done") => {
+  const go = async (to: SetupStep | "done", outcome: "done" | "skipped" = "done") => {
     track("onboarding_step", { step, outcome });
     setBusy(true);
     try {
-      await saveOnboarding({ onboarding: to, ...(tour ? { tour } : {}) });
+      await saveOnboarding({ onboarding: to, tour: "done" });
       if (to === "done") router.replace("/summary");
       else setStep(to);
     } catch {
@@ -146,7 +147,7 @@ function Setup({ saved, fresh }: { saved: SetupStep; fresh: boolean }) {
           {step === "learned" && <LearnedStep />}
           {step === "contacts" && <ContactsStep />}
           {step === "draft" && <DraftStep />}
-          {step === "ready" && <ReadyStep finish={(tour) => go("done", "done", tour)} />}
+          {step === "ready" && <ReadyStep finish={() => go("done")} />}
         </DialogContent>
       </Dialog>
     </SetupContext.Provider>
@@ -389,23 +390,22 @@ function AboutStep({ onLeave }: { onLeave: () => void }) {
 // 6. Ready
 // ---------------------------------------------------------------------------------------------------------
 
-function ReadyStep({ finish }: { finish: (tour: "pending" | "done") => void }) {
+function ReadyStep({ finish }: { finish: () => void }) {
   const { back, busy, channels, imported, firstName } = useSetup();
   const done = [
     (channels.mail || channels.whatsapp) && "Your accounts are connected and stay in sync.",
-    imported.done && `${imported.counts.conversations.toLocaleString()} conversations are sorted, with what needs you at the top.`,
-    "Konva knows about your work and how you write. Change it any time in Settings, under Personalisation.",
+    imported.done && imported.counts.conversations > 0 && `${imported.counts.conversations.toLocaleString()} conversations have come in so far, with what needs you at the top.`,
+    "Tell Konva about your work in Settings, under Personalisation. It learns how you write from the replies you send.",
     "Open any conversation to reply with a tap, a few words, or your own text tidied up.",
   ].filter(Boolean) as string[];
   return (
     <StepFrame
       title={firstName ? `You're Ready, ${firstName}` : "You're Ready"}
-      description="Here's what's set up. A short tour shows you where everything is."
+      description="Here's what's set up."
       footer={
         <>
           {back && <Button variant="ghost" disabled={busy} onClick={back}>Back</Button>}
-          <Button variant="secondary" disabled={busy} onClick={() => finish("done")}>Start Using Konva</Button>
-          <Button disabled={busy} onClick={() => finish("pending")}>Show Me Around</Button>
+          <Button disabled={busy} onClick={finish}>Start Using Konva</Button>
         </>
       }
     >

@@ -62,6 +62,11 @@ export interface PendingSend {
   status: "queued" | "sending" | "sent" | "failed";
   error?: string;
   attachments?: Attachment[];
+  /** What a retry needs to send the same thing again: the From address and, for Reply All, who it went to. */
+  fromAddress?: string;
+  copies?: { to: string[]; cc: string[] };
+  /** Files the row was queued with. Placeholders reloaded from the outbox have the count but not the files. */
+  fileCount?: number;
 }
 
 /**

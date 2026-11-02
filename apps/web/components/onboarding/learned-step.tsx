@@ -1,40 +1,40 @@
 "use client";
 
-// 3. What Konva found: how much came in, and the profile it wrote from it, to read, edit and refine
-// before it is used. Kept only when you continue, and only into settings you have not filled in yourself.
+// 3. What Konva has so far: the real counts from your accounts, an About You started from your own words, and the
+// people you talk to most (from your real conversations). How you write is shown as an example only: Konva learns
+// it from replies it has read, and nothing on this step is saved unless it came from you or from your real data.
 
 import { useEffect, useState } from "react";
 import { Mail, MessagesSquare, Sparkles, Users, X } from "lucide-react";
-import { MOCK_PEOPLE, MOCK_WRITING, mockAbout, mockRefine, peopleText, type Person } from "@/lib/onboarding-demo";
+import { aboutSeed, keepPatch, topPeople, type Person } from "@/lib/onboarding-findings";
 import { useApp } from "@/lib/store";
 import { BrandLogo } from "@/components/provider-logo";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { StepFrame, useSetup } from "./setup-context";
 
+/** Shown under How You Write: a sample of the kind of note Konva will keep, not a finding about this person. */
+const WRITING_EXAMPLE = "Short and friendly. You open with the person's first name, keep most replies to two or three sentences, and sign off with just your first name.";
+
 export function LearnedStep() {
   const { next, back, busy, imported, channels, role, extra } = useSetup();
-  const { profile, dispatch } = useApp();
+  const { profile, dispatch, threads, contacts } = useApp();
   const [about, setAbout] = useState("");
-  const [writing, setWriting] = useState("");
   const [people, setPeople] = useState<Person[]>([]);
   const ready = imported.done;
 
-  // Written once the import is in, from the import and what you said about yourself.
+  // Filled once the import is in: About You from what you said, the people from your real conversations.
   useEffect(() => {
     if (!ready) return;
-    setAbout((a) => a || mockAbout(role, extra));
-    setWriting((w) => w || MOCK_WRITING);
-    setPeople((p) => (p.length ? p : MOCK_PEOPLE));
-  }, [ready, role, extra]);
+    setAbout((a) => a || aboutSeed(role, extra));
+    setPeople((p) => (p.length ? p : topPeople(threads, contacts)));
+  }, [ready, role, extra, threads, contacts]);
 
   const keep = () => {
-    const patch = {
-      ...(!profile.about.trim() && about.trim() ? { about: about.trim() } : {}),
-      ...(!profile.people.trim() && people.length ? { people: peopleText(people) } : {}),
-    };
+    const patch = keepPatch(profile, about, people);
     if (Object.keys(patch).length > 0) dispatch({ type: "patchProfile", patch });
     next();
   };
@@ -42,10 +42,10 @@ export function LearnedStep() {
   const { counts } = imported;
   return (
     <StepFrame
-      title={ready ? "Here's What Konva Found" : "Reading Your Messages"}
+      title={ready ? "Here's What Konva Has" : "Reading Your Messages"}
       description={ready
-        ? "Konva wrote this from your messages. Edit anything, or tell it what to change. It's used to sort and draft for you."
-        : "Konva is bringing in your messages and learning how you work. This takes a moment."}
+        ? "These are the real numbers from your accounts. Edit what Konva will know about you; it's used to sort and draft for you."
+        : "Konva is bringing in your messages. This takes a moment."}
       footer={
         <>
           {back && <Button variant="ghost" disabled={busy} onClick={back}>Back</Button>}
@@ -56,21 +56,31 @@ export function LearnedStep() {
     >
       <div className="space-y-6">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat icon={<Mail className="size-4" />} label="Emails" value={counts.emails} off={!channels.mail} />
-          <Stat icon={<BrandLogo brand="whatsapp" />} label="WhatsApp Messages" value={counts.whatsapp} off={!channels.whatsapp} />
+          <Stat icon={<Mail className="size-4" />} label="Email Conversations" value={counts.emailConversations} off={!channels.mail} />
+          <Stat icon={<BrandLogo brand="whatsapp" />} label="WhatsApp Chats" value={counts.whatsappConversations} off={!channels.whatsapp} />
           <Stat icon={<MessagesSquare className="size-4" />} label="Conversations" value={counts.conversations} />
           <Stat icon={<Users className="size-4" />} label="Contacts" value={counts.contacts} />
         </div>
 
-        <Written title="About You" note="From your role and the conversations you have most." ready={ready}>
-          <Editable value={about} onChange={setAbout} label="About You" rows={4} />
+        <Written title="About You" note="Start from your own words." ready={ready}>
+          <div className="rounded-lg border">
+            <Textarea
+              aria-label="About You"
+              rows={4}
+              value={about}
+              onChange={(e) => setAbout(e.target.value)}
+              placeholder="What you do and who you talk to. You can also add this later in Settings, under Personalisation."
+              className="resize-none rounded-none border-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
+            />
+          </div>
         </Written>
 
-        <Written title="How You Write" note={`From ${Math.min(counts.emails, 200).toLocaleString()} replies you sent.`} ready={ready}>
-          <Editable value={writing} onChange={setWriting} label="How You Write" rows={4} />
+        <Written title="How You Write" note="Learned from replies you send." ready={ready} example>
+          <p className="rounded-lg border p-3 text-sm text-muted-foreground">{WRITING_EXAMPLE}</p>
+          <p className="text-xs text-muted-foreground">An example of what Konva keeps. Yours appears in Settings, under Personalisation, once Konva has read your sent replies. Nothing here is saved.</p>
         </Written>
 
-        <Written title="Who Matters Most" note="The people you reply to fastest and most often." ready={ready}>
+        <Written title="Who Matters Most" note="The people you talk to most." ready={ready}>
           <People people={people} onChange={setPeople} />
         </Written>
       </div>
@@ -87,12 +97,14 @@ function Stat({ icon, label, value, off }: { icon: React.ReactNode; label: strin
   );
 }
 
-/** One thing Konva wrote, waiting as a skeleton until the import is in. */
-function Written({ title, note, ready, children }: { title: string; note: string; ready: boolean; children: React.ReactNode }) {
+/** One section, waiting as a skeleton until the import is in. An example is labelled as one. */
+function Written({ title, note, ready, example, children }: { title: string; note: string; ready: boolean; example?: boolean; children: React.ReactNode }) {
   return (
     <section className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="flex items-center gap-1.5 text-sm font-medium"><Sparkles className="size-3.5 text-muted-foreground" /> {title}</h3>
+        <h3 className="flex items-center gap-1.5 text-sm font-medium">
+          <Sparkles className="size-3.5 text-muted-foreground" /> {title} {example && <Badge variant="outline">Example</Badge>}
+        </h3>
         {ready && <span className="truncate text-xs text-muted-foreground">{note}</span>}
       </div>
       {ready ? children : (
@@ -103,35 +115,6 @@ function Written({ title, note, ready, children }: { title: string; note: string
         </div>
       )}
     </section>
-  );
-}
-
-/** Text to edit directly, or to change by saying how. */
-function Editable({ value, onChange, label, rows }: { value: string; onChange: (v: string) => void; label: string; rows: number }) {
-  const [ask, setAsk] = useState("");
-  const [thinking, setThinking] = useState(false);
-  const change = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!ask.trim()) return;
-    setThinking(true);
-    // MOCK: the AI worker rewrites it with the instruction.
-    setTimeout(() => { onChange(mockRefine(value, ask)); setAsk(""); setThinking(false); }, 900);
-  };
-  return (
-    <div className="rounded-lg border">
-      <Textarea
-        aria-label={label}
-        rows={rows}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        readOnly={thinking}
-        className="resize-none rounded-none border-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
-      />
-      <form onSubmit={change} className="flex items-center gap-2 border-t p-2">
-        <Input value={ask} onChange={(e) => setAsk(e.target.value)} disabled={thinking} placeholder="Tell Konva What to Change" aria-label={`Change ${label}`} className="h-8 flex-1" />
-        <Button type="submit" variant="secondary" size="sm" disabled={thinking || !ask.trim()}>{thinking ? "Changing…" : "Change"}</Button>
-      </form>
-    </div>
   );
 }
 

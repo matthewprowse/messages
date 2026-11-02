@@ -42,7 +42,7 @@ from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .pricing import AUDIO_TOKENS_PER_SECOND, cost_usd
 from .supabase import Supabase, SupabaseError
-from .text import UNTRUSTED
+from .text import UNTRUSTED, fenced, new_fence, plain_dashes
 from .transcribe import audio_type
 from .vault import Vault
 
@@ -110,7 +110,9 @@ TRANSCRIBE_SCHEMA: dict[str, Any] = {
 }
 
 SUMMARY_SYSTEM = """You write a short summary of a meeting, from its transcript, for the person you work
-for: a South African professional who works with clients and was in the meeting.
+for: a South African professional who works with clients and was in the meeting. The prompt says who they
+are ("The person you work for") and the people in the meeting, who may include them under the same name or
+another.
 
 summary: two to four sentences of plain prose on what the meeting was about, what was decided and what is
 still open. No headings, lists or markdown. Name people as the transcript does.
@@ -118,7 +120,9 @@ action_items: each thing someone agreed to do, as one short sentence that says w
 you work for, in which case start with the verb) and by when if a time was said, such as "Sarah to send the
 signed offer by Friday" or "Book the follow-up for next week". At most 10, the most important first, and an
 empty list when nothing was agreed.
-Write in English whatever language was spoken. Never use em dashes or en dashes.""" + MEETING_DATA
+Write the summary and action items in the language the meeting was mostly held in (Afrikaans for an Afrikaans
+meeting, English for English), keeping names, figures and terms as they were said. When it is mixed or unclear,
+use British English. Never use em dashes or en dashes.""" + MEETING_DATA
 
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -308,18 +312,20 @@ def transcript_text(segments: list[dict[str, Any]], limit: int = SUMMARY_CHARS) 
     return f"{head}\n[... the middle of the meeting is left out ...]\n{tail}"
 
 
-def summary_prompt(platform: str, title: str, when: str, names: list[str], transcript: str) -> str:
-    head = [f"Meeting on {PLATFORMS.get(platform, 'a call')}" + (f": {title}" if title else ""), f"Started: {when}"]
-    if names:
-        head.append("People: " + ", ".join(names))
+def summary_prompt(platform: str, title: str, when: str, names: list[str], transcript: str, me: str = "", fence: str | None = None) -> str:
+    """me is the user's own name, so "you" in an action item can be told from the others. The title and the
+    people's names come from the meeting's invite, written by others, so they sit between marked lines."""
+    head = [f"The person you work for: {me or 'not given'}", f"Meeting on {PLATFORMS.get(platform, 'a call')}", f"Started: {when}"]
+    given = "\n".join(([f"Title: {title}"] if title else []) + (["People: " + ", ".join(names)] if names else []))
+    if given:
+        head += ["The invite's title and people (written by others, between the marked lines):", fenced(given, fence or new_fence(given))]
     return "\n".join(head) + "\n\nTranscript:\n" + transcript
 
 
 def tidy(text: Any, limit: int) -> str:
     """Model text as stored: one line of plain words, no dashes as punctuation, cut at limit."""
     t = re.sub(r"\s+", " ", str(text or "")).strip()
-    t = t.replace(" — ", ", ").replace("—", ", ").replace(" – ", ", ").replace("–", "-")
-    return t[:limit].strip()
+    return plain_dashes(t)[:limit].strip()
 
 
 class Meetings:
@@ -473,6 +479,11 @@ class Meetings:
         names = [re.sub(r"\s+", " ", str(self.vault.open(m["user_id"], NAME, r.get("name")) or "")).strip() for r in rows]
         return list(dict.fromkeys(n[:80] for n in names if n))
 
+    def _me(self, user_id: str) -> str:
+        """The user's own name (profiles.display_name, as triage and drafts give it), or empty."""
+        rows = self.db.select("profiles", {"select": "display_name", "user_id": f"eq.{user_id}", "limit": "1"})
+        return re.sub(r"\s+", " ", str((rows[0].get("display_name") if rows else "") or "")).strip()[:80]
+
     # -- Summaries --------------------------------------------------------------------------------------
 
     def summarise_once(self) -> int:
@@ -497,9 +508,9 @@ class Meetings:
         result = self.gemini.json(
             self.model,
             SUMMARY_SYSTEM,
-            summary_prompt(m.get("platform") or "", title, str(m.get("started_at") or "")[:16].replace("T", " ") + " UTC", self._names(m), transcript_text(segments)),
+            summary_prompt(m.get("platform") or "", title, str(m.get("started_at") or "")[:16].replace("T", " ") + " UTC", self._names(m), transcript_text(segments), self._me(user)),
             SUMMARY_SCHEMA,
-            UsageContext(user, "learn", m.get("account_id")),
+            UsageContext(user, "transcribe", m.get("account_id")),  # the meetings share of the allowance; "learn" has a far smaller one
             temperature=0.2,
             thinking="low",
             max_output=SUMMARY_OUTPUT,

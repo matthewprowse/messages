@@ -19,6 +19,28 @@ export function isRoleAddress(address: string): boolean {
   return ROLE_LOCAL.test(address.split("@")[0] ?? "");
 }
 
+/**
+ * Whether a display name is a plausible person ("Thandi Mokoena", "T Mokoena") whose name makes up the company
+ * domain (thandimokoena, tmokoena, mokoenathandi) and who writes from an address that carries their own name.
+ * Both signals are needed so a brand written as two words ("Virgin Active" from virginactive.com) stays a company.
+ * org is the squashed organisation name.
+ */
+function isSoleTraderName(name: string, emails: string[], org: string): boolean {
+  const words = name.trim().split(/\s+/);
+  if (words.length < 2 || words.length > 4 || !words.every((w) => /^\p{L}[\p{L}'’-]*\.?$/u.test(w))) return false;
+  if (words.some((w) => BRAND_WORDS.test(w) || ROLE_LOCAL.test(squash(w)) || AUTOMATED_PARTS.some((a) => squash(w).includes(a)))) return false;
+  const first = squash(words[0]);
+  const last = squash(words[words.length - 1]);
+  if (!first || !last) return false;
+  const full = squash(name);
+  if (!(org === full || org === first + last || org === last + first || org === first[0] + last || org === last + first[0])) return false;
+  // The sender's own address names them (thandi@, thandi.mokoena@, tm@), not a shared inbox.
+  return emails.some((e) => {
+    const local = squash(e.split("@")[0] ?? "");
+    return !isRoleAddress(e) && local.length >= 2 && (local.includes(first) || local.includes(last) || local === first[0] + last || local === first[0] + last[0]);
+  });
+}
+
 export function isCompanySender(c: { name: string; emails: string[]; phones: string[]; organizationName: string | null }): boolean {
   // Anyone with a phone number is a person. Otherwise only contacts filed under a company move there.
   if (c.phones.length > 0) return false;
@@ -28,6 +50,8 @@ export function isCompanySender(c: { name: string; emails: string[]; phones: str
   const name = squash(c.name);
   const org = squash(c.organizationName);
   if (!name || !org) return false;
+  // "Thandi Mokoena" writing from thandimokoena.co.za is a sole trader: a person who happens to own the domain.
+  if (isSoleTraderName(c.name, c.emails, org)) return false;
   // "Emirates" or "Emirates Skywards" from emirates.com, but not "Andrew Stegmann | Relocation Africa".
   if (name === org || name.startsWith(org)) return true;
   // "Adam from UX Pilot", "Kate at Notion", "Max Bishop via LinkedIn" or "Geordin on LinkedIn": a person's

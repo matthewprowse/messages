@@ -10,7 +10,7 @@ import { X } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { defaultCountryCode, existingChat, normalisePhone, PHONE_HINT, searchPhoneContacts, linkedAccount } from "@/lib/new-items";
 import { ContactAvatar } from "@/components/primitives";
-import { useComposeSend } from "@/components/compose-dialog";
+import { noEnterSubmit, useComposeSend } from "@/components/compose-dialog";
 import { ComposeAi, type Composed } from "@/components/compose-ai";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -112,7 +112,8 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
             Link WhatsApp first to start a chat. <Link href="/settings/accounts/whatsapp" className="underline underline-offset-4" onClick={() => onOpenChange(false)}>Link WhatsApp</Link>
           </p>
         ) : (
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+          // Enter in the number or name box picks a suggestion at most; it never sends.
+          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }} onKeyDown={noEnterSubmit}>
             <div className="grid gap-2">
               <Label htmlFor="whatsapp-to">To</Label>
               {picked ? (

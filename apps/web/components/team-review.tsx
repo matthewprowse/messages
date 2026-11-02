@@ -63,8 +63,8 @@ export function TeamReview() {
   const [busy, setBusy] = useState(false);
 
   const recent = !!joinedAt && Date.now() - Date.parse(joinedAt) < RECENT_DAYS * 86_400_000;
-  // Setup and the tour come first for someone brand new.
-  const settled = (!meta.onboarding || meta.onboarding === "done") && meta.tour !== "pending";
+  // Setup comes first for someone brand new.
+  const settled = !meta.onboarding || meta.onboarding === "done";
   const open = !!userId && pending && recent && settled && !AWAY(pathname) && suggested.length > 0;
   if (!open || !team) return null;
 

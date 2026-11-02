@@ -1,0 +1,8 @@
+{
+  "baileys": "7.0.0-rc14",
+  "libsignal": "6.0.0",
+  "whatsapp-rust-bridge": {
+    "version": "0.5.4",
+    "files": { "dist/index.js": "13586c5d558b7a683f1aa5678dadf8cbe664182fbc63608d294c9a5c7378e206" }
+  }
+}

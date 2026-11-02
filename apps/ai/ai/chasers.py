@@ -21,7 +21,7 @@ from . import log
 from .fields import BODY, HTML
 from .gemini import Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
-from .text import UNTRUSTED, clean
+from .text import UNTRUSTED, clean, fenced, new_fence
 from .vault import Vault
 
 MIN_AGE = timedelta(days=1)  # read a day in, so the Waiting filter (two days) is ready when it is due
@@ -60,14 +60,14 @@ SCHEMA: dict[str, Any] = {
 }
 
 
-def build_prompt(cases: list[tuple[str, str, str]]) -> str:
-    """cases: (id, the message before yours or "", your last message)."""
+def build_prompt(cases: list[tuple[str, str, str]], fence: str | None = None) -> str:
+    """cases: (id, the message before yours or "", your last message). Each conversation sits between lines
+    carrying a random code (fence), as the system prompt says: the other person's words are data."""
+    fence = fence or new_fence()
     out = []
     for cid, before, mine in cases:
-        out.append(f"Conversation {cid}:")
-        if before:
-            out.append(f"--- Them:\n{before}")
-        out.append(f"--- Me (last):\n{mine}\n")
+        body = (f"--- Them:\n{before}\n" if before else "") + f"--- Me (last):\n{mine}"
+        out += [f"Conversation {cid}:", fenced(body, fence), ""]
     return "\n".join(out)
 
 

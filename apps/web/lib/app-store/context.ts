@@ -28,6 +28,8 @@ export interface Ctx extends Omit<State, "byThread"> {
   hasOlder: (threadId: string) => boolean;
   /** Removes a queued or failed reply placeholder by its outbox id (a failed send you deleted or retried). */
   removePending: (outboxId: string) => void;
+  /** Queues a failed send again with its text, From address and Reply All recipients. Resolves false when it may have gone out already or could not be queued. */
+  retryPending: (outboxId: string) => Promise<boolean>;
   /** Starts loading a conversation about to be opened. Does nothing once it is loaded or loading. */
   prefetchMessages: (threadId: string) => void;
   listThreads: (view: View, filter: ListFilter) => Thread[];

@@ -429,9 +429,9 @@ class ComposeDrafts(unittest.TestCase):
     def test_a_new_email_gets_a_subject_and_no_conversation(self):
         db, gemini = self.run_compose("email")
         self.assertEqual(db.calls, ["compose_context"])
-        self.assertIn("Writing to: Sam", gemini.prompts[0])
+        self.assertRegex(gemini.prompts[0], r"Writing to \(name[^\n]*\n<<<UNTRUSTED-[0-9a-f]+\nSam\nUNTRUSTED-")
         self.assertIn("A new email message, not a reply", gemini.prompts[0])
-        self.assertTrue(gemini.prompts[0].rstrip().endswith("Write their new email message to Sam, with its subject."))
+        self.assertTrue(gemini.prompts[0].rstrip().endswith("Write their new email message to the person named above, with its subject."))
         self.assertIn("subject", gemini.schema["properties"])
         self.assertIn("This starts a conversation", gemini.system)
         [written] = [p for t, f, p in db.updates if p.get("status") == "active"]

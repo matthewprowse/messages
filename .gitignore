@@ -18,3 +18,4 @@ supabase/.temp/
 apps/linkedin/konva-linkedin
 .pytest_cache
 *.pyc
+captures/

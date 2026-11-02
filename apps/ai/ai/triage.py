@@ -36,7 +36,7 @@ from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, billing_paused, not_in
 from .supabase import Supabase, in_list
-from .text import UNTRUSTED, clean, new_fence
+from .text import UNTRUSTED, clean, fenced, new_fence
 from .vault import Vault
 
 PRIORITIES = ["urgent", "important", "normal", "low"]
@@ -257,9 +257,14 @@ def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]], fence: str | N
         "Their own addresses: " + (", ".join(ctx.own_addresses) or "not given"),
         f"About them: {ctx.about or 'not given'}",
         f"People who matter to them: {ctx.important_people or 'not given'}",
-        "Their recent corrections: " + ("; ".join(ctx.corrections[:12]) or "none"),
         f"Write summaries in: {LANGUAGE_NAMES.get(ctx.language, 'the language and spelling they write in themselves (judge by their own sent emails and the email thread), British English when unclear')}",
     ]
+    # Each correction names a conversation's subject, written by someone else, so the list sits between marked lines.
+    if ctx.corrections:
+        listed = "\n".join(ctx.corrections[:12])
+        lines += ["Their recent corrections (subjects written by other people, between the marked lines):", fenced(listed, new_fence(listed))]
+    else:
+        lines.append("Their recent corrections: none")
     for i, e in enumerate(emails, 1):
         lines += [
             "",
@@ -755,16 +760,23 @@ class Triage:
         threads = sorted({m["thread_id"] for m in ask if not (m.get("list_unsubscribe") or m.get("is_bulk"))})
         if not threads:
             return []
-        rows = self.db.select(
-            "messages",
-            {
-                "select": "id,user_id,thread_id,direction,sent_at,transcript,body_text,body_html",
-                "thread_id": in_list(threads),
-                "sent_at": f"lte.{max(m['sent_at'] for m in ask)}",
-                "order": "sent_at.desc,id.desc",
-                "limit": str((CONTEXT_MESSAGES + 2) * len(threads)),
-            },
-        )
+        # One read per thread: a single capped read across all of them let a busy thread's history use up the cap
+        # and leave the others with no context.
+        newest: dict[str, str] = {}
+        for m in ask:
+            newest[m["thread_id"]] = max(newest.get(m["thread_id"], m["sent_at"]), m["sent_at"])
+        rows: list[dict[str, Any]] = []
+        for thread in threads:
+            rows += self.db.select(
+                "messages",
+                {
+                    "select": "id,user_id,thread_id,direction,sent_at,transcript,body_text,body_html",
+                    "thread_id": in_list([thread]),
+                    "sent_at": f"lte.{newest[thread]}",
+                    "order": "sent_at.desc,id.desc",
+                    "limit": str(CONTEXT_MESSAGES + 2),
+                },
+            )
         users = {m["thread_id"]: m["user_id"] for m in ask}
         for r in rows:
             user_id = users[r["thread_id"]]

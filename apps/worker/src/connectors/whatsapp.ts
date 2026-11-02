@@ -10,7 +10,6 @@
 
 import makeWASocket, {
   Browsers,
-  DisconnectReason,
   WAMessageStubType,
   fetchLatestWaWebVersion,
   isJidBroadcast,
@@ -49,6 +48,8 @@ import { BoundedMap } from "../whatsapp/bounded-map";
 import { messageFromRef, mediaRef, saveMedia, type MediaRow, type StoredMedia } from "../whatsapp/media";
 import { describe, e164, formatPairingCode, nameMentions, oneLine, pairingDigits, unreadInHistory } from "../whatsapp/normalize";
 import { quietSignalLogs } from "../whatsapp/quiet-signal";
+import { decideClose, noCloses } from "../whatsapp/close-policy";
+import { ownsAccount } from "../shard";
 import { HISTORY_PER_CALL, ingestWhatsApp, ingestWhatsAppHistory, type WhatsAppStored } from "../whatsapp/ingest";
 import { retryStore } from "../whatsapp/retry";
 import { saveContactPhoto, saveGroupPhoto } from "../photos/store";
@@ -110,6 +111,9 @@ export class WhatsAppConnector {
   private open = false;
   private stopped = false;
   private readonly backoff = new Backoff();
+  /** Closes of each troublesome kind since the last open, and the least wait before the next reconnect (close-policy.ts). */
+  private closes = noCloses();
+  private minDelayMs = 0;
   /** Message storage runs in order, one at a time, so history and live messages never race. */
   private readonly queue = new SerialQueue();
   /** File downloads, one at a time, apart from message storage so a slow file never holds up messages. */
@@ -168,7 +172,8 @@ export class WhatsAppConnector {
       this.clearTimers();
       if (this.stopped || outcome === "stop") break;
       if (outcome === "restart") continue; // WhatsApp asks for a fresh connection right after linking
-      const delay = this.backoff.next();
+      const delay = Math.max(this.backoff.next(), this.minDelayMs);
+      this.minDelayMs = 0;
       log.info("whatsapp reconnecting", { account: this.id, inMs: delay });
       await sleep(delay);
     }
@@ -208,6 +213,7 @@ export class WhatsAppConnector {
       getMessage: (key) => this.storedMessage(key),
       cachedGroupMetadata: async (jid) => this.groups.get(jid),
       generateHighQualityLinkPreview: false,
+      // WAM telemetry has no switch in Baileys: it only goes out if sock.sendWAMBuffer is called, which we never do (README, "Updating Baileys").
     });
     this.sock = sock;
 
@@ -277,6 +283,7 @@ export class WhatsAppConnector {
   private async onOpen(sock: WASocket) {
     this.open = true;
     this.backoff.reset();
+    this.closes = noCloses();
     const me = sock.user;
     const phone = e164(me?.id);
     must(
@@ -319,29 +326,31 @@ export class WhatsAppConnector {
     log.info("whatsapp connection closed", { account: this.id, status: status ?? null });
     if (this.stopped) return "stop";
 
-    if (status === DisconnectReason.restartRequired) return "restart";
-    if (status === DisconnectReason.loggedOut) {
+    const { action, counts } = decideClose({ status, wasLinked, ownsAccount: ownsAccount(this.id), counts: this.closes });
+    this.closes = counts;
+    if (action.kind === "restart") return "restart";
+    if (action.kind === "logged-out") {
       // The phone removed this device, or the link lapsed because the phone was offline for 14 days.
       // The session is useless now, so it is wiped and a new link starts from a fresh QR code.
       await this.auth?.wipe().catch((err) => log.warn("whatsapp wipe failed", { account: this.id, code: errorCode(err) }));
-      await this.linkFailed("WhatsApp unlinked this device. Scan the QR code again.");
+      await this.linkFailed(action.detail);
       log.warn("whatsapp logged out", { account: this.id });
       return "stop";
     }
-    if (!wasLinked && status === DisconnectReason.timedOut) {
-      await this.linkFailed("The code expired before it was scanned. Scan the QR code again.");
+    if (action.kind === "link-expired") {
+      await this.linkFailed(action.detail);
       return "stop";
     }
-    if (status === DisconnectReason.connectionReplaced) {
-      await setAccountStatus(this.id, "error", "Another copy of the worker took over this WhatsApp link. Stop the other one, then reconnect.").catch(() => undefined);
+    if (action.kind === "yield") {
+      // Another worker owns this account now and its socket replaced ours. Stopping leaves the link and status to it.
+      log.info("whatsapp yielded to the owning worker", { account: this.id });
       return "stop";
     }
-    if (status === DisconnectReason.forbidden || status === DisconnectReason.multideviceMismatch) {
-      await this.auth?.wipe().catch(() => undefined);
-      await setAccountStatus(this.id, "error", "WhatsApp refused this device. Scan the QR code again.").catch(() => undefined);
-      return "stop";
-    }
-    await setAccountStatus(this.id, "connecting", "Connection lost. Reconnecting.").catch(() => undefined);
+    // A refusal, a replaced link or a damaged session is retried slowly and never wipes: wiping loses the whole link.
+    this.minDelayMs = action.minDelayMs;
+    if (action.minDelayMs > 0) log.warn("whatsapp reconnect delayed", { account: this.id, status: status ?? null, inMs: action.minDelayMs, attention: action.attention !== null });
+    if (action.attention) await setAccountStatus(this.id, "error", action.attention).catch(() => undefined);
+    else await setAccountStatus(this.id, "connecting", "Connection lost. Reconnecting.").catch(() => undefined);
     return "reconnect";
   }
 

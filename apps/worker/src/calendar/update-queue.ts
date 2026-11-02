@@ -2,6 +2,7 @@
 
 import type { TablesUpdate } from "@messages/db";
 import { db, must, retryWrite } from "../db";
+import { readQueued } from "../in-chunks";
 import { errorCode, log } from "../log";
 import type { StoredCalendarEvent } from "./delete-event";
 import { openEvent, sealEvent } from "./sealed";
@@ -43,8 +44,9 @@ export async function settleUpdated(id: string, note: string | null = null) {
 /** The oldest queued changes, of the given accounts when asked (a worker reads only the accounts it runs). */
 export async function queuedUpdates(accountIds?: string[]): Promise<CalendarUpdateRow[]> {
   if (accountIds && accountIds.length === 0) return [];
-  const query = db.from("calendar_updates").select("*").eq("status", "queued");
-  return must(await (accountIds ? query.in("account_id", accountIds) : query).order("created_at").limit(50), "load calendar updates");
+  const query = () => db.from("calendar_updates").select("*").eq("status", "queued");
+  if (!accountIds) return must(await query().order("created_at").limit(50), "load calendar updates");
+  return readQueued(accountIds, (slice) => query().in("account_id", slice).order("created_at").limit(50), "load calendar updates", 50);
 }
 
 /** An update left "updating" by a worker that stopped mid-request may or may not have happened, so it is failed rather than sent again. */

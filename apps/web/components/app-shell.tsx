@@ -1,7 +1,7 @@
 "use client";
 
 // The frame around every signed-in page: navigation rail and bottom bar, the New menu, search palette, sync bar,
-// and the dialogs that open over the app (setup, tour, team review).
+// and the dialogs that open over the app (setup, team review).
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -20,10 +20,9 @@ import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-// Search (with cmdk), the tour, setup and team review load in their own chunks, so the first page does not carry them.
+// Search (with cmdk), setup and team review load in their own chunks, so the first page does not carry them.
 const SearchCommand = dynamic(() => import("@/components/search-command").then((m) => m.SearchCommand), { ssr: false });
 const ShortcutsDialog = dynamic(() => import("@/components/search-command").then((m) => m.ShortcutsDialog), { ssr: false });
-const AppTour = dynamic(() => import("@/components/tour").then((m) => m.AppTour), { ssr: false });
 const SetupDialog = dynamic(() => import("@/components/onboarding/setup-dialog").then((m) => m.SetupDialog), { ssr: false });
 const TeamReview = dynamic(() => import("@/components/team-review").then((m) => m.TeamReview), { ssr: false });
 
@@ -194,7 +193,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const onLogin = pathname === "/login";
   const onInvite = pathname.startsWith("/invite/");
-  const onOnboarding = pathname === "/onboarding";
   const isDetail = useIsDetailRoute();
   const meta = useOnboardingMeta();
   const team = useMyTeam();
@@ -211,17 +209,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [searchReady]);
 
-  // The dialogs only when they could show: setup and the tour until they are done, team review for someone in a team.
-  const onboarding = meta.onboarding !== "done" ||meta.tour === "pending";
+  // The dialogs only when they could show: setup until it is done, team review for someone in a team.
+  const onboarding = meta.onboarding !== "done";
   const reviewPending = !!team && meta.teamReview !== team.workspaceId;
 
   // Everything except the sign-in page and an invite link needs a signed-in user: row-level security returns nothing otherwise.
   // An invite page asks someone to sign in itself, so the link they were sent is not lost.
   useEffect(() => {
-    if (session === null && !onLogin && !onInvite && !onOnboarding) router.replace("/login");
-  }, [session, onLogin, onInvite, onOnboarding, router]);
+    if (session === null && !onLogin && !onInvite) router.replace("/login");
+  }, [session, onLogin, onInvite, router]);
 
-  if (onLogin || onInvite || onOnboarding) return <main className="h-dvh w-full">{children}</main>;
+  if (onLogin || onInvite) return <main className="h-dvh w-full">{children}</main>;
   if (!session) return <div className="h-dvh w-full" />; // checking the stored session, or redirecting
 
   return (
@@ -241,7 +239,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="min-h-0 flex-1">{children}</div>
       </main>
       <BottomBar hidden={isDetail} />
-      {onboarding && <AppTour />}
       {onboarding && <Suspense><SetupDialog /></Suspense>}
       {reviewPending && <TeamReview />}
     </div>

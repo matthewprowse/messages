@@ -218,13 +218,23 @@ export function helperBuilt(path = helperPath()): boolean {
   return existsSync(path);
 }
 
+/** What the helper (a Go program) may see: the basics it needs to run and verify TLS. Nothing else, so a bug or a bad dependency in it cannot read the service-role key or the encryption keys. Proxy variables are set per helper, never inherited. */
+const HELPER_ENV_ALLOW = ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "TZ", "LANG", "LANGUAGE", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT"];
+/** The allow-listed part of an environment, plus any LC_* locale variable. */
+export function allowedEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(base)) {
+    if (value !== undefined && (HELPER_ENV_ALLOW.includes(name) || name.startsWith("LC_"))) env[name] = value;
+  }
+  return env;
+}
+
 /**
  * The environment a helper runs in. With a proxy, every request the helper makes goes through it: linkedingo
  * reads the standard proxy variables, once, when it starts, so this is per helper and so per account.
  */
 export function helperEnv(proxy?: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env = { ...base };
-  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"]) delete env[name];
+  const env = allowedEnv(base);
   if (proxy?.trim()) {
     env.HTTPS_PROXY = proxy.trim();
     env.HTTP_PROXY = proxy.trim();

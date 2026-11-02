@@ -1,7 +1,6 @@
 "use client";
 
-// Settings page for connecting Google (Gmail, Calendar, Tasks, and Meet and Chat when chosen): in-app sign-in via ConnectGoogle,
-// with terminal steps below as the developer route.
+// Settings page for connecting Google (Gmail, Calendar, Tasks, and Meet and Chat when chosen): in-app sign-in via ConnectGoogle.
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -14,69 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { SettingsRow, SettingsRows } from "@/components/settings/sections";
-import { Command, SetupSteps, type SetupStep } from "../setup-steps";
-
-const STEPS: SetupStep[] = [
-  {
-    title: "Create a Google Cloud Project",
-    body: <p>At console.cloud.google.com, choose New Project and name it Messages.</p>,
-  },
-  {
-    title: "Turn On Gmail, Calendar and Tasks",
-    body: <p>Under APIs and Services, then Library, open the Gmail API, the Google Calendar API and the Google Tasks API and choose Enable on each.</p>,
-  },
-  {
-    title: "Turn On Meet and Chat",
-    body: (
-      <p>
-        Only for Meet Transcripts and Google Chat, which need a Google Workspace account. In the same Library, enable the Google Meet REST API and
-        the Google Chat API. Then open the Google Chat API&apos;s Configuration tab, give the Chat app the name Messages, an avatar URL and a
-        description, turn off Interactive Features, and save. Chat refuses every request until this is done. Transcripts also need a Workspace
-        plan with Meet transcription, turned on in each meeting.
-      </p>
-    ),
-  },
-  {
-    title: "Set Up the Consent Screen",
-    body: (
-      <p>
-        Open Google Auth Platform and choose Get Started. Name the app Messages, use your own email for support and contact, and choose External.
-        Then, under Audience, choose Publish App so it says In Production. An app left in Testing signs you out every 7 days.
-      </p>
-    ),
-  },
-  {
-    title: "Create the Sign-In Client",
-    body: (
-      <p>
-        Under Clients, choose Create Client with the application type Desktop App. Copy the client ID and secret into apps/worker/.env as
-        GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Google shows the secret only once.
-      </p>
-    ),
-  },
-  {
-    title: "Run the Connect Command",
-    body: (
-      <>
-        <p>From the project folder:</p>
-        <Command>pnpm connect:google</Command>
-        <p className="mt-2">
-          It asks whether to connect Meet transcripts and Google Chat as well. Google then opens in your browser. It warns that the app is not
-          verified, because it is your own: choose Advanced, then Go to Messages. Leave every box ticked, including Google Tasks.
-        </p>
-      </>
-    ),
-  },
-  {
-    title: "Restart the Worker",
-    body: (
-      <>
-        <Command>pnpm worker</Command>
-        <p className="mt-2">It reads the client from .env when it starts. Gmail then imports the last 30 days, and new mail appears within seconds.</p>
-      </>
-    ),
-  },
-];
+import { SetupSteps } from "../setup-steps";
 
 export default function GoogleSetup() {
   return (
@@ -84,7 +21,6 @@ export default function GoogleSetup() {
       provider="google"
       title="Connect Google"
       description="Gmail, Google Calendar and Google Tasks connect with one Google sign-in, and Meet transcripts and Google Chat with it when you choose. The sign-in is stored encrypted and only used to sync."
-      steps={STEPS}
       label="Google"
       watch={["gmail", "google_calendar", "google_tasks", "google_meet"]}
       connect={<Suspense><ConnectGoogle /></Suspense>}

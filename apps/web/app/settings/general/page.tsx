@@ -4,6 +4,7 @@
 
 import { SettingsHeader } from "@/components/settings-header";
 import { AppearanceSection, ProfilePhotoSection, DataSection, LanguageSection, SignInSection, TourSection } from "@/components/settings/sections";
+import { TwoFactorSection } from "@/components/settings/two-factor";
 
 export default function GeneralPage() {
   return (
@@ -16,6 +17,7 @@ export default function GeneralPage() {
         <DataSection />
         <TourSection />
         <SignInSection />
+        <TwoFactorSection />
       </div>
     </>
   );
