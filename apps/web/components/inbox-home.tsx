@@ -39,7 +39,8 @@ function useSentTimes(): string[] | null {
   return times;
 }
 
-export function InboxHome() {
+/** `lists`: the Today, Needs Reply and Important cards; off beside the Summary, which already lists them. */
+export function InboxHome({ lists = true }: { lists?: boolean }) {
   const { threads, loading, profile } = useApp();
   const signInName = useSignInName();
   const { unread, attention } = inboxCounts(threads);
@@ -59,17 +60,17 @@ export function InboxHome() {
             <StatCard label="Unread" value={loading ? undefined : unread} />
             <StatCard label="Need You" value={loading ? undefined : attention} />
           </div>
-          {events && events.length > 0 && (
+          {lists && events && events.length > 0 && (
             <HomeCard title="Today" href="/calendar">
               {events.slice(0, SHOWN).map((e) => <EventRow key={e.id} event={e} today={dayKey(now)} />)}
             </HomeCard>
           )}
-          {sections.reply.length > 0 && (
+          {lists && sections.reply.length > 0 && (
             <HomeCard title="Needs Reply" href="/summary">
               {sections.reply.slice(0, SHOWN).map((t) => <ConversationLink key={t.id} thread={t} />)}
             </HomeCard>
           )}
-          {sections.priority.length > 0 && (
+          {lists && sections.priority.length > 0 && (
             <HomeCard title="Important" href="/summary">
               {sections.priority.slice(0, SHOWN).map((t) => <ConversationLink key={t.id} thread={t} />)}
             </HomeCard>

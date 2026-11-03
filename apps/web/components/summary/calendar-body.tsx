@@ -14,7 +14,7 @@ export function CalendarBody({ failed, pending, events, today, onRetry }: { fail
   if (failed) {
     return (
       <div className="flex items-center gap-3 p-3" role="alert">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
           <CalendarX className="size-4" />
         </div>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Couldn&apos;t Load Calendar</span>
@@ -25,7 +25,7 @@ export function CalendarBody({ failed, pending, events, today, onRetry }: { fail
   if (pending) {
     return (
       <div role="status" aria-busy="true" aria-label="Loading calendar" className="flex items-center gap-3 p-3">
-        <Skeleton className="size-8 shrink-0 rounded-full" />
+        <Skeleton className="size-10 shrink-0 rounded-full" />
         <div className="flex flex-1 flex-col gap-1">
           <Skeleton className="h-5 w-1/2" />
           <Skeleton className="h-4 w-2/3" />

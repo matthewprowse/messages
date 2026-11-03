@@ -3,20 +3,19 @@
 // Only the (marketing)/updates server component imports this; it never reaches the browser.
 
 import { unstable_cache } from "next/cache";
-import { READER_COLUMNS, mapReaderUpdate, sortPublished, type ReaderUpdate } from "@/lib/updates-seen";
+import { READER_COLUMNS, mapReaderUpdate, sortReleases, type ReaderUpdate } from "@/lib/updates-seen";
 import { admin } from "./request";
 
 // Plenty for a changelog; the page is not paged yet.
 const LIMIT = 200;
 
-/** Every published release, by release date, newest first; on the same day the one published last comes first. */
+/** Every published release, newest release date first, then the higher version on the same day. */
 export const loadPublicUpdates = unstable_cache(
   async (): Promise<ReaderUpdate[]> => {
     if (!admin) return [];
     const { data, error } = await admin.from("updates").select(READER_COLUMNS).eq("published", true).limit(LIMIT);
     if (error) throw error;
-    // sortPublished orders by when each went public; the stable sort then groups by release date, which a reader expects.
-    return sortPublished((data ?? []).map(mapReaderUpdate)).sort((a, b) => b.releasedOn.localeCompare(a.releasedOn));
+    return sortReleases((data ?? []).map(mapReaderUpdate));
   },
   ["public-updates"],
   { revalidate: 300 },

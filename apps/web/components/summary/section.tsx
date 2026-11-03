@@ -63,7 +63,7 @@ export function Separated({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col gap-2">
       {Children.toArray(children).map((child, i) => (
         <Fragment key={isValidElement(child) ? child.key : i}>
-          {i > 0 && <div className="pl-14"><Separator /></div>}
+          {i > 0 && <div className="pl-16"><Separator /></div>}
           {child}
         </Fragment>
       ))}

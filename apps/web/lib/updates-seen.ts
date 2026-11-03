@@ -49,3 +49,20 @@ export function shouldShowWhatsNew(o: { latest: ReaderUpdate | undefined; seen: 
 export function groupChanges(changes: Change[]): { kind: ChangeKind; label: string; items: string[] }[] {
   return CHANGE_KINDS.map(({ key, label }) => ({ kind: key, label, items: changes.filter((c) => c.kind === key).map((c) => c.text) })).filter((g) => g.items.length > 0);
 }
+
+/** "v1.2.3" or "1.2.3" as three numbers, or undefined for any other version text. */
+const versionParts = (v: string): number[] | undefined => {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+};
+
+/** The higher version first; 0 when either has no version number to compare. */
+function byVersion(a: ReaderUpdate, b: ReaderUpdate): number {
+  const x = versionParts(a.version);
+  const y = versionParts(b.version);
+  return x && y ? y[0] - x[0] || y[1] - x[1] || y[2] - x[2] : 0;
+}
+
+/** The public changelog's order: newest release date first, then the higher version on the same day (entries published
+ * together share one moment, so publish time cannot tell them apart), then the one published last. */
+export const sortReleases = (list: ReaderUpdate[]): ReaderUpdate[] => sortPublished(list).sort((a, b) => b.releasedOn.localeCompare(a.releasedOn) || byVersion(a, b));

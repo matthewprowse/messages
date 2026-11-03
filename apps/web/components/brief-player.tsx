@@ -303,11 +303,11 @@ export function BriefPlayer() {
   const refreshNote = none ? `No Refreshes Left Today${allowance?.nextAt ? `, Available ${whenAllowed(allowance.nextAt, now)}` : ""}` : cooling ? "Available Again in a Minute" : "Refresh Brief";
 
   return (
-    <div className="flex shrink-0 items-center gap-3">
+    <div className="flex shrink-0 items-center gap-1">
       {waiting && <span role="status" className="hidden pr-1 text-xs text-muted-foreground md:inline">Writing your brief, this takes up to a minute</span>}
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="secondary" size="icon" aria-label={waiting ? "Stop" : label} onClick={toggle}>
+          <Button variant="ghost" size="icon" aria-label={waiting ? "Stop" : label} onClick={toggle}>
             {waiting ? <Loader2 className="animate-spin" /> : playing ? <Pause /> : <Volume2 />}
           </Button>
         </TooltipTrigger>
@@ -316,14 +316,13 @@ export function BriefPlayer() {
       {brief && !waiting && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={none || cooling ? 0 : -1} className="flex items-center gap-3">
-              {left && <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">{left}</span>}
+            <span tabIndex={none || cooling ? 0 : -1} className="flex items-center">
               <Button variant="ghost" size="icon" aria-label="Refresh Brief" disabled={none || cooling} onClick={() => setConfirming(true)}>
                 <RotateCcw />
               </Button>
             </span>
           </TooltipTrigger>
-          <TooltipContent>{refreshNote}</TooltipContent>
+          <TooltipContent>{left && !none && !cooling ? `${refreshNote}, ${left}` : refreshNote}</TooltipContent>
         </Tooltip>
       )}
       <AlertDialog open={confirming} onOpenChange={setConfirming}>

@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { groupChanges, latestUpdate, mapReaderUpdate, seenFromMetadata, shouldShowWhatsNew, sortPublished, updateKey, type ReaderRow, type ReaderUpdate } from "./updates-seen";
+import { groupChanges, latestUpdate, mapReaderUpdate, seenFromMetadata, shouldShowWhatsNew, sortPublished, sortReleases, updateKey, type ReaderRow, type ReaderUpdate } from "./updates-seen";
 
 const row = (over: Partial<ReaderRow> = {}): ReaderRow => ({ id: "a", version: "0.0.4", title: "T", summary: null, changes: [{ kind: "new", text: "A" }], released_on: "2026-11-01", published: true, created_at: "2026-11-01T10:00:00Z", updated_at: "2026-11-01T10:00:00Z", published_at: "2026-11-02T08:00:00Z", ...over });
 const upd = (over: Partial<ReaderRow> = {}): ReaderUpdate => mapReaderUpdate(row(over));
@@ -67,4 +67,20 @@ test("seenFromMetadata only trusts a string", () => {
   assert.equal(seenFromMetadata({ whatsNewSeen: "x" }), "x");
   assert.equal(seenFromMetadata({ whatsNewSeen: 5 }), undefined);
   assert.equal(seenFromMetadata(undefined), undefined);
+});
+
+test("sortReleases puts the newest day first, and the higher version first within a day, even when published together", () => {
+  const at = "2026-11-03T16:00:00Z";
+  const list = [
+    upd({ id: "a", version: "v0.0.9", released_on: "2026-11-02", published_at: at }),
+    upd({ id: "b", version: "v0.0.19", released_on: "2026-11-03", published_at: at }),
+    upd({ id: "c", version: "v0.0.10", released_on: "2026-11-02", published_at: at }),
+    upd({ id: "d", version: "v0.0.20", released_on: "2026-11-03", published_at: at }),
+  ];
+  assert.deepEqual(sortReleases(list).map((u) => u.version), ["v0.0.20", "v0.0.19", "v0.0.10", "v0.0.9"]);
+});
+
+test("sortReleases falls back to publish time when a version is missing", () => {
+  const list = [upd({ id: "a", version: null, published_at: "2026-11-02T08:00:00Z" }), upd({ id: "b", version: null, published_at: "2026-11-02T09:00:00Z" })];
+  assert.deepEqual(sortReleases(list).map((u) => u.id), ["b", "a"]);
 });

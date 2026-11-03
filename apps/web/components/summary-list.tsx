@@ -19,7 +19,6 @@ import { channelsOf } from "@/lib/thread-list";
 import { tasksForToday } from "@/lib/tasks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { providerLabel } from "@/components/primitives";
 import { AccountsNotice } from "@/components/summary/accounts-notice";
 import { useAdvanceAfterDone } from "@/components/summary/use-advance-after-done";
@@ -29,6 +28,7 @@ import { ManageLabelsHost } from "@/components/labels/manage-labels-dialog";
 import { useSnoozePick } from "@/components/snooze/use-snooze-pick";
 import { SelectionBar, ThreadRow, useSwipedRow, useThreadSelection } from "@/components/thread-list";
 import { BriefPlayer } from "@/components/brief-player";
+import { SummaryFilter } from "@/components/summary/summary-filter";
 import { CalendarBody } from "@/components/summary/calendar-body";
 import { Section, Separated } from "@/components/summary/section";
 import { LoadingSummary, SummaryEmpty } from "@/components/summary/summary-empty";
@@ -179,35 +179,28 @@ export function SummaryList() {
     >
       {/* Plain white like the Conversations header, so the rows scrolling under it do not show through. */}
       <div ref={headerRef} className="sticky top-0 z-10 space-y-3 border-b bg-background p-3">
-        <div className="flex h-8 items-center justify-between gap-3">
-          <h1 className="flex h-8 items-center text-lg font-medium">Summary</h1>
-          <BriefPlayer />
-        </div>
-        {picked.length > 0 ? (
-          <SelectionBar
-            allPicked={picked.length === order.length}
-            anyUnread={threads.some((t) => t.unread && pickedIds.has(t.id))}
-            ids={picked}
-            onAll={() => setChecked(order)}
-            onClear={() => setChecked([])}
-            onAction={(action) => (action === "snooze" ? snoozePick.request(picked) : run(picked, action))}
-          />
-        ) : (
-          <div className="flex items-center justify-between gap-2">
-            <time dateTime={today} className="min-w-0 truncate text-sm text-muted-foreground">{longDate(now.toISOString())}</time>
-            {/* Replace, not push, and keep the open conversation: a filter is a view of the list, not a place to go back to. */}
-            <Select value={filter} onValueChange={(v) => router.replace(listHref(v as ListFilter, params.id))}>
-              <SelectTrigger aria-label="Filter" className="w-36 data-[size=default]:h-8">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent align="end">
-                {options.map((o) => (
-                  <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        {/* The same 40px rows as the Conversations header, so the title and the row under it line up with the rail. */}
+        <div className="flex h-10 items-center justify-between gap-3">
+          <h1 className="min-w-0 truncate text-xl font-medium">Summary</h1>
+          <div className="flex shrink-0 items-center gap-1">
+            <BriefPlayer />
+            <SummaryFilter filter={filter} options={options} openId={params.id} />
           </div>
-        )}
+        </div>
+        <div className="flex h-10 flex-col justify-center">
+          {picked.length > 0 ? (
+            <SelectionBar
+              allPicked={picked.length === order.length}
+              anyUnread={threads.some((t) => t.unread && pickedIds.has(t.id))}
+              ids={picked}
+              onAll={() => setChecked(order)}
+              onClear={() => setChecked([])}
+              onAction={(action) => (action === "snooze" ? snoozePick.request(picked) : run(picked, action))}
+            />
+          ) : (
+            <time dateTime={today} className="min-w-0 truncate text-sm text-muted-foreground">{longDate(now.toISOString())}</time>
+          )}
+        </div>
       </div>
       <div ref={rowsRef} className="px-3">
         {busy && <LoadingSummary />}
@@ -215,13 +208,7 @@ export function SummaryList() {
         {!busy && empty && <SummaryEmpty noAccounts={noAccounts} importing={importing} filter={filter} onClearFilter={() => router.replace(listHref("none", params.id))} />}
         {!busy && !empty && (
           <div>
-            {(headline || filter !== "none") && (
-              <p className="pt-3 text-xs text-muted-foreground">
-                {headline}
-                {headline && filter !== "none" && ". "}
-                {filter !== "none" && "The filter applies to conversations; the calendar and tasks always show."}
-              </p>
-            )}
+            {headline && <p className="pt-3 text-xs text-muted-foreground">{headline}</p>}
             {calendarShown && (
               <Section title="Today's Calendar" count={calendarFailed || calendarPending ? undefined : events.length} headerHeight={headerHeight} action={{ label: "Open", href: "/calendar" }} separated>
                 <CalendarBody failed={calendarFailed} pending={calendarPending} events={events} today={today} onRetry={retryCalendar} />
