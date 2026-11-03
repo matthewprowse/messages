@@ -238,14 +238,15 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
               placeholder="Message"
               rows={1}
-              className="min-h-5 resize-none rounded-none border-0 bg-transparent p-0 text-base leading-5 md:text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+              className="min-h-5 resize-none rounded-none border-0 bg-transparent p-0 text-sm leading-5 shadow-none focus-visible:ring-0 dark:bg-transparent"
             />
           )}
           {!recorder && phase !== "thinking" && <SignatureNote signature={signature} off={noSignature} hasText={!!text.trim()} onToggle={() => setNoSignature((v) => !v)} left={unresolvedVariables(text)} />}
           <div className="mt-3 empty:hidden"><AttachmentChips files={files} /></div>
-          <div className="mt-6 flex items-center justify-between gap-3">
+          {/* Phones have 40px controls, so the tools sit closer, Send drops "via Gmail", and Send wraps below rather than run off the edge. */}
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             {recorder ? <div /> : (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 md:gap-2">
                 <AttachButton files={files} />
                 <SpeakButton voice={speech} disabled={busy} />
                 <RecordButton files={files} voice={voice} />
@@ -256,8 +257,8 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
             {recorder
               ? <RecordingActions voice={recorder} done={recorder === speech ? "Draft" : "Stop"} />
               : (
-                <div className="flex">
-                  <Button disabled={!canSend} onClick={() => submit()} className="rounded-r-none">Send via {providerLabel[thread.provider]}</Button>
+                <div className="ml-auto flex">
+                  <Button disabled={!canSend} onClick={() => submit()} className="rounded-r-none" aria-label={`Send via ${providerLabel[thread.provider]}`}>Send<span className="max-md:hidden"> via {providerLabel[thread.provider]}</span></Button>
                   <SendLaterMenu variant="default" disabled={!canSend} onPick={(at) => submit(at)} className="rounded-l-none border-l border-primary-foreground/20" />
                 </div>
               )}

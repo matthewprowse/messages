@@ -133,8 +133,10 @@ export function RecordButton({ files, voice }: { files: OutboxFiles; voice: Voic
       aria-label="Record Voice Note"
       disabled={files.disabled || files.uploading || voice.recording}
       onClick={voice.start}
+      className="max-md:w-10 max-md:px-0"
     >
-      <Voicemail /> Voice Note
+      {/* Icon only on phones, so the reply box's tools and Send stay on one row. */}
+      <Voicemail /><span className="max-md:hidden">Voice Note</span>
     </Button>
   );
 }

@@ -197,12 +197,13 @@ function AttachmentsPage() {
 
       <section className="flex min-h-0 min-w-0 flex-1 flex-col md:h-full">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-background p-3 md:px-4">
-          <span className="flex h-8 items-center text-sm text-muted-foreground tabular-nums">
+          <span className="flex h-8 items-center text-sm whitespace-nowrap text-muted-foreground tabular-nums">
             {loaded ? countLabel({ shown: shown.length, total: kind === "audio" ? null : visible.total, more: visible.more, narrowed }) : loaded === false ? "Not Loaded" : "Loading"}
           </span>
           <span className="flex items-center gap-3">
             {(narrowed || kind !== "all") && loaded && <Button variant="ghost" onClick={() => { setQuery(""); router.replace(hrefWith(NO_FILTERS, "all"), { scroll: false }); }}>Clear Filters</Button>}
-            {loaded && <span className="flex h-8 items-center text-sm text-muted-foreground tabular-nums">{sizeLabel(shown, visible.more)}</span>}
+            {/* The total size steps aside on phones, where Sort and Select need the row. */}
+            {loaded && <span className="hidden h-8 items-center text-sm whitespace-nowrap text-muted-foreground tabular-nums sm:flex">{sizeLabel(shown, visible.more)}</span>}
             <Select value={filters.sort} onValueChange={(sort) => go({ sort: sort as Sort })}>
               <SelectTrigger aria-label="Sort" className="w-28 data-[size=default]:h-8"><SelectValue /></SelectTrigger>
               <SelectContent>{SORTS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}</SelectContent>

@@ -147,9 +147,10 @@ export function ReplyHeader({ thread, msgs, reply, all }: { thread: Thread; msgs
   return (
     <>
       {target && <ReplyingTo target={target} author={target.from === "me" ? "You" : contactById(target.from)?.name ?? target.address ?? "Unknown"} onCancel={() => setReplyTo(thread.id, null)} />}
-      <div className="mb-3 flex items-center justify-between gap-3">
+      {/* On a phone the names get their own line, with Reply and Writing As below them. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         {/* Each person by name, with their address after it in angle brackets for email. */}
-        <div className={cn("flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap", all.all && "hidden")}>
+        <div className={cn("flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap max-md:basis-full", all.all && "hidden")}>
           {to.map((r, i) => (
             <Fragment key={i}>
               {r.name && <span className="shrink-0 text-sm font-medium">{r.name}</span>}

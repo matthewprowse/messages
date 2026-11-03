@@ -3355,3 +3355,9 @@ The owner's iPhone feedback, with evidence per item, is in `docs/reviews/2026-11
 
 Waiting on the owner: draft wording ("What Should This Say?"), automatic calendar availability in reply choices, the AI memory
 as an editable written summary, how much settings text to cut, and shell caching.
+
+## Control Sizes on Phones (3 November 2026)
+
+- Desktop and tablet keep 32px controls (`h-8`). Below `md` (phones), buttons, icon buttons, inputs, input groups, select
+  triggers and toggles are 40px (`max-md:h-10`, set once in `components/ui`), so they are easier to tap. Small sizes (`sm`,
+  `xs`) and the date picker's day grid keep their size.
