@@ -194,7 +194,7 @@ function ReassignDialog({ agent, members, onClose, onDone }: { agent: { id: stri
   };
   return (
     <Dialog open={!!agent} onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track="reassign_agent_chats" className="sm:max-w-md">
+      <DialogContent track="reassign_agent_chats" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Reassign {agent?.name}&apos;s Chats</DialogTitle>
           <DialogDescription>
@@ -209,7 +209,6 @@ function ReassignDialog({ agent, members, onClose, onDone }: { agent: { id: stri
           </Select>
         </div>
         <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="button" disabled={busy || !to} onClick={() => void submit()}>{busy ? "Assigning" : "Assign All"}</Button>
         </div>
       </DialogContent>

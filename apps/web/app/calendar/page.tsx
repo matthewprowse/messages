@@ -39,6 +39,7 @@ import { useCalendarKeys } from "@/components/calendar/use-calendar-input";
 import { usePendingChanges } from "@/components/calendar/use-pending-changes";
 import { useReload } from "@/components/calendar/use-reload";
 import { WeekView } from "@/components/calendar/week-view";
+import { cn } from "@/lib/utils";
 
 function CalendarPageContent() {
   const { session } = useAuth();
@@ -255,11 +256,14 @@ function CalendarPageContent() {
   );
 
   // The same split as Conversations and Summary: the header and the list on the left, what they are about
-  // beside it. Phones stack them, the grid between the header and the list.
+  // beside it. Phones stack them, the grid between the header and the list. On a phone the agenda keeps the header
+  // and the month grid in place and scrolls only the list; the day and week views are taller than the screen, so
+  // there the column scrolls as one.
+  const pinned = view === "agenda";
   return (
     <Now.Provider value={now}>
     <Page.Provider value={context}>
-      <div className="flex h-full min-h-0 flex-col overflow-y-auto md:grid md:grid-cols-[20rem_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)] md:overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+      <div className={cn("flex h-full min-h-0 flex-col md:grid md:grid-cols-[20rem_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)] md:overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]", pinned ? "overflow-hidden" : "overflow-y-auto")}>
         {/* The same two bands as Conversations: title and views, then search. */}
         <div className="shrink-0 bg-background md:col-start-1 md:row-start-1 md:border-r">
           <PaneHeader
@@ -345,7 +349,7 @@ function CalendarPageContent() {
           </div>
         </div>
 
-        <div data-calendar-list className="shrink-0 border-t md:col-start-1 md:row-start-2 md:min-h-0 md:border-t-0 md:border-r">
+        <div data-calendar-list className={cn("border-t md:col-start-1 md:row-start-2 md:min-h-0 md:border-t-0 md:border-r", pinned ? "min-h-0 flex-1" : "shrink-0")}>
           {events !== null && (
             <EventList
               keys={listed}

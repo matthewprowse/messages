@@ -2,7 +2,8 @@
 
 // The Notes chip other pages mount: a button with the number of notes linked to a contact, conversation or event,
 // opening a list of them and a New Note that is linked to it already. Works on any screen (it does not need the
-// Notes page's provider); the list is read when the chip appears and again each time it opens.
+// Notes page's provider); the list is read when the chip appears and again each time it opens. NotesMenuItem is the
+// same list as a submenu, for headers that fold the chip into their More menu on phones.
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -12,24 +13,33 @@ import type { LinkKind } from "@/lib/note-link-map";
 import { relTime } from "@/lib/format";
 import { useCaptureNote } from "@/components/note-capture";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
-export function NotesChip({ kind, id, title }: { kind: LinkKind; id: string; /** The title a new note from here starts with, such as a conversation's subject. */ title?: string }) {
-  const capture = useCaptureNote();
+/** The notes linked to something, read on mount and again whenever `fresh` turns true (the list opening). Null while loading. */
+function useLinkedNotes(kind: LinkKind, id: string, fresh: boolean) {
   const [notes, setNotes] = useState<LinkedNote[] | null>(null);
-  const [open, setOpen] = useState(false);
   const load = useCallback(() => {
     let cancelled = false;
     loadLinkedNotes({ kind, id }).then((list) => { if (!cancelled) setNotes(list); }).catch(() => { if (!cancelled) setNotes((n) => n ?? []); });
     return () => { cancelled = true; };
   }, [kind, id]);
   useEffect(() => { setNotes(null); return load(); }, [load]);
-  useEffect(() => (open ? load() : undefined), [open, load]);
+  useEffect(() => (fresh ? load() : undefined), [fresh, load]);
+  return notes;
+}
+
+interface Props { kind: LinkKind; id: string; /** The title a new note from here starts with, such as a conversation's subject. */ title?: string }
+
+export function NotesChip({ kind, id, title, className }: Props & { className?: string }) {
+  const capture = useCaptureNote();
+  const [open, setOpen] = useState(false);
+  const notes = useLinkedNotes(kind, id, open);
   const count = notes?.length ?? 0;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="secondary" aria-label={count ? `Notes, ${count}` : "Notes"}><NotebookPen />Notes{count > 0 && <span className="tabular-nums text-muted-foreground">{count}</span>}</Button>
+        <Button variant="secondary" className={className} aria-label={count ? `Notes, ${count}` : "Notes"}><NotebookPen />Notes{count > 0 && <span className="tabular-nums text-muted-foreground">{count}</span>}</Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="flex w-72 flex-col gap-1 p-1">
         {notes === null && <p className="px-2 py-1.5 text-sm text-muted-foreground" role="status">Loading</p>}
@@ -43,5 +53,37 @@ export function NotesChip({ kind, id, title }: { kind: LinkKind; id: string; /**
         <Button variant="ghost" className="justify-start" onClick={() => { setOpen(false); void capture({ title, links: [{ kind, id }] }); }}><Plus />New Note</Button>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** The same list as a submenu, for a More menu on phones where the chip does not fit. Read when the submenu mounts (the menu opening). */
+function NotesSubContent({ kind, id, title }: Props) {
+  const capture = useCaptureNote();
+  const notes = useLinkedNotes(kind, id, false);
+  return (
+    <DropdownMenuSubContent className="w-64">
+      {notes === null && <DropdownMenuItem disabled>Loading</DropdownMenuItem>}
+      {notes?.length === 0 && <DropdownMenuItem disabled>No notes yet.</DropdownMenuItem>}
+      {notes?.map((n) => (
+        <DropdownMenuItem key={n.id} asChild>
+          <Link href={`/notes/${n.id}`}>
+            <span className="min-w-0 flex-1 truncate">{n.title.trim() || "Untitled Note"}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{relTime(n.updatedAt)}</span>
+          </Link>
+        </DropdownMenuItem>
+      ))}
+      {notes && notes.length > 0 && <DropdownMenuSeparator />}
+      <DropdownMenuItem onSelect={() => void capture({ title, links: [{ kind, id }] })}>New Note</DropdownMenuItem>
+    </DropdownMenuSubContent>
+  );
+}
+
+/** Notes as a More menu entry. `className` lets a caller show it only where the chip is hidden. */
+export function NotesMenuItem({ className, ...props }: Props & { className?: string }) {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger className={className}>Notes</DropdownMenuSubTrigger>
+      <NotesSubContent {...props} />
+    </DropdownMenuSub>
   );
 }

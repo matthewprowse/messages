@@ -95,7 +95,7 @@ export function TeamReview() {
 
   return (
     <Dialog open onOpenChange={(next) => { if (!next && !busy) void finish(); }}>
-      <DialogContent showCloseButton={false} track="team_review" className="sm:max-w-lg">
+      <DialogContent track="team_review" className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Review Your Work Chats</DialogTitle>
           <DialogDescription>

@@ -111,7 +111,7 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} track="new_whatsapp" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="new_whatsapp" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New WhatsApp Message</DialogTitle>
           <DialogDescription>Sent from your linked WhatsApp, then shown in the Inbox.</DialogDescription>
@@ -220,9 +220,7 @@ export function NewWhatsAppDialog({ open, onOpenChange, to }: { open: boolean; o
             {sent && <p className="text-xs text-muted-foreground">Sent. The chat opens here once it is stored.</p>}
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The message could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              {sending.holding
-                ? <Button type="button" variant="ghost" onClick={sending.undo}>Undo</Button>
-                : <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>}
+              {sending.holding && <Button type="button" variant="ghost" onClick={sending.undo}>Undo</Button>}
               <div className="flex">
                 <Button type="submit" variant="secondary" disabled={!ready || (checked && !!toError)} className="flex-1 rounded-r-none">{sending.holding ? `Sending in ${sending.holdLeft}s` : waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
                 <SendLaterMenu disabled={!ready || (checked && !!toError)} onPick={(at) => submit(at)} className="rounded-l-none border-l border-border" />

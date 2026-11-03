@@ -99,7 +99,7 @@ export function BuilderDialog({ open, automation, initial, onClose, onSaved }: {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent showCloseButton={false} className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{automation ? "Change Automation" : "New Custom Automation"}</DialogTitle>
           <DialogDescription>When a new email matches, Konva reads the details you name and does what you choose. It never sends anything for you.</DialogDescription>
@@ -186,7 +186,6 @@ export function BuilderDialog({ open, automation, initial, onClose, onSaved }: {
           {problem && <p className="text-sm text-destructive" role="alert">{problem}</p>}
         </form>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="submit" form="automation-form" disabled={busy}>Save</Button>
         </DialogFooter>
       </DialogContent>

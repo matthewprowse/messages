@@ -20,6 +20,7 @@ import { NoteCaptureShortcut } from "@/components/note-capture";
 import { SyncBar } from "@/components/sync-bar";
 import { WhatsNewDialog } from "@/components/whats-new/whats-new-dialog";
 import { UsageRing } from "@/components/usage-ring";
+import { RAIL_ITEM, RAIL_LABEL, RAIL_TIP } from "@/components/rail-item";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -73,28 +74,30 @@ function useAttentionCount() {
 }
 
 function UnreadDot() {
-  return <span aria-hidden className="absolute top-1 right-1 size-2 rounded-full bg-primary" />;
+  return <span aria-hidden className="absolute top-1 right-1 size-2 rounded-full bg-primary lg:static lg:ml-auto" />;
 }
-
 
 function RailButton({ href, onClick, label, icon: Icon, active, dot, dotLabel = "Unread", hint }: { href?: string; onClick?: () => void; label: string; icon: LucideIcon; active: boolean; dot?: boolean; dotLabel?: string; hint?: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         {href ? (
-          <Button asChild variant={active ? "secondary" : "ghost"} size="icon" className="relative">
+          <Button asChild variant={active ? "secondary" : "ghost"} size="icon" className={cn("relative", RAIL_ITEM)}>
             <Link href={href} aria-label={dot ? `${label}, ${dotLabel}` : label} aria-current={active ? "page" : undefined}>
               <Icon />
+              <span className={RAIL_LABEL}>{label}</span>
               {dot && <UnreadDot />}
             </Link>
           </Button>
         ) : (
-          <Button variant={active ? "secondary" : "ghost"} size="icon" aria-label={label} onClick={onClick}>
+          <Button variant={active ? "secondary" : "ghost"} size="icon" className={RAIL_ITEM} aria-label={label} onClick={onClick}>
             <Icon />
+            <span className={RAIL_LABEL}>{label}</span>
+            {hint && <Kbd className="ml-auto hidden lg:inline-flex">{hint}</Kbd>}
           </Button>
         )}
       </TooltipTrigger>
-      <TooltipContent side="right">{label}{hint && <> <Kbd>{hint}</Kbd></>}</TooltipContent>
+      <TooltipContent side="right" className={RAIL_TIP}>{label}{hint && <> <Kbd>{hint}</Kbd></>}</TooltipContent>
     </Tooltip>
   );
 }
@@ -106,10 +109,10 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
   const attention = useAttentionCount();
   return (
     // Scrolls on short screens so every item stays reachable. Below md the bottom bar takes over.
-    <nav aria-label="Main" className="hidden h-full shrink-0 flex-col gap-3 overflow-y-auto border-r p-3 md:flex">
+    <nav aria-label="Main" className="hidden h-full shrink-0 flex-col gap-3 overflow-y-auto border-r p-3 md:flex lg:w-56">
       <RailButton onClick={onSearch} label="Search" icon={Search} active={searchOpen} hint="⌘K" />
       <div className="flex flex-col gap-1">
-        <div><NewMenu /></div>
+        <NewMenu />
         {NAV.map((item) => (
           <RailButton
             key={item.href}
@@ -221,11 +224,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (session === null && !onLogin && !onInvite) router.replace("/login");
   }, [session, onLogin, onInvite, router]);
 
-  if (onLogin || onInvite) return <main className="h-dvh w-full">{children}</main>;
-  if (!session) return <div className="h-dvh w-full" />; // checking the stored session, or redirecting
+  // viewport-fit=cover runs the page under the iOS status bar, so every frame pads by the safe area and paints that
+  // strip in the page colour. Without it the top of the page (the search band, a detail header) sits under the bar.
+  if (onLogin || onInvite) return <main className="safe-top h-dvh w-full bg-background">{children}</main>;
+  if (!session) return <div className="safe-top h-dvh w-full bg-background" />; // checking the stored session, or redirecting
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden">
+    <div className="safe-top flex h-dvh w-full overflow-hidden bg-background">
       {/* First in the tab order: hidden until focused, then jumps past the navigation. */}
       <a
         href="#content"

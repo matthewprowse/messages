@@ -101,11 +101,12 @@ function ImportForm({ onDone }: { onDone: () => void }) {
           {plan.length > PREVIEW_ROWS && <p className="text-xs text-muted-foreground">Showing the first {PREVIEW_ROWS} of {plan.length} rows.</p>}
         </>
       )}
-      <div className={DIALOG_BUTTONS}>
-        <Button type="button" variant="ghost" onClick={onDone} disabled={progress !== null}>Cancel</Button>
-        {plan && <Button type="button" variant="ghost" onClick={() => input.current?.click()} disabled={progress !== null}>Choose Another File</Button>}
-        {plan && <Button type="button" variant="secondary" disabled={todo === 0 || progress !== null} onClick={() => void run()}>{progress !== null ? `Importing ${progress} of ${plan.length}` : `Import ${plural(todo, "Contact")}`}</Button>}
-      </div>
+      {plan && (
+        <div className={DIALOG_BUTTONS}>
+          <Button type="button" variant="ghost" onClick={() => input.current?.click()} disabled={progress !== null}>Choose Another File</Button>
+          <Button type="button" variant="secondary" disabled={todo === 0 || progress !== null} onClick={() => void run()}>{progress !== null ? `Importing ${progress} of ${plan.length}` : `Import ${plural(todo, "Contact")}`}</Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -113,7 +114,7 @@ function ImportForm({ onDone }: { onDone: () => void }) {
 export function ImportContactsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Import Contacts</DialogTitle>
           <DialogDescription>Choose a vCard or CSV file. Anyone who shares an email address or phone number with someone here gets the missing details added, and no one is added twice.</DialogDescription>

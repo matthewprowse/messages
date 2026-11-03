@@ -34,6 +34,17 @@ export const DOC_FILTERS: { key: "all" | DocType; label: string }[] = [
   { key: "id", label: "IDs" },
 ];
 
+// The AI worker's test for a picture that is a document by its name (DOC_WORDS and NOT_DOC_WORDS in
+// apps/ai/ai/documents_card.py). Mirrored here so Read Document is only offered where it can be worth a call: a photo or
+// a meme from a chat is not a document, and reading it costs a call for nothing. Change both together.
+const DOC_WORDS = /invoice|inv[-_ ]?\d|quote|quotation|estimate|contract|agreement|statement|receipt|proof|payment|\bpop\b|scan|camscanner|document|\bid\b|passport|licen[cs]e|payslip|bill|order/i;
+const NOT_DOC_WORDS = /\blogo\b|signature|banner|footer|header|\bicon\b|unsubscribe|newsletter/i;
+
+/** Whether to offer reading a file as a document: every PDF, and a picture only when its name says it is a document. */
+export function looksLikeDocument(a: { kind: string; name: string }): boolean {
+  return a.kind === "pdf" || (a.kind === "image" && DOC_WORDS.test(a.name) && !NOT_DOC_WORDS.test(a.name));
+}
+
 /** A filter value from the address; anything unknown is Any Document. */
 export const docFilterOf = (value: string | null | undefined): "all" | DocType => DOC_FILTERS.find((f) => f.key === value)?.key ?? "all";
 

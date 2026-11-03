@@ -62,23 +62,24 @@ test("junk, archived and deleted conversations are left out", () => {
   assert.deepEqual([...s.reply, ...s.priority, ...s.updates], []);
 });
 
-test("urgent comes before important, then newest first", () => {
+test("urgent comes before important, then newest first, and urgent fades to important after a day", () => {
   const s = summarise(
     [
       thread("important-new", { priority: "important", lastMessageAt: hoursAgo(1) }),
       thread("urgent-old", { priority: "urgent", lastMessageAt: hoursAgo(30) }),
       thread("urgent-new", { priority: "urgent", lastMessageAt: hoursAgo(2) }),
+      thread("urgent-day", { priority: "urgent", lastMessageAt: hoursAgo(23) }),
     ],
     "none",
     now,
   );
-  assert.deepEqual(ids(s.priority), ["urgent-new", "urgent-old", "important-new"]);
+  assert.deepEqual(ids(s.priority), ["urgent-new", "urgent-day", "important-new", "urgent-old"]);
 });
 
 test("old, bulk and unsummarised conversations stay out", () => {
   const s = summarise(
     [
-      thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 15) }),
+      thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 3 + 1) }),
       thread("stale-urgent", { priority: "urgent", lastMessageAt: hoursAgo(24 * 8) }),
       thread("newsletter", { priority: "important", category: "newsletter" }),
       thread("no-summary", { category: "fyi" }),
@@ -108,9 +109,19 @@ test("a conversation you answered last is left out, whatever its priority", () =
   assert.deepEqual([...s.reply, ...s.priority, ...s.updates], []);
 });
 
-test("the filter narrows every section", () => {
-  const s = summarise([thread("mail", { needsReply: true }), thread("chat", { needsReply: true, channel: "whatsapp" })], "whatsapp", now);
-  assert.deepEqual(ids(s.reply), ["chat"]);
+test("the filter narrows every section, by any channel", () => {
+  const threads = [thread("mail", { needsReply: true }), thread("chat", { needsReply: true, channel: "whatsapp" }), thread("dm", { needsReply: true, channel: "instagram" })];
+  assert.deepEqual(ids(summarise(threads, "whatsapp", now).reply), ["chat"]);
+  assert.deepEqual(ids(summarise(threads, "instagram", now).reply), ["dm"]);
+});
+
+test("a question about a time that has passed leaves Needs Reply for Older", () => {
+  const threads = [
+    thread("passed", { needsReply: true, askedAt: hoursAgo(2) }),
+    thread("coming", { needsReply: true, askedAt: new Date(now.getTime() + 3_600_000).toISOString() }),
+  ];
+  assert.deepEqual(ids(summarise(threads, "none", now).reply), ["coming"]);
+  assert.deepEqual(ids(olderWaiting(threads, "none", now)), ["passed"]);
 });
 
 test("the digest counts what is there and skips what is not", () => {
@@ -132,7 +143,7 @@ test("the rail count is the page's Needs Reply plus Important, so old unanswered
   const threads = [
     thread("reply", { needsReply: true }),
     thread("urgent", { priority: "urgent" }),
-    thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 20) }),
+    thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 4) }),
     thread("bulk", { priority: "important", category: "newsletter" }),
     thread("update", { category: "fyi", summary: "FYI." }),
   ];
@@ -140,9 +151,9 @@ test("the rail count is the page's Needs Reply plus Important, so old unanswered
   assert.equal(attentionCount([thread("stale", { priority: "urgent", lastMessageAt: hoursAgo(24 * 9) })], now), 0);
 });
 
-test("old unanswered and old urgent conversations are counted as older, not dropped", () => {
+test("old unanswered and old urgent conversations are listed as older, newest first, not dropped", () => {
   const threads = [
-    thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 15) }),
+    thread("stale-reply", { needsReply: true, lastMessageAt: hoursAgo(24 * 4) }),
     thread("stale-urgent", { priority: "urgent", lastMessageAt: hoursAgo(24 * 8) }),
     thread("stale-important", { priority: "important", lastMessageAt: hoursAgo(24 * 8) }),
     thread("stale-newsletter", { priority: "urgent", category: "newsletter", lastMessageAt: hoursAgo(24 * 8) }),
@@ -151,6 +162,7 @@ test("old unanswered and old urgent conversations are counted as older, not drop
     thread("whatsapp", { needsReply: true, channel: "whatsapp", lastMessageAt: hoursAgo(24 * 20) }),
   ];
   assert.deepEqual(ids(olderWaiting(threads, "none", now)), ["stale-reply", "stale-urgent", "whatsapp"]);
+  assert.deepEqual(ids(summarise([thread("three-days", { needsReply: true, lastMessageAt: hoursAgo(24 * 3) })], "none", now).reply), ["three-days"]);
   assert.deepEqual(ids(olderWaiting(threads, "whatsapp", now)), ["whatsapp"]);
 });
 

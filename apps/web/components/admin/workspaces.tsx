@@ -43,7 +43,7 @@ export function OwnerInviteDialog({ invite, onClose }: { invite: OwnerInvite | n
 
   return (
     <Dialog open={!!invite} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent showCloseButton={false} track="owner_invite" className="sm:max-w-md">
+      <DialogContent track="owner_invite" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{shown?.name} Is Ready</DialogTitle>
           <DialogDescription>

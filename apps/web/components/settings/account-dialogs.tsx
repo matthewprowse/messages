@@ -39,7 +39,7 @@ export function RenameDialog({ group, onClose, onSave }: { group: AccountGroup |
   const base = group ? FAMILY_NAME[group.family] ?? group.accounts[0].label : undefined;
   return (
     <Dialog open={group !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent showCloseButton={false}>
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Rename Account</DialogTitle>
           <DialogDescription>
@@ -50,7 +50,6 @@ export function RenameDialog({ group, onClose, onSave }: { group: AccountGroup |
           <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={base} aria-label="Account Name" autoFocus />
         </form>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="submit" form="rename-account">Save</Button>
         </DialogFooter>
       </DialogContent>

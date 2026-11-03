@@ -63,7 +63,7 @@ function Candidates({ logo, onClose, onChanged }: { logo: CompanyLogo; onClose: 
     }
   };
   return (
-    <DialogContent showCloseButton={false} className="sm:max-w-2xl">
+    <DialogContent className="sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>{logo.name}</DialogTitle>
         <DialogDescription>
@@ -118,9 +118,6 @@ function Candidates({ logo, onClose, onChanged }: { logo: CompanyLogo; onClose: 
           </>
         )}
       </ScrollArea>
-      <DialogFooter>
-        <Button variant="secondary" onClick={onClose}>Close</Button>
-      </DialogFooter>
     </DialogContent>
   );
 }
@@ -273,7 +270,7 @@ function Logos() {
       </Dialog>
       <Dialog open={!!rejecting} onOpenChange={(o) => !o && setRejecting(null)}>
         {rejecting && (
-          <DialogContent showCloseButton={false}>
+          <DialogContent>
             <DialogHeader>
               <DialogTitle>Reject This Logo?</DialogTitle>
               <DialogDescription>
@@ -281,7 +278,6 @@ function Logos() {
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setRejecting(null)}>Cancel</Button>
               <Button variant="secondary" onClick={() => void reject(rejecting)}>Reject</Button>
             </DialogFooter>
           </DialogContent>

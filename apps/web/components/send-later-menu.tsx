@@ -9,10 +9,10 @@ import { combineDateTime, describeWhen, laterChoices, scheduleError, type LaterC
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { TimeSelect } from "@/components/time-select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 export function SendLaterMenu({ disabled, onPick, variant = "secondary", className }: { disabled?: boolean; onPick: (at: Date) => void; variant?: "secondary" | "default" | "outline"; className?: string }) {
@@ -44,7 +44,7 @@ export function SendLaterMenu({ disabled, onPick, variant = "secondary", classNa
 
 function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
 
-/** The date and time dialog: the stock calendar and a time box, and a plain footer. */
+/** The date and time dialog: the stock calendar and the shared time list, and a plain footer. */
 function PickTime({ onClose, onPick }: { onClose: () => void; onPick: (at: Date) => void }) {
   const [day, setDay] = useState<Date | undefined>(() => { const d = new Date(); d.setDate(d.getDate() + 1); return d; });
   const [time, setTime] = useState("08:00");
@@ -54,7 +54,7 @@ function PickTime({ onClose, onPick }: { onClose: () => void; onPick: (at: Date)
   const error = scheduleError(when, new Date());
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent showCloseButton={false} track="send_later" className="sm:max-w-sm">
+      <DialogContent track="send_later" className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Send Later</DialogTitle>
           <DialogDescription>Pick when this goes out, in your local time. You can change or cancel it until then.</DialogDescription>
@@ -84,12 +84,11 @@ function PickTime({ onClose, onPick }: { onClose: () => void; onPick: (at: Date)
           </div>
           <div className="grid gap-2">
             <Label htmlFor="later-time">Time</Label>
-            <Input id="later-time" type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-invalid={checked && !!error} className="tabular-nums" />
+            <TimeSelect id="later-time" value={time} onChange={setTime} invalid={checked && !!error} />
           </div>
           {checked && error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
           <Button type="button" onClick={() => { setChecked(true); if (when && !error) onPick(when); }}>Schedule</Button>
         </DialogFooter>
       </DialogContent>

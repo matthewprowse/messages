@@ -38,7 +38,7 @@ function EditDialog({ editing, onClose }: { editing: Editing | null; onClose: ()
   };
   return (
     <Dialog open={!!editing} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent showCloseButton={false} track="edit_template" className="sm:max-w-md">
+      <DialogContent track="edit_template" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{draft?.id ? "Edit" : "Add"} {snippet ? "Snippet" : "Template"}</DialogTitle>
           <DialogDescription>Use {"{first_name}"}, {"{name}"}, {"{company}"} and {"{my_name}"} and they are filled in for the person you write to.</DialogDescription>
@@ -64,7 +64,6 @@ function EditDialog({ editing, onClose }: { editing: Editing | null; onClose: ()
           </div>
         )}
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
           <Button type="button" variant="secondary" disabled={saving || !draft?.title.trim() || !draft?.body.trim()} onClick={submit}>Save</Button>
         </DialogFooter>
       </DialogContent>

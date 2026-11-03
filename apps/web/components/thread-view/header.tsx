@@ -1,17 +1,20 @@
 // The top bar of a conversation: Back, the person (linking to their contact page), channel tabs, sharing and the More menu
-// (which also holds Snooze, Remind Me If No Reply and Label).
+// (which also holds Snooze, Remind Me If No Reply and Label). On phones Sharing, Schedule and Notes fold into the More
+// menu too, so the name keeps its room.
 
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, MoreHorizontal } from "lucide-react";
+import { refreshMyTeam } from "@/lib/share";
 import { useApp } from "@/lib/store";
 import type { Contact, Thread } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ThreadAvatar } from "@/components/primitives";
 import { ProviderLogo } from "@/components/provider-logo";
-import { ThreadShare } from "@/components/work-badge";
-import { NotesChip } from "@/components/notes-chip";
+import { ShareBadge, ShareItems, useThreadShare } from "@/components/work-badge";
+import { NotesChip, NotesMenuItem } from "@/components/notes-chip";
 import { ScheduleButton } from "@/components/schedule-button";
 import { ChannelTabs } from "@/components/thread-view/channel-tabs";
 import { TriageNotes } from "@/components/triage/triage-notes";
@@ -47,6 +50,8 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
     snooze(ids, at, action === "remind" ? "reminder" : "snooze");
     onLeave();
   });
+  const share = useThreadShare(thread);
+  const [scheduling, setScheduling] = useState(false);
   return (
     <>
       <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
@@ -75,12 +80,22 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
           })()}
         </div>
         <ChannelTabs thread={thread} person={primary} hrefFor={hrefFor} />
-        <ThreadShare thread={thread} />
-        <ScheduleButton thread={thread} />
-        <NotesChip kind="thread" id={thread.id} title={thread.subject} />
-        <DropdownMenu>
+        <ShareBadge share={share} className="max-md:hidden" />
+        <ScheduleButton thread={thread} className="max-md:hidden" open={scheduling} onOpenChange={setScheduling} />
+        <NotesChip kind="thread" id={thread.id} title={thread.subject} className="max-md:hidden" />
+        <DropdownMenu onOpenChange={(open) => open && share.shown && refreshMyTeam()}>
           <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-max">
+            {/* Phones only: what sits in the header beside this menu on wider screens. */}
+            <NotesMenuItem kind="thread" id={thread.id} title={thread.subject} className="md:hidden" />
+            <DropdownMenuItem className="md:hidden" onSelect={() => setScheduling(true)}>Schedule</DropdownMenuItem>
+            {share.shown && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className="md:hidden">Sharing</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-max max-w-64"><ShareItems share={share} /></DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
+            <DropdownMenuSeparator className="md:hidden" />
             <DropdownMenuItem onClick={() => pin(thread.id, !thread.pinned)}>{thread.pinned ? "Unpin" : "Pin"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => markRead(thread.id, thread.unread)}>{thread.unread ? "Mark as Read" : "Mark as Unread"}</DropdownMenuItem>
             <DropdownMenuItem onClick={() => { archive(thread.id); onLeave(); }}>Archive</DropdownMenuItem>
@@ -103,6 +118,7 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
         </DropdownMenu>
       </header>
       {pick.dialog}
+      {share.dialogs}
       <TriageNotes thread={thread} />
       <ManageLabelsHost />
     </>

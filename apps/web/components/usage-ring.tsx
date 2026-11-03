@@ -14,6 +14,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { RAIL_ITEM, RAIL_LABEL } from "@/components/rail-item";
 
 const STALE_MS = 60_000; // opening the card again within a minute shows what was loaded, without asking again
 
@@ -71,9 +72,10 @@ export function UsageRing() {
   return (
     <HoverCard openDelay={150} closeDelay={100} onOpenChange={(open) => { if (open) void refresh(); }}>
       <HoverCardTrigger asChild>
-        <Button asChild variant={active ? "secondary" : "ghost"} size="icon">
+        <Button asChild variant={active ? "secondary" : "ghost"} size="icon" className={RAIL_ITEM}>
           <Link href="/settings/usage" aria-label={closest ? `Usage, ${pctLabel(pct)} of ${closest.label} Used` : "Usage"} aria-current={active ? "page" : undefined}>
             <Ring pct={pct} full={pct >= 100} />
+            <span className={RAIL_LABEL}>Usage</span>
           </Link>
         </Button>
       </HoverCardTrigger>

@@ -1,9 +1,9 @@
 // Tests for lib/attachment-filters.ts: what the address remembers, the derived Source list, date and search matching, the
-// people list and the honest header counts.
+// honest header counts.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { countLabel, effectivePerson, filterFiles, filtersHref, isNarrowed, isVoiceNote, NO_FILTERS, parseFilters, peopleIn, searchTextOf, sizeLabel, sourcesIn, type FilterContext } from "./attachment-filters";
+import { countLabel, filterFiles, filtersHref, isNarrowed, isVoiceNote, NO_FILTERS, parseFilters, searchTextOf, sizeLabel, sourcesIn, type FilterContext } from "./attachment-filters";
 import type { FiledAttachment } from "./types";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -12,19 +12,21 @@ const file = (id: string, over: Partial<FiledAttachment> = {}) => ({ id, name: `
 const ctx = (over: Partial<FilterContext> = {}): FilterContext => ({ sourceOf: () => "gmail", text: (a) => a.name.toLowerCase(), now: NOW, ...over });
 
 test("the address round trips every filter and writes only what is not the default", () => {
-  const f = { kind: "pdf" as const, source: "outlook", date: "month", person: "c9", q: "invoice", sort: "largest" as const };
+  const f = { kind: "pdf" as const, source: "outlook", date: "month", q: "invoice", sort: "largest" as const };
   const href = filtersHref(f);
-  assert.equal(href, "/attachments?kind=pdf&source=outlook&date=month&person=c9&q=invoice&sort=largest");
+  assert.equal(href, "/attachments?kind=pdf&source=outlook&date=month&q=invoice&sort=largest");
   assert.deepEqual(parseFilters((k) => new URL(href, "http://x").searchParams.get(k)), f);
   assert.equal(filtersHref(NO_FILTERS), "/attachments");
   assert.deepEqual(parseFilters(() => null), NO_FILTERS);
   assert.equal(parseFilters((k) => (k === "kind" ? "media" : k === "date" ? "decade" : null)).kind, "all");
   assert.equal(parseFilters((k) => (k === "date" ? "decade" : null)).date, "any");
+  // The Sent By filter is gone: an old link that carries a person opens with every file.
+  assert.deepEqual(parseFilters((k) => (k === "person" ? "c9" : null)), NO_FILTERS);
 });
 
-test("only a source, date, person, search or the Largest sort narrows the list, not the tab", () => {
+test("only a source, date, search or the Largest sort narrows the list, not the tab", () => {
   assert.equal(isNarrowed({ ...NO_FILTERS, kind: "pdf" }), false);
-  for (const over of [{ source: "gmail" }, { date: "week" }, { person: "c1" }, { q: "x" }, { sort: "largest" as const }]) assert.equal(isNarrowed({ ...NO_FILTERS, ...over }), true);
+  for (const over of [{ source: "gmail" }, { date: "week" }, { q: "x" }, { sort: "largest" as const }]) assert.equal(isNarrowed({ ...NO_FILTERS, ...over }), true);
   assert.equal(isNarrowed({ ...NO_FILTERS, q: "  " }), false);
 });
 
@@ -60,15 +62,6 @@ test("the Audio tab leaves voice notes out and keeps real audio files", () => {
   const files = [file("v", { kind: "audio", name: "Voice Note.ogg" }), file("s", { kind: "audio", name: "song.mp3" })];
   assert.equal(isVoiceNote(files[0]), true);
   assert.deepEqual(filterFiles(files, { ...NO_FILTERS, kind: "audio" }, ctx()).map((a) => a.id), ["s"]);
-});
-
-test("people list you first, then by name, with counts; a person who has dropped out of view falls back to Everyone", () => {
-  const names: Record<string, string> = { me: "You", c1: "Zed", c2: "Amy" };
-  const people = peopleIn([file("a", { from: "c1" }), file("b", { from: "c2" }), file("c", { from: "me" }), file("d", { from: "c2" })], (id) => names[id]);
-  assert.deepEqual(people, [{ id: "me", name: "You", count: 1 }, { id: "c2", name: "Amy", count: 2 }, { id: "c1", name: "Zed", count: 1 }]);
-  assert.equal(effectivePerson("c2", people), "c2");
-  assert.equal(effectivePerson("gone", people), "all");
-  assert.equal(effectivePerson("all", []), "all");
 });
 
 test("the count is exact when every page is in or nothing is narrowed, and admits it is still searching otherwise", () => {

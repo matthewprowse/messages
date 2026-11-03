@@ -94,7 +94,7 @@ export function ConnectedAccountsSection() {
       </AlertDialog>
 
       <Dialog open={removing !== null} onOpenChange={(o) => { if (!o && !busy) setRemoving(null); }}>
-        <DialogContent showCloseButton={false} className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md">
           <form onSubmit={(e) => { e.preventDefault(); if (removing) void remove(removing); }} className="space-y-4">
             <DialogHeader>
               <DialogTitle>Remove Account</DialogTitle>
@@ -107,7 +107,6 @@ export function ConnectedAccountsSection() {
               <Input id="remove-word" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" placeholder="REMOVE" />
             </div>
             <DialogFooter>
-              <Button type="button" variant="secondary" disabled={busy} onClick={() => setRemoving(null)}>Cancel</Button>
               <Button type="submit" variant="destructive" disabled={busy || !isRemoveWord(typed)}>{busy ? "Removing…" : "Remove Account"}</Button>
             </DialogFooter>
           </form>

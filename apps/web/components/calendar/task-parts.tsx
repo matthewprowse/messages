@@ -85,7 +85,7 @@ export function TaskDialog({ task, onClose, onEdit }: { task: Task | null; onClo
   const shown = task ?? last.current;
   return (
     <Dialog open={!!task} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent track="task_details" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="task_details" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         {shown && <TaskDialogBody task={shown} onClose={onClose} onEdit={onEdit} />}
       </DialogContent>
     </Dialog>
@@ -126,7 +126,6 @@ export function TaskDialogBody({ task, onClose, onEdit }: { task: Task; onClose:
         </dl>
       </div>
       <div className={DIALOG_BUTTONS}>
-        <Button variant="ghost" onClick={onClose}>Close</Button>
         {saved && <Button variant="ghost" onClick={() => setConfirmDelete(true)}>Delete</Button>}
         {saved && <Button variant="secondary" onClick={() => onEdit(task)}>Edit</Button>}
         <Button variant="secondary" disabled={!saved} onClick={() => tickTask(task, !task.completed, "details")}>{task.completed ? "Mark as Not Done" : "Mark as Done"}</Button>

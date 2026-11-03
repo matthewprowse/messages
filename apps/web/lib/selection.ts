@@ -31,17 +31,6 @@ export function shortcutAction(e: { key: string; metaKey: boolean; ctrlKey: bool
   return null;
 }
 
-/**
- * The filters that make sense in a view. Subscriptions are all email, so only Unread applies there;
- * Junk keeps Email and WhatsApp. Waiting (they owe you an answer) is for All: Priority only holds
- * conversations waiting on you. "none" is always allowed.
- */
-export function filtersForView(view: string): string[] {
-  if (view === "subscriptions") return ["none", "unread"];
-  if (view === "deleted") return ["none"];
-  return view === "all" ? ["none", "unread", "email", "whatsapp", "waiting"] : ["none", "unread", "email", "whatsapp"];
-}
-
 /** How many rows to draw: a hundred to start, a hundred more each time the end nears, never more than exist. */
 export const PAGE_SIZE = 100;
 export function nextLimit(limit: number, total: number): number {

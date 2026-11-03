@@ -8,7 +8,7 @@ import json
 import unittest
 from typing import Any
 
-from ai.documents import AUTO_CAP, TOTAL_CAP, CAPPED, FAILED, PAUSED, Documents
+from ai.documents import AI_PAUSED, AUTO_CAP, TOTAL_CAP, CAPPED, FAILED, PAUSED, Documents
 from ai.documents_card import SYSTEM, check_answer, mime_of, prompt, worth_reading
 from ai.gemini import GeminiError
 from ai.vault import Vault
@@ -185,6 +185,25 @@ class Requests(unittest.TestCase):
         worker(db, FakeGemini(error=GeminiError(None, "budget_documents"))).run_once()
         self.assertIn(PAUSED, [p.get("error") for t, f, p in db.updates if t == "document_reads"])
         self.assertEqual(stored(db), [])
+
+    def test_a_billing_pause_or_unknown_budget_says_ai_is_paused_and_lets_go_of_the_claim(self):
+        # The page used to wait 90s on a request held in silence through the 2 Nov billing pause.
+        for reason in ("billing_paused", "budget_unknown"):
+            db = FakeDb(attachment(), requests=[{"attachment_id": "a1", "user_id": "u"}])
+            worker(db, FakeGemini(error=GeminiError(None, reason))).run_once()
+            [last] = [p for t, f, p in db.updates if t == "document_reads" and "error" in p]
+            self.assertEqual(last, {"error": AI_PAUSED, "claimed_at": None}, reason)
+            self.assertEqual(stored(db), [])
+
+    def test_a_tripped_billing_breaker_answers_a_request_without_downloading(self):
+        class NoDownload(FakeDb):
+            def download(self, bucket, path):
+                raise AssertionError("nothing is downloaded while billing is paused")
+
+        db, gemini = NoDownload(attachment(), requests=[{"attachment_id": "a1", "user_id": "u"}]), FakeGemini(GOOD, blocked=True)
+        worker(db, gemini).run_once()
+        self.assertEqual(gemini.calls, [])
+        self.assertIn(AI_PAUSED, [p.get("error") for t, f, p in db.updates if t == "document_reads"])
 
     def test_a_model_failure_keeps_the_request_with_an_error_to_retry(self):
         db = FakeDb(attachment(), requests=[{"attachment_id": "a1", "user_id": "u"}])

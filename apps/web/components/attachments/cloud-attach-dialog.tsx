@@ -7,13 +7,13 @@
 import { ICLOUD_NOTE, SOURCE_LABEL } from "@/lib/cloud-pick/config";
 import { useCloudPick, type PickRule } from "@/lib/cloud-pick/use-cloud-pick";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export function CloudAttachDialog({ open, onOpenChange, rule, onFiles, notify, onDevice }: { open: boolean; onOpenChange: (open: boolean) => void; rule: PickRule; onFiles: (files: File[]) => void; notify: (message: string | null) => void; /** Opens the device's file chooser. */ onDevice: () => void }) {
   const { sources, busy, pick } = useCloudPick({ rule, onFiles, notify });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="attach_files" showCloseButton={false} className="sm:max-w-sm">
+      <DialogContent track="attach_files" className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Attach Files</DialogTitle>
           <DialogDescription>{ICLOUD_NOTE}</DialogDescription>
@@ -25,9 +25,6 @@ export function CloudAttachDialog({ open, onOpenChange, rule, onFiles, notify, o
             <Button key={s} variant="secondary" disabled={!!busy} onClick={() => { void pick(s); onOpenChange(false); }}>{SOURCE_LABEL[s]}</Button>
           ))}
         </div>
-        <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

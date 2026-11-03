@@ -1,5 +1,5 @@
 // The Attachments page's filtering as plain functions: the tabs, what the address remembers, the Source list derived from
-// the data, the date and search matching, who sent the files in view, and the honest header labels. No React, so it is
+// the data, the date and search matching, and the honest header labels. No React, so it is
 // tested here (attachment-filters.test.ts); the page only wires state to it.
 
 import { filesLabel, SOURCE_LABEL, sourceOf, type Source } from "./attachment-view";
@@ -28,10 +28,11 @@ export const DATES: { key: string; label: string; days: number }[] = [
 ];
 
 /** Everything the page's controls set. All of it lives in the address, so a reload or a shared link comes back the same. */
-export type Filters = { kind: Kind; source: string; date: string; person: string; q: string; sort: Sort };
-export const NO_FILTERS: Filters = { kind: "all", source: "all", date: "any", person: "all", q: "", sort: "newest" };
+export type Filters = { kind: Kind; source: string; date: string; q: string; sort: Sort };
+export const NO_FILTERS: Filters = { kind: "all", source: "all", date: "any", q: "", sort: "newest" };
 
-/** The filters an address carries; an unknown tab or date falls back to the default rather than showing nothing. */
+/** The filters an address carries; an unknown tab or date falls back to the default rather than showing nothing. An old
+ * link's person= (the Sent By filter, since removed) is ignored. */
 export function parseFilters(get: (key: string) => string | null): Filters {
   const kind = get("kind");
   const date = get("date");
@@ -39,7 +40,6 @@ export function parseFilters(get: (key: string) => string | null): Filters {
     kind: KINDS.some((k) => k.key === kind) ? (kind as Kind) : "all",
     source: get("source") || "all",
     date: DATES.some((d) => d.key === date) ? (date as string) : "any",
-    person: get("person") || "all",
     q: get("q") ?? "",
     sort: get("sort") === "largest" ? "largest" : "newest",
   };
@@ -51,7 +51,6 @@ export function filtersHref(f: Filters): string {
   if (f.kind !== "all") next.set("kind", f.kind);
   if (f.source !== "all") next.set("source", f.source);
   if (f.date !== "any") next.set("date", f.date);
-  if (f.person !== "all") next.set("person", f.person);
   if (f.q.trim()) next.set("q", f.q);
   if (f.sort !== "newest") next.set("sort", f.sort);
   const text = next.toString();
@@ -59,7 +58,7 @@ export function filtersHref(f: Filters): string {
 }
 
 /** True when a filter other than the tab narrows the list, or Largest reorders it: the page must hold every file to be honest. */
-export const isNarrowed = (f: Filters) => f.source !== "all" || f.date !== "any" || f.person !== "all" || f.q.trim() !== "" || f.sort !== "newest";
+export const isNarrowed = (f: Filters) => f.source !== "all" || f.date !== "any" || f.q.trim() !== "" || f.sort !== "newest";
 
 /** A WhatsApp voice note belongs to its chat, so the Audio tab leaves it out. */
 export const isVoiceNote = (a: Pick<Attachment, "kind" | "name">) => a.kind === "audio" && /^voice note\b/i.test(a.name);
@@ -85,7 +84,7 @@ export type FilterContext = {
   now: number;
 };
 
-/** Everything but the person filter, so the list of people can say how many files each one has in view. */
+/** The files that pass the tab, source, date and search. */
 export function filterFiles(files: FiledAttachment[], f: Filters, ctx: FilterContext): FiledAttachment[] {
   const words = f.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const days = DATES.find((d) => d.key === f.date)?.days ?? 0;
@@ -99,18 +98,6 @@ export function filterFiles(files: FiledAttachment[], f: Filters, ctx: FilterCon
     return words.every((w) => haystack.includes(w));
   });
 }
-
-/** Everyone who sent one of the files, with you first and the rest by name. */
-export function peopleIn(files: FiledAttachment[], nameOf: (id: string) => string): { id: string; name: string; count: number }[] {
-  const counts = new Map<string, number>();
-  for (const a of files) counts.set(a.from, (counts.get(a.from) ?? 0) + 1);
-  return [...counts]
-    .sort(([x], [y]) => (x === "me" ? -1 : y === "me" ? 1 : nameOf(x).localeCompare(nameOf(y))))
-    .map(([id, count]) => ({ id, name: nameOf(id), count }));
-}
-
-/** The chosen person if they still have files in view, otherwise Everyone, so the filter never hides itself. */
-export const effectivePerson = (person: string, people: { id: string }[]) => (person !== "all" && people.some((p) => p.id === person) ? person : "all");
 
 export type CountInput = {
   shown: number;

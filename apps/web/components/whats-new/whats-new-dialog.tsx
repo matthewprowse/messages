@@ -49,7 +49,7 @@ export function WhatsNewDialog() {
   if (!latest) return null;
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>What's New</DialogTitle>
           <DialogDescription>{latest.title}{latest.version ? ` (${latest.version})` : ""}</DialogDescription>

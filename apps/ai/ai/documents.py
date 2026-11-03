@@ -44,6 +44,7 @@ ATTACHMENT_COLUMNS = "id,user_id,filename,mime_type,size_bytes,storage_path,doc_
 MESSAGE_COLUMNS = "account_id,thread_id,sender_address"
 
 PAUSED = "Document cards are paused until the 1st. The file is still here."
+AI_PAUSED = "AI is paused for now. Try again later."  # Gemini billing is paused or the budget cannot be read: not the person's share
 FAILED = "This file could not be read. Try again."
 CAPPED = "You have read a lot of documents today. Try again tomorrow."
 UNREADABLE = {
@@ -126,6 +127,9 @@ class Documents:
         if self._read_today(user_id) >= TOTAL_CAP:
             self._fail(attachment_id, CAPPED)
             return
+        if self.gemini.billing_blocked():  # known before downloading anything: say so now rather than leave the page waiting
+            self._fail(attachment_id, AI_PAUSED)
+            return
         self._open(user_id, a)
         mime = mime_of(a.get("mime_type"), a.get("filename"))
         size = a.get("size_bytes") or 0
@@ -135,9 +139,10 @@ class Documents:
             self._fail(attachment_id, UNREADABLE["size"])
         else:
             outcome = self._read(a, user_id, mime, "request")
-            if outcome == "held":  # billing is paused: the claim goes stale and the request is read again after the pause
-                return
-            if outcome == "budget":
+            # Someone is watching the page: a pause is said plainly (Retry is there) instead of held in silence until it ends.
+            if outcome in ("held", "unknown"):
+                self._fail(attachment_id, AI_PAUSED)
+            elif outcome == "budget":
                 self._fail(attachment_id, PAUSED)
             elif outcome == "failed":
                 self._fail(attachment_id, FAILED)
@@ -191,7 +196,7 @@ class Documents:
             except Exception as err:
                 self._failed(a["id"], err)
                 continue
-            if outcome == "held":
+            if outcome in ("held", "unknown"):  # nobody is waiting on the pass: it tries again once the pause is over
                 return done
             if outcome == "budget":
                 self._paused[user_id] = time.monotonic() + PAUSE_S
@@ -227,7 +232,8 @@ class Documents:
 
     def _read(self, a: dict[str, Any], user_id: str, mime: str, by: str) -> str:
         """Reads the file and stores the card. Returns "done" (a card or a note that it is no document), "held" (billing is
-        paused, nothing stored), "budget" (the share is used up) or "failed" (the model could not answer)."""
+        paused, nothing stored), "budget" (the share is used up), "unknown" (the budget could not be read) or "failed"
+        (the model could not answer)."""
         data = self.db.download(BUCKET, a["storage_path"])
         opened = self.vault.open_bytes(user_id, ATTACHMENT_DATA, data)
         if opened is None:
@@ -249,6 +255,8 @@ class Documents:
             if billing_paused(err):
                 log.warn("document read held")
                 return "held"
+            if "budget_unknown" in str(err):
+                return "unknown"
             return "budget" if "budget_" in str(err) else "failed"
         finally:
             if uploaded:
@@ -263,6 +271,6 @@ class Documents:
         self.db.update("attachments", {"id": f"eq.{attachment_id}"}, patch, minimal=True)
 
     def _fail(self, attachment_id: str, reason: str) -> None:
-        """Keeps the request with its error, so the app can say why and offer Retry."""
-        self.db.update("document_reads", {"attachment_id": f"eq.{attachment_id}"}, {"error": reason}, minimal=True)
+        """Keeps the request with its error, so the app can say why and offer Retry, and lets go of the claim."""
+        self.db.update("document_reads", {"attachment_id": f"eq.{attachment_id}"}, {"error": reason, "claimed_at": None}, minimal=True)
 

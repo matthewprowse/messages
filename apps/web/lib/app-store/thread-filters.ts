@@ -3,7 +3,7 @@
 
 
 import type { ListFilter, Message, Priority, Thread, View } from "../types";
-import { State } from "./reducer";
+import type { State } from "./reducer";
 
 /** Sort order for priority, lowest number first. */
 export const rank: Record<Priority, number> = { urgent: 0, important: 1, normal: 2, low: 3 };
@@ -19,12 +19,19 @@ export const isPriority = (t: Thread) => (t.priority === "urgent" || t.priority 
 
 export function inFilter(t: Thread, filter: ListFilter) {
   switch (filter) {
+    case "none": return true;
     case "unread": return t.unread;
-    case "email": return t.channel === "email";
-    case "whatsapp": return t.channel === "whatsapp";
     case "waiting": return isWaiting(t);
-    default: return true;
+    // Every other filter is a channel.
+    default: return t.channel === filter;
   }
+}
+
+/** How long Urgent lasts: after this since the latest message it reads as Important, so old urgency stops shouting. */
+export const URGENT_HOURS = 24;
+/** The priority as the lists show it now: Urgent fades to Important URGENT_HOURS after the latest message. */
+export function priorityNow(t: Pick<Thread, "priority" | "lastMessageAt">, now: number = Date.now()): Priority {
+  return t.priority === "urgent" && now - Date.parse(t.lastMessageAt) > URGENT_HOURS * 3_600_000 ? "important" : t.priority;
 }
 
 /** Waiting: you wrote last, your message expects an answer, and none has come for WAITING_DAYS. */

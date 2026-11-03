@@ -246,8 +246,8 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* A click outside (or Escape) must not throw away an email you have started: Cancel closes it on purpose. */}
-      <DialogContent showCloseButton={false} track="compose" onInteractOutside={keepWork} onEscapeKeyDown={keepWork} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      {/* A click outside (or Escape) must not throw away an email you have started: the X closes it on purpose. */}
+      <DialogContent track="compose" onInteractOutside={keepWork} onEscapeKeyDown={keepWork} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Email</DialogTitle>
           <DialogDescription>Sent from your own account, then filed in the Inbox.</DialogDescription>
@@ -337,9 +337,7 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The email could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <AttachButton files={files} className="self-start sm:mr-auto" />
-              {sending.holding
-                ? <Button type="button" variant="ghost" onClick={sending.undo}>Undo</Button>
-                : <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>}
+              {sending.holding && <Button type="button" variant="ghost" onClick={sending.undo}>Undo</Button>}
               <div className="flex">
                 <Button type="submit" variant="secondary" disabled={!ready} className="flex-1 rounded-r-none">{sending.holding ? `Sending in ${sending.holdLeft}s` : waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
                 <SendLaterMenu disabled={!ready} onPick={(at) => submit(at)} className="rounded-l-none border-l border-border" />

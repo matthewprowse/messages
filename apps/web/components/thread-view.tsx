@@ -13,8 +13,7 @@ import { useAuth } from "@/lib/auth";
 import type { Contact, Message } from "@/lib/types";
 import { seenLabelId } from "@/lib/seen";
 import { leaveHref, sideBySide } from "@/lib/thread-nav";
-import { filterOf, viewOf } from "@/lib/thread-list";
-import { filtersForView } from "@/lib/selection";
+import { filterFits, filterOf, viewOf } from "@/lib/thread-list";
 import { readKey, shouldAutoRead } from "@/lib/thread-read";
 import { forwardDraft, headerOf } from "@/lib/thread-header";
 import { Button } from "@/components/ui/button";
@@ -146,7 +145,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const onLeave = useCallback(() => {
     const view = viewOf(params.get("view"));
     const rawFilter = filterOf(params.get("filter"));
-    const order = listThreads(view, filtersForView(view).includes(rawFilter) ? rawFilter : "none").map((t) => t.id);
+    const order = listThreads(view, filterFits(view, rawFilter) ? rawFilter : "none").map((t) => t.id);
     router.replace(leaveHref(order, [threadId], threadId, basePath, listQuery.toString(), sideBySide(), basePath === "/inbox"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listThreads, params, router, threadId, basePath]);

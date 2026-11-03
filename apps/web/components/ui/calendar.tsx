@@ -6,10 +6,12 @@ import {
   DayPicker,
   getDefaultClassNames,
   type DayButton,
+  type DropdownProps,
   type Locale,
 } from "react-day-picker"
 
 import { Button, buttonVariants } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon } from "lucide-react"
 
 function Calendar({
@@ -75,10 +77,6 @@ function Calendar({
         dropdown_root: cn(
           "relative rounded-(--cell-radius)",
           defaultClassNames.dropdown_root
-        ),
-        dropdown: cn(
-          "absolute inset-0 bg-popover opacity-0",
-          defaultClassNames.dropdown
         ),
         caption_label: cn(
           "font-medium select-none",
@@ -164,6 +162,7 @@ function Calendar({
         DayButton: ({ ...props }) => (
           <CalendarDayButton locale={locale} {...props} />
         ),
+        Dropdown: CalendarDropdown,
         WeekNumber: ({ children, ...props }) => {
           return (
             <td {...props}>
@@ -177,6 +176,30 @@ function Calendar({
       }}
       {...props}
     />
+  )
+}
+
+// Month and year as shadcn Selects. react-day-picker's own dropdown is a native <select>, which iOS shows as its
+// wheel picker; this keeps every date picker in the app's look. The change goes back through day-picker's onChange,
+// which only reads e.target.value.
+function CalendarDropdown({ options, value, onChange, disabled, "aria-label": ariaLabel }: DropdownProps) {
+  return (
+    <Select
+      value={value === undefined ? undefined : String(value)}
+      disabled={disabled}
+      onValueChange={(v) => onChange?.({ target: { value: v } } as React.ChangeEvent<HTMLSelectElement>)}
+    >
+      <SelectTrigger size="sm" aria-label={ariaLabel} className="gap-1 px-2 font-medium">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent className="max-h-72">
+        {options?.map((o) => (
+          <SelectItem key={o.value} value={String(o.value)} disabled={o.disabled}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 

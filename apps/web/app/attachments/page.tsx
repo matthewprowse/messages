@@ -1,13 +1,13 @@
 "use client";
 
-// Every attachment from the connected chats in one place, filterable by kind, source, date, person and search. Files load a
+// Every attachment from the connected chats in one place, filterable by kind, source, date, document type and search. Files load a
 // page at a time and the header counts honestly; hidden files sit in a collapsed row under the grid, where they can be
-// opened and unhidden. The tab, source, date, person and search live in the address, so a reload or shared link comes back
+// opened and unhidden. The tab, source, date and search live in the address, so a reload or shared link comes back
 // the same. The filtering is in lib/attachment-filters.ts and the paging in lib/attachment-pages.ts. Select picks several
 // files for Download Selected (a zip), Hide Selected and Delete (Konva's copy only); Largest sorts by size. The rules for
 // those are in lib/attachment-actions/.
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronRight, Paperclip, Search } from "lucide-react";
 import { DOC_FILTERS, docFilterOf, matchesDocFilter } from "@/lib/search/document-card";
@@ -18,16 +18,15 @@ import { actionsFor, selectedFiles, SORTS, sortLargest, toggled, type Sort } fro
 import { zipMessage } from "@/lib/attachment-actions/zip";
 import { useApp } from "@/lib/store";
 import { useAttachmentPages, type AttachmentList } from "@/lib/use-attachment-pages";
-import { countLabel, effectivePerson, filterFiles, filtersHref, isNarrowed, KINDS, DATES, NO_FILTERS, parseFilters, peopleIn, searchTextOf, sizeLabel, sourcesIn, type Filters, type Kind } from "@/lib/attachment-filters";
+import { countLabel, filterFiles, filtersHref, isNarrowed, KINDS, DATES, NO_FILTERS, parseFilters, searchTextOf, sizeLabel, sourcesIn, type Filters, type Kind } from "@/lib/attachment-filters";
 import { filesLabel, SOURCE_LABEL, sourceOf } from "@/lib/attachment-view";
 import type { FiledAttachment } from "@/lib/types";
 import { PaneControls, PaneHeader, SearchBand, ViewButtons } from "@/components/pane";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ContactAvatar, EmptyState } from "@/components/primitives";
+import { EmptyState } from "@/components/primitives";
 import { AttachmentGrid } from "@/components/attachments";
 import { DeleteFilesDialog } from "@/components/attachments/delete-dialog";
 import { useDocumentCards } from "@/components/attachments/document-store";
@@ -63,8 +62,6 @@ function AttachmentsPage() {
   useEffect(() => { if (narrowed && visible.files && visible.more && !visible.loading) visible.loadMore(); }, [narrowed, visible]);
   useEffect(() => { if (narrowed && hiddenOpen && hidden.files && hidden.more && !hidden.loading) hidden.loadMore(); }, [narrowed, hiddenOpen, hidden]);
 
-  const nameOf = useCallback((from: string) => (from === "me" ? "You" : contactById(from)?.name ?? "Unknown"), [contactById]);
-
   // Per file, built once per load and not on every keystroke: the account it came through, and the text a search looks in.
   const lists = [visible.files || [], hidden.files || []];
   const derived = useMemo(() => {
@@ -91,16 +88,13 @@ function AttachmentsPage() {
   const inViewVisible = useMemo(() => filterFiles(lists[0], filters, ctx), [visible.files, kind, filters.source, filters.date, filters.q, ctx]); // eslint-disable-line react-hooks/exhaustive-deps
   const inViewHidden = useMemo(() => filterFiles(lists[1], filters, ctx), [hidden.files, kind, filters.source, filters.date, filters.q, ctx]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Everyone who sent one of the files in view, with you first. A chosen person with nothing left in view falls back to Everyone.
-  const people = useMemo(() => peopleIn(inViewVisible, nameOf), [inViewVisible, nameOf]);
-  const person = effectivePerson(filters.person, people);
   // Cards are looked up for every loaded file only while a document filter is on; otherwise the grid asks for the tiles it shows.
   const cardOf = useDocumentCards(useMemo(() => (doc === "all" ? [] : [...inViewVisible, ...inViewHidden].filter((a) => a.path && (a.kind === "pdf" || a.kind === "image")).map((a) => a.id)), [doc, inViewVisible, inViewHidden]));
   const cardType = (a: FiledAttachment) => { const e = cardOf(a.id); return e?.state === "card" ? e.card : null; };
-  const only = (files: FiledAttachment[]) => (person === "all" ? files : files.filter((a) => a.from === person)).filter((a) => matchesDocFilter(cardType(a), doc));
+  const only = (files: FiledAttachment[]) => files.filter((a) => matchesDocFilter(cardType(a), doc));
   const largest = filters.sort === "largest";
-  const shown = useMemo(() => (largest ? sortLargest(only(inViewVisible)) : only(inViewVisible)), [inViewVisible, person, largest, doc, cardOf]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shownHidden = useMemo(() => (largest ? sortLargest(only(inViewHidden)) : only(inViewHidden)), [inViewHidden, person, largest, doc, cardOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = useMemo(() => (largest ? sortLargest(only(inViewVisible)) : only(inViewVisible)), [inViewVisible, largest, doc, cardOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shownHidden = useMemo(() => (largest ? sortLargest(only(inViewHidden)) : only(inViewHidden)), [inViewHidden, largest, doc, cardOf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Hide or unhide from the viewer: the file moves between the two lists at once, and goes back if it could not be saved.
   const toggleHidden = async (a: FiledAttachment) => {
@@ -168,17 +162,17 @@ function AttachmentsPage() {
   const kindLabel = KINDS.find((k) => k.key === kind)?.label;
   const hiddenCount = hiddenOpen ? shownHidden.length : hidden.total;
   const showHiddenRow = !!loaded && ((hidden.total ?? 0) > 0 || hiddenOpen);
-  const pickPerson = (id: string) => go({ person: id });
 
   return (
-    // The same split as Conversations and Contacts: the filters on the left, the files beside them.
-    <div className="flex h-full min-h-0 flex-col md:flex-row">
-      <aside className="flex shrink-0 flex-col md:h-full md:w-80 md:border-r lg:w-1/3">
+    // One column: the filters in the header, the files under them. (A Sent By list once filled a left column here; with it
+    // gone the filters fit across the top.)
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0">
         <PaneHeader title="Attachments">
           <PaneControls>
             <ViewButtons label="Type" value={kind} items={KINDS} onSelect={(k: Kind) => go({ kind: k })} />
           </PaneControls>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
             <Select value={filters.source} onValueChange={(source) => go({ source })}>
               <SelectTrigger aria-label="Source" className="w-full data-[size=default]:h-8"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -193,43 +187,13 @@ function AttachmentsPage() {
               </SelectContent>
             </Select>
             <Select value={doc} onValueChange={(d) => router.replace(hrefWith(filters, docFilterOf(d)), { scroll: false })}>
-              <SelectTrigger aria-label="Document" className="col-span-2 w-full data-[size=default]:h-8"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Document" className="col-span-2 w-full data-[size=default]:h-8 md:col-span-1"><SelectValue /></SelectTrigger>
               <SelectContent>{DOC_FILTERS.map((d) => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}</SelectContent>
-            </Select>
-            {/* On a phone there is no people list beside the grid, so the sender is chosen here. */}
-            <Select value={person} onValueChange={pickPerson}>
-              <SelectTrigger aria-label="Sent By" className="col-span-2 w-full data-[size=default]:h-8 md:hidden"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Everyone</SelectItem>
-                {people.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-              </SelectContent>
             </Select>
           </div>
         </PaneHeader>
         <SearchBand value={query} onChange={search} placeholder="Search Attachments" />
-        {/* Who the files are from. Choosing one shows only theirs. */}
-        <ScrollArea className="hidden min-h-0 flex-1 md:block">
-          <div className="flex flex-col gap-1 p-3">
-            {[{ id: "all", name: "Everyone", count: inViewVisible.length }, ...people].map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                aria-pressed={person === p.id}
-                onClick={() => pickPerson(p.id)}
-                className={cn("flex items-center gap-3 rounded-lg p-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", person === p.id ? "bg-muted" : "hover:bg-muted/50")}
-              >
-                {p.id === "all" ? (
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted"><Paperclip className="size-4" /></span>
-                ) : (
-                  <ContactAvatar contact={p.id === "me" ? undefined : contactById(p.id)} className="size-8" />
-                )}
-                <span className="min-w-0 flex-1 truncate text-sm font-medium">{p.name}</span>
-                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{p.count.toLocaleString()}</span>
-              </button>
-            ))}
-          </div>
-        </ScrollArea>
-      </aside>
+      </div>
 
       <section className="flex min-h-0 min-w-0 flex-1 flex-col md:h-full">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-background p-3 md:px-4">
@@ -262,7 +226,7 @@ function AttachmentsPage() {
         <ScrollArea className="min-h-0 flex-1">
           <div className="p-3 md:px-4">
             {loaded === null && (
-              <div role="status" aria-busy="true" aria-label="Loading Attachments" className="grid grid-cols-3 gap-x-3 gap-y-4 md:grid-cols-6">
+              <div role="status" aria-busy="true" aria-label="Loading Attachments" className="grid grid-cols-3 gap-x-3 gap-y-4 md:grid-cols-6 xl:grid-cols-8">
                 {Array.from({ length: 12 }, (_, i) => (
                   <div key={i} className="flex flex-col gap-1">
                     <Skeleton className="aspect-square w-full rounded-lg" />
@@ -297,7 +261,7 @@ function AttachmentsPage() {
               </div>
             )}
             {shown.length > 0 && (
-              <AttachmentGrid items={shown} byMonth={!largest} className="grid-cols-3 md:grid-cols-6" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={visible.more && !narrowed ? visible.loadMore : undefined} />
+              <AttachmentGrid items={shown} byMonth={!largest} className="grid-cols-3 md:grid-cols-6 xl:grid-cols-8" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={visible.more && !narrowed ? visible.loadMore : undefined} />
             )}
             {loaded && shown.length === 0 && visible.more && (
               <p role="status" className="py-24 text-center text-sm text-muted-foreground">Searching your files</p>
@@ -315,7 +279,7 @@ function AttachmentsPage() {
                     {hidden.files === false && <p className="text-sm text-muted-foreground">Hidden files did not load.</p>}
                     {hidden.files && shownHidden.length === 0 && !hidden.more && <p className="text-sm text-muted-foreground">{narrowed ? "No hidden files fit these filters." : "Nothing is hidden."}</p>}
                     {shownHidden.length > 0 && (
-                      <AttachmentGrid items={shownHidden} byMonth={!largest} className="grid-cols-3 md:grid-cols-6" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={hidden.more && !narrowed ? hidden.loadMore : undefined} />
+                      <AttachmentGrid items={shownHidden} byMonth={!largest} className="grid-cols-3 md:grid-cols-6 xl:grid-cols-8" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={hidden.more && !narrowed ? hidden.loadMore : undefined} />
                     )}
                   </div>
                 )}

@@ -11,7 +11,7 @@ import { dayKey, fromDateKey, addDays } from "@/lib/dates";
 import { loadEvents, type CalendarEvent } from "@/lib/calendar";
 import { browserStorage } from "@/lib/event-calendars";
 import { DEFAULT_HOURS, formatFreeTimes, freeTimes, minutesOf, nextWorkingDays, readHours, timeOfMinutes, workingDaysBetween, writeHours, type WorkingHours } from "@/lib/free-times";
-import { TimeSelect } from "@/components/new-event/event-fields";
+import { TimeSelect } from "@/components/time-select";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -87,7 +87,7 @@ export function CopyFreeTimes({ open, onOpenChange, queued, now }: { open: boole
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Copy Free Times</DialogTitle>
           <DialogDescription>Gaps in your working hours, in your time zone ({timeZone}), ready to paste into a reply.</DialogDescription>
@@ -111,11 +111,11 @@ export function CopyFreeTimes({ open, onOpenChange, queued, now }: { open: boole
           <div className="grid grid-cols-3 gap-4">
             <div className="grid gap-2">
               <Label htmlFor="free-from">From</Label>
-              <TimeSelect id="free-from" value={timeOfMinutes(hours.start)} onChange={setBound("start")} invalid={false} disabled={false} />
+              <TimeSelect id="free-from" value={timeOfMinutes(hours.start)} onChange={setBound("start")} />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="free-to">To</Label>
-              <TimeSelect id="free-to" value={timeOfMinutes(hours.end)} onChange={setBound("end")} invalid={false} disabled={false} />
+              <TimeSelect id="free-to" value={timeOfMinutes(hours.end)} onChange={setBound("end")} />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="free-length">At Least</Label>
@@ -131,7 +131,6 @@ export function CopyFreeTimes({ open, onOpenChange, queued, now }: { open: boole
           </div>
         </div>
         <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
           <Button type="button" variant="secondary" disabled={!text} onClick={() => void copy()}>Copy</Button>
         </div>
       </DialogContent>

@@ -51,11 +51,10 @@ from .supabase import Supabase, in_list
 from .text import UNTRUSTED, fenced, new_fence
 from .vault import Vault
 
-POLL_S = 10  # while briefs are being made or asked for
-# An idle brief looks 10s, 20s, then every 30s (poll.Backoff), and every 10s again once a brief is asked for or due.
-# A brief is read in a minute or more and the daily one is due by the clock, so a request waiting up to 30s is fine,
-# and each look costs several requests.
-IDLE_S = 30
+# Someone pressed Listen and is waiting, so a request is looked for every 2s, idle or not. An idle look is one indexed
+# select (both kinds of request at once); profiles are cached for PROFILES_TTL_S and the sweep runs every SWEEP_EVERY_S.
+POLL_S = 2
+IDLE_S = 2
 PROFILES_TTL_S = 300  # briefing times and time zones are read this often, not on every look
 SCRIPT_MAX_OUTPUT = 6144  # tokens, thinking included: a spoken brief is a few minutes of text
 AUDIO_BUCKET = "brief-audio"
@@ -65,21 +64,23 @@ KEEP_DAYS = 2  # audio is rebuilt on request and is the bulk of the storage, so 
 SWEEP_EVERY_S = 300  # stuck briefs are failed and old ones deleted this often, not on every look (STALE_AFTER is 10 minutes)
 STALE_AFTER = timedelta(minutes=10)  # a brief still 'working' this long was cut off (a restart) and is failed
 QUIET_RECHECK_S = 1800  # a user with nothing new since their last brief is looked at again this often, not on every poll
-REPLY_DAYS = 14  # the same windows as the Summary page (apps/web/lib/summary.ts); both are tested against apps/web/lib/summary-fixture.json
+REPLY_DAYS = 3  # the same windows as the Summary page (apps/web/lib/summary.ts); both are tested against apps/web/lib/summary-fixture.json
 PRIORITY_DAYS = 7
 UPDATE_HOURS = 24
+URGENT_HOURS = 24  # urgent sorts as important this long after the latest message (priorityNow in apps/web/lib/app-store/thread-filters.ts)
 MAX_ITEMS = 8  # conversations per section in the prompt
 MAX_TASKS = 8  # tasks per section in the prompt; the rest are counted
 MAX_WAITING = 3  # conversations waiting on them, in the prompt
 MAX_PROMISES = 4
 WAITING_MIN_DAYS = 2  # the same two days as the Summary's Waiting On Others
 WAITING_MAX_DAYS = 14
+THREAD_DAYS = max(REPLY_DAYS, PRIORITY_DAYS, WAITING_MAX_DAYS)  # how far back conversations are read: the widest section window
 DEFAULT_ZONE = "Africa/Johannesburg"
 VOICES = {"Kore", "Aoede", "Sulafat", "Charon", "Achird", "Iapetus"}  # profiles.brief_voice allows these
 # Each part is spoken on its own, so every boundary is a place the voice can change tone. Parts grow: the
 # first is short so the first words are heard soon, and each later one is ready long before the one
 # playing ends, so there are few boundaries without a wait at any of them.
-PART_WORDS_BY_SEQ = (40, 80, 160)
+PART_WORDS_BY_SEQ = (20, 60, 160)  # the first is the greeting and a sentence: about 20 words is heard within seconds
 FIRST_PART_WORDS = PART_WORDS_BY_SEQ[0]
 PART_WORDS = PART_WORDS_BY_SEQ[-1]
 # Silence the speech model leaves at each end of a part, kept short so parts follow on like sentences.
@@ -226,7 +227,10 @@ def sections(threads: list[dict[str, Any]], now: datetime) -> dict[str, list[dic
         t for t in open_
         if t["id"] not in taken and t.get("category") in ("fyi", "work") and (t.get("summary") or "").strip() and age_h(t) <= UPDATE_HOURS
     ]
-    pressing = lambda t: (rank.get(t.get("priority") or "normal", 2), -datetime.fromisoformat(str(t["last_message_at"]).replace("Z", "+00:00")).timestamp())
+    def now_priority(t: dict[str, Any]) -> str:
+        return "important" if t.get("priority") == "urgent" and age_h(t) > URGENT_HOURS else t.get("priority") or "normal"
+
+    pressing = lambda t: (rank.get(now_priority(t), 2), -datetime.fromisoformat(str(t["last_message_at"]).replace("Z", "+00:00")).timestamp())
     return {"reply": sorted(reply, key=pressing), "priority": sorted(priority, key=pressing), "updates": sorted(updates, key=lambda t: age_h(t))}
 
 
@@ -402,11 +406,12 @@ class Brief:
         if self.gemini.billing_blocked():  # every claim would be written, refused and put back (or deleted) again on each poll
             return 0
         done = 0
-        for row in self.db.select("briefs", {"select": "id,user_id", "status": "eq.speak_pending", "order": "updated_at", "limit": "5"}):
-            if self._claim(row["id"], "speak_pending"):
+        # Both kinds of request in one select, as this runs every POLL_S: speaking a written brief first (the quicker one).
+        asked = self.db.select("briefs", {"select": "id,user_id,for_date,status", "status": "in.(speak_pending,pending)", "order": "updated_at", "limit": "10"})
+        for row in sorted(asked, key=lambda b: b["status"] != "speak_pending"):
+            if row["status"] == "speak_pending" and self._claim(row["id"], "speak_pending"):
                 done += self._speak_written(row["id"], row["user_id"])
-        for row in self.db.select("briefs", {"select": "id,user_id,for_date", "status": "eq.pending", "order": "created_at", "limit": "5"}):
-            if self._claim(row["id"], "pending"):
+            elif row["status"] == "pending" and self._claim(row["id"], "pending"):
                 done += self._write(row["id"], row["user_id"], date.fromisoformat(row["for_date"]), now)
         # Who is due is worked out here from profiles read every PROFILES_TTL_S, not selected on each look.
         due = {p["user_id"]: d for p in self._profile_rows() if (d := due_today(now, zone_of(p.get("timezone")), p.get("briefing_time")))}
@@ -429,11 +434,11 @@ class Brief:
 
     def _has_news(self, user_id: str, now: datetime) -> bool:
         """Whether a daily brief is worth making: a connected account, and a message that arrived since the last brief
-        (or in the last REPLY_DAYS when there has been none)."""
+        (or in the last THREAD_DAYS when there has been none)."""
         if not self.db.select("accounts", {"select": "id", "user_id": f"eq.{user_id}", "status": "in.(connected,syncing)", "limit": "1"}):
             return False
         last = self.db.first("briefs", {"select": "created_at", "user_id": f"eq.{user_id}", "order": "created_at.desc"})
-        since = (last or {}).get("created_at") or _iso(now - timedelta(days=REPLY_DAYS))
+        since = (last or {}).get("created_at") or _iso(now - timedelta(days=THREAD_DAYS))
         return bool(self.db.select("messages", {"select": "id", "user_id": f"eq.{user_id}", "created_at": f"gt.{since}", "limit": "1"}))
 
     def _profile_rows(self) -> list[dict[str, Any]]:
@@ -523,7 +528,7 @@ class Brief:
                     "user_id": f"eq.{user_id}",
                     "status": "eq.inbox",
                     "junk": "eq.false",
-                    "last_message_at": f"gte.{_iso(now - timedelta(days=REPLY_DAYS))}",
+                    "last_message_at": f"gte.{_iso(now - timedelta(days=THREAD_DAYS))}",
                     "order": "last_message_at.desc",
                     "limit": "300",
                 },
@@ -554,16 +559,19 @@ class Brief:
             if not script:
                 raise GeminiError(None, "empty script")
             parts = split_parts(script)
+            # Stored before any speech: speaking takes a while and can fail, and the written brief is worth having either way
+            # (the app shows it while the audio comes). A brief to be spoken stays 'working' until its first part is ready.
+            self.db.update(
+                "briefs",
+                {"id": f"eq.{brief_id}"},
+                {"status": "working" if speak else "written", "script": self.vault.seal(user_id, BRIEF, script), "parts": None, "voice": None, "seconds": None, "error": None,
+                 "updated_at": _iso(datetime.now(timezone.utc))},
+                minimal=True,
+            )
             if not speak:
-                self.db.update(
-                    "briefs",
-                    {"id": f"eq.{brief_id}"},
-                    {"status": "written", "script": self.vault.seal(user_id, BRIEF, script), "parts": None, "voice": None, "seconds": None, "error": None, "updated_at": _iso(datetime.now(timezone.utc))},
-                    minimal=True,
-                )
                 log.info("brief written", user=user_id, events=len(events), tasks=len(tasks), threads=len(threads), parts=len(parts), spoken=False)
                 return 1
-            seconds = self._speak(brief_id, user_id, script, parts, voice, usage)
+            seconds = self._speak(brief_id, user_id, parts, voice, usage)
             self.db.update(
                 "briefs",
                 {"id": f"eq.{brief_id}"},
@@ -642,7 +650,7 @@ class Brief:
                 raise GeminiError(None, "no script to speak")
             profile = self.db.first("profiles", {"select": "brief_voice", "user_id": f"eq.{user_id}"}) or {}
             voice = self._voice(profile)
-            seconds = self._speak(brief_id, user_id, script, parts, voice, UsageContext(user_id, "brief"))
+            seconds = self._speak(brief_id, user_id, parts, voice, UsageContext(user_id, "brief"))
             self.db.update("briefs", {"id": f"eq.{brief_id}"}, {"status": "ready", "seconds": seconds, "error": None, "updated_at": _iso(datetime.now(timezone.utc))}, minimal=True)
             log.info("brief spoken", user=user_id, parts=len(parts), seconds=seconds)
             return 1
@@ -656,7 +664,7 @@ class Brief:
             return 0
 
 
-    def _speak(self, brief_id: str, user_id: str, script: str, parts: list[str], voice: str, usage: UsageContext) -> int:
+    def _speak(self, brief_id: str, user_id: str, parts: list[str], voice: str, usage: UsageContext) -> int:
         """Speaks the parts and stores each as it is ready: the first on its own, then the brief turns
         'speaking' so the app can start, and the rest at once. Returns the total length in seconds."""
         # A brief written again replaces its parts, files included.
@@ -684,7 +692,7 @@ class Brief:
         self.db.update(
             "briefs",
             {"id": f"eq.{brief_id}"},
-            {"status": "speaking", "script": self.vault.seal(user_id, BRIEF, script), "parts": len(parts), "voice": voice, "updated_at": _iso(datetime.now(timezone.utc))},
+            {"status": "speaking", "parts": len(parts), "voice": voice, "updated_at": _iso(datetime.now(timezone.utc))},  # the script is stored already
             minimal=True,
         )
         with ThreadPoolExecutor(max_workers=SPEAKERS, thread_name_prefix="speak") as pool:

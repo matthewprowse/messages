@@ -28,16 +28,25 @@ export const metadata: Metadata = {
   icons: { icon: "/icon.svg", apple: "/apple-touch-icon.png" },
 };
 
-export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f7f6f3" },
-    { media: "(prefers-color-scheme: dark)", color: "#121210" },
-  ],
-  width: "device-width",
-  initialScale: 1,
-  viewportFit: "cover",
-  interactiveWidget: "resizes-content",
-};
+// iPhone and iPad Safari zoom the page when a field under 16px takes focus. maximumScale: 1 stops that, and iOS still
+// lets you pinch zoom, so fields can be 14px like the rest of the app. Android honours maximumScale as a zoom lock,
+// so it is only sent to iOS.
+const IOS_UA = /iPhone|iPad|iPod/;
+
+export async function generateViewport(): Promise<Viewport> {
+  const ua = (await headers()).get("user-agent") ?? "";
+  return {
+    themeColor: [
+      { media: "(prefers-color-scheme: light)", color: "#f7f6f3" },
+      { media: "(prefers-color-scheme: dark)", color: "#121210" },
+    ],
+    width: "device-width",
+    initialScale: 1,
+    ...(IOS_UA.test(ua) ? { maximumScale: 1 } : {}),
+    viewportFit: "cover",
+    interactiveWidget: "resizes-content",
+  };
+}
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // The per-request nonce from middleware.ts: next-themes' inline script needs it, and reading it renders pages per request. Soft navigations skip the middleware, so it can be missing there; the layout does not re-render then.

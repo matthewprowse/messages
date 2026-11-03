@@ -177,7 +177,7 @@ export function EventDialog({ event, onClose }: { event: CalendarEvent | null; o
   const shown = event ?? last.current;
   return (
     <Dialog open={!!event} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent track="event_details" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="event_details" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         {shown && <EventDialogBody event={shown} onClose={onClose} />}
       </DialogContent>
     </Dialog>
@@ -194,8 +194,8 @@ export function EventDialogBody({ event, onClose }: { event: CalendarEvent; onCl
         <DialogDescription className="tabular-nums">{eventWhen(full)}</DialogDescription>
       </DialogHeader>
       <EventDetails event={event} />
-      <div className={DIALOG_BUTTONS}>
-        <Button variant="ghost" onClick={onClose}>Close</Button>
+      {/* The X closes it, so a read-only event has no button row at all. */}
+      {(link || canDelete || canEdit) && <div className={DIALOG_BUTTONS}>
         {link && (
           <Button variant="ghost" asChild>
             <a href={link} target="_blank" rel="noopener noreferrer">Open in Google Calendar</a>
@@ -203,7 +203,7 @@ export function EventDialogBody({ event, onClose }: { event: CalendarEvent; onCl
         )}
         {canDelete && <Button variant="ghost" disabled={loading} onClick={() => { onClose(); askToDelete(full); }}>Delete</Button>}
         {canEdit && <Button variant="secondary" disabled={loading || !full.detailed} onClick={() => { onClose(); askToEdit(full); }}>Edit</Button>}
-      </div>
+      </div>}
     </>
   );
 }

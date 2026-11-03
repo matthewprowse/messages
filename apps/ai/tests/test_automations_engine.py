@@ -155,7 +155,8 @@ class LiveRun(unittest.TestCase):
         self.assertNotIn("property24.com", draft["reply_to"])
         self.assertIn("not to the portal", draft["instruction"])
         self.assertNotIn("is this still available", draft["instruction"], "the enquirer's own words never go into the instruction")
-        self.assertIn(("threads", {"id": f"eq.{THREAD}", "user_id": f"eq.{USER}"}, {"priority": "urgent", "junk": False, "needs_reply": True}), db.updates)
+        urgent = {"priority": "urgent", "junk": False, "needs_reply": True, "triage_reason": "automation", "triage_reason_text": "s:summary:Your automation marked this urgent"}
+        self.assertIn(("threads", {"id": f"eq.{THREAD}", "user_id": f"eq.{USER}"}, urgent), db.updates, "urgent from an automation says why")
         run = db.run_patch()
         self.assertEqual((run["status"], run["read_by"], run["error"]), ("done", "parser", None))
         self.assertEqual(json.loads(run["fields"].removeprefix("s:automation_run:"))["name"], "Sipho Dlamini")
@@ -307,6 +308,10 @@ class Preview(unittest.TestCase):
         result = json.loads(db.updates[-1][2]["result"].removeprefix("s:automation_run:"))
         self.assertEqual((result["count"], result["leads"][0]["name"]), (1, "Sipho Dlamini"))
         self.assertEqual(db.of("contacts") + db.of("task_updates") + db.of("drafts"), [], "a preview makes nothing")
+
+    def test_a_preview_asked_for_while_idle_is_picked_up_within_seconds(self):
+        from ai.automations.previews import IDLE_S
+        self.assertLessEqual(IDLE_S, 5)  # the Turn On dialog waits for it; 30s idle left most of that wait in the back-off
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
 "use client";
 
-// The Notes list: search, pinned notes first then newest edits, an Archived view, templates for New Note, and the delete dialog.
+// The Notes list: search, pinned notes first then newest edits, an Archived view, New Note and its templates, row
+// actions on hover or a swipe to the left, and the delete dialog.
 
 import { PaneHeader, SearchBand } from "@/components/pane";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Archive, ArchiveRestore, ChevronDown, ListChecks, NotebookPen, Pin, PinOff, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, ArchiveRestore, LayoutTemplate, ListChecks, NotebookPen, Pin, PinOff, Trash2, type LucideIcon } from "lucide-react";
 import type { Note } from "@/lib/notes";
 import { checklistProgress, matchesNote, matchingLine, noteExcerpt, searchWords } from "@/lib/note-text";
 import { factStatus } from "@/lib/note-facts";
@@ -23,7 +24,8 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Kbd } from "@/components/ui/kbd";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useRowSwipe, useSwipeOpen } from "@/components/use-row-swipe";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fromTemplate, NOTE_TEMPLATES, shortDate } from "@/lib/note-templates";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -38,8 +40,10 @@ export const noteTitle = (n: Pick<Note, "title">) => n.title.trim() || "Untitled
 /** How long the pointer rests on a row (ms) before its note is fetched ahead of a click. */
 const WARM_HOVER_MS = 150;
 
-// The row's text fades out under its two hover buttons, as on conversation rows.
-const FADE = "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-hover/row:invisible group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] pointer-coarse:[mask-image:linear-gradient(to_right,black_calc(100%-112px),transparent_calc(100%-80px))] [&_[data-hover-hide]]:group-focus-within/row:invisible [&_[data-hover-hide]]:pointer-coarse:invisible";
+// The row's text fades out under its three buttons: with a mouse on hover or focus, on a phone once swiped open (a
+// tap focuses the row it opens, so focus alone must not fade it there), as on conversation rows.
+const FADE = "group-hover/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:group-hover/row:invisible pointer-fine:group-focus-within/row:[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:pointer-fine:group-focus-within/row:invisible";
+const SWIPED_FADE = "[mask-image:linear-gradient(to_right,black_calc(100%-148px),transparent_calc(100%-116px))] [&_[data-hover-hide]]:invisible";
 
 function RowButton({ label, icon: Icon, onClick }: { label: string; icon: LucideIcon; onClick: () => void }) {
   return (
@@ -63,7 +67,7 @@ function Highlight({ text, words }: { text: string; words: string[] }) {
   );
 }
 
-const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onPin, onDelete, onDraft, onArchive, onWarm }: {
+const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, open, onSwipe, onTouchRow, onPin, onDelete, onDraft, onArchive, onWarm }: {
   note: Note;
   /** How the note stands for drafts, passed as plain text so the row only redraws when it changes. */
   drafts: DraftsStatus;
@@ -72,6 +76,10 @@ const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onP
   /** Only read through relTime: a new day redraws the row. */
   today: string;
   selected: boolean;
+  /** Swiped open on a touch screen: the actions are out. */
+  open: boolean;
+  onSwipe: (id: string | null) => void;
+  onTouchRow: (id: string) => void;
   onPin: (note: Note) => void;
   onDelete: (note: Note) => void;
   onDraft: (note: Note) => void;
@@ -87,18 +95,22 @@ const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onP
   // Until the text is downloaded the stored excerpt stands in for it.
   const text = note.unloaded ? note.excerpt ?? "" : note.body;
   const preview = (term && matchingLine(text, term)) || (note.unloaded ? text : noteExcerpt(text));
+  const { handlers, guardClick } = useRowSwipe({ id: note.id, open, onSwipe, onTouchRow });
+  // An action closes the swiped row, so the next tap on it opens the note.
+  const then = (fn: (note: Note) => void) => () => { if (open) onSwipe(null); fn(note); };
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className={cn("group/row relative rounded-lg", selected ? "bg-muted" : "hover:bg-muted/50")}>
+        <div {...handlers} className={cn("group/row relative touch-pan-y rounded-lg", selected ? "bg-muted" : "hover:bg-muted/50")}>
           <Link
             href={`/notes/${note.id}`}
             data-row-link
             onPointerEnter={() => { clearTimeout(hover.current); hover.current = setTimeout(() => onWarm(note.id), WARM_HOVER_MS); }}
             onPointerLeave={() => clearTimeout(hover.current)}
             onFocus={() => onWarm(note.id)}
+            onClick={guardClick}
             aria-current={selected ? "page" : undefined}
-            className={cn("flex flex-col gap-1 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", FADE)}
+            className={cn("flex flex-col gap-1 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", open ? SWIPED_FADE : FADE)}
           >
             {/* 20px title line + 4px gap + 16px preview line, as on conversation rows. */}
             <div className="flex h-5 items-center justify-between gap-3">
@@ -116,10 +128,10 @@ const NoteRow = memo(function NoteRow({ note, drafts, term, today, selected, onP
               <DraftsBadge status={drafts} />
             </div>
           </Link>
-          <div className="absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1 group-hover/row:flex group-focus-within/row:flex pointer-coarse:flex">
-            <RowButton label={note.pinned ? "Unpin" : "Pin"} icon={note.pinned ? PinOff : Pin} onClick={() => onPin(note)} />
-            <RowButton label={note.archived ? "Restore" : "Archive"} icon={note.archived ? ArchiveRestore : Archive} onClick={() => onArchive(note)} />
-            <RowButton label="Delete" icon={Trash2} onClick={() => onDelete(note)} />
+          <div className={cn("absolute top-1/2 right-3 -translate-y-1/2 items-center gap-1", open ? "flex animate-in fade-in-0 slide-in-from-right-4 duration-150" : "hidden group-hover/row:flex pointer-fine:group-focus-within/row:flex")}>
+            <RowButton label={note.pinned ? "Unpin" : "Pin"} icon={note.pinned ? PinOff : Pin} onClick={then(onPin)} />
+            <RowButton label={note.archived ? "Restore" : "Archive"} icon={note.archived ? ArchiveRestore : Archive} onClick={then(onArchive)} />
+            <RowButton label="Delete" icon={Trash2} onClick={then(onDelete)} />
           </div>
         </div>
       </ContextMenuTrigger>
@@ -241,6 +253,7 @@ export function NoteList() {
   const pinned = useMemo(() => shown.filter((n) => n.pinned), [shown]);
   const rest = useMemo(() => shown.filter((n) => !n.pinned), [shown]);
   const rowsRef = useRowNavigation<HTMLDivElement>();
+  const { openId, onSwipe, onTouchRow } = useSwipeOpen();
   const today = useToday();
   const onPin = useCallback((note: Note) => pin(note.id, !note.pinned), [pin]);
   const onArchive = useCallback((note: Note) => archive(note.id, !note.archived), [archive]);
@@ -257,7 +270,7 @@ export function NoteList() {
       {list.map((n, i) => (
         <Fragment key={n.id}>
           {i > 0 && <div className="px-3"><Separator /></div>}
-          <NoteRow note={n} drafts={factStatus(facts, n)} term={term} today={today} selected={params.id === n.id} onPin={onPin} onDelete={setDeleting} onDraft={onDraft} onArchive={onArchive} onWarm={warm} />
+          <NoteRow note={n} drafts={factStatus(facts, n)} term={term} today={today} selected={params.id === n.id} open={openId === n.id} onSwipe={onSwipe} onTouchRow={onTouchRow} onPin={onPin} onDelete={setDeleting} onDraft={onDraft} onArchive={onArchive} onWarm={warm} />
         </Fragment>
       ))}
     </section>
@@ -270,21 +283,24 @@ export function NoteList() {
         <PaneHeader
           title="Notes"
           action={
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="secondary" className="shrink-0" disabled={creating} aria-keyshortcuts="N">New Note<ChevronDown /></Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-max">
-                <DropdownMenuItem onClick={() => void newNote()}>Blank Note<Kbd>N</Kbd></DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>From a Template</DropdownMenuLabel>
-                {NOTE_TEMPLATES.map((t) => <DropdownMenuItem key={t.id} onClick={() => void newNote(fromTemplate(t, shortDate(new Date())))}>{t.name}</DropdownMenuItem>)}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            // New Note makes a blank note in one tap; templates sit in their own menu beside it.
+            <div className="flex shrink-0 items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="secondary" size="icon" disabled={creating} aria-label="New Note From a Template"><LayoutTemplate /></Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-max">
+                  <DropdownMenuLabel>From a Template</DropdownMenuLabel>
+                  {NOTE_TEMPLATES.map((t) => <DropdownMenuItem key={t.id} onClick={() => void newNote(fromTemplate(t, shortDate(new Date())))}>{t.name}</DropdownMenuItem>)}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button variant="secondary" disabled={creating} aria-keyshortcuts="N" onClick={() => void newNote()}>New Note</Button>
+            </div>
           }
         />
         <SearchBand inputRef={searchRef} value={search} onChange={setSearch} placeholder="Search Notes" keyShortcut="/" hint={<>Search Notes <Kbd>/</Kbd></>} />
-        <Tabs value={view} onValueChange={(v) => setView(v as "notes" | "archived")} className="px-3 pb-2">
+        {/* Its own band under the search, with a line under it like the search's. */}
+        <Tabs value={view} onValueChange={(v) => setView(v as "notes" | "archived")} className="border-b p-3">
           <TabsList className="w-full">
             <TabsTrigger value="notes">Notes</TabsTrigger>
             <TabsTrigger value="archived">Archived{archivedCount > 0 && <span className="tabular-nums text-muted-foreground">{archivedCount}</span>}</TabsTrigger>

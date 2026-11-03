@@ -19,7 +19,8 @@ function WhyCard({ thread, onDone }: { thread: Thread; onDone: () => void }) {
   const options = notRightOptions(thread);
   return (
     <div className="space-y-2">
-      <p className="text-sm">{text ?? (note ? "The AI did not say why." : "Loading")}</p>
+      {/* No stored reason means no line at all: the Not Right? choices still work without one. */}
+      {(text || !note) && <p className="text-sm">{text ?? "Loading"}</p>}
       {options.length > 0 && (
         <div className="flex flex-wrap items-center gap-1">
           <span className="text-xs text-muted-foreground">Not Right?</span>
@@ -44,7 +45,7 @@ export function WhyTag({ thread, marker }: { thread: Thread; marker: "urgent" | 
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); }}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); } }}
         >
-          <Badge variant={marker === "urgent" ? "destructive" : "secondary"}>{marker === "urgent" ? "Urgent" : "Needs Reply"}</Badge>
+          <Badge variant="secondary">{marker === "urgent" ? "Urgent" : "Needs Reply"}</Badge>
         </span>
       </HoverCardTrigger>
       <HoverCardContent align="start" className="w-64">{open && <WhyCard thread={thread} onDone={() => setOpen(false)} />}</HoverCardContent>

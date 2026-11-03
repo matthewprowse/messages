@@ -35,6 +35,7 @@ export function ListRow({
   at,
   aside,
   detail,
+  unread = 0,
   selected = false,
   className,
 }: {
@@ -49,6 +50,8 @@ export function ListRow({
   aside?: React.ReactNode;
   /** Leave undefined for no detail line; an empty string keeps the row's height. */
   detail?: string;
+  /** Unread messages, as a count under the time like an Inbox row. */
+  unread?: number;
   selected?: boolean;
   className?: string;
 }) {
@@ -66,11 +69,17 @@ export function ListRow({
             <span className="min-w-0 truncate text-sm font-medium">{title}</span>
             {badge}
           </span>
-          {aside ??(at && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{relTime(at, new Date())}</span>)}
+          {aside ?? (at && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{relTime(at, new Date())}</span>)}
         </div>
         {detail !== undefined && (
-          <div className="flex h-4 items-center">
+          <div className="flex h-4 items-center justify-between gap-3">
             <span className="min-w-0 truncate text-xs">{detail}</span>
+            {/* The Inbox row's unread chip (thread-list/thread-row.tsx), so the two lists read the same. */}
+            {unread > 0 && (
+              <span className={cn("-my-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-xs font-medium", selected ? "bg-background" : "bg-muted")} aria-label={`${unread} unread`}>
+                {unread}
+              </span>
+            )}
           </div>
         )}
       </div>

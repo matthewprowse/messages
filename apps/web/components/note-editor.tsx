@@ -46,6 +46,8 @@ const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test((naviga
 const MOD = isMac ? "⌘" : "Ctrl+";
 // Links a note may hold; any other scheme (javascript:, data:) is refused.
 const SAFE_LINK = /^(https?|mailto|tel):/i;
+/** How long the keyboard inset keeps being re-read after the keyboard starts to move (ms): iOS animates it for about 500. */
+const KEYBOARD_SETTLE_MS = 600;
 
 /**
  * How far the on-screen keyboard covers the bottom of the page, in pixels, so a bar can sit just above it.
@@ -56,11 +58,34 @@ export function useKeyboardInset(): number {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    const update = () => setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
+    // A fixed bar is placed against the layout viewport (innerHeight tall); the part you can see ends at the visual
+    // viewport's offsetTop + height. What lies between is the keyboard.
+    const update = () => setInset(Math.max(0, Math.round(window.innerHeight - (vv.offsetTop + vv.height))));
+    // iOS reports the first resize and focus before the keyboard has finished sliding in (and scrolls the page as it
+    // goes), so one reading leaves the bar too low on first open. Keep reading every frame until things settle.
+    let frame = 0;
+    let until = 0;
+    const tick = () => {
+      update();
+      frame = performance.now() < until ? requestAnimationFrame(tick) : 0;
+    };
+    const settle = () => {
+      until = performance.now() + KEYBOARD_SETTLE_MS;
+      if (!frame) frame = requestAnimationFrame(tick);
+    };
     update();
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
-    return () => { vv.removeEventListener("resize", update); vv.removeEventListener("scroll", update); };
+    vv.addEventListener("resize", settle);
+    vv.addEventListener("scroll", settle);
+    // Focus moving into or out of a field is when the keyboard comes or goes, sometimes before the viewport says so.
+    window.addEventListener("focusin", settle);
+    window.addEventListener("focusout", settle);
+    return () => {
+      cancelAnimationFrame(frame);
+      vv.removeEventListener("resize", settle);
+      vv.removeEventListener("scroll", settle);
+      window.removeEventListener("focusin", settle);
+      window.removeEventListener("focusout", settle);
+    };
   }, []);
   return inset;
 }

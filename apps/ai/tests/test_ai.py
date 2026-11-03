@@ -487,7 +487,7 @@ class TriageDecisions(unittest.TestCase):
         b = triage_prompt(UserContext(about="Runs a cafe"), [email, {**email, "subject": "Other"}], "UNTRUSTED-x")
         self.assertTrue(a.startswith("Their name: not given\nTheir own addresses: not given\nAbout them: Runs a cafe"))
         self.assertTrue(b.startswith(a))  # the same start, which Gemini bills at the cached rate when it repeats
-        self.assertIn("=== Email 2\nFrom: Sam <sam@x.com>", b)
+        self.assertIn("=== Message 2\nChannel: Email\nFrom: Sam <sam@x.com>", b)
         self.assertIn("They have written to this sender before: yes", a)
 
     def test_each_email_sits_in_a_random_fence(self):
@@ -599,7 +599,7 @@ class FakeTriageGemini:
 
     def json(self, model, system, prompt, schema, usage, **kw):
         self.calls.append((prompt, usage, kw))
-        n = prompt.count("=== Email ")
+        n = prompt.count("=== Message ")
         return {"results": [{"email": i, "priority": "important", "category": "work", "junk": False, "needs_reply": True, "summary": f"s{i}"} for i in range(1, n + 1)]}
 
 
@@ -616,7 +616,7 @@ class TriageRun(unittest.TestCase):
         self.assertEqual(Triage(db, gemini, "fast").run_once(), 3)
         self.assertEqual(len(gemini.calls), 1)  # m1 is older than m2 in the same conversation: no model call for it
         prompt, usage, kw = gemini.calls[0]
-        self.assertEqual(prompt.count("=== Email "), 2)
+        self.assertEqual(prompt.count("=== Message "), 2)
         self.assertEqual((usage.feature, usage.account_id, usage.thread_id, kw["thinking"]), ("triage", "acc1", None, "minimal"))
         [(table, written)] = db.upserts
         by_id = {r["message_id"]: r for r in written}

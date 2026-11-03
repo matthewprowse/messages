@@ -31,14 +31,13 @@ class Intervals(unittest.TestCase):
     def test_the_unindexed_audio_query_runs_far_less_often_than_the_stale_sweep(self):
         self.assertGreaterEqual(AUDIO_SWEEP_EVERY_S, 5 * SWEEP_EVERY_S)
 
-    def test_brief_and_bulk_read_idle_at_30s_and_bulk_read_is_quick_when_busy(self):
-        self.assertEqual(BRIEF_IDLE_S, 30)
+    def test_a_brief_request_is_seen_within_2s_and_bulk_read_idles_at_30s(self):
         self.assertEqual(BULK_READ_IDLE_S, 30)
         b = Backoff(BULK_READ_EVERY_S, BULK_READ_IDLE_S)
         self.assertEqual([b.next(False) for _ in range(7)][-1], 30)
         self.assertEqual(b.next(True), 1.5)
         k = Backoff(BRIEF_POLL_S, BRIEF_IDLE_S)
-        self.assertEqual([k.next(False) for _ in range(4)], [10, 20, 30, 30])
+        self.assertEqual([k.next(False) for _ in range(4)], [2, 2, 2, 2])  # someone pressed Listen: never more than 2s
 
 
 class Pause(unittest.TestCase):

@@ -2,13 +2,33 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { accountNameMap, advanceTarget, emptyFor, filterOf, inboxCounts, listHref, matchesSearch, rowMarker, stepTarget, viewOf, withQuery } from "./thread-list";
+import { accountNameMap, advanceTarget, channelsOf, emptyFor, filterFits, filterLabel, filterOf, filterOptions, inboxCounts, listHref, matchesSearch, rowMarker, stepTarget, viewOf, withQuery } from "./thread-list";
 import type { Thread } from "./types";
 
 test("a link leaves out the default view and a filter the view does not offer", () => {
   assert.equal(listHref("all", "none"), "/inbox");
   assert.equal(listHref("priority", "unread"), "/inbox?view=priority&filter=unread");
   assert.equal(listHref("subscriptions", "whatsapp"), "/inbox?view=subscriptions");
+  assert.equal(listHref("all", "linkedin"), "/inbox?filter=linkedin");
+  assert.equal(listHref("priority", "waiting"), "/inbox?view=priority");
+});
+
+test("a channel filter fits every view but Subscriptions and Deleted; Waiting only fits All", () => {
+  assert.ok(filterFits("junk", "instagram"));
+  assert.ok(!filterFits("subscriptions", "email"));
+  assert.ok(filterFits("subscriptions", "unread"));
+  assert.ok(!filterFits("deleted", "unread"));
+  assert.ok(filterFits("all", "waiting"));
+  assert.ok(!filterFits("archive", "waiting"));
+});
+
+test("the filter offers the channels you have, in a fixed order, and none with only one", () => {
+  const channels = channelsOf([{ channel: "instagram" }, { channel: "email" }, { channel: "linkedin" }, { channel: "email" }]);
+  assert.deepEqual(channels, ["email", "linkedin", "instagram"]);
+  assert.deepEqual(filterOptions(channels).map((o) => o.label), ["No Filter", "Unread", "Email", "LinkedIn", "Instagram", "Waiting"]);
+  assert.deepEqual(filterOptions(["email"]).map((o) => o.key), ["none", "unread", "waiting"]);
+  assert.equal(filterLabel("whatsapp"), "WhatsApp");
+  assert.equal(filterLabel("none"), undefined);
 });
 
 test("withQuery adds a question mark only when there is a query", () => {
@@ -21,7 +41,9 @@ test("unknown views and filters fall back to the defaults", () => {
   assert.equal(viewOf("nonsense"), "all");
   assert.equal(viewOf(null), "all");
   assert.equal(filterOf("waiting"), "waiting");
+  assert.equal(filterOf("instagram"), "instagram");
   assert.equal(filterOf("nonsense"), "none");
+  assert.equal(filterOf("constructor"), "none");
   assert.equal(filterOf(null), "none");
 });
 
@@ -46,7 +68,7 @@ test("only services with two or more accounts get a name, the nickname first", (
   assert.deepEqual([...names], [["a", "Work"], ["b", "home@x.co"]]);
 });
 
-const base = { priority: "normal", needsReply: false, lastFromMe: false, junk: false, status: "inbox" } as const;
+const base = { priority: "normal", needsReply: false, lastFromMe: false, junk: false, status: "inbox", lastMessageAt: new Date().toISOString() } as const;
 
 test("a row shows Urgent over Needs Reply, and no marker once you answered, or in Junk or the Archive", () => {
   assert.equal(rowMarker({ ...base, priority: "urgent", needsReply: true }), "urgent");
@@ -55,6 +77,14 @@ test("a row shows Urgent over Needs Reply, and no marker once you answered, or i
   assert.equal(rowMarker({ ...base, priority: "urgent", lastFromMe: true }), null);
   assert.equal(rowMarker({ ...base, needsReply: true, junk: true }), null);
   assert.equal(rowMarker({ ...base, needsReply: true, status: "archived" }), null);
+});
+
+test("Urgent fades after a day: the row falls back to Needs Reply, or to nothing", () => {
+  const now = Date.parse("2026-11-02T12:00:00Z");
+  const at = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+  assert.equal(rowMarker({ ...base, priority: "urgent", lastMessageAt: at(23) }, now), "urgent");
+  assert.equal(rowMarker({ ...base, priority: "urgent", needsReply: true, lastMessageAt: at(25) }, now), "needs_reply");
+  assert.equal(rowMarker({ ...base, priority: "urgent", lastMessageAt: at(25) }, now), null);
 });
 
 test("after archiving, the next row opens, else the one before, else nothing", () => {

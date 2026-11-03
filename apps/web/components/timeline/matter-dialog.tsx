@@ -12,19 +12,19 @@ import { checkMatterName, KIND_LABEL, MATTER_KINDS, MATTER_NAME_MAX, type Matter
 export function MatterDialog({ open, onOpenChange, matter, onSave }: { open: boolean; onOpenChange: (open: boolean) => void; matter?: Matter; onSave: (name: string, kind: MatterKind) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="matter" showCloseButton={false} className="sm:max-w-sm">
+      <DialogContent track="matter" className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{matter ? "Rename Matter" : "New Matter"}</DialogTitle>
           <DialogDescription>A deal, listing, policy or matter for this client. Add conversations, notes and files to it to see just that job.</DialogDescription>
         </DialogHeader>
         {/* Mounted only while open, so it starts from the matter as it is now. */}
-        {open && <MatterForm matter={matter} onCancel={() => onOpenChange(false)} onSave={(n, k) => { onSave(n, k); onOpenChange(false); }} />}
+        {open && <MatterForm matter={matter} onSave={(n, k) => { onSave(n, k); onOpenChange(false); }} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function MatterForm({ matter, onCancel, onSave }: { matter?: Matter; onCancel: () => void; onSave: (name: string, kind: MatterKind) => void }) {
+function MatterForm({ matter, onSave }: { matter?: Matter; onSave: (name: string, kind: MatterKind) => void }) {
   const [name, setName] = useState(matter?.name ?? "");
   const [kind, setKind] = useState<MatterKind>(matter?.kind ?? "matter");
   const [tried, setTried] = useState(false);
@@ -42,7 +42,6 @@ function MatterForm({ matter, onCancel, onSave }: { matter?: Matter; onCancel: (
         <SelectContent>{MATTER_KINDS.map((k) => <SelectItem key={k} value={k}>{KIND_LABEL[k]}</SelectItem>)}</SelectContent>
       </Select>
       <DialogFooter>
-        <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>
         <Button type="submit">{matter ? "Save" : "Create"}</Button>
       </DialogFooter>
     </form>

@@ -1,13 +1,13 @@
 "use client";
 
 // The document card on a file: a one-line chip for a tile, and the full card in the viewer with its facts, Read Document for
-// a file that has none yet, and "Invoice due 30 Nov" as a task in one click (store createTask, the same queue as New Task).
+// a PDF or a picture named like a document that has none yet, and "Invoice due 30 Nov" as a task in one click (store createTask, the same queue as New Task).
 // The card is made by the AI worker (apps/ai/ai/documents.py); the words here are plain text and never the file's own markup.
 
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { track } from "@/lib/analytics";
-import { cardFacts, cardTaskForm, DOC_LABEL, taskTitle, tileLine, type DocCard } from "@/lib/search/document-card";
+import { cardFacts, cardTaskForm, DOC_LABEL, looksLikeDocument, taskTitle, tileLine, type DocCard } from "@/lib/search/document-card";
 import { TASK_PROVIDERS } from "@/lib/tasks";
 import { useApp } from "@/lib/store";
 import type { Attachment } from "@/lib/types";
@@ -56,6 +56,8 @@ export function DocumentCardPanel({ attachment: a, entry }: { attachment: Attach
   }
   if (entry.state === "waiting")
     return <div role="status" className="flex flex-col gap-2 rounded-lg border p-3"><Skeleton className="h-4 w-1/3" /><Skeleton className="h-4 w-full" /><span className="text-xs text-muted-foreground">Reading This Document</span></div>;
+  // Only a file that may be a document is offered a read (or told it is not one): not every photo from a chat.
+  if (!looksLikeDocument(a)) return null;
   if (entry.state === "none") return <p className="text-xs text-muted-foreground">This does not look like an invoice, contract or similar document.</p>;
   if (entry.state === "error")
     return <div className="flex items-center gap-3 text-sm"><span className="min-w-0 flex-1 text-muted-foreground">{entry.message}</span><Button variant="secondary" onClick={() => void requestCard(a.id)}>Retry</Button></div>;

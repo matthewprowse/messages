@@ -2499,7 +2499,7 @@ Decisions made while building the screens, so later work follows them:
 - **One header pattern.** Every list or page screen is built from `components/pane.tsx`, copied from the Inbox: a title row
   (h-8, at most one action on the right), one row of controls (views as text buttons, a small select), then the search in its
   own band. Buttons, selects and inputs are h-8. No outline buttons (date pickers are the one exception); the main action is
-  secondary, quiet actions are ghost. Dialogs have no X (`showCloseButton={false}`), Cancel is ghost, the main action is secondary.
+  secondary, quiet actions are ghost. Dialogs show the stock X top right and have no Cancel (3 November 2026, replacing "no X, Cancel is ghost"); AlertDialog confirms keep Cancel; the main action is secondary.
 - **Mobile bottom bar.** Summary, Calendar, Inbox, Contacts and More. More is its own screen (`/more`): New Email, WhatsApp,
   LinkedIn and Instagram messages, New Event and New Task, then Notes and Attachments, then Analytics, Updates and Admin for the
   owner, then Settings.
@@ -2783,7 +2783,7 @@ after that. Automations are built so either can be added as one more "When" chan
 
 **Status: built in Wave 6, email only, not yet tested on real enquiry emails (2 November 2026).**
 
-- `automations`, `automation_runs` and `automation_previews` (migration `20261120110000_automations.sql`, written, not applied).
+- `automations`, `automation_runs` and `automation_previews` (migration `20261120110000_automations.sql`, applied).
   The name, conditions, fields and actions are one sealed JSON (`automations.spec`); a run has the sealed fields it read,
   the contact, an error code and `effects` (ids only) so Undo can reverse exactly what it did. A message runs an
   automation once (unique on automation and message). Only mail that arrives after an automation is turned on, and is
@@ -2889,7 +2889,7 @@ Apple Account (removable there). Agreed with the owner on 2 November 2026.
 A light relationship layer on Contacts. It is not a CRM: no stages, scores, pipeline or custom fields (the Full App
 Review "Do not add" list stands).
 
-- **Status line** on every contact, computed and never typed, in the list and on the page: "Waiting on you since
+- **Status line** on every contact, computed and never typed, on the contact page (the list shows how to reach them and an unread count since 3 November 2026): "Waiting on you since
   Tuesday" when their message is the newest, "Waiting on them since Monday" when yours is the newest and under a
   week old, otherwise "You last wrote 12 days ago". `contact_last_touch()` returns the newest incoming and outgoing
   message per contact across channels, leaving out groups, junk, newsletters, notifications and the bin.
@@ -2958,8 +2958,8 @@ Review "Do not add" list stands).
 
 - Summary page, wave 3: the rail dot is the page's own Needs Reply plus Important count (`attentionCount` in
   `lib/summary.ts`), and `apps/web/lib/summary-fixture.json` is sorted by both the page and `brief.py` in tests so the
-  spoken brief cannot drift. Conversations that aged out of the windows (unanswered over 14 days, urgent over 7) show
-  as an "Older" row linking to Inbox, Priority. The filter replaces the address and keeps the open conversation;
+  spoken brief cannot drift. Conversations that aged out of the windows (unanswered over 3 days, urgent over 7) show
+  as an Older section on the Summary itself (3 November 2026; was 14 days and a link to Inbox, Priority). The filter replaces the address and keeps the open conversation;
   archiving, deleting or answering the open one opens the next row on wide screens. `summary_shown` is emitted once a
   visit with section counts. Snooze and Waiting On Others came in Wave 4; draft chips are not built yet.
 - Settings is six pages: Accounts (with WhatsApp Read Receipts and Resume Sync, no sign-in needed), AI (What Drafts
@@ -3019,7 +3019,7 @@ Review "Do not add" list stands).
   it is left alone. Drafts and AI drafts are kept free of it. The AI worker is told not to write its own signature block (the sign-off
   phrase only) when the plain flag `account_composer.has_signature` is set. The reply box and New Email show the signature under the
   text with a per-message **No Signature** toggle. The worker send path is unchanged.
-- **Writing As:** the From address is a chip (Writing As, address) in the reply box and New Email, with the same choice of addresses.
+- **Writing As:** the From address is a normal button (not rounded) (Writing As, address) in the reply box and New Email, with the same choice of addresses.
   Settings, Accounts has a **Default Send-From** for each account with more than one address. It decides only when the latest email
   does not say (the address it was sent to still wins), and it is sent along with the reply so the worker agrees.
 - **Templates and Snippets:** your own, in Settings, AI, Templates and Snippets (`user_templates`, title, shortcut and body sealed).
@@ -3029,7 +3029,7 @@ Review "Do not add" list stands).
 - **Suggest Times:** a permanent calendar button in the reply box, New Email and New WhatsApp that adds three free times (the same
   `freeSlots` as guided drafting).
 - **One-step Draft:** the draft bar has a **What Should This Say?** field; Enter or Draft drafts at once. The Draft dialog is gone;
-  Edit Text keeps its dialog. Edit With AI already holds Fix Typos and Grammar, Edit Text and the tone changes in one menu.
+  Edit Text keeps its dialog. Edit (was Edit With AI) already holds Fix Typos and Grammar, Edit Text and the tone changes in one menu.
 - **Draft Tone:** Settings, AI, Behaviour, Draft Tone (Match How I Write, Formal, Friendly, Brief) in `profiles.draft_tone`. The AI worker
   reads it for a draft written afresh; a tone picked for one draft still wins, and edits ignore it.
 - **Not done:** per contact domain default send-from; signatures with images or HTML; the worker adding a signature for sends that do
@@ -3050,8 +3050,8 @@ Review "Do not add" list stands).
   reply cancels it. `follow_ups` (the AI's note that a message expects an answer) is not reused: it has no time.
 - **Labels:** `labels`, `thread_labels` and `saved_views`, all row level security on `user_id`. Label and view names are
   sealed with the user's key as field `name`. Colours are nine stock palette names. Labels are set from the thread menu, the
-  row right-click menu and the bulk bar; the Inbox shows a chip per label (`?label=`) and a Saved Views menu (view, filter and
-  label). Deleting a label removes it everywhere; a saved view that used it keeps its view and filter. Not live across tabs yet.
+  row right-click menu and the bulk bar; the Inbox shows a chip per label (`?label=`) and a "..." list menu holding Saved Views (view, filter and
+  label) and By Person. Deleting a label removes it everywhere; a saved view that used it keeps its view and filter. Not live across tabs yet.
 - **Deleted view:** read on demand (the store does not hold trash), newest 200, with Restore (email also queues `untrash`).
   Delete Forever is not offered: the mail action path has no permanent delete and non-email chats have nothing to remove at
   a provider. The 30 day auto-empty is still not built.
@@ -3134,7 +3134,7 @@ Review "Do not add" list stands).
 
 ### One Person, One Conversation (Wave 5)
 
-- **By Person:** a toggle in the Inbox list (`group=person` in the address) shows one row per contact, merged contacts included,
+- **By Person:** a toggle in the Inbox list's "..." menu (`group=person` in the address) shows one row per contact, merged contacts included,
   with the channel icons and the newest message. A row opens `/inbox/person/<contact id>`: that person's email, WhatsApp, LinkedIn
   and Instagram messages in date order, a channel badge on every message (a link that opens that conversation). The reply box goes
   out on the channel picked, the channel of their last message to begin with. Opening the timeline only loads messages; nothing is
@@ -3196,7 +3196,7 @@ Review "Do not add" list stands).
 
 ## Triage labels, reasons and Clean Up, Wave 5 (2 November 2026)
 
-Migration `20261119120000_triage_labels_reasons.sql` (written, not applied yet).
+Migration `20261119120000_triage_labels_reasons.sql` (applied).
 
 - **Auto labels:** up to 6 labels can be marked Auto in Manage Labels, each with a one line description (sealed with field
   `name`). Triage sends them numbered, between marked lines, and the model returns one number or `none` in the same call (one
@@ -3287,13 +3287,71 @@ Migrations `20261121110000_feature_flags_audit.sql` and `20261121111000_admin_op
 
 - **Web app on Vercel**, project `konva` in the `prowse` team, built from `apps/web` on every push to `main`. Functions run in
   Dublin (`dub1`) because the Supabase project is in AWS Ireland, so each request reaches the database without leaving the region.
-- **Workers on one Google Compute Engine VM**, `konva-workers` (e2-medium, `africa-south1-a`), in the `messages-keys` project next
-  to the KMS key. The VM's own service account can only encrypt and decrypt with `user-data-keys`, so the workers need no key file.
-  Docker Compose runs the sync worker, the AI worker and, when switched on, the iCloud Reminders and Instagram processes.
-  About $30 to $35 a month. Chosen over Cloud Run because the workers hold long connections (WhatsApp, IMAP) and poll in a loop,
-  and over a VPS elsewhere because Confidential Space (stage 4) is the same project and region.
+- **Until launch, the workers run on the owner's laptop** (`pnpm worker` and `pnpm ai`) against the same Supabase project, and the
+  phone uses the live site. Mail, WhatsApp and drafts only move while the laptop is awake with both running. Agreed 2 November
+  2026, to avoid paying for a server before anyone else uses Konva.
+- **Before launch: workers on one Google Compute Engine VM**, `konva-workers` in `africa-south1-a`, in the `messages-keys`
+  project next to the KMS key. The VM's own service account can only encrypt and decrypt with `user-data-keys`, so the workers
+  need no key file. Docker Compose runs the sync worker, the AI worker and, when switched on, the iCloud Reminders and Instagram
+  processes. Chosen over Cloud Run because the workers hold long connections (WhatsApp, IMAP) and poll in a loop, and over a
+  cheaper VPS elsewhere (Hetzner, about $5 to $7 a month) because South African hosting matters for POPIA once clients are on
+  it, and Confidential Space (stage 4) is the same project and region. The scripts in `deploy/` are written; the VM is not created.
+- **VM size: e2-small (2 GB) or e2-medium (4 GB)**, decided at setup. Estimated monthly cost for one user (check the Google
+  Cloud calculator before creating it; price sites disagreed in November 2026):
+
+  | Item | e2-small | e2-medium |
+  | --- | --- | --- |
+  | Machine, running all month | about $13.50 | about $27 |
+  | 30 GB balanced disk | about $3.50 | about $3.50 |
+  | External IPv4 address | about $3.65 | about $3.65 |
+  | Network out, one user | under $1 | under $1 |
+  | KMS key (already paid) | $1 to $2.50 | $1 to $2.50 |
+  | **Total** | **about $22** | **about $35** |
+
+  e2-small only works if the images are built elsewhere (GitHub Actions pushing to Artifact Registry), because building on the
+  VM needs more than 2 GB; e2-medium builds on the VM as `deploy/release.sh` does now. A one-year commitment takes about 37%
+  off the machine. Add a watchdog that restarts unhealthy containers (Docker only restarts crashed ones), stop the laptop
+  workers once the VM holds the leases, and set `ERROR_TRACKER_DSN` so failures are noticed.
 - **The LinkedIn helper is now built into the worker image** as a static Go binary, so LinkedIn works in production.
 - **Releases** build on the VM from a pushed commit (`deploy/release.sh`, default `origin/main`), never from the working tree.
   Secrets are copied from local env files by `deploy/push-env.sh` and `deploy/push-web-env.sh` and live only on the VM and in Vercel.
 - For one user, the Google OAuth app is published without verification so Gmail sign-ins do not expire after 7 days in Testing
   mode. Verification (with the security assessment for Gmail scopes) is needed before other people sign in.
+
+## Mobile Feedback Pass (3 November 2026)
+
+The owner's iPhone feedback, with evidence per item, is in `docs/reviews/2026-11-02/mobile-feedback.md`. Decided and built:
+
+- **Dialogs:** stock X top right, no Cancel. AlertDialog confirms keep Cancel. The onboarding setup dialog stays without an X.
+- **Fields are 14px everywhere.** iPhones get `maximumScale: 1` (set from the user agent in `app/layout.tsx`) so focus does
+  not zoom; pinch zoom still works there. iPads report a Mac user agent and still zoom on focus.
+- **Status bar:** the shell pads `env(safe-area-inset-top)` on a solid background, so iOS has no see-through band over the top.
+- **Pickers:** month and year in every date picker are shadcn Selects; one `TimeSelect` (15 minute steps) in New Event, New
+  Task, Send Later and Copy Free Times.
+- **Calendar on phones:** header and month grid stay put and are shorter; only the list scrolls. New Event fills the screen on
+  phones, with guest suggestions inline under the field instead of a popover.
+- **Summary:** Needs Reply covers 3 days (`REPLY_DAYS`, web and `brief.py`); Older is a section on the page. Urgent counts as
+  important 24 hours after the latest message (`URGENT_HOURS`). The channel filter (Summary and Inbox) lists the channels you
+  have. A past asked-about time drops a conversation to Older once `Thread.askedAt` is filled (not yet: needs a plain
+  `threads.asked_at` written by triage).
+- **Urgent:** only a same-day deadline, a real money or security problem, or something lost today. Someone waiting on you is
+  important and needs a reply. No reason line when none is stored; the tag is grey, never red. Automations write the reason
+  `automation`. Triage calls chats messages, not email.
+- **No red delete buttons** anywhere outside destructive confirms.
+- **Conversation header on phones:** Notes, Schedule and Sharing move into the "..." menu.
+- **Contacts list:** phone, Instagram and email under the name; unread count summed across channels under the date.
+- **Notes:** New Note makes a blank note, templates have their own icon button; Pin, Archive and Delete appear on swipe
+  (`components/use-row-swipe.ts`, for other lists later); the toolbar re-measures the keyboard while it settles.
+- **Attachments:** no People filter; Read Document only offered for PDFs and document-named images; the viewer has the X and
+  icon buttons for Download and Delete.
+- **AI paused:** a requested draft or document read fails at once with "AI is paused for now. Try again later." instead of
+  waiting. Pre-drafts and briefs still wait. Brief requests are looked for every 2s, the first spoken part is about 20 words,
+  and Listen only rewrites when a conversation the brief would mention moved on. Previews are looked for every 5s.
+- **Automations:** Turn On no longer waits for the preview. Cost estimate: about USD 1 to 2 per user a month, mostly the draft
+  each lead gets.
+- **Settings:** compact desktop nav like the rail; larger section headings; Usage shows AI before storage.
+- **Not server rendered, on purpose:** content is decrypted in the browser, so pages stay client rendered. Native feel comes from
+  shell caching, skeletons and gestures (proposed, not built).
+
+Waiting on the owner: draft wording ("What Should This Say?"), automatic calendar availability in reply choices, the AI memory
+as an editable written summary, how much settings text to cut, and shell caching.

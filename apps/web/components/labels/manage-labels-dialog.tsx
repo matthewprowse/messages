@@ -13,7 +13,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AutoLabelsSection } from "@/components/labels/auto-labels-section";
-import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 
 const OPEN_EVENT = "konva:manage-labels";
 // Hosts in mount order: a header opened beside the list mounts later, and is the one that answers.
@@ -54,7 +53,7 @@ function LabelRow({ label }: { label: Label }) {
       <Input value={name} maxLength={NAME_MAX} aria-label="Label Name" className="h-8 min-w-0 flex-1" onChange={(e) => setName(e.target.value)} onBlur={save} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
       <ColorSelect value={label.color} label={`Colour of ${label.name}`} onChange={(color) => api.updateLabel(label.id, { color })} />
       {confirm
-        ? <Button type="button" variant="destructive" size="sm" onClick={() => api.deleteLabel(label.id)} onBlur={() => setConfirm(false)}>Delete</Button>
+        ? <Button type="button" variant="secondary" size="sm" onClick={() => api.deleteLabel(label.id)} onBlur={() => setConfirm(false)}>Delete</Button>
         : <Button type="button" variant="ghost" size="icon" aria-label={`Delete ${label.name}`} onClick={() => setConfirm(true)}><Trash2 /></Button>}
     </div>
   );
@@ -82,7 +81,7 @@ export function ManageLabelsHost() {
   };
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Labels</DialogTitle>
           <DialogDescription>Labels are private to you and stored encrypted. Deleting one takes it off every conversation.</DialogDescription>
@@ -96,9 +95,6 @@ export function ManageLabelsHost() {
           <Button type="submit" variant="secondary" disabled={!name.trim()}>Add</Button>
         </form>
         <AutoLabelsSection labels={api.labels} active={open} />
-        <div className={DIALOG_BUTTONS}>
-          <Button type="button" onClick={() => setOpen(false)}>Done</Button>
-        </div>
       </DialogContent>
     </Dialog>
   );

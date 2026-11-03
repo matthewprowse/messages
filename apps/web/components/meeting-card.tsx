@@ -17,7 +17,6 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { providerLabel } from "@/components/primitives";
 import { ProviderLogo } from "@/components/provider-logo";
-import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { useMeetings } from "@/components/meetings-data";
 
 /** Where a card is shown, for the analytics. */
@@ -133,7 +132,7 @@ function TranscriptDialog({ meeting: m, place, open, onOpenChange }: { meeting: 
   const searching = query.trim().length > 0;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} track="meeting_transcript" className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl">
+      <DialogContent track="meeting_transcript" className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="break-words">{meetingTitle(m)}</DialogTitle>
           <DialogDescription className="tabular-nums">{meetingWhen(m)}</DialogDescription>
@@ -187,9 +186,6 @@ function TranscriptDialog({ meeting: m, place, open, onOpenChange }: { meeting: 
             {shown.length === 1 ? "1 of" : `${shown.length} of`} {segments.length} turns match
           </p>
         )}
-        <div className={DIALOG_BUTTONS}>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>Close</Button>
-        </div>
       </DialogContent>
     </Dialog>
   );

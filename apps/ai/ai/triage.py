@@ -291,6 +291,7 @@ class Triage(BatchTriageMixin, ContextMixin):
                 "bulk": bool(m.get("list_unsubscribe")),
                 "subject": (m.get("subject") or "")[:SUBJECT_CHARS],
                 "sent": m.get("sent_at"),
+                "channel": (m.get("threads") or {}).get("channel") or "email",
                 "body": clean(body.get("body_text"), body.get("body_html"), limit=BULK_BODY_CHARS if m.get("list_unsubscribe") or m.get("is_bulk") else BODY_CHARS),
                 "earlier": [
                     {"from_me": r["direction"] == "outbound", "text": r["text"]}

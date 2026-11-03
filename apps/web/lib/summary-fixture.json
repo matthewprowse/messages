@@ -3,8 +3,8 @@
   "threads": [
     { "id": "reply-urgent", "ageHours": 5, "needsReply": true, "priority": "urgent", "category": "work" },
     { "id": "reply-normal-newer", "ageHours": 2, "needsReply": true, "priority": "normal", "category": "personal" },
-    { "id": "reply-edge-14d", "ageHours": 336, "needsReply": true, "priority": "normal", "category": "personal" },
-    { "id": "reply-too-old", "ageHours": 337, "needsReply": true, "priority": "normal", "category": "personal" },
+    { "id": "reply-edge-3d", "ageHours": 72, "needsReply": true, "priority": "normal", "category": "personal" },
+    { "id": "reply-too-old", "ageHours": 73, "needsReply": true, "priority": "normal", "category": "personal" },
     { "id": "important", "ageHours": 30, "priority": "important", "category": "work" },
     { "id": "urgent-edge-7d", "ageHours": 168, "priority": "urgent", "category": "personal" },
     { "id": "urgent-too-old", "ageHours": 169, "priority": "urgent", "category": "personal" },
@@ -19,8 +19,8 @@
     { "id": "archived", "ageHours": 1, "needsReply": true, "status": "archived" }
   ],
   "expected": {
-    "reply": ["reply-urgent", "reply-normal-newer", "reply-edge-14d"],
-    "priority": ["urgent-edge-7d", "important"],
+    "reply": ["reply-urgent", "reply-normal-newer", "reply-edge-3d"],
+    "priority": ["important", "urgent-edge-7d"],
     "updates": ["update", "update-edge-24h"]
   }
 }

@@ -1,6 +1,7 @@
 "use client";
 
-// Settings, Usage: how much of the AI allowance is used, per feature, read from the my_ai_allowance function.
+// Settings, Usage: how much of the AI allowance is used, per feature, read from the my_ai_allowance function, then storage.
+// The allowance comes first as it is the limit people run into; storage rarely changes.
 
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
@@ -45,7 +46,7 @@ export default function UsagePage() {
     <>
       <SettingsHeader
         title="Usage"
-        description="Your storage and your AI allowance for the month."
+        description="Your AI allowance for the month, then your storage."
         actions={allowance && (
           <Button variant="secondary" disabled={refreshing} onClick={() => void load()}>
             <RefreshCw className={refreshing ? "animate-spin" : undefined} /> Refresh
@@ -53,7 +54,6 @@ export default function UsagePage() {
         )}
       />
       <div className="space-y-3">
-        <StorageSection />
         {failed && (
           <Alert variant="destructive">
             <AlertTitle>Could Not Load Your AI Allowance</AlertTitle>
@@ -97,6 +97,7 @@ export default function UsagePage() {
             </SettingsRows>
           </SettingsSection>
         )}
+        <StorageSection />
       </div>
     </>
   );

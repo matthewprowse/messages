@@ -16,7 +16,8 @@ export type Priority = "urgent" | "important" | "normal" | "low";
 export type Category = "personal" | "work" | "needs_reply" | "fyi" | "newsletter" | "notification";
 export type ThreadStatus = "inbox" | "archived" | "trash";
 export type View = "priority" | "all" | "junk" | "subscriptions" | "archive" | "snoozed" | "deleted";
-export type ListFilter = "none" | "unread" | "email" | "whatsapp" | "waiting";
+/** A list filter: unread, waiting on others, or one channel (built from the channels you have, lib/thread-list.ts channelsOf). */
+export type ListFilter = "none" | "unread" | "waiting" | Channel;
 export type AccountStatus = "connecting" | "syncing" | "connected" | "disconnected" | "error";
 
 export interface Contact {
@@ -166,6 +167,9 @@ export interface Thread {
   category: Category;
   summary: string;
   needsReply: boolean;
+  /** The time the latest message asks whether you are free at (message_ai.reply_choices "asked"). Once it has passed the
+   * conversation leaves Needs Reply for Older. Not loaded with the list yet, so usually undefined. */
+  askedAt?: string;
   /** The latest message is yours, so the conversation waits on them, not you. */
   lastFromMe: boolean;
   /** Who sent the latest message, so a group's row can say who it was. */

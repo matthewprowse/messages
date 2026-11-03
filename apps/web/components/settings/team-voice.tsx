@@ -105,7 +105,7 @@ function ItemDialog({ kind, item, open, onClose, onSaved }: { kind: "template" |
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track={template ? "company_template" : "company_fact"} className="sm:max-w-md">
+      <DialogContent track={template ? "company_template" : "company_fact"} className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-3">
           <DialogHeader>
             <DialogTitle>{item ? (template ? "Edit Template" : "Edit Fact") : template ? "Add Template" : "Add Fact"}</DialogTitle>
@@ -124,7 +124,6 @@ function ItemDialog({ kind, item, open, onClose, onSaved }: { kind: "template" |
             <Textarea id="voice-item-body" rows={template ? 6 : 4} maxLength={bodyMax} value={body} disabled={busy} placeholder={template ? "Thanks for your interest. When would suit you to view it?" : "8 to 5 on weekdays, closed on public holidays"} onChange={(e) => setBody(e.target.value)} />
           </div>
           <div className={DIALOG_BUTTONS}>
-            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
             <Button type="submit" variant="secondary" disabled={busy || !title.trim() || !body.trim()}>{busy ? "Saving" : "Save"}</Button>
           </div>
         </form>

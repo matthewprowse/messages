@@ -42,6 +42,7 @@ RULE_REASONS = {
     "sender_settled": "Bulk sender you never answer",
     "no_reply_needed": "You said no reply is needed",
     "copied": "Same email as in another account",
+    "automation": "Your automation marked this urgent",
 }
 REASONS = list(MODEL_REASONS)
 SUSPICIOUS_KINDS = ["none", "payment_change", "phishing", "impersonation"]

@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cardFacts, cardSearchText, cardTaskForm, docFilterOf, dueLabel, amountLabel, matchesDocFilter, parseDocCard, taskTitle, tileLine } from "./document-card";
+import { cardFacts, cardSearchText, cardTaskForm, docFilterOf, dueLabel, amountLabel, looksLikeDocument, matchesDocFilter, parseDocCard, taskTitle, tileLine } from "./document-card";
 import { messageDocs, type MessageRow } from "./docs";
 import { SearchEngine } from "./engine";
 import { parseQuery } from "./query";
@@ -80,4 +80,15 @@ test("'invoice from Sipho' finds the file the card is on, and the file with no c
   const limits = { thread: 10, message: 10, contact: 10, note: 10, event: 10, task: 10, file: 10 };
   const found = engine.search(parseQuery("invoice sipho", new Date("2026-11-02T10:00:00Z")), limits, Date.parse("2026-11-02T10:00:00Z"));
   assert.deepEqual(found.file.hits.map((h) => h.doc.r), ["a1"]);
+});
+
+test("reading is offered for every PDF, and for a picture only when its name says it is a document", () => {
+  assert.equal(looksLikeDocument({ kind: "pdf", name: "brochure.pdf" }), true);
+  assert.equal(looksLikeDocument({ kind: "image", name: "Invoice 0042.jpg" }), true);
+  assert.equal(looksLikeDocument({ kind: "image", name: "CamScanner 01-11-2026.jpg" }), true);
+  assert.equal(looksLikeDocument({ kind: "image", name: "ID front.png" }), true);
+  assert.equal(looksLikeDocument({ kind: "image", name: "IMG_4821.jpg" }), false);
+  assert.equal(looksLikeDocument({ kind: "image", name: "funny meme.png" }), false);
+  assert.equal(looksLikeDocument({ kind: "image", name: "invoice logo.png" }), false);
+  assert.equal(looksLikeDocument({ kind: "video", name: "contract walkthrough.mp4" }), false);
 });

@@ -48,7 +48,7 @@ function CoverDialog({ team, userId, open, onClose, onSaved }: { team: TeamState
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && close()}>
-      <DialogContent showCloseButton={false} track="set_cover" className="sm:max-w-md">
+      <DialogContent track="set_cover" className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-3">
           <DialogHeader>
             <DialogTitle>Set Cover</DialogTitle>
@@ -85,7 +85,6 @@ function CoverDialog({ team, userId, open, onClose, onSaved }: { team: TeamState
             </div>
           </div>
           <div className={DIALOG_BUTTONS}>
-            <Button type="button" variant="ghost" disabled={busy} onClick={close}>Cancel</Button>
             <Button variant="secondary" type="submit" disabled={!valid || busy}>{busy ? "Setting" : "Set Cover"}</Button>
           </div>
         </form>

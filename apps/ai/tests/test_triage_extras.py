@@ -1,6 +1,10 @@
-"""Tests for ai/triage_extras.py and how triage uses it: reasons, the suspicious flag, Auto labels and the junk summary."""
+"""Tests for ai/triage_extras.py and how triage uses it: reasons (and that they reach both writes), the suspicious flag,
+Auto labels, the junk summary, what counts as urgent and that chats are not called emails."""
 
 import unittest
+
+from ai.triage import Triage
+from tests.test_ai import FakeTriageDb, FakeTriageGemini
 
 from ai.triage import SCHEMA, SYSTEM, apply_signals, known_outcome, read_results, triage_prompt
 from ai.triage_extras import AutoLabel, label_to_add, read_label, read_reason, read_suspicious, with_subject_summary
@@ -45,6 +49,45 @@ class ReasonTests(unittest.TestCase):
         self.assertEqual(got["reason_code"], "unsubscribed")
         got = known_outcome({"sender_address": "c@d.com", "subject": "Hi"}, UserContext(), ["junk"])
         self.assertEqual(got["reason_code"], "marked_junk")
+
+    def test_the_models_reason_is_written_to_the_message_and_the_conversation(self):
+        # Pins the 2 Nov bug report: every reason was null because the running worker predated the columns (v0.0.15).
+        class WithReason(FakeTriageGemini):
+            def json(self, model, system, prompt, schema, usage, **kw):
+                self.calls.append((prompt, usage, kw))
+                return {"results": [{"message": 1, "priority": "urgent", "category": "work", "junk": False, "needs_reply": True, "summary": "s",
+                                     "reason": "deadline", "reason_text": "Payment due today"}]}
+
+        m = {"id": "m1", "user_id": "u", "account_id": "acc1", "thread_id": "t1", "provider_message_id": "<m1@x>", "subject": "S",
+             "sender_address": "sam@x.com", "sender_contact_id": None, "list_unsubscribe": None, "sent_at": "2026-10-20T10:00:00+00:00"}
+        db = FakeTriageDb([m], [{"id": "m1", "thread_id": "t1", "direction": "inbound"}])
+        Triage(db, WithReason(), "fast").run_once()
+        [(_, [row])] = db.upserts
+        self.assertEqual((row["triage_reason"], row["triage_reason_text"]), ("deadline", "Payment due today"))
+        self.assertEqual((db.thread_updates["t1"]["triage_reason"], db.thread_updates["t1"]["triage_reason_text"]), ("deadline", "Payment due today"))
+
+    def test_an_answer_without_a_reason_still_gets_one(self):
+        got = read_results({"results": [item(priority="urgent")]}, 1)[1]
+        self.assertEqual((got["reason_code"], got["reason_text"]), ("other", "Sorted by the AI"))
+
+
+class UrgentAndChannelTests(unittest.TestCase):
+    def test_urgent_is_for_today_and_a_waiting_person_is_not_urgent(self):
+        self.assertIn("explicit deadline today", SYSTEM)
+        self.assertIn("A person waiting on a reply, even one chasing, is important and needs_reply, not urgent", SYSTEM)
+        self.assertNotIn("a person waiting on them now", SYSTEM)
+
+    def test_chats_are_named_as_chats_not_emails(self):
+        chat = {"name": "Sam", "sender": "+27", "relationship": "", "known": True, "bulk": False, "subject": "", "body": "Hi", "channel": "whatsapp"}
+        prompt = triage_prompt(UserContext(), [chat, {**chat, "channel": None}], fence="F")
+        self.assertIn("=== Message 1\nChannel: WhatsApp chat", prompt)
+        self.assertIn("=== Message 2\nChannel: Email", prompt)
+        self.assertNotIn("=== Email", prompt)
+        self.assertTrue(SYSTEM.startswith("You sort one person's incoming messages."))
+
+    def test_answers_are_numbered_by_message_and_old_email_numbers_still_read(self):
+        self.assertEqual(SCHEMA["properties"]["results"]["items"]["required"][0], "message")
+        self.assertEqual(sorted(read_results({"results": [item(), {**item(), "email": None, "message": 2}]}, 2)), [1, 2])
 
 
 class SuspiciousTests(unittest.TestCase):

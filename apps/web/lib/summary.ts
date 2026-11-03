@@ -1,12 +1,12 @@
 // What the Summary page gathers from your conversations. It is worked out in the browser from the labels
 // the AI already puts on each conversation: whether it needs a reply, its priority, category and summary.
 
-import { isWaiting } from "./app-store/thread-filters";
+import { inFilter, isWaiting, priorityNow } from "./app-store/thread-filters";
 import { isSnoozed } from "./snooze";
 import type { ListFilter, Priority, Thread } from "./types";
 
-/** Conversations waiting on a reply for longer than this are left to Conversations. */
-export const REPLY_DAYS = 14;
+/** Conversations waiting on a reply for longer than this move to Older. Mirrored in apps/ai/ai/brief.py. */
+export const REPLY_DAYS = 3;
 /** Urgent and important conversations quieter than this have had their moment. */
 export const PRIORITY_DAYS = 7;
 /** Updates are FYI and work conversations from the last day that the AI summarised. */
@@ -25,16 +25,11 @@ export interface SummarySections {
   waiting: Thread[];
 }
 
-function matches(t: Thread, filter: ListFilter) {
-  switch (filter) {
-    case "unread": return t.unread;
-    case "email": return t.channel === "email";
-    case "whatsapp": return t.channel === "whatsapp";
-    default: return true;
-  }
-}
+// Waiting has its own list (summarise), so here it is only ever a channel, Unread or nothing.
+const matches = (t: Thread, filter: ListFilter) => filter === "waiting" || inFilter(t, filter);
 
-const byPressing = (a: Thread, b: Thread) => rank[a.priority] - rank[b.priority] || Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt);
+// Urgent fades to Important a day after the latest message (priorityNow), so it sorts with the important ones.
+const byPressing = (now: number) => (a: Thread, b: Thread) => rank[priorityNow(a, now)] - rank[priorityNow(b, now)] || Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt);
 const byNewest = (a: Thread, b: Thread) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt);
 
 const isPriorityCategory = (t: Thread) => t.category !== "newsletter" && t.category !== "notification";
@@ -53,8 +48,9 @@ export function summarise(threads: Thread[], filter: ListFilter, now: Date = new
   const open = threads.filter((t) => t.status === "inbox" && !t.junk && !t.lastFromMe && !isSnoozed(t, now.getTime()) && matches(t, filter));
   const within = (t: Thread, hours: number) => now.getTime() - Date.parse(t.lastMessageAt) <= hours * 3_600_000;
 
-  // Only the needs-reply flag: the AI clears it once you have answered, while the category stays.
-  const reply = open.filter((t) => t.needsReply && within(t, REPLY_DAYS * 24));
+  // Only the needs-reply flag: the AI clears it once you have answered, while the category stays. A question about a
+  // time that has already gone ("are you free at 3 today?") is past answering in time, so it waits in Older.
+  const reply = open.filter((t) => t.needsReply && within(t, REPLY_DAYS * 24) && !(t.askedAt && Date.parse(t.askedAt) < now.getTime()));
   const taken = new Set(reply.map((t) => t.id));
   const priority = open.filter(
     (t) =>
@@ -66,7 +62,8 @@ export function summarise(threads: Thread[], filter: ListFilter, now: Date = new
   for (const t of priority) taken.add(t.id);
   const updates = open.filter((t) => !taken.has(t.id) && (t.category === "fyi" || t.category === "work") && t.summary.trim() && within(t, UPDATE_HOURS));
 
-  return { reply: reply.sort(byPressing), priority: priority.sort(byPressing), updates: updates.sort(byNewest), waiting: [] };
+  const pressing = byPressing(now.getTime());
+  return { reply: reply.sort(pressing), priority: priority.sort(pressing), updates: updates.sort(byNewest), waiting: [] };
 }
 
 /** How many conversations the page asks you to deal with: Needs Reply plus Important. The rail dot reads this, so it always agrees with the page. */
@@ -76,9 +73,10 @@ export function attentionCount(threads: Thread[], now: Date = new Date()): numbe
 }
 
 /**
- * Conversations that still wait on you but have aged out of the page's windows: unanswered for longer than REPLY_DAYS,
- * or urgent and quieter than PRIORITY_DAYS. They are not listed (that is the point of the windows) but the page counts
- * them, so a lost client does not vanish without a trace. Important ones are left out: that would be noise.
+ * Conversations that still wait on you but have aged out of the page's windows: unanswered for longer than REPLY_DAYS
+ * (or asking about a time that has passed), or marked urgent and quieter than PRIORITY_DAYS. The page lists them
+ * under Older, newest first, so a lost client does not vanish without a trace. Important ones are left out: that would
+ * be noise.
  */
 export function olderWaiting(threads: Thread[], filter: ListFilter, now: Date = new Date()): Thread[] {
   if (filter === "waiting") return [];
@@ -88,7 +86,7 @@ export function olderWaiting(threads: Thread[], filter: ListFilter, now: Date = 
     (t) =>
       t.status === "inbox" && !t.junk && !t.lastFromMe && !isSnoozed(t, now.getTime()) && matches(t, filter) && !shown.has(t.id) &&
       (t.needsReply || (t.priority === "urgent" && isPriorityCategory(t))),
-  );
+  ).sort(byNewest);
 }
 
 /** One line for the top of the page, such as "3 Need a Reply, 2 Urgent or Important, 4 Events Today, 1 Task". Empty when there is nothing. */

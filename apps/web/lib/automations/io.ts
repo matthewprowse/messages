@@ -74,27 +74,36 @@ export async function removeAutomation(id: string): Promise<string | null> {
   return error ? "Could not delete it. Check your connection and try again." : null;
 }
 
-/** Asks the AI worker for the 30 day preview of a setup. Resolves to the request's id, or null. */
-export async function requestPreview(spec: AutomationSpec, templateKey: string | null): Promise<string | null> {
+/** Asks the AI worker for the 30 day preview of a setup. Resolves to the request's id, or the sentence to show when it could not be
+ *  asked. The error code is kept in the sentence (never any content) so a refused insert is not mistaken for a slow worker. */
+export async function requestPreview(spec: AutomationSpec, templateKey: string | null): Promise<{ id: string } | { error: string }> {
   const sealed = await seal(FIELD.automation, specText(spec)).catch(() => null);
-  if (!sealed) return null;
+  if (!sealed) return { error: "Could not ask for the preview: your key could not be opened. Reload the page and try again." };
   const { data, error } = await supabase.from("automation_previews").insert({ template_key: templateKey as "property24" | "private_property" | null, spec: sealed }).select("id").single();
-  return error || !data ? null : data.id;
+  if (error || !data) {
+    console.warn("automation preview request failed", error?.code ?? "no_row");
+    return { error: `Could not ask for the preview (${error?.code ?? "no row"}). You can still turn it on.` };
+  }
+  return { id: data.id };
 }
 
-/** Waits for the worker's answer. Resolves to the result, or an error sentence when it failed, took too long or was cancelled. */
+/** Waits for the worker's answer. Resolves to the result, or an error sentence when it failed, took too long or was cancelled. A
+ *  preview still queued at the end was never picked up (the AI worker is not running the preview loop), which is said plainly. */
 export async function waitForPreview(id: string, signal: AbortSignal): Promise<{ result: PreviewResult } | { error: string }> {
   const started = Date.now();
+  let status: string | null = null;
   while (!signal.aborted && Date.now() - started < PREVIEW_WAIT_MS) {
     const { data, error } = await supabase.from("automation_previews").select("status, result").eq("id", id).maybeSingle();
-    if (!error && data?.status === "failed") return { error: "The preview could not be made. Try again." };
+    if (!error && data) status = data.status;
+    if (!error && data?.status === "failed") return { error: "The preview could not be made. You can still turn it on." };
     if (!error && data?.status === "done") {
       const result = readPreview(await open(FIELD.automationRun, data.result));
-      return result ? { result } : { error: "The preview could not be read. Try again." };
+      return result ? { result } : { error: "The preview could not be read. You can still turn it on." };
     }
     await new Promise((r) => setTimeout(r, PREVIEW_POLL_MS));
   }
-  return { error: signal.aborted ? "" : "The preview is taking too long. Please try again in a moment." };
+  if (signal.aborted) return { error: "" };
+  return { error: status === "running" ? "The preview is taking too long, so it was skipped. You can still turn it on." : "The preview was not picked up, so it was skipped. You can still turn it on." };
 }
 
 /** Removes a preview request once it has been read. Best effort. */

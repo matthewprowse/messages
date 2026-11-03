@@ -2,7 +2,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { byName, byRecent, bySort, byVipThen, detailOf, firstReach, fold, haystack, matchesQuery, plural, queryOf, sortAndView } from "./contact-list-helpers";
+import { formatPhone } from "./format";
+import { byName, byRecent, bySort, byVipThen, detailOf, firstReach, fold, haystack, matchesQuery, plural, queryOf, sortAndView, unreadByPerson } from "./contact-list-helpers";
 
 test("search finds words in any order and ignores accents", () => {
   const hay = haystack(["John Smith", "Zoë Müller"], []);
@@ -72,10 +73,18 @@ test("starred people come first whichever order is chosen", () => {
   assert.deepEqual([...list].sort(byVipThen("name")).map((x) => x.name), ["Z", "A", "M"]);
 });
 
-test("the line under a name is where you stand, else their work, else how to reach them", () => {
-  const base = { id: "1", name: "Sam", company: "Firm", role: "Partner", emails: ["sam@firm.co.za"], phones: [], lastAt: null, isCompany: false, organizationName: null, conversationCount: 0, hasWhatsApp: false, handles: [], hasLinkedIn: false, hidden: false };
-  const now = new Date(2026, 10, 12, 15);
-  assert.equal(detailOf({ ...base, lastInboundAt: new Date(2026, 10, 10, 9).toISOString() }, now), "Waiting on you since Tuesday");
-  assert.equal(detailOf(base, now), "Partner, Firm");
-  assert.equal(detailOf({ ...base, role: null, company: null }, now), "sam@firm.co.za");
+test("the line under a name is how to reach them, number then Instagram then address, else their work", () => {
+  const base = { role: "Partner", company: "Firm", emails: ["sam@firm.co.za"], phones: ["+27821234567"], handles: ["sam.r"] };
+  assert.equal(detailOf(base), `${formatPhone("+27821234567")} · @sam.r · sam@firm.co.za`);
+  assert.equal(detailOf({ ...base, phones: [], handles: [] }), "sam@firm.co.za");
+  assert.equal(detailOf({ ...base, phones: [], handles: [], emails: [] }), "Partner, Firm");
+  assert.equal(detailOf({ ...base, phones: [], handles: [], emails: [], role: null, company: null }), "");
+});
+
+test("unread counts add up across a person's channels and leave groups out", () => {
+  const t = (id: string, unread: boolean, unreadCount: number, isGroup = false) => ({ participantIds: [id], unread, unreadCount, isGroup });
+  const counts = unreadByPerson([t("a", true, 2), t("a", true, 0), t("a", false, 0), t("b", true, 5, true), t("c", false, 0)]);
+  assert.equal(counts.get("a"), 3);
+  assert.equal(counts.get("b"), undefined);
+  assert.equal(counts.get("c"), undefined);
 });

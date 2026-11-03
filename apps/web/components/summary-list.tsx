@@ -4,7 +4,7 @@
 // hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /summary. The sections and rows
 // are in components/summary/; this file wires them to the store. The section rules are in lib/summary.ts.
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { track } from "@/lib/analytics";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/store";
@@ -14,13 +14,14 @@ import { longDate } from "@/lib/format";
 import { shortcutAction } from "@/lib/selection";
 import { isSnoozed, tomorrowMorning } from "@/lib/snooze";
 import { digest, olderWaiting, summarise } from "@/lib/summary";
-import { FILTER_OPTIONS, filterOf, listHref, SUMMARY_BASE as BASE } from "@/lib/summary-list";
+import { filterOf, filterOptions, listHref, OLDER_SHOWN, SUMMARY_BASE as BASE } from "@/lib/summary-list";
+import { channelsOf } from "@/lib/thread-list";
 import { tasksForToday } from "@/lib/tasks";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { providerLabel } from "@/components/primitives";
 import { AccountsNotice } from "@/components/summary/accounts-notice";
-import { OlderRow } from "@/components/summary/older-row";
 import { useAdvanceAfterDone } from "@/components/summary/use-advance-after-done";
 import { useNow } from "@/components/summary/use-now";
 import { useImporting } from "@/components/sync-bar";
@@ -70,6 +71,11 @@ export function SummaryList() {
   const sectionsNow = useMemo(() => new Date(), [now, snoozeClock]);
   const sections = useMemo(() => summarise(threads, filter, sectionsNow), [threads, filter, sectionsNow]);
   const older = useMemo(() => olderWaiting(threads, filter, sectionsNow), [threads, filter, sectionsNow]);
+  // Older is collapsed to its newest few, so the page's own sections stay in view.
+  const [allOlder, setAllOlder] = useState(false);
+  const olderShown = allOlder ? older : older.slice(0, OLDER_SHOWN);
+  // The filter offers the channels you have conversations on, not a fixed list.
+  const options = useMemo(() => filterOptions(channelsOf(threads)), [threads]);
   const { events: loadedEvents, failed: calendarFailed, retry: retryCalendar } = useTodaysEvents(eventsNow);
   // The calendar is not filtered: events are neither email nor WhatsApp nor unread, but they are still today.
   const events = loadedEvents ?? [];
@@ -79,7 +85,7 @@ export function SummaryList() {
     const provider = accounts.find((a) => a.id === accountId)?.provider;
     return provider ? providerLabel[provider] : undefined;
   };
-  const order = useMemo(() => [...sections.reply, ...sections.priority, ...sections.updates, ...sections.waiting].map((t) => t.id), [sections]);
+  const order = useMemo(() => [...sections.reply, ...sections.priority, ...sections.updates, ...sections.waiting, ...olderShown].map((t) => t.id), [sections, olderShown]);
   // Conversations show as soon as they are ready; the calendar section joins when its events arrive.
   const busy = loading;
   // A new user with no account connected yet is pointed at connecting one.
@@ -195,7 +201,7 @@ export function SummaryList() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent align="end">
-                {FILTER_OPTIONS.map((o) => (
+                {options.map((o) => (
                   <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
                 ))}
               </SelectContent>
@@ -233,7 +239,10 @@ export function SummaryList() {
             {sections.waiting.length > 0 && <Section title="Waiting On Others" count={sections.waiting.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0}>{rows(sections.waiting)}</Section>}
             {older.length > 0 && (
               <Section title="Older" count={older.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0 && sections.reply.length + sections.priority.length + sections.updates.length === 0}>
-                <OlderRow count={older.length} />
+                {rows(olderShown)}
+                {older.length > OLDER_SHOWN && (
+                  <Button type="button" variant="ghost" size="sm" className="mt-2 w-full" onClick={() => setAllOlder((a) => !a)}>{allOlder ? "Show Fewer" : "Show All"}</Button>
+                )}
               </Section>
             )}
           </div>

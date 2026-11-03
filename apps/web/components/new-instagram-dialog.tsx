@@ -75,7 +75,7 @@ export function NewInstagramDialog({ open, onOpenChange }: { open: boolean; onOp
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="new_instagram" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="new_instagram" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Instagram Message</DialogTitle>
           <DialogDescription>Sent from your connected Instagram, then shown in the Inbox.</DialogDescription>
@@ -85,9 +85,6 @@ export function NewInstagramDialog({ open, onOpenChange }: { open: boolean; onOp
             <p className="text-sm text-muted-foreground">
               Connect Instagram first to start a conversation. <Link href="/settings/accounts/instagram" className="underline underline-offset-4" onClick={() => onOpenChange(false)}>Connect Instagram</Link>
             </p>
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            </div>
           </div>
         ) : (
           <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
@@ -141,7 +138,6 @@ export function NewInstagramDialog({ open, onOpenChange }: { open: boolean; onOp
             {sent && <p className="text-xs text-muted-foreground">Sent. The conversation opens here once it is stored.</p>}
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The message could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
               <Button type="submit" variant="secondary" disabled={!ready || (checked && !!toError)}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
             </div>
           </form>

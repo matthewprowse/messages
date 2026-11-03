@@ -130,6 +130,7 @@ POLL_IDLE_MAX_S = 10.0
 POLL_ACTIVE_S = 0.5
 ACTIVE_FOR_S = 120
 BUCKET = "attachments"
+AI_PAUSED = "AI is paused for now. Try again later."  # Gemini billing is paused: the same words documents.py writes
 AUDIO_TYPES = {"ogg": "audio/ogg", "webm": "audio/webm", "m4a": "audio/mp4", "mp4": "audio/mp4", "wav": "audio/wav"}
 
 
@@ -334,9 +335,13 @@ class Drafts(GatherMixin):
                     except GeminiError:
                         pass
         except GeminiError as err:
-            if billing_paused(err):  # the draft stays pending and is written once the pause ends (or fails as stale)
+            if billing_paused(err) and d.get("auto"):  # nobody is waiting on a pre-draft: it stays pending until the pause ends (or goes stale)
                 self._hold_until = time.monotonic() + BILLING_HOLD_S
                 log.warn("draft held", draft=d["id"])
+                return
+            if billing_paused(err):  # someone asked and is watching the reply box: say so now, not after the app gives up
+                log.warn("draft paused", draft=d["id"])
+                self._fail(d, AI_PAUSED)
                 return
             log.warn("draft failed", draft=d["id"], status=err.status)
             self._fail(d, "The draft could not be written. Try again.")

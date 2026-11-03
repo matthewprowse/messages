@@ -86,7 +86,7 @@ function RenameDialog({ client, onClose, onDone }: { client: TeamClient; onClose
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track="rename_team_client" className="sm:max-w-md">
+      <DialogContent track="rename_team_client" className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Rename Client</DialogTitle>
@@ -97,7 +97,6 @@ function RenameDialog({ client, onClose, onDone }: { client: TeamClient; onClose
             <Input id="client-name" autoFocus maxLength={120} value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className={DIALOG_BUTTONS}>
-            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
             <Button type="submit" variant="secondary" disabled={busy || !name.trim() || name.trim() === client.name}>{busy ? "Saving" : "Save"}</Button>
           </div>
         </form>
@@ -122,7 +121,7 @@ function CompanyDialog({ client, onClose, onDone }: { client: TeamClient; onClos
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track="set_team_client_company" className="sm:max-w-md">
+      <DialogContent track="set_team_client_company" className="sm:max-w-md">
         <form onSubmit={(e) => { e.preventDefault(); if (!busy && company.trim()) void save(company); }} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Set Company</DialogTitle>
@@ -136,7 +135,6 @@ function CompanyDialog({ client, onClose, onDone }: { client: TeamClient; onClos
             <datalist id="team-companies">{(companies ?? []).map((c) => <option key={c.domainIndex} value={c.name} />)}</datalist>
           </div>
           <div className={DIALOG_BUTTONS}>
-            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
             {client.company && <Button type="button" variant="ghost" disabled={busy} onClick={() => void save(null)}>Clear Company</Button>}
             <Button type="submit" variant="secondary" disabled={busy || !company.trim() || company.trim() === client.company}>{busy ? "Saving" : "Save"}</Button>
           </div>
@@ -165,7 +163,7 @@ function AgentDialog({ client, onClose, onDone }: { client: TeamClient; onClose:
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track="set_team_client_agent" className="sm:max-w-md">
+      <DialogContent track="set_team_client_agent" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Change Agent</DialogTitle>
           <DialogDescription>
@@ -184,7 +182,6 @@ function AgentDialog({ client, onClose, onDone }: { client: TeamClient; onClose:
           </div>
         )}
         <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button type="button" disabled={busy || !agent} onClick={() => void submit()}>{busy ? "Saving" : "Save"}</Button>
         </div>
       </DialogContent>
@@ -210,7 +207,7 @@ function MergeDialog({ client, onClose, onDone }: { client: TeamClient; onClose:
   };
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track="merge_team_clients" className="sm:max-w-md">
+      <DialogContent track="merge_team_clients" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Merge Clients</DialogTitle>
           <DialogDescription>
@@ -229,7 +226,6 @@ function MergeDialog({ client, onClose, onDone }: { client: TeamClient; onClose:
           </div>
         )}
         <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button type="button" disabled={busy || !chosen} onClick={() => void submit()}>{busy ? "Merging" : "Merge"}</Button>
         </div>
       </DialogContent>
@@ -350,7 +346,7 @@ function ExportDialog({ client, onClose }: { client: TeamClient; onClose: () => 
   const pct = progress && progress.messagesTotal > 0 ? Math.min(100, Math.round((progress.messages / progress.messagesTotal) * 100)) : 0;
   return (
     <Dialog open onOpenChange={(open) => !open && !working && onClose()}>
-      <DialogContent showCloseButton={false} track="compliance_export" className="sm:max-w-md">
+      <DialogContent track="compliance_export" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Export Work History</DialogTitle>
           <DialogDescription>
@@ -388,16 +384,16 @@ function ExportDialog({ client, onClose }: { client: TeamClient; onClose: () => 
           </div>
         )}
         {phase === "failed" && <p className="text-sm text-destructive" role="alert">{reason}</p>}
-        <div className={DIALOG_BUTTONS}>
-          {phase === "ready" ? (
-            <>
-              <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-              <Button type="button" onClick={() => void start()}>Start Export</Button>
-            </>
-          ) : (
-            <Button type="button" variant={phase === "done" ? "default" : "outline"} disabled={working} onClick={onClose}>{phase === "done" ? "Done" : "Close"}</Button>
-          )}
-        </div>
+        {phase === "ready" && (
+          <div className={DIALOG_BUTTONS}>
+            <Button type="button" onClick={() => void start()}>Start Export</Button>
+          </div>
+        )}
+        {phase === "done" && (
+          <div className={DIALOG_BUTTONS}>
+            <Button type="button" onClick={onClose}>Done</Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

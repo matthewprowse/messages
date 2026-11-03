@@ -11,6 +11,7 @@ import { track } from "@/lib/analytics";
 import { supabase } from "@/lib/supabase";
 import { cooldownWait, noteRefresh, readLastRefresh, REQUESTS_PER_DAY, whenAllowed } from "@/lib/brief-pace";
 import { loadAllowance, loadBrief, loadBriefPart, loadBriefSettings, localDate, requestBrief, requestSpeech, syncTimezone, type BriefSettings, type DailyBrief } from "@/lib/brief";
+import type { Thread } from "@/lib/types";
 import { joinParts } from "@/lib/wav";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -23,15 +24,20 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
  */
 const POLL_MS = 6_000;
 const WAIT_MS = 2 * 60_000;
-/** A brief older than this is written again on Listen when a conversation has moved on since. */
+/** A brief older than this is written again on Listen when a conversation it would mention has moved on since. */
 const STALE_MS = 60 * 60_000;
+
+/** A conversation the brief could talk about: in the inbox, not junk or a subscription, and needing a reply or marked urgent
+ * or important. Only a newer message in one of these makes a written brief stale; a newsletter arriving does not. */
+const wouldMention = (t: Thread) =>
+  t.status === "inbox" && !t.junk && !t.subscription && (t.needsReply || t.priority === "urgent" || t.priority === "important");
 
 /**
  * Listen to today's brief. Its audio comes in parts: the first is short, so playing starts as soon as
  * it is stored, and the rest play in turn while later ones are still being spoken. The morning brief is
  * only a script until someone listens: Listen asks the worker to speak it. Listen writes a fresh
  * brief first when there is none, it failed, the voice changed in Settings (once spoken), or conversations
- * moved on since it was written more than an hour ago. Speed comes from Settings. The script is never shown,
+ * the brief would mention moved on since it was written more than an hour ago. Speed comes from Settings. The script is never shown,
  * only played, and the phone's lock screen gets play and pause.
  */
 export function BriefPlayer() {
@@ -258,7 +264,7 @@ export function BriefPlayer() {
     setWaiting(true);
     const [settings, latest] = await Promise.all([loadBriefSettings(userId), loadBrief(localDate(), userId)]);
     if (run.current !== mine) return;
-    const moved = !!latest && Date.now() - Date.parse(latest.updatedAt) > STALE_MS && threads.some((t) => Date.parse(t.lastMessageAt) > Date.parse(latest.updatedAt));
+    const moved = !!latest && Date.now() - Date.parse(latest.updatedAt) > STALE_MS && threads.some((t) => wouldMention(t) && Date.parse(t.lastMessageAt) > Date.parse(latest.updatedAt));
     const written = latest?.status === "written";
     // With no requests left, a brief that exists is played as it is instead of asking for another.
     const spare = !forceFresh && !!latest && (latest.status === "ready" || latest.status === "written") && allowanceLeft.current === 0;

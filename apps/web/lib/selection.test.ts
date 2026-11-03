@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filtersForView, nextLimit, shortcutAction, toggleSelection } from "./selection";
+import { nextLimit, shortcutAction, toggleSelection } from "./selection";
 
 const order = ["a", "b", "c", "d", "e"];
 
@@ -32,14 +32,6 @@ test("maps keys to list actions", () => {
   assert.equal(key("!"), "junk");
   assert.equal(key("Backspace"), null);
   assert.equal(key("e", { metaKey: true }), null);
-});
-
-test("subscriptions only offer filters that can match", () => {
-  assert.deepEqual(filtersForView("subscriptions"), ["none", "unread"]);
-  assert.ok(filtersForView("all").includes("whatsapp"));
-  assert.ok(filtersForView("all").includes("waiting"));
-  assert.ok(!filtersForView("priority").includes("waiting"));
-  assert.ok(filtersForView("junk").includes("whatsapp"));
 });
 
 test("the row limit grows by a page and stops at the total", () => {

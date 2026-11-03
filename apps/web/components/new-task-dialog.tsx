@@ -7,7 +7,7 @@ import Link from "next/link";
 import { ChevronDownIcon } from "lucide-react";
 import { markSubmitted } from "@/lib/analytics";
 import { useApp } from "@/lib/store";
-import { dayKey, fromDateKey, timeChoices } from "@/lib/dates";
+import { dayKey, fromDateKey } from "@/lib/dates";
 import { dateOnly, formOfTask, MAX_NOTES, MAX_TASK_TITLE, taskChanged, taskProblem, TASK_PROVIDERS, TASK_PROVIDER_NAMES, type TaskForm } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -19,8 +19,8 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { TimeSelect } from "@/components/time-select";
 
-const NO_TIME = "none";
 const PRIORITIES = [{ value: "0", label: "None" }, { value: "1", label: "High" }, { value: "2", label: "Medium" }, { value: "3", label: "Low" }];
 
 const EMPTY: TaskForm = { title: "", notes: "", accountId: "", date: "", time: "", priority: 0 };
@@ -68,11 +68,9 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
     onOpenChange(false);
   };
 
-  const times = useMemo(() => timeChoices(form.time), [form.time]);
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track={edit ? "edit_task" : "new_task"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
+      <DialogContent track={edit ? "edit_task" : "new_task"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{edit ? "Edit Task" : "New Task"}</DialogTitle>
           {(edit || choices.length > 0) && <DialogDescription>{edit ? "Changed" : "Created"} in your task list, then shown on the Calendar page.</DialogDescription>}
@@ -145,13 +143,7 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
             ) : (
               <div className="grid gap-2">
                 <Label htmlFor="task-time">Time</Label>
-                <Select value={form.time || NO_TIME} onValueChange={(v) => set({ time: v === NO_TIME ? "" : v })} disabled={!form.date}>
-                  <SelectTrigger id="task-time" className="w-full tabular-nums"><SelectValue /></SelectTrigger>
-                  <SelectContent className="max-h-72">
-                    <SelectItem value={NO_TIME}>No Time</SelectItem>
-                    {times.map((t) => <SelectItem key={t} value={t} className="tabular-nums">{t}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <TimeSelect id="task-time" value={form.time} onChange={(time) => set({ time })} allowNone disabled={!form.date} />
               </div>
             )}
             {!dateless && (
@@ -166,7 +158,6 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
               </div>
             )}
             <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
               <Button type="submit" variant="secondary" disabled={!account || unchanged || (checked && !!problem)}>{edit ? "Save" : "Create"}</Button>
             </DialogFooter>
           </form>

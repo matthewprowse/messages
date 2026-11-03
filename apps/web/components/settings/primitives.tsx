@@ -7,9 +7,10 @@ import { cn } from "@/lib/utils";
 /** A section or group title with its description. */
 export function SettingsHeading({ title, description, level = 2 }: { title: React.ReactNode; description?: React.ReactNode; level?: 2 | 3 | 4 }) {
   const Tag = `h${level}` as const;
+  // A page's sections (level 2) are a step above the rows' titles so the page scans by section; groups inside stay row-sized.
   return (
     <div>
-      <Tag className="flex min-h-8 items-center text-sm font-medium">{title}</Tag>
+      <Tag className={cn("flex min-h-8 items-center", level === 2 ? "text-base font-semibold" : "text-sm font-medium")}>{title}</Tag>
       {description && <div className="text-sm text-muted-foreground">{description}</div>}
     </div>
   );

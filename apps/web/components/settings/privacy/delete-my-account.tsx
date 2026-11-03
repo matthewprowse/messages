@@ -74,7 +74,7 @@ export function DeleteMyAccountSection() {
       </SettingsRows>
 
       <Dialog open={open} onOpenChange={(o) => { if (!o && !busy) close(); }}>
-        <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
+        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
           <form onSubmit={(e) => { e.preventDefault(); void submit(); }} className="space-y-4">
             <DialogHeader>
               <DialogTitle>Delete My Account</DialogTitle>
@@ -89,7 +89,6 @@ export function DeleteMyAccountSection() {
             </div>
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             <DialogFooter>
-              <Button type="button" variant="secondary" disabled={busy} onClick={close}>Cancel</Button>
               <Button type="submit" variant="destructive" disabled={busy || !proof || !isDeleteWord(typed)}>{busy ? "Checking…" : "Delete My Account"}</Button>
             </DialogFooter>
           </form>

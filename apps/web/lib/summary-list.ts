@@ -2,17 +2,20 @@
 // move focus. The components in components/summary/ add React, routing and the store.
 
 import type { CalendarEvent } from "./calendar";
-import type { ListFilter } from "./types";
+import { CHANNEL_LABELS, filterOf as inboxFilterOf } from "./thread-list";
+import type { Channel, ListFilter } from "./types";
 
 export const SUMMARY_BASE = "/summary";
 
-export const FILTER_OPTIONS: { key: ListFilter; label: string }[] = [
-  { key: "none", label: "All" },
-  { key: "email", label: "Email" },
-  { key: "whatsapp", label: "WhatsApp" },
-  // Replaces Unread: this page is already what needs you, so the useful other half is what waits on them.
-  { key: "waiting", label: "Waiting on Others" },
-];
+/** The Summary's filter choices: All, a channel for each you have (when there are two or more), Waiting on Others. */
+export function filterOptions(channels: Channel[]): { key: ListFilter; label: string }[] {
+  return [
+    { key: "none", label: "All" },
+    ...(channels.length > 1 ? channels.map((c) => ({ key: c, label: CHANNEL_LABELS[c] })) : []),
+    // Replaces Unread: this page is already what needs you, so the useful other half is what waits on them.
+    { key: "waiting", label: "Waiting on Others" },
+  ];
+}
 
 /** The Summary link for a filter; no filter is the bare path. With `openId` it keeps that conversation open beside the list. */
 export function listHref(filter: ListFilter, openId?: string) {
@@ -20,8 +23,8 @@ export function listHref(filter: ListFilter, openId?: string) {
   return filter === "none" ? path : `${path}?filter=${filter}`;
 }
 
-/** Where the Older row leads: the Inbox's Priority view, which holds the urgent and important conversations still waiting on you. */
-export const OLDER_HREF = "/inbox?view=priority";
+/** How many Older conversations show before Show All. */
+export const OLDER_SHOWN = 3;
 
 /**
  * The conversation to open once the open one is done (archived, deleted, answered). `before` is the list as it was
@@ -34,9 +37,10 @@ export function nextAfterDone(before: string[], after: string[], openId: string)
   return before.slice(at + 1).find((id) => left.has(id)) ?? before.slice(0, at).reverse().find((id) => left.has(id));
 }
 
-/** A filter from the address, "none" when it is missing or unknown. */
+/** A filter from the address, "none" when it is missing, unknown or Unread (the Summary has no Unread). */
 export function filterOf(raw: string | null): ListFilter {
-  return raw && FILTER_OPTIONS.some((o) => o.key === raw) ? (raw as ListFilter) : "none";
+  const filter = inboxFilterOf(raw);
+  return filter === "unread" ? "none" : filter;
 }
 
 /** How long an event with no end time stays on the list after it starts. */

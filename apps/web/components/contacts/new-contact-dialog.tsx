@@ -65,7 +65,6 @@ function NewContactForm({ onDone }: { onDone: () => void }) {
       <ContactFields idPrefix="new-contact" fields={fields} tried={tried} disabled={saving} />
       {failure && <p role="alert" className="text-sm text-destructive">{failure.text}</p>}
       <div className={DIALOG_BUTTONS}>
-        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
         {failure?.existingId && (
           <Button type="button" variant="secondary" onClick={() => open(failure.existingId!)}>Open Contact</Button>
         )}
@@ -78,7 +77,7 @@ function NewContactForm({ onDone }: { onDone: () => void }) {
 export function NewContactDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="new_contact" showCloseButton={false} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
+      <DialogContent track="new_contact" className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New Contact</DialogTitle>
           <DialogDescription>Add someone with any of their email addresses and phone numbers.</DialogDescription>

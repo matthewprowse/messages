@@ -5,15 +5,14 @@
 import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { track } from "@/lib/analytics";
-import { filtersForView } from "@/lib/selection";
-import { filterOf, viewOf } from "@/lib/thread-list";
+import { filterFits, filterOf, viewOf } from "@/lib/thread-list";
 import type { ListFilter, View } from "@/lib/types";
 
 export function useListState() {
   const params = useSearchParams();
   const view: View = viewOf(params.get("view"));
   const rawFilter = filterOf(params.get("filter"));
-  const filter: ListFilter = filtersForView(view).includes(rawFilter) ? rawFilter : "none";
+  const filter: ListFilter = filterFits(view, rawFilter) ? rawFilter : "none";
   // Which view and filter people choose (the default is not a choice).
   useEffect(() => {
     if (view !== "all") track("feature_used", { feature: "conversation_view", detail: view });

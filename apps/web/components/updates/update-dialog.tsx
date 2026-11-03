@@ -103,7 +103,7 @@ export function UpdateDialog({ open, onOpenChange, editing, suggestedVersion, on
   return (
     <>
       <Dialog open={open} onOpenChange={requestClose}>
-        <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
+        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Update" : "New Update"}</DialogTitle>
             <DialogDescription>What changed in a release. Only you can see updates for now.</DialogDescription>
@@ -173,7 +173,6 @@ export function UpdateDialog({ open, onOpenChange, editing, suggestedVersion, on
           </form>
           <DialogFooter>
             {editing && <Button type="button" variant="ghost" className="sm:mr-auto" onClick={() => setConfirmDelete(true)}>Delete</Button>}
-            <Button type="button" variant="ghost" onClick={() => requestClose(false)}>Cancel</Button>
             <Button type="submit" form="update-form" variant="secondary" disabled={saving}>{saving ? "Saving" : "Save"}</Button>
           </DialogFooter>
         </DialogContent>

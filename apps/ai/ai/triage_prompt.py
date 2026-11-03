@@ -1,5 +1,5 @@
 """Triage's prompt and the reading of its answer: the JSON schema, the system instructions, the prompt built per
-group of emails, the earlier-messages lines and the parsing of the model's results and choices. Pure: no network.
+group of messages (email and chats), the earlier-messages lines and the parsing of the model's results and choices. Pure: no network.
 Split out of triage.py, which re-exports every name here."""
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "email": {"type": "integer", "description": "The number of the email this result is for."},
+                    "message": {"type": "integer", "description": "The number of the message this result is for."},
                     "priority": {"type": "string", "enum": PRIORITIES},
                     "category": {"type": "string", "enum": CATEGORIES},
                     "junk": {"type": "boolean"},
@@ -47,29 +47,29 @@ SCHEMA = {
                     "asked_time": {"type": "string", "description": "YYYY-MM-DDTHH:MM, or empty."},
                     "asked_minutes": {"type": "integer", "description": "Length in minutes, or 0."},
                 },
-                "required": ["email", "priority", "category", "junk", "needs_reply", "summary", "reason", "reason_text", "suspicious", "label", "choices", "asked_time", "asked_minutes"],
+                "required": ["message", "priority", "category", "junk", "needs_reply", "summary", "reason", "reason_text", "suspicious", "label", "choices", "asked_time", "asked_minutes"],
             },
         }
     },
     "required": ["results"],
 }
 
-SYSTEM = """You sort one person's incoming email. For each numbered email, decide:
+SYSTEM = """You sort one person's incoming messages. Each is an email or a chat message (WhatsApp, LinkedIn or Instagram, as its channel says); chats are short and informal, so judge them as chats, not as emails. For each numbered message, decide:
 
 priority
-- urgent: needs them within hours (a deadline today, a real security or money problem, a person waiting on them now).
-- important: a real person writing to them personally, work they are part of, appointments, bills and anything with consequences.
+- urgent: only when it must be dealt with today: an explicit deadline today, a real security or money problem (a charge, a payment failing, an account taken over), or something that breaks or is lost today if they do nothing. Rare: most days nothing is urgent.
+- important: a real person writing to them personally, work they are part of, appointments, bills and anything with consequences. A person waiting on a reply, even one chasing, is important and needs_reply, not urgent, unless one of the urgent reasons above is stated.
 - normal: useful but not pressing.
 - low: everything else.
 Routine login codes, sign-in links, verification and welcome emails are normal, not urgent: they are only useful the moment they were asked for. A security alert about something they did not do is urgent.
 
 category: personal, work, needs_reply (a person is asking them something), fyi, newsletter, notification (automated account or service messages).
 
-junk: true for mail that is not written for them: marketing, promotions, sales, cold outreach, mass newsletters, generic automated alerts and digests, surveys, spam. False for anything personal, any reply in a conversation they took part in, receipts, bookings, security codes, bills and notices about accounts they hold. Bulk mail (it has an unsubscribe header) is junk unless it clearly matters to them personally.
+junk: true for a message that is not written for them: marketing, promotions, sales, cold outreach, mass newsletters, generic automated alerts and digests, surveys, spam. False for anything personal, any reply in a conversation they took part in, receipts, bookings, security codes, bills and notices about accounts they hold. Bulk mail (it has an unsubscribe header) is junk unless it clearly matters to them personally.
 
 needs_reply: true when a real person is waiting on them to say or do something: a question, a request, an invitation or a proposal to answer, plans being made that they have not settled, or a follow-up on something they have not answered. It is also true when the message is phrased as a statement but moves plans forward and a friend or colleague would expect a response (for example "turns out there are student tickets" after they agreed to go). Read the earlier messages of the conversation when they are shown: a question they already answered is not open, and a closing thanks or an acknowledgement ends it. When unsure about a person they know, lean towards true, since a missed message costs more than a false flag. False for automated senders, newsletters, receipts and notices, and for a message that only informs with nothing to respond to.
 
-summary: leave it empty when junk is true (nobody reads it). Otherwise one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email". Write it to them: call them "you" and never use their own name, even when the email addresses them by name (write "Cindy wants to set up an interview with you", not "with Matthew Prowse"). Their name and own addresses are given; when no name is given, the name in an email's greeting or the name matching their address is theirs. An email from one of their own addresses is one they sent (a copy, or to themselves): summarise it as theirs, such as "Your application for the Business Analyst role, copied to your inbox."
+summary: leave it empty when junk is true (nobody reads it). Otherwise one plain sentence saying what it is and what, if anything, they need to do. No greetings, no "This email" or "This message". Write it to them: call them "you" and never use their own name, even when the message addresses them by name (write "Cindy wants to set up an interview with you", not "with Matthew Prowse"). Their name and own addresses are given; when no name is given, the name in a message's greeting or the name matching their address is theirs. An email from one of their own addresses is one they sent (a copy, or to themselves): summarise it as theirs, such as "Your application for the Business Analyst role, copied to your inbox."
 
 choices: only when needs_reply is true and the message asks about a time (are they free, can they meet, which slot) or for a decision only they can make (a yes or no, whether they will do or send something, a pick between options the sender listed). Never for an open question that needs information from them, a request for documents or a long answer, or a general conversation. Give 2 to 4 options they would realistically pick, each with:
 - label: button text, 1 to 4 words in Title Case, such as "Yes, Available", "Not Available", "Sending Today", "Which Documents?".
@@ -79,31 +79,34 @@ When they are asked about a meeting, call or viewing time, include an other_time
 
 asked_time: when the message asks whether they are free at a specific date and time, that time as YYYY-MM-DDTHH:MM, as written in the message (the sender's local time), working out the date from when it was sent. Otherwise empty. asked_minutes: how long it would take in minutes when stated or obvious, otherwise 0.
 
-reason: the main reason for the priority and junk decision, from the list, with reason_text saying it in a few plain words to them, such as "You asked a question", "Client marked important" or "Newsletter". Write it to them, never use their name.
+reason: the main reason for the priority and junk decision, from the list, with reason_text saying it in a few plain words to them, such as "You were asked a question", "Payment due today" or "Newsletter". Always give one, urgent most of all: it is shown next to the label. Write it to them, never use their name.
 
-suspicious: payment_change when the email asks for money to go to new or changed bank details, or says banking details have changed, or an invoice or payment that does not fit the conversation; phishing when it tries to get a password, code, card number or login through a link or attachment, or threatens an account; impersonation when it pretends to be someone they know or a company but the sender does not fit. Otherwise none. Be careful: a normal invoice, receipt or security code they asked for is none. This only warns them, so say so when in real doubt.
+suspicious: payment_change when the message asks for money to go to new or changed bank details, or says banking details have changed, or an invoice or payment that does not fit the conversation; phishing when it tries to get a password, code, card number or login through a link or attachment, or threatens an account; impersonation when it pretends to be someone they know or a company but the sender does not fit. Otherwise none. Be careful: a normal invoice, receipt or security code they asked for is none. This only warns them, so say so when in real doubt.
 
-label: when they have auto labels (listed with the numbers below), the number of the one that clearly fits the email by its description, otherwise none. Always none when no auto labels are listed or the email is junk.
+label: when they have auto labels (listed with the numbers below), the number of the one that clearly fits the message by its description, otherwise none. Always none when no auto labels are listed or the message is junk.
 
 Use what you are told about them and their past corrections. Mail styled to look personal but sent to a list is still junk.
 
-Judge each email on its own, though an email may show the earlier messages of its conversation (oldest first, "You" is them, "Them" is the other side): use those only as context. Return one result for every email, with its number.""" + UNTRUSTED
+Judge each message on its own, though a message may show the earlier messages of its conversation (oldest first, "You" is them, "Them" is the other side): use those only as context. Return one result for every message, with its number.""" + UNTRUSTED
 
+
+# The channel line for each message, so a chat is not read as an email.
+CHANNEL_NAMES = {"email": "Email", "whatsapp": "WhatsApp chat", "linkedin": "LinkedIn chat", "instagram": "Instagram chat"}
 
 # Spelling and language for what is written about their mail. Never American by default: they write British.
 LANGUAGE_NAMES = {"en-GB": "British English (colour, organise, cheque)", "en-US": "American English", "af": "Afrikaans"}
 
 def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]], fence: str | None = None) -> str:
-    """What is known about them first (the same on every call of theirs), then the numbered emails.
-    Each email has name, sender, relationship, known, bulk, subject and body. Each sits between lines carrying
-    a random code (fence), so one email's text cannot pass for instructions or for another email."""
+    """What is known about them first (the same on every call of theirs), then the numbered messages.
+    Each has name, sender, relationship, known, bulk, subject, body and channel (missing means email). Each sits between
+    lines carrying a random code (fence), so one message's text cannot pass for instructions or for another message."""
     fence = fence or new_fence()
     lines = [
         f"Their name: {ctx.name or 'not given'}",
         "Their own addresses: " + (", ".join(ctx.own_addresses) or "not given"),
         f"About them: {ctx.about or 'not given'}",
         f"People who matter to them: {ctx.important_people or 'not given'}",
-        f"Write summaries in: {LANGUAGE_NAMES.get(ctx.language, 'the language and spelling they write in themselves (judge by their own sent emails and the email thread), British English when unclear')}",
+        f"Write summaries in: {LANGUAGE_NAMES.get(ctx.language, 'the language and spelling they write in themselves (judge by their own sent messages and the conversation), British English when unclear')}",
     ]
     # Each correction names a conversation's subject, written by someone else, so the list sits between marked lines.
     if ctx.auto_labels:
@@ -120,7 +123,8 @@ def triage_prompt(ctx: UserContext, emails: list[dict[str, Any]], fence: str | N
         lines += [
             "",
             f"<<<{fence}",
-            f"=== Email {i}",
+            f"=== Message {i}",
+            f"Channel: {CHANNEL_NAMES.get(e.get('channel') or 'email', 'Email')}",
             f"From: {e['name']} <{e['sender']}>",
             f"Relationship: {e['relationship'] or 'unknown'}",
             f"They have written to this sender before: {'yes' if e['known'] else 'no'}",
@@ -195,7 +199,7 @@ def read_choices(item: dict[str, Any]) -> str:
 
 
 def read_results(result: Any, count: int, label_count: int = 0) -> dict[int, dict[str, Any]]:
-    """The model's answers by email number, 1 to count. A missing or malformed answer is left out. Junk has no
+    """The model's answers by message number, 1 to count. A missing or malformed answer is left out. Junk has no
     summary (the caller uses the subject), and label_count is how many auto labels were offered."""
     out: dict[int, dict[str, Any]] = {}
     items = result.get("results") if isinstance(result, dict) else None
@@ -203,7 +207,7 @@ def read_results(result: Any, count: int, label_count: int = 0) -> dict[int, dic
         if not isinstance(item, dict):
             continue
         try:
-            n = int(item.get("email"))
+            n = int(item.get("message", item.get("email")))  # "email" is what answers asked before the rename carry (batches in flight)
         except (TypeError, ValueError):
             continue
         if not 1 <= n <= count or n in out or not isinstance(item.get("junk"), bool):

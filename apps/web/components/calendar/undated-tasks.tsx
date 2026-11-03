@@ -25,7 +25,7 @@ export function UndatedTasks({ tasks, onNewTask }: { tasks: Task[]; onNewTask: (
         </Button>
       </div>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] sm:max-w-lg">
+        <DialogContent className="max-h-[calc(100svh-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>No Date</DialogTitle>
             <DialogDescription>Tasks with no due date, from your task lists.</DialogDescription>
@@ -37,7 +37,6 @@ export function UndatedTasks({ tasks, onNewTask }: { tasks: Task[]; onNewTask: (
             </div>
           </div>
           <div className={DIALOG_BUTTONS}>
-            <Button variant="ghost" onClick={() => setOpen(false)}>Close</Button>
             <Button variant="secondary" onClick={() => { setOpen(false); onNewTask(); }}>New Task</Button>
           </div>
         </DialogContent>

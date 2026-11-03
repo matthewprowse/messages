@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, ExternalLink } from "lucide-react";
+import { ArrowLeft, ArrowRight, Download, ExternalLink, Trash2 } from "lucide-react";
 import { track } from "@/lib/analytics";
 import { FETCH_TEXT } from "@/lib/attachment-fetch";
 import { ATTACHMENT_BUCKET as BUCKET, KIND_LABEL, notKeptMessage, swipeOf } from "@/lib/attachment-view";
@@ -14,7 +14,7 @@ import type { Attachment, Contact } from "@/lib/types";
 import { fullDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { ContactAvatar } from "@/components/primitives";
 import { MyAvatar } from "@/components/my-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -167,9 +167,9 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent track="attachment_viewer" showCloseButton={false} className={cn("max-h-[calc(100dvh-2rem)] grid-cols-1 gap-3 overflow-y-auto sm:max-w-3xl", wide && "sm:max-w-5xl", a.kind === "image" && hugging?.id === a.id && "w-fit min-w-[min(24rem,calc(100%-2rem))] sm:max-w-3xl")}>
-        {/* Who sent it, with their photo, and when. Show in Conversation is on the right; Download and Close are in the footer. */}
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+      <DialogContent track="attachment_viewer" className={cn("max-h-[calc(100dvh-2rem)] grid-cols-1 gap-3 overflow-y-auto sm:max-w-3xl", wide && "sm:max-w-5xl", a.kind === "image" && hugging?.id === a.id && "w-fit min-w-[min(24rem,calc(100%-2rem))] sm:max-w-3xl")}>
+        {/* Who sent it, with their photo, and when. Show in Conversation is on the right, clear of the dialog's X; Download is in the footer. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 pr-8">
           {sender && (sender.me ? <MyAvatar className="size-8" /> : <ContactAvatar contact={sender.contact} className="size-8" />)}
           <div className="min-w-32 flex-1 basis-40">
             <DialogTitle className="truncate text-sm font-medium">{sender?.name ?? detail ?? (titled ? a.name : KIND_LABEL[a.kind])}</DialogTitle>
@@ -202,7 +202,7 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
         >
           {body}
         </div>
-        {/* The place in the files on the left, with the arrows that step through them; Download and Close on the right. Escape closes too. */}
+        {/* The place in the files on the left, with the arrows that step through them; the file's actions on the right. The X or Escape closes. */}
         <DialogFooter className="flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             {canStep && (
@@ -218,10 +218,9 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
               <Button variant="secondary" disabled={toggling} onClick={() => { setToggling(true); void onToggleHidden().finally(() => setToggling(false)); }}>{a.hiddenReason ? "Unhide" : "Hide"}</Button>
             )}
             {onDelete && a.path && (
-              <Button variant="secondary" disabled={deleting} onClick={() => { setDeleting(true); void onDelete().finally(() => setDeleting(false)); }}>Delete</Button>
+              <Button variant="secondary" size="icon" aria-label="Delete" title="Delete" disabled={deleting} onClick={() => { setDeleting(true); void onDelete().finally(() => setDeleting(false)); }}><Trash2 /></Button>
             )}
-            <Button variant="secondary" disabled={file?.state !== "ready" || saving} onClick={() => void download()}>Download</Button>
-            <DialogClose asChild><Button variant="secondary">Close</Button></DialogClose>
+            <Button variant="secondary" size="icon" aria-label="Download" title="Download" disabled={file?.state !== "ready" || saving} onClick={() => void download()}><Download /></Button>
           </div>
         </DialogFooter>
       </DialogContent>

@@ -20,7 +20,7 @@ export function WritingAsChip({ value, groups, onChange, disabled, id, className
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button id={id} type="button" variant="secondary" size="sm" disabled={disabled} aria-label={`Writing As ${current.label}`} className={className ?? "h-8 max-w-48 min-w-0 gap-1.5 rounded-full sm:max-w-72"}>
+        <Button id={id} type="button" variant="secondary" disabled={disabled} aria-label={`Writing As ${current.label}`} className={className ?? "max-w-48 min-w-0 sm:max-w-72"}>
           <span className="shrink-0 text-muted-foreground">Writing As</span>
           <span className="min-w-0 truncate">{current.label}</span>
           <ChevronDown className="shrink-0" />

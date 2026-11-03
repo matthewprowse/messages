@@ -195,13 +195,13 @@ class TriageRegroup(unittest.TestCase):
         class Partial(FakeTriageGemini):
             def json(self, model, system, prompt, schema, usage, **kw):
                 self.calls.append((prompt, usage, kw))
-                n = prompt.count("=== Email ")
+                n = prompt.count("=== Message ")
                 answered = 1 if len(self.calls) == 1 else n
                 return {"results": [{"email": i, "priority": "normal", "category": "fyi", "junk": False, "needs_reply": False, "summary": "s"} for i in range(1, answered + 1)]}
 
         gemini = Partial()
         self.assertEqual(Triage(FakeTriageDb(pending, rows), gemini, "fast").run_once(), 3)
-        self.assertEqual([c[0].count("=== Email ") for c in gemini.calls], [3, 2])  # not 3, then 1, then 1
+        self.assertEqual([c[0].count("=== Message ") for c in gemini.calls], [3, 2])  # not 3, then 1, then 1
 
     def test_bulk_mail_is_cut_shorter(self):
         from ai.triage import BODY_CHARS, BULK_BODY_CHARS

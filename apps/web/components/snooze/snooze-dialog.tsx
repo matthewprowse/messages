@@ -30,7 +30,7 @@ export function SnoozeDialog({ request, onClose, onPick }: { request: SnoozeRequ
   const many = request.ids.length > 1;
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent showCloseButton={false} className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{remind ? "Remind Me If No Reply" : "Snooze"}</DialogTitle>
           <DialogDescription>
@@ -55,10 +55,11 @@ export function SnoozeDialog({ request, onClose, onPick }: { request: SnoozeRequ
             <p className="text-xs text-muted-foreground">{day ? `Returns ${returnText(pickedDay(day, now).toISOString(), now)}.` : "Choose a day. It returns at 08:00."}</p>
           </div>
         )}
-        <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          {step === "date" && <Button type="button" disabled={!day} onClick={() => day && onPick(request, pickedDay(day, now))}>{remind ? "Set Reminder" : "Snooze"}</Button>}
-        </div>
+        {step === "date" && (
+          <div className={DIALOG_BUTTONS}>
+            <Button type="button" disabled={!day} onClick={() => day && onPick(request, pickedDay(day, now))}>{remind ? "Set Reminder" : "Snooze"}</Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -3,7 +3,7 @@
 // The Contacts list. The pieces the Contacts pages share (rows, detail page frame, form fields) live in
 // components/contacts/ and are re-exported here, so contact-view.tsx, company-view.tsx and merge-suggestions.tsx
 // keep importing from this file. Search and ordering rules are in lib/contact-list-helpers.ts. People shows starred
-// contacts first and where you stand with each; Going Quiet lists starred people and clients you have not been in touch with.
+// contacts first with how to reach each and their unread count; Going Quiet lists starred people and clients you have not been in touch with.
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -12,7 +12,7 @@ import type { ContactSummary } from "@/lib/contacts";
 import type { CompanySummary } from "@/lib/organizations";
 import { isCompanySender } from "@/lib/people";
 import { searchDigits } from "@/lib/phone-search";
-import { bySort, byVipThen, detailOf, fold, haystack, matchesQuery, plural, queryOf, sortAndView, type Filters, type Sort, type View } from "@/lib/contact-list-helpers";
+import { bySort, byVipThen, detailOf, fold, haystack, matchesQuery, plural, queryOf, sortAndView, unreadByPerson, type Filters, type Sort, type View } from "@/lib/contact-list-helpers";
 import { goingQuiet } from "@/lib/going-quiet";
 import { matchesRelationship } from "@/lib/relationships";
 import { tidyCounts } from "@/lib/tidy-up";
@@ -27,6 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import { CompanyAvatar, ContactAvatar } from "@/components/primitives";
 import { Badge } from "@/components/ui/badge";
 import { useContactsData } from "@/components/contacts-data";
+import { useApp } from "@/lib/store";
 import { TeamClientsRow } from "@/components/team-clients";
 import { ListRow } from "./contacts/list-rows";
 import { ListBody } from "./contacts/list-body";
@@ -49,6 +50,10 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
   const params = useParams<{ id?: string }>();
   const pathname = usePathname();
   const { suggestions, suggestionsMore, needCompanies, reload } = useContactsData();
+  // The same conversations the Inbox lists (not junk, archived or deleted), so a row's count matches what the Inbox shows.
+  const { listThreads } = useApp();
+  const inboxThreads = listThreads("all", "none");
+  const unread = useMemo(() => unreadByPerson(inboxThreads), [inboxThreads]);
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -222,6 +227,7 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
                   badge={c.vip ? <Star aria-label="Starred" className="size-3.5 shrink-0 fill-current text-muted-foreground" /> : undefined}
                   at={c.lastAt}
                   detail={detailOf(c)}
+                  unread={unread.get(c.id)}
                   aside={isPlaceholderName(c.name) ? <Badge variant="outline">Needs a Name</Badge> : undefined}
                   selected={params.id === c.id}
                   className="scroll-mt-[157px]"

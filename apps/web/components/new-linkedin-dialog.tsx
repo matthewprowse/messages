@@ -110,7 +110,7 @@ export function NewLinkedInDialog({ open, onOpenChange }: { open: boolean; onOpe
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="new_linkedin" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="new_linkedin" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New LinkedIn Message</DialogTitle>
           <DialogDescription>Sent from your linked LinkedIn, then shown in the Inbox. LinkedIn may only allow messages to people you are connected with.</DialogDescription>
@@ -207,7 +207,6 @@ export function NewLinkedInDialog({ open, onOpenChange }: { open: boolean; onOpe
             {sent && <p className="text-xs text-muted-foreground">Sent. The conversation opens here once it is stored.</p>}
             {sending.failed && <p className="text-xs text-destructive">{sending.error ?? "The message could not be sent."}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
               <Button type="submit" variant="secondary" disabled={!ready || (checked && !!toError)}>{waiting ? "Sending" : sent ? "Sent" : "Send"}</Button>
             </div>
           </form>

@@ -28,11 +28,11 @@ import { RowButton } from "./row-button";
 import type { RowAction } from "./use-row-actions";
 
 // A row's hover actions, in order from the left.
-const ROW_ACTIONS = (thread: Thread, doneForNow: boolean): { action: RowAction; label: string; icon: LucideIcon; keys: string; destructive?: boolean }[] => [
+const ROW_ACTIONS = (thread: Thread, doneForNow: boolean): { action: RowAction; label: string; icon: LucideIcon; keys: string }[] => [
   { action: "archive", label: thread.status === "archived" ? "Unarchive" : "Archive", icon: Archive, keys: "e" },
   // Snooze opens the choices (H); on the Summary, Done for Now snoozes to tomorrow morning in one click. A snoozed one offers Unsnooze.
   ...(thread.status === "inbox" ? [isSnoozed(thread) ? { action: "unsnooze" as const, label: "Unsnooze", icon: Clock, keys: "h" } : { action: "snooze" as const, label: doneForNow ? "Done for Now" : "Snooze", icon: Clock, keys: "h" }] : []),
-  { action: "trash", label: "Delete", icon: Trash2, keys: "#", destructive: true },
+  { action: "trash", label: "Delete", icon: Trash2, keys: "#" },
   { action: "junk", label: thread.junk ? "Not Junk" : "Move to Junk", icon: thread.junk ? MailCheck : OctagonAlert, keys: "!" },
 ];
 
@@ -221,7 +221,6 @@ export const ThreadRow = memo(function ThreadRow({
                   label={a.label}
                   icon={a.icon}
                   keys={a.keys}
-                  destructive={a.destructive}
                   onClick={() => act(a.action)}
                 />
               ))}

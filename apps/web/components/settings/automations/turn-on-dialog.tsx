@@ -1,8 +1,9 @@
 "use client";
 
-// Turning an automation on: first the preview, "In the last 30 days this would have made N leads", with the list, and only then the
-// Turn On button. Opening the dialog asks the AI worker to read the last 30 days of mail with the same When and the same reader a live
-// run uses; nothing is made. Turning on only affects mail that arrives afterwards.
+// Turning an automation on, with the preview "In the last 30 days this would have made N leads" and its list. Opening the dialog asks
+// the AI worker to read the last 30 days of mail with the same When and the same reader a live run uses; nothing is made. Turn On
+// never waits for the preview: it only affects mail that arrives afterwards, and a worker that is down or slow would otherwise hold
+// it for 90 seconds. The preview shows when it arrives, or a plain line says it was skipped.
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -31,8 +32,10 @@ export function TurnOnDialog({ target, onClose, onDone }: { target: TurnOn | nul
     const abort = new AbortController();
     let id: string | null = null;
     void (async () => {
-      id = await requestPreview(target.spec, target.templateKey);
-      if (!id) return setState({ error: "Could not ask for the preview. Check your connection and try again." });
+      const asked = await requestPreview(target.spec, target.templateKey);
+      if ("error" in asked) return setState(asked);
+      id = asked.id;
+      if (abort.signal.aborted) return void dropPreview(id);
       const answer = await waitForPreview(id, abort.signal);
       if (!abort.signal.aborted) setState(answer);
       void dropPreview(id);
@@ -57,10 +60,10 @@ export function TurnOnDialog({ target, onClose, onDone }: { target: TurnOn | nul
   const result = state && "result" in state ? state.result : null;
   return (
     <Dialog open={target !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent showCloseButton={false}>
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Turn On {target?.spec.name}</DialogTitle>
-          <DialogDescription>First, here is what it would have done over the last 30 days. Nothing is made until you turn it on, and then only for new email.</DialogDescription>
+          <DialogDescription>Here is what it would have done over the last 30 days. Nothing is made until you turn it on, and then only for new email.</DialogDescription>
         </DialogHeader>
         <div className="min-h-24 space-y-3 text-sm">
           {state === null && (
@@ -70,7 +73,7 @@ export function TurnOnDialog({ target, onClose, onDone }: { target: TurnOn | nul
               <Skeleton className="h-4 w-1/2" />
             </div>
           )}
-          {state && "error" in state && state.error && <p className="text-destructive" role="alert">{state.error}</p>}
+          {state && "error" in state && state.error && <p className="text-muted-foreground" role="status">{state.error}</p>}
           {result && (
             <>
               <p className="font-medium">{previewHeadline(result)}</p>
@@ -85,13 +88,12 @@ export function TurnOnDialog({ target, onClose, onDone }: { target: TurnOn | nul
                   ))}
                 </ul>
               )}
-              {target && <p className="text-xs text-muted-foreground">When it is on, each new match: {doSummary(target.spec).join(", ").toLowerCase() || "does nothing"}. Nothing is ever sent without you.</p>}
             </>
           )}
+          {target && <p className="text-xs text-muted-foreground">When it is on, each new match: {doSummary(target.spec).join(", ").toLowerCase() || "does nothing"}. Nothing is ever sent without you.</p>}
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="secondary" disabled={!result || busy} onClick={() => void turnOn()}>Turn On</Button>
+          <Button variant="secondary" disabled={busy} onClick={() => void turnOn()}>Turn On</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

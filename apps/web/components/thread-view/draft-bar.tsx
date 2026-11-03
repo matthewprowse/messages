@@ -1,7 +1,7 @@
-// The row of AI controls above the reply box: a "What Should This Say?" field with Draft (Enter drafts in one step), one Edit With AI
+// The row of AI controls above the reply box: a "What Should This Say?" field with Draft (Enter drafts in one step), one Edit
 // menu (fix, edit, shorter, formal, casual), Undo and Discard Draft. Presentational: the composer owns the state and passes the actions in.
 
-import { ChevronDown, X } from "lucide-react";
+import { X } from "lucide-react";
 import type { Draft } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,7 @@ interface DraftBarProps {
 
 export function DraftBar({ busy, hasText, editable, undoable, hasDraft, draftLabel, instruction, onInstruction, onDraft, onFix, onAskEdit, onAdjust, onUndo, onDiscard }: DraftBarProps) {
   return (
-    // Draft writes a whole new reply and replaces the box. Edit With AI works on what is already there. Tooltips are one short line; Draft, discard, attach and voice notes have none (their labels and icons say enough).
+    // Draft writes a whole new reply and replaces the box. Edit works on what is already there. Tooltips are one short line; Draft, discard, attach and voice notes have none (their labels and icons say enough).
     <div className="mb-3 flex flex-wrap items-center gap-2">
       {/* One step: say what it should cover (or nothing) and press Enter or Draft. The same text stays with the draft for another try. */}
       <Input
@@ -64,7 +64,7 @@ export function DraftBar({ busy, hasText, editable, undoable, hasDraft, draftLab
         // One menu for everything that works on the text in the box, so the bar stays one short row (and fits a phone).
         <DropdownMenu>
           <Hint text="Fix, change or reshape your text">
-            <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Edit With AI <ChevronDown /></Button></DropdownMenuTrigger>
+            <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Edit</Button></DropdownMenuTrigger>
           </Hint>
           <DropdownMenuContent align="start">
             {editable && hasText && <DropdownMenuItem onSelect={onFix}>Fix Typos and Grammar</DropdownMenuItem>}

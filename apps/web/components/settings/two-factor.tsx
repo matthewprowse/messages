@@ -93,7 +93,7 @@ export function TwoFactorSection() {
       </SettingsRows>
 
       <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-        <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
+        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
           {enrol ? (
             <form onSubmit={(e) => { e.preventDefault(); void confirmEnrol(); }} className="space-y-4">
               <DialogHeader>
@@ -105,7 +105,6 @@ export function TwoFactorSection() {
               <p className="break-all text-center text-xs text-muted-foreground">Or enter this key by hand: <span className="font-mono">{enrol.secret}</span></p>
               {codeField}
               <DialogFooter>
-                <Button type="button" variant="secondary" onClick={close}>Cancel</Button>
                 <Button type="submit" disabled={busy}>{busy ? "Checking…" : "Turn On"}</Button>
               </DialogFooter>
             </form>
@@ -117,7 +116,6 @@ export function TwoFactorSection() {
               </DialogHeader>
               {codeField}
               <DialogFooter>
-                <Button type="button" variant="secondary" onClick={close}>Cancel</Button>
                 <Button type="submit" variant="destructive" disabled={busy}>{busy ? "Checking…" : "Turn Off"}</Button>
               </DialogFooter>
             </form>

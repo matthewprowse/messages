@@ -2,9 +2,8 @@
 
 import { Paperclip } from "lucide-react";
 import type { FiledAttachment } from "@/lib/types";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/primitives";
 import { AttachmentGrid } from "@/components/attachments";
 
@@ -19,7 +18,7 @@ interface AttachmentsDialogProps {
 export function AttachmentsDialog({ open, onOpenChange, files, hrefFor }: AttachmentsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Attachments</DialogTitle>
           <DialogDescription>{files.length === 1 ? "1 file" : `${files.length} files`} in this conversation</DialogDescription>
@@ -31,9 +30,6 @@ export function AttachmentsDialog({ open, onOpenChange, files, hrefFor }: Attach
             <AttachmentGrid items={files} hrefFor={hrefFor} />
           )}
         </ScrollArea>
-        <DialogFooter>
-          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Close</Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

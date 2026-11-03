@@ -29,7 +29,7 @@ MAX_SCAN = 3000  # rows looked at in all, newest first; a very busy inbox is cut
 MAX_READ = 300  # emails whose body is read: the ones the sender and subject already allow
 MAX_LEADS = 50  # leads listed; the count is of all of them
 EVERY_S = 3
-IDLE_S = 30
+IDLE_S = 5  # someone is looking at the Turn On dialog, which waits 90s: one indexed select (a partial index) every 5s is cheap
 STALE = timedelta(minutes=10)  # a preview claimed and never finished (the worker stopped) is taken again after this
 
 

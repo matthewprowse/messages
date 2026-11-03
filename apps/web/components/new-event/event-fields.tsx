@@ -1,12 +1,11 @@
-// Small field components for the New Event dialog (components/new-event-dialog.tsx): the time list, a switch row, the
-// date picker, the Repeat list and the "reconnect your calendar" notice. Each is controlled; the dialog owns the state.
+// Small field components for the New Event dialog (components/new-event-dialog.tsx): a switch row, the date picker,
+// the Repeat list and the "reconnect your calendar" notice. The time list is the shared components/time-select.tsx. Each is controlled; the dialog owns the state.
 
-import { useMemo } from "react";
 import Link from "next/link";
 import { ChevronDownIcon } from "lucide-react";
 import type { Account } from "@/lib/types";
-import { dayKey, fromDateKey, timeChoices } from "@/lib/dates";
-import { NO_REPEAT, STEP, UNKNOWN_REPEAT } from "@/lib/event-form";
+import { dayKey, fromDateKey } from "@/lib/dates";
+import { NO_REPEAT, UNKNOWN_REPEAT } from "@/lib/event-form";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -14,20 +13,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-export function TimeSelect({ id, value, onChange, invalid, disabled }: { id: string; value: string; onChange: (v: string) => void; invalid: boolean; disabled: boolean }) {
-  const times = useMemo(() => timeChoices(value, STEP), [value]);
-  return (
-    <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger id={id} className="w-full tabular-nums" aria-invalid={invalid}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent className="max-h-72">
-        {times.map((t) => <SelectItem key={t} value={t} className="tabular-nums">{t}</SelectItem>)}
-      </SelectContent>
-    </Select>
-  );
-}
 
 export function Reconnect({ provider, change = false }: { provider?: Account["provider"]; change?: boolean }) {
   const action = change ? "Change" : "Create";

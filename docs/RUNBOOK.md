@@ -9,8 +9,8 @@ AI worker are separate containers that meet in one Supabase database and never c
 | Service | Where | Image | Health port |
 | --- | --- | --- | --- |
 | Web app (`apps/web`) | Vercel project `konva` (team `prowse`), functions in `dub1` | none | none |
-| Sync worker (`apps/worker`) | VM `konva-workers`, container, one per shard | `apps/worker/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
-| AI worker (`apps/ai`) | VM `konva-workers`, container, exactly one | `apps/ai/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
+| Sync worker (`apps/worker`) | VM `konva-workers` (laptop until launch), container, one per shard | `apps/worker/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
+| AI worker (`apps/ai`) | VM `konva-workers` (laptop until launch), container, exactly one | `apps/ai/Dockerfile` | `HEALTH_PORT` (8080 in the image) |
 | Instagram and iCloud Reminders | The AI image, started with `python -m ai instagram` or `icloud-reminders` | `apps/ai/Dockerfile` with `EXTRA_REQUIREMENTS` | none (run with the health check off) |
 | LinkedIn helper (`apps/linkedin`) | Inside the worker image at `/usr/local/bin/konva-linkedin` (`LINKEDIN_HELPER`) | built in the worker Dockerfile | none |
 
@@ -65,7 +65,10 @@ for a Vercel sign-in; use the custom domain on the phone.
 
 ## Production VM
 
-One Compute Engine VM, `konva-workers` (e2-medium, `africa-south1-a`, project `messages-keys`), runs the workers with Docker
+Not created yet: until launch the workers run on the owner's laptop (`pnpm worker`, `pnpm ai`), and the live site only gets
+new mail and drafts while they run (docs/PLAN.md, "Hosting For Daily Use"). Once the VM exists, stop the laptop workers.
+
+One Compute Engine VM, `konva-workers` (e2-small or e2-medium, see PLAN.md; `africa-south1-a`, project `messages-keys`), runs the workers with Docker
 Compose (`deploy/compose.yaml`). Its service account `konva-workers@messages-keys.iam.gserviceaccount.com` may only encrypt
 and decrypt with `user-data-keys` and write logs, and the workers reach KMS through the metadata server, so no key file is on
 the VM. No ports are open beyond SSH; the workers only connect out.

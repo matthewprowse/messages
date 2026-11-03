@@ -28,7 +28,8 @@ import {
 import { followEvent, type Row } from "@/components/new-event/follow-event";
 import { useCalendars } from "@/components/new-event/use-calendars";
 import { failureToast } from "@/components/calendar/use-pending-changes";
-import { DateField, RepeatField, Reconnect, SwitchRow, TimeSelect } from "@/components/new-event/event-fields";
+import { DateField, RepeatField, Reconnect, SwitchRow } from "@/components/new-event/event-fields";
+import { TimeSelect } from "@/components/time-select";
 import { GuestPicker } from "@/components/new-event/guest-picker";
 import { ScopeDialog } from "@/components/new-event/scope-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -36,11 +37,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const CALENDARS = ["google_calendar", "icloud_calendar", "outlook_calendar"] as const;
 const PROVIDER_NAME: Record<string, string> = { google_calendar: "Google", icloud_calendar: "iCloud", outlook_calendar: "Outlook" };
+
+// A column with a fixed header and footer and a scrolling middle. On a phone it fills the screen (padded clear of the
+// status bar and home indicator, the X moved down with it), so the keyboard and the guest list have room.
+const SHEET = "flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-lg max-sm:inset-0 max-sm:h-dvh max-sm:max-h-none max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:pt-[calc(1rem+env(safe-area-inset-top))] max-sm:pb-[calc(1rem+env(safe-area-inset-bottom))] max-sm:ring-0 max-sm:*:data-[slot=dialog-close]:top-[calc(0.5rem+env(safe-area-inset-top))]";
 
 /**
  * A new Google, Outlook or iCloud Calendar event, or with `editing` a change to one. The dialog closes as soon as
@@ -325,15 +330,17 @@ export function NewEventDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track={edit ? "edit_event" : "new_event"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
-        <DialogHeader>
+      <DialogContent track={edit ? "edit_event" : "new_event"} className={SHEET}>
+        <DialogHeader className="shrink-0">
           <DialogTitle>{edit ? "Edit Event" : "New Event"}</DialogTitle>
           <DialogDescription>{edit ? "Changed" : "Created"} in your {PROVIDER_NAME[account?.provider ?? ""] ?? "Google"} Calendar, then shown on the Calendar page.</DialogDescription>
         </DialogHeader>
         {!account ? (
           <Reconnect change={edit} />
         ) : (
-          <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? (repeating && (!repeatChanged || othersChanged) ? askScope() : submitEdit(repeating ? "series" : "occurrence")) : submit()); }}>
+          <form className="flex min-h-0 flex-1 flex-col gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? (repeating && (!repeatChanged || othersChanged) ? askScope() : submitEdit(repeating ? "series" : "occurrence")) : submit()); }}>
+            {/* Only the fields scroll; the title and the Create button stay put. The negative margin keeps focus rings unclipped. */}
+            <div className="-mx-4 -my-1 grid min-h-0 flex-1 content-start gap-4 overflow-y-auto px-4 py-1">
             {!edit && picked && calendarOptions.length > 1 && (
               <div className="grid gap-2">
                 <Label htmlFor="event-calendar">Calendar</Label>
@@ -399,14 +406,14 @@ export function NewEventDialog({
               </Alert>
             )}
             {failed && !needsOutlookWrite(row?.error) && (reconnect ? <Reconnect provider={account.provider} change={edit} /> : <p className="text-xs text-destructive">{row?.error ?? (edit ? "The event could not be changed." : "The event could not be created.")}</p>)}
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{locked ? "Close" : "Cancel"}</Button>
+            </div>
+            <DialogFooter className="shrink-0">
               {!edit ? (
                 <Button type="submit" variant="secondary" disabled={locked || (checked && !!problem)}>{queueing ? "Creating" : "Create"}</Button>
               ) : (
                 <Button type="submit" variant="secondary" disabled={locked || unchanged || (checked && !!problem)}>{queueing ? "Saving" : "Save"}</Button>
               )}
-            </div>
+            </DialogFooter>
           </form>
         )}
         <ScopeDialog open={scopeOpen} onOpenChange={setScopeOpen} saveOn={saveOn} />

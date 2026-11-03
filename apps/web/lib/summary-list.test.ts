@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filterOf, listHref, nextAfterDone, nextRowIndex, unfinishedEvents } from "./summary-list";
+import { filterOf, filterOptions, listHref, nextAfterDone, nextRowIndex, unfinishedEvents } from "./summary-list";
 import type { CalendarEvent } from "./calendar";
 
 const event = (id: string, startsAt: string, endsAt: string | null, allDay = false) => ({ id, startsAt, endsAt, allDay }) as CalendarEvent;
@@ -14,6 +14,12 @@ test("no filter links to the bare Summary path", () => {
   assert.equal(filterOf("waiting"), "waiting");
   assert.equal(filterOf("unread"), "none"); // Unread was replaced by Waiting On Others
   assert.equal(filterOf(null), "none");
+  assert.equal(filterOf("linkedin"), "linkedin");
+});
+
+test("the Summary filter lists your channels between All and Waiting on Others", () => {
+  assert.deepEqual(filterOptions(["email", "whatsapp", "instagram"]).map((o) => o.label), ["All", "Email", "WhatsApp", "Instagram", "Waiting on Others"]);
+  assert.deepEqual(filterOptions(["whatsapp"]).map((o) => o.label), ["All", "Waiting on Others"]);
 });
 
 test("finished events drop out, all-day ones lead, and an event with no end lasts an hour", () => {

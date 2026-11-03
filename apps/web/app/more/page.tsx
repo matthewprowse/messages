@@ -7,8 +7,10 @@
 import Link from "next/link";
 import { CalendarPlus, ChartColumn, CircleCheck, Mail, Megaphone, MessageCircle, NotebookPen, Paperclip, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
 import { useIsOwner } from "@/lib/auth";
+import { cn } from "@/lib/utils";
 import { NEW_ITEM_EVENT } from "@/components/new-menu";
 import { PaneHeader } from "@/components/pane";
+import { buttonVariants } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 
@@ -23,8 +25,9 @@ const NEW_ITEMS: { item: string; label: string; icon: LucideIcon }[] = [
 
 const rowClass = "flex w-full items-center gap-3 rounded-lg p-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset";
 
+// Looks like a stock secondary icon button but is a plain span: the whole row is the one link or button.
 function Icon({ icon: I }: { icon: LucideIcon }) {
-  return <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted"><I className="size-4" /></span>;
+  return <span aria-hidden className={cn(buttonVariants({ variant: "secondary", size: "icon" }), "pointer-events-none shrink-0")}><I /></span>;
 }
 
 function LinkRow({ href, label, icon }: { href: string; label: string; icon: LucideIcon }) {

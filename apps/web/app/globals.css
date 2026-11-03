@@ -200,7 +200,8 @@
 
 /* Notes: the editor's formatting, in the app's own text size and stock colours. */
 /* 16px on phones so iOS does not zoom into the editor; the app size from md up. */
-.note-content { @apply min-h-40 text-base leading-6 outline-none md:text-sm; }
+/* 14px everywhere: the iOS viewport sets maximumScale: 1 (app/layout.tsx), so focus no longer zooms under 16px. */
+.note-content { @apply min-h-40 text-sm leading-6 outline-none; }
 .note-content > * + * { margin-top: 0.75em; }
 .note-content h1 { @apply mt-6 text-xl font-semibold leading-8; }
 .note-content h2 { @apply mt-5 text-lg font-semibold leading-7; }

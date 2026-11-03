@@ -15,8 +15,10 @@ import { parseDocCard, type DocCard } from "@/lib/search/document-card";
 export type DocEntry = { state: "card"; card: DocCard } | { state: "none" } | { state: "unread" } | { state: "waiting" } | { state: "error"; message: string };
 
 const CHUNK = 100;
-const POLL_MS = 2500;
-const GIVE_UP_MS = 90_000;
+const POLL_MS = 2500; // ms
+// A read takes a few seconds; one still waiting after this is stuck (the worker writes an error, such as AI being
+// paused, when it cannot go on), so the page stops waiting rather than spinning on.
+const GIVE_UP_MS = 45_000;
 
 const entries = new Map<string, DocEntry>();
 const asked = new Set<string>(); // ids already fetched (or being fetched) from the database
@@ -51,10 +53,18 @@ async function load(ids: string[]) {
       for (const id of part) asked.delete(id);
       return;
     }
+    // A read the worker gave up on (AI paused, file unreadable) says why, after a reload too, rather than offering it again.
+    const unread = (data ?? []).filter((row) => row.doc_state !== "done" && row.doc_state !== "none").map((row) => row.id);
+    const failed = new Map<string, string>();
+    if (unread.length) {
+      const reads = await supabase.from("document_reads").select("attachment_id, error").in("attachment_id", unread).not("error", "is", null);
+      for (const r of reads.data ?? []) if (r.error) failed.set(r.attachment_id, r.error);
+    }
     const got = new Set<string>();
     for (const row of data ?? []) {
       got.add(row.id);
-      const entry = await entryOf(row);
+      const error = failed.get(row.id);
+      const entry: DocEntry = error ? { state: "error", message: error } : await entryOf(row);
       if (entries.get(row.id)?.state !== "waiting") set(row.id, entry);
     }
     for (const id of part) if (!got.has(id) && !entries.has(id)) set(id, { state: "unread" });

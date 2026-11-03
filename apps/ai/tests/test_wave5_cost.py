@@ -3,6 +3,7 @@ setup triage and learning through it, shared rule matching, the learn-from-media
 pre-draft cap, context cache storage cost and audio prices."""
 
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -546,7 +547,8 @@ class CacheAndAudio(unittest.TestCase):
         g = Gemini("k", mock.MagicMock())
         recorded = []
         g._record = lambda model, ctx, usage: recorded.append(usage)
-        g._caches["cachedContents/y"] = ("m", UsageContext("u", "transcribe"), 1_000_000, 0.0, 1800)
+        # Made an hour ago by the monotonic clock (not at 0.0, which is under 30 minutes in when the machine just booted).
+        g._caches["cachedContents/y"] = ("m", UsageContext("u", "transcribe"), 1_000_000, time.monotonic() - 3600, 1800)
         g._settle_expired_caches()
         g.close()
         self.assertAlmostEqual(recorded[0].cost_usd, 0.5, places=3)

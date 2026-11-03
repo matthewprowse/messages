@@ -445,6 +445,28 @@ class ComposeDrafts(unittest.TestCase):
         [written] = [p for t, f, p in db.updates if p.get("status") == "active"]
         self.assertNotIn("subject", written)
 
+    def test_a_billing_pause_fails_an_asked_for_draft_at_once_and_holds_a_pre_draft(self):
+        from ai.drafts import AI_PAUSED
+        from ai.gemini import GeminiError
+
+        class Paused(ComposeGemini):
+            def json(self, *a, **k):
+                raise GeminiError(None, "billing_paused")
+
+        for auto in (False, True):
+            db = ComposeDb({"id": "d1", "user_id": "u", "thread_id": None, "account_id": "a1", "contact_id": "c1", "tone": "custom",
+                            "status": "pending", "instruction": "ask Sam about viewing the flat on Thursday", "auto": auto})
+            db.channel = "email"
+            drafts = Drafts(db, Paused(), "m", None, Vault(db, MASTER_B64, True))
+            drafts._write(db.draft)
+            failed = [p for t, f, p in db.updates if p.get("status") == "failed"]
+            if auto:
+                self.assertEqual(failed, [])  # nobody is waiting: it stays pending until the pause ends
+                self.assertGreater(drafts._hold_until, 0)
+            else:
+                self.assertEqual([p["error"] for p in failed], [AI_PAUSED])
+                self.assertEqual(drafts._hold_until, 0.0)
+
     def test_nothing_to_say_fails_without_asking_the_model(self):
         db, gemini = self.run_compose("email", instruction=None)
         self.assertEqual(gemini.prompts, [])

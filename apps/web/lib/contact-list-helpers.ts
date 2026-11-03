@@ -6,8 +6,8 @@ import type { ContactSummary } from "./contacts";
 import { isPlaceholderName } from "./merging";
 import { phoneQueryMatches } from "./phone-search";
 import { DEFAULT_QUIET_DAYS, quietDaysOf } from "./going-quiet";
-import { statusLine } from "./relationship-status";
 import { ALL_RELATIONSHIPS } from "./relationships";
+import type { Thread } from "./types";
 
 export type Sort = "recent" | "name";
 export type View = "people" | "companies" | "hidden" | "quiet";
@@ -63,10 +63,26 @@ export function sortAndView(params: { get: (key: string) => string | null }): { 
   return { sort, view, query: queryOf(sort, view, filters), ...filters };
 }
 
-/** The line under a person's name: where you stand with them, else their role and company, else how to reach them. */
-export function detailOf(c: ContactSummary, now: Date = new Date()) {
-  const work = [c.role, c.company].filter(Boolean).join(", ");
-  return statusLine(c.lastInboundAt, c.lastOutboundAt, now) ?? (work || firstReach(c));
+/**
+ * The line under a person's name: how to reach them (number, Instagram, address, the first of each), else their role
+ * and company. Where you stand with them is on their page, not here: in a list it said "Waiting on you" on every row.
+ */
+export function detailOf(c: Pick<ContactSummary, "emails" | "phones" | "handles" | "role" | "company">) {
+  const reach = [c.phones[0] && formatPhone(c.phones[0]), c.handles[0] && `@${c.handles[0]}`, c.emails[0]].filter(Boolean).join(" · ");
+  return reach || [c.role, c.company].filter(Boolean).join(", ");
+}
+
+/**
+ * Unread messages per contact across all their one-to-one conversations (email, WhatsApp, LinkedIn, Instagram), counted
+ * as the Inbox counts them (lib/person-groups.ts): an unread thread with no count is one. Groups are left out.
+ */
+export function unreadByPerson(threads: Pick<Thread, "isGroup" | "participantIds" | "unread" | "unreadCount">[]) {
+  const counts = new Map<string, number>();
+  for (const t of threads) {
+    const id = t.isGroup ? undefined : t.participantIds[0];
+    if (id && t.unread) counts.set(id, (counts.get(id) ?? 0) + Math.max(t.unreadCount, 1));
+  }
+  return counts;
 }
 
 export function bySort(sort: Sort) {

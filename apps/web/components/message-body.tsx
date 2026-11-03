@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/lib/supabase";
 import { open as openText } from "@/lib/vault";
@@ -342,7 +341,7 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
         <TooltipContent>View Original</TooltipContent>
       </Tooltip>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent showCloseButton={false} track="view_original" className="flex h-[85dvh] flex-col sm:max-w-3xl">
+        <DialogContent track="view_original" className="flex h-[85dvh] flex-col sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Original Email</DialogTitle>
             <DialogDescription>The email as it was sent, fetched from your mailbox.</DialogDescription>
@@ -365,9 +364,6 @@ export function ViewOriginal({ messageId }: { messageId: string }) {
           ) : (
             <Skeleton className="min-h-0 w-full flex-1 rounded-md" />
           )}
-          <div className={DIALOG_BUTTONS}>
-            <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Close</Button>
-          </div>
         </DialogContent>
       </Dialog>
     </>

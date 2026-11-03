@@ -2,7 +2,7 @@
 
 // Edited and deleted WhatsApp messages. "Edited" under a bubble, and "Deleted by Sender" in place of its text, both open View Original:
 // what the message said before. The worker keeps every earlier text sealed (message_versions); it is fetched and opened only when
-// someone asks, and shown in a plain dialog with one Close button.
+// someone asks, and shown in a plain dialog closed from its X.
 
 import { useEffect, useState } from "react";
 import type { Message } from "@/lib/types";
@@ -10,7 +10,7 @@ import { loadVersions } from "@/lib/data/load-versions";
 import { originalOf, type MessageVersion } from "@/lib/message-versions";
 import { fullStamp } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; versions: MessageVersion[] };
@@ -31,7 +31,7 @@ function OriginalDialog({ m, open, onOpenChange }: { m: Message; open: boolean; 
   const later = loaded.state === "ready" ? loaded.versions.filter((v) => v !== original) : [];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} track="view_original_whatsapp" className="sm:max-w-md">
+      <DialogContent track="view_original_whatsapp" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Original Message</DialogTitle>
           <DialogDescription>{m.deleted ? "The sender deleted this message. This is what it said." : "The sender edited this message. This is what it said first."}</DialogDescription>
@@ -55,9 +55,6 @@ function OriginalDialog({ m, open, onOpenChange }: { m: Message; open: boolean; 
             )}
           </div>
         )}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

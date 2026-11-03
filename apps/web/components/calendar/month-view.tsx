@@ -36,10 +36,11 @@ export function MonthView({
   const month = monthOf.getMonth();
   const weekdays = days.slice(0, 7).map((key) => fromKey(key).toLocaleDateString("en-GB", { weekday: "short" }));
 
+  // On a phone the grid stays on screen above the list, so its rows are as short as a date and its dots allow.
   return (
     <div className="flex flex-col md:h-full">
       <div className="grid shrink-0 grid-cols-7 border-b">
-        {weekdays.map((w) => <span key={w} className="px-2 py-2 text-right text-xs text-muted-foreground">{w}</span>)}
+        {weekdays.map((w) => <span key={w} className="px-2 py-1 text-right text-xs text-muted-foreground md:py-2">{w}</span>)}
       </div>
       {/* A container query, not the screen width: the grid is narrower beside the list, and titles fit once a cell does. */}
       <div className="@container grid grid-cols-7 grid-rows-6 md:min-h-0 md:flex-1">
@@ -67,7 +68,7 @@ export function MonthView({
               aria-label={counted ? `${date}, ${counted}` : date}
               aria-pressed={isSelected}
               className={cn(
-                "flex h-14 min-h-0 min-w-0 flex-col gap-0.5 overflow-hidden border-b p-1 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset md:h-auto",
+                "flex h-10 min-h-0 min-w-0 flex-col gap-0.5 overflow-hidden border-b px-1 py-0.5 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset md:h-auto md:p-1",
                 i % 7 !== 0 && "border-l",
                 isSelected && "bg-muted hover:bg-muted",
               )}

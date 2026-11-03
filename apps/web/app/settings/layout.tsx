@@ -1,6 +1,7 @@
 "use client";
 
-// A fixed-width list on the left, the selected section filling the rest.
+// A fixed-width list on the left, the selected section filling the rest. On desktop the rows are compact, plain icons at the size of
+// the app rail's 32px buttons, so the list reads as navigation rather than a page of cards; phones keep larger touch rows.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -25,10 +26,10 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   const isIndex = pathname === "/settings";
   return (
     <div className="flex h-full min-h-0">
-      <aside className={cn("h-full w-full shrink-0 flex-col border-r-0 md:flex md:w-72 md:border-r", isIndex ? "flex" : "hidden")}>
+      <aside className={cn("h-full w-full shrink-0 flex-col border-r-0 md:flex md:w-56 md:border-r", isIndex ? "flex" : "hidden")}>
         <div className="shrink-0"><PaneHeader title="Settings" /></div>
         <ScrollArea className="min-h-0 flex-1">
-          <nav aria-label="Settings" className="flex flex-col gap-1 p-3">
+          <nav aria-label="Settings" className="flex flex-col gap-1 p-3 md:gap-0.5">
             {SECTIONS.map((s) => {
               const selected = pathname === s.href || pathname.startsWith(`${s.href}/`);
               return (
@@ -37,11 +38,11 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                   href={s.href}
                   aria-current={selected ? "page" : undefined}
                   className={cn(
-                    "flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
-                    selected ? "bg-muted md:bg-muted" : "hover:bg-muted/50",
+                    "flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset md:h-8 md:gap-2 md:rounded-md md:px-2 md:py-0",
+                    selected ? "bg-secondary text-secondary-foreground" : "hover:bg-muted/50",
                   )}
                 >
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted"><s.icon className="size-4" /></span>
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted md:size-auto md:bg-transparent"><s.icon className="size-4" /></span>
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{s.label}</span>
                   <ChevronRight className="size-4 text-muted-foreground md:hidden" aria-hidden />
                 </Link>

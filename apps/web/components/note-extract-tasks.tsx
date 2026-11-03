@@ -71,7 +71,7 @@ export function ExtractTasksDialog({ open, onOpenChange, title, body, contactNam
   const noTaskList = choices.length === 0;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="extract_tasks" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg" showCloseButton={false}>
+      <DialogContent track="extract_tasks" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Extract Tasks</DialogTitle>
           <DialogDescription>Unchecked items in this note become tasks in your task list, shown on the Calendar page.</DialogDescription>
@@ -123,10 +123,11 @@ export function ExtractTasksDialog({ open, onOpenChange, title, body, contactNam
             </div>
           </div>
         )}
-        <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-          {!noTaskList && items.length > 0 && <Button type="button" disabled={picked.size === 0 || !date} onClick={submit}>{picked.size === 1 ? "Make 1 Task" : `Make ${picked.size} Tasks`}</Button>}
-        </div>
+        {!noTaskList && items.length > 0 && (
+          <div className={DIALOG_BUTTONS}>
+            <Button type="button" disabled={picked.size === 0 || !date} onClick={submit}>{picked.size === 1 ? "Make 1 Task" : `Make ${picked.size} Tasks`}</Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

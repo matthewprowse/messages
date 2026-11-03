@@ -157,6 +157,8 @@ class FakeDb:
     def select(self, table, params):
         if table == "briefs" and str(params.get("status", "")).startswith("eq."):
             return [b for b in self.briefs if b["status"] == params["status"][3:]]
+        if table == "briefs" and str(params.get("status", "")).startswith("in.("):
+            return [b for b in self.briefs if b["status"] in params["status"][4:-1].split(",")]
         if table == "briefs" and str(params.get("for_date", "")).startswith("lt."):
             old, self.old = self.old, []  # a second look finds none: the batch was deleted
             return old
@@ -169,7 +171,9 @@ class FakeDb:
         if table == "profiles":
             return [{"user_id": "u1", "timezone": "Africa/Johannesburg", "briefing_time": "07:00:00"}]
         if table == "threads":
-            return [{**thread(1, 5, needs_reply=True, summary="Wants the lease signed."), "is_group": False, "group_name": None,
+            # Five hours before the real clock (run_once reads it), inside the 3 day Needs Reply window whenever the tests run.
+            return [{**thread(1, 5, needs_reply=True, summary="Wants the lease signed."), "last_message_at": (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),
+                     "is_group": False, "group_name": None,
                      "thread_participants": [{"contacts": {"display_name": "Sam Naidoo"}}]}]
         return []
 
@@ -227,7 +231,12 @@ class Writing(unittest.TestCase):
         self.assertIn("Sam Naidoo", gemini.prompts[0])
         speaking = [p for _, p in db.updates if p.get("status") == "speaking"][0]
         ready = [p for _, p in db.updates if p.get("status") == "ready"][0]
-        self.assertTrue(speaking["script"].startswith("Good morning Matthew."))  # no vault key: plaintext passes
+        stored = [i for i, (_, p) in enumerate(db.updates) if "script" in p]
+        self.assertEqual(len(stored), 1)
+        self.assertTrue(db.updates[stored[0]][1]["script"].startswith("Good morning Matthew."))  # no vault key: plaintext passes
+        self.assertEqual(db.updates[stored[0]][1]["status"], "working")
+        self.assertLess(stored[0], [i for i, (_, p) in enumerate(db.updates) if p.get("status") == "speaking"][0], "the script is stored before any speech")
+        self.assertNotIn("script", speaking)
         self.assertEqual((speaking["voice"], speaking["parts"]), ("Sulafat", len(db.parts)))
         self.assertGreater(len(db.parts), 1)
         self.assertEqual(sorted(p["seq"] for p in db.parts), list(range(len(db.parts))))
@@ -280,9 +289,10 @@ class Gating(unittest.TestCase):
             for k, v in kw.items():
                 setattr(db, k, v)
             b = Brief(db, gemini, "m", "tts", "Kore")
-            self.assertEqual(b.run_once(), 0)
-            self.assertEqual((gemini.prompts, db.briefs), ([], []))
-            b.run_once()  # and not looked up again at once
+            with mock.patch("ai.brief.datetime", FixedNow):  # past the 07:00 briefing time, whatever the clock says
+                self.assertEqual(b.run_once(), 0)
+                self.assertEqual((gemini.prompts, db.briefs), ([], []))
+                b.run_once()  # and not looked up again at once
             self.assertTrue(b._quiet)
 
     def test_a_quiet_user_is_checked_again_after_a_while(self):
@@ -291,10 +301,10 @@ class Gating(unittest.TestCase):
         db, gemini = FakeDb(status=None), FakeGemini()
         db.news = []
         b = Brief(db, gemini, "m", "tts", "Kore")
-        with mock.patch.object(brief_module.time, "monotonic", return_value=1000.0):
+        with mock.patch("ai.brief.datetime", FixedNow), mock.patch.object(brief_module.time, "monotonic", return_value=1000.0):
             b.run_once()
         db.news = [{"id": "m1"}]
-        with mock.patch.object(brief_module.time, "monotonic", return_value=1000.0 + brief_module.QUIET_RECHECK_S + 1):
+        with mock.patch("ai.brief.datetime", FixedNow), mock.patch.object(brief_module.time, "monotonic", return_value=1000.0 + brief_module.QUIET_RECHECK_S + 1):
             self.assertEqual(b.run_once(), 1)
 
     def test_nothing_is_claimed_or_requeued_while_billing_is_paused(self):
@@ -387,6 +397,33 @@ class Storage(unittest.TestCase):
         db = NoInsert(status="pending")
         Brief(db, FakeGemini(), "m", "tts", "Kore").run_once()
         self.assertEqual(db.files, {})
+
+
+class Speed(unittest.TestCase):
+    def test_an_idle_look_is_one_select_for_both_kinds_of_request(self):
+        class Counting(FakeDb):
+            def select(self, table, params):
+                self.looks = getattr(self, "looks", []) + [(table, params.get("status"))]
+                return super().select(table, params)
+
+        db = Counting(status="written", script="Good morning.")
+        brief = Brief(db, FakeGemini(), "m", "tts", "Kore")
+        brief._swept = float("inf")  # the sweep runs every few minutes, not on this look
+        brief._made.add(("u1", db.today))
+        brief.run_once()  # the first look reads profiles too; they are kept for PROFILES_TTL_S
+        db.looks = []
+        brief.run_once()
+        self.assertEqual(db.looks, [("briefs", "in.(speak_pending,pending)")])
+
+    def test_needs_reply_is_3_days_but_conversations_are_read_far_enough_back_for_every_section(self):
+        from ai.brief import PRIORITY_DAYS, REPLY_DAYS, THREAD_DAYS, WAITING_MAX_DAYS
+        self.assertEqual(REPLY_DAYS, 3)
+        self.assertEqual(THREAD_DAYS, max(PRIORITY_DAYS, WAITING_MAX_DAYS))
+
+    def test_the_first_part_is_about_twenty_words(self):
+        self.assertEqual(FIRST_PART_WORDS, 20)
+        parts = split_parts("Good morning Matthew. Sam Naidoo wants the lease signed by Friday. " + "Nothing else is waiting on you today, so it should be quiet. " * 4)
+        self.assertEqual(parts[0], "Good morning Matthew. Sam Naidoo wants the lease signed by Friday.")
 
 
 class Parts(unittest.TestCase):

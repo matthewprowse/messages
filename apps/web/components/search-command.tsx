@@ -13,7 +13,6 @@ import { fullDate, relTime } from "@/lib/format";
 import { ContactAvatar, ThreadAvatar, providerLabel } from "@/components/primitives";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { NEW_ITEM_EVENT, isTypingKey } from "@/components/new-menu";
 import { Calendar, CalendarPlus, Inbox, ListChecks, Mail, MessageCircle, Newspaper, NotebookPen, Paperclip, Settings, Users, type LucideIcon } from "lucide-react";
@@ -437,7 +436,7 @@ export function ShortcutsDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Keyboard Shortcuts</DialogTitle>
           <DialogDescription>Shortcuts work when you are not typing in a field.</DialogDescription>
@@ -456,9 +455,6 @@ export function ShortcutsDialog() {
               ))}
             </section>
           ))}
-        </div>
-        <div className="flex justify-end">
-          <Button variant="secondary" onClick={() => setOpen(false)}>Close</Button>
         </div>
       </DialogContent>
     </Dialog>

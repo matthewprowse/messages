@@ -8,6 +8,7 @@ import { SquarePen } from "lucide-react";
 import { useApp } from "@/lib/store";
 import { whatsappLinked } from "@/lib/new-items";
 import { Button } from "@/components/ui/button";
+import { RAIL_ITEM, RAIL_LABEL, RAIL_TIP } from "@/components/rail-item";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -80,12 +81,13 @@ export function NewMenu() {
         <Tooltip>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
-              <Button ref={trigger} variant={menuOpen || open ? "secondary" : "ghost"} size="icon" aria-label="New">
+              <Button ref={trigger} variant={menuOpen || open ? "secondary" : "ghost"} size="icon" className={RAIL_ITEM} aria-label="New">
                 <SquarePen />
+                <span className={RAIL_LABEL}>New</span>
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="right">New</TooltipContent>
+          <TooltipContent side="right" className={RAIL_TIP}>New</TooltipContent>
         </Tooltip>
         {/* When an item opens a dialog, focus must go to the dialog, not back to this button, or Esc and Tab miss it. */}
         <DropdownMenuContent side="right" align="start" className="w-max min-w-48" onCloseAutoFocus={(e) => { if (open) e.preventDefault(); }}>

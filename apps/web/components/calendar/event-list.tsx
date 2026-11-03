@@ -95,8 +95,8 @@ export function EventList({
   const shownKey = useRef<string | undefined>(undefined);
   const endRef = useRef<HTMLDivElement>(null);
 
-  // The list scrolls inside its own pane on wide screens and with the page on phones; watching the end against
-  // the screen works for both.
+  // The list scrolls inside its own pane, except in the phone's day and week views where it scrolls with the page;
+  // watching the end against the screen works for both.
   useEffect(() => {
     const el = endRef.current;
     if (!el || !onEnd || loading) return;
@@ -136,8 +136,8 @@ export function EventList({
     if (viewport && viewport.scrollHeight > viewport.clientHeight) {
       viewport.scrollTo({ top: section.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop, behavior: "smooth" });
     } else if (picked) {
-      // On a phone the page scrolls rather than the list, so the day is brought up the page. Only when a date is
-      // tapped, not when the page opens.
+      // In the phone's day and week views the page scrolls rather than the list, so the day is brought up the page.
+      // Only when a date is tapped, not when the page opens.
       section.scrollIntoView({ block: "start", behavior: "smooth" });
     }
   }, [selectedKey, loading]);
@@ -145,7 +145,7 @@ export function EventList({
   return (
     // The scrollbar starts below the first day's header and its line (57px), and stays above the headers that
     // stick to the top as their days scroll, rather than running behind them.
-    <ScrollArea className="md:h-full" scrollbarClassName="z-10 !top-[57px] !h-auto">
+    <ScrollArea className="h-full" scrollbarClassName="z-10 !top-[57px] !h-auto">
       <div ref={rowsRef} className="px-3">
         {loading && (
           <div className="flex flex-col gap-2 py-3" aria-label="Loading events">

@@ -42,7 +42,7 @@ function AccessDialog({ inbox, team, onClose, onSaved }: { inbox: SharedInbox | 
   };
   return (
     <Dialog open={!!inbox} onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track="inbox_access" className="sm:max-w-md">
+      <DialogContent track="inbox_access" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Who Uses {inbox?.name}</DialogTitle>
           <DialogDescription>
@@ -61,7 +61,6 @@ function AccessDialog({ inbox, team, onClose, onSaved }: { inbox: SharedInbox | 
           })}
         </div>
         <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="button" disabled={busy} onClick={() => void save()}>{busy ? "Saving" : "Save"}</Button>
         </div>
       </DialogContent>
@@ -91,7 +90,7 @@ function ShareDialog({ open, onClose, onShared }: { open: boolean; onClose: () =
   };
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
-      <DialogContent showCloseButton={false} track="share_account" className="sm:max-w-md">
+      <DialogContent track="share_account" className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Make a Shared Inbox</DialogTitle>
           <DialogDescription>
@@ -119,7 +118,6 @@ function ShareDialog({ open, onClose, onShared }: { open: boolean; onClose: () =
           </div>
         )}
         <div className={DIALOG_BUTTONS}>
-          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="button" disabled={busy || !account || !name.trim()} onClick={() => void submit()}>{busy ? "Sharing" : "Make Shared Inbox"}</Button>
         </div>
       </DialogContent>

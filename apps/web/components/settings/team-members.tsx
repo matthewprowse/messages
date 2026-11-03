@@ -60,7 +60,7 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
-      <DialogContent showCloseButton={false} track="invite_member" className="sm:max-w-md">
+      <DialogContent track="invite_member" className="sm:max-w-md">
         {link ? (
           <>
             <DialogHeader>
@@ -98,7 +98,6 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
               <p className="text-xs text-muted-foreground">{ROLE_HELP[role]}</p>
             </div>
             <div className={DIALOG_BUTTONS}>
-              <Button type="button" variant="ghost" disabled={busy} onClick={close}>Cancel</Button>
               <Button variant="secondary" type="submit" disabled={busy || !email.trim()}>{busy ? "Creating Link" : "Create Invite Link"}</Button>
             </div>
           </form>
