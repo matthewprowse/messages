@@ -1,36 +1,39 @@
 "use client";
 
-// Every attachment from the connected chats in one place, filterable by kind, source, date, document type and search. Files load a
-// page at a time and the header counts honestly; hidden files sit in a collapsed row under the grid, where they can be
-// opened and unhidden. The tab, source, date and search live in the address, so a reload or shared link comes back
-// the same. The filtering is in lib/attachment-filters.ts and the paging in lib/attachment-pages.ts. Select picks several
-// files for Download Selected (a zip), Hide Selected and Delete (Konva's copy only); Largest sorts by size. The rules for
-// those are in lib/attachment-actions/.
+// Every attachment from the connected chats in one place, laid out like Conversations: the kinds as views, a Filter
+// (source, date, document type, sort and Show Hidden) and a search, over a grid of white tiles on the grey pane. Files load
+// a page at a time. The filters live in the address, so a reload or shared link comes back the same; the filtering is in
+// lib/attachment-filters.ts and the paging in lib/attachment-pages.ts. Select picks several files for Download (a zip),
+// Hide and Delete (Konva's copy only); the rules for those are in lib/attachment-actions/.
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown, ChevronRight, Paperclip, Search } from "lucide-react";
-import { DOC_FILTERS, docFilterOf, matchesDocFilter } from "@/lib/search/document-card";
+import { Paperclip, Search } from "lucide-react";
+import { docFilterOf, matchesDocFilter } from "@/lib/search/document-card";
 import { setAttachmentsHidden } from "@/lib/data";
 import { deleteAttachmentFiles } from "@/lib/attachment-actions/load-copies";
 import { downloadZip } from "@/lib/attachment-actions/download-zip";
-import { actionsFor, selectedFiles, SORTS, sortLargest, toggled, type Sort } from "@/lib/attachment-actions/selection";
+import { actionsFor, selectedFiles, sortLargest, toggled } from "@/lib/attachment-actions/selection";
 import { zipMessage } from "@/lib/attachment-actions/zip";
 import { useApp } from "@/lib/store";
 import { useAttachmentPages, type AttachmentList } from "@/lib/use-attachment-pages";
-import { countLabel, filterFiles, filtersHref, isNarrowed, KINDS, DATES, NO_FILTERS, parseFilters, searchTextOf, sizeLabel, sourcesIn, type Filters, type Kind } from "@/lib/attachment-filters";
-import { filesLabel, SOURCE_LABEL, sourceOf } from "@/lib/attachment-view";
+import { filterFiles, filtersHref, isNarrowed, KINDS, parseFilters, searchTextOf, sourcesIn, type Filters, type Kind } from "@/lib/attachment-filters";
+import { SOURCE_LABEL, sourceOf } from "@/lib/attachment-view";
 import type { FiledAttachment } from "@/lib/types";
-import { PaneControls, PaneHeader, SearchBand, ViewButtons } from "@/components/pane";
+import { PaneHeader, ViewButtons } from "@/components/pane";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/primitives";
 import { AttachmentGrid } from "@/components/attachments";
 import { DeleteFilesDialog } from "@/components/attachments/delete-dialog";
 import { useDocumentCards } from "@/components/attachments/document-store";
+import { FilterMenu, type FileFilters } from "@/components/attachments/filter-menu";
+import { LoadingTiles } from "@/components/attachments/loading-tiles";
 import { SelectionBar } from "@/components/attachments/selection-bar";
+
+const COLUMNS = "grid-cols-3 md:grid-cols-6 xl:grid-cols-8";
+// White cards on the grey pane; ring-0 because the border draws the edge (a selected tile's ring still shows).
+const TILE = "border bg-background ring-0";
 
 function AttachmentsPage() {
   const router = useRouter();
@@ -41,9 +44,14 @@ function AttachmentsPage() {
   // The search is typed into at once and written to the address after a pause; everything else is read from the address.
   const [query, setQuery] = useState(fromAddress.q);
   const filters: Filters = { ...fromAddress, q: query };
-  // The document filter (Invoices, Contracts...) is kept in the address beside the others.
+  // The document filter (Invoices, Contracts...) and Show Hidden are kept in the address beside the others.
   const doc = docFilterOf(params.get("doc"));
-  const hrefWith = (f: Filters, d = doc) => { const base = filtersHref(f); return d === "all" ? base : `${base}${base.includes("?") ? "&" : "?"}doc=${d}`; };
+  const showHidden = params.get("hidden") === "1";
+  const hrefWith = (f: Filters, d = doc, h = showHidden) => {
+    const extra = [d === "all" ? "" : `doc=${d}`, h ? "hidden=1" : ""].filter(Boolean).join("&");
+    const base = filtersHref(f);
+    return extra ? `${base}${base.includes("?") ? "&" : "?"}${extra}` : base;
+  };
   const go = (patch: Partial<Filters>) => router.replace(hrefWith({ ...filters, ...patch }), { scroll: false });
   const typing = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(typing.current), []);
@@ -52,15 +60,20 @@ function AttachmentsPage() {
     clearTimeout(typing.current);
     typing.current = setTimeout(() => router.replace(hrefWith({ ...filters, q: value }), { scroll: false }), 300);
   };
+  const setMenu = (patch: Partial<FileFilters>) => {
+    const { doc: d = doc, hidden: h = showHidden, ...rest } = patch;
+    router.replace(hrefWith({ ...filters, ...rest }, d, h), { scroll: false });
+  };
+  // Clear Filters resets the menu's own choices; the view and the search have their own controls.
+  const clearMenu = () => router.replace(hrefWith({ ...filters, source: "all", date: "any", sort: "newest" }, "all", false), { scroll: false });
 
-  const [hiddenOpen, setHiddenOpen] = useState(false);
   const visible = useAttachmentPages(kind, "visible");
-  const hidden = useAttachmentPages(kind, "hidden", hiddenOpen);
+  const hidden = useAttachmentPages(kind, "hidden", showHidden);
   const narrowed = isNarrowed(filters) || doc !== "all";
 
   // A filter or search can only be right about files that are loaded, so while one is on the remaining pages are fetched.
   useEffect(() => { if (narrowed && visible.files && visible.more && !visible.loading) visible.loadMore(); }, [narrowed, visible]);
-  useEffect(() => { if (narrowed && hiddenOpen && hidden.files && hidden.more && !hidden.loading) hidden.loadMore(); }, [narrowed, hiddenOpen, hidden]);
+  useEffect(() => { if (narrowed && showHidden && hidden.files && hidden.more && !hidden.loading) hidden.loadMore(); }, [narrowed, showHidden, hidden]);
 
   // Per file, built once per load and not on every keystroke: the account it came through, and the text a search looks in.
   const lists = [visible.files || [], hidden.files || []];
@@ -110,7 +123,7 @@ function AttachmentsPage() {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [working, setWorking] = useState(false);
-  const everything = useMemo(() => [...shown, ...(hiddenOpen ? shownHidden : [])], [shown, shownHidden, hiddenOpen]);
+  const everything = useMemo(() => [...shown, ...(showHidden ? shownHidden : [])], [shown, shownHidden, showHidden]);
   const picked = useMemo(() => selectedFiles(everything, selected), [everything, selected]);
   const endSelecting = () => { setSelecting(false); setSelected(new Set()); };
 
@@ -126,7 +139,7 @@ function AttachmentsPage() {
       visible.remove(ids);
       hidden.remove(ids);
       setSelected((s) => new Set([...s].filter((id) => !ids.includes(id))));
-      notify(`Deleted ${ids.length} ${ids.length === 1 ? "file" : "files"} from Konva. Your emails and chats are untouched.`);
+      notify(`Deleted ${ids.length} ${ids.length === 1 ? "file" : "files"} from Konva.`);
     } else notify("Could not delete that. Try again.");
     asking.done(ok);
     setAsking(null);
@@ -160,135 +173,79 @@ function AttachmentsPage() {
 
   const loaded = visible.files;
   const kindLabel = KINDS.find((k) => k.key === kind)?.label;
-  const hiddenCount = hiddenOpen ? shownHidden.length : hidden.total;
-  const showHiddenRow = !!loaded && ((hidden.total ?? 0) > 0 || hiddenOpen);
+  const selection = { selecting, selected, onToggle: (id: string) => setSelected((s) => toggled(s, id)) };
+  const nothing = loaded && shown.length === 0 && !visible.more && !(showHidden && shownHidden.length > 0);
 
   return (
-    // One column: the filters in the header, the files under them. (A Sent By list once filled a left column here; with it
-    // gone the filters fit across the top.)
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0">
-        <PaneHeader title="Attachments">
-          <PaneControls>
-            <ViewButtons label="Type" value={kind} items={KINDS} onSelect={(k: Kind) => go({ kind: k })} />
-          </PaneControls>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
-            <Select value={filters.source} onValueChange={(source) => go({ source })}>
-              <SelectTrigger aria-label="Source" className="w-full data-[size=default]:h-8"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Sources</SelectItem>
-                {sources.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={filters.date} onValueChange={(date) => go({ date })}>
-              <SelectTrigger aria-label="Date" className="w-full data-[size=default]:h-8"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {DATES.map((d) => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={doc} onValueChange={(d) => router.replace(hrefWith(filters, docFilterOf(d)), { scroll: false })}>
-              <SelectTrigger aria-label="Document" className="col-span-2 w-full data-[size=default]:h-8 md:col-span-1"><SelectValue /></SelectTrigger>
-              <SelectContent>{DOC_FILTERS.map((d) => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-        </PaneHeader>
-        <SearchBand value={query} onChange={search} placeholder="Search Attachments" />
-      </div>
-
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col md:h-full">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b bg-background p-3 md:px-4">
-          <span className="flex h-8 items-center text-sm whitespace-nowrap text-muted-foreground tabular-nums">
-            {loaded ? countLabel({ shown: shown.length, total: kind === "audio" ? null : visible.total, more: visible.more, narrowed }) : loaded === false ? "Not Loaded" : "Loading"}
-          </span>
-          <span className="flex items-center gap-3">
-            {(narrowed || kind !== "all") && loaded && <Button variant="ghost" onClick={() => { setQuery(""); router.replace(hrefWith(NO_FILTERS, "all"), { scroll: false }); }}>Clear Filters</Button>}
-            {/* The total size steps aside on phones, where Sort and Select need the row. */}
-            {loaded && <span className="hidden h-8 items-center text-sm whitespace-nowrap text-muted-foreground tabular-nums sm:flex">{sizeLabel(shown, visible.more)}</span>}
-            <Select value={filters.sort} onValueChange={(sort) => go({ sort: sort as Sort })}>
-              <SelectTrigger aria-label="Sort" className="w-28 data-[size=default]:h-8"><SelectValue /></SelectTrigger>
-              <SelectContent>{SORTS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}</SelectContent>
-            </Select>
-            {loaded && shown.length > 0 && !selecting && <Button variant="secondary" onClick={() => setSelecting(true)}>Select</Button>}
-          </span>
-        </header>
-        {selecting && (
-          <SelectionBar
-            files={picked}
-            total={everything.length}
-            busy={working}
-            onSelectAll={() => setSelected(new Set(everything.map((a) => a.id)))}
-            onClear={() => setSelected(new Set())}
-            onDownload={() => void downloadPicked()}
-            onHide={() => void hidePicked()}
-            onDelete={() => void requestDelete(picked)}
-            onDone={endSelecting}
-          />
-        )}
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="p-3 md:px-4">
-            {loaded === null && (
-              <div role="status" aria-busy="true" aria-label="Loading Attachments" className="grid grid-cols-3 gap-x-3 gap-y-4 md:grid-cols-6 xl:grid-cols-8">
-                {Array.from({ length: 12 }, (_, i) => (
-                  <div key={i} className="flex flex-col gap-1">
-                    <Skeleton className="aspect-square w-full rounded-lg" />
-                    <Skeleton className="h-4 w-3/4" />
-                  </div>
-                ))}
-              </div>
-            )}
-            {loaded === false && (
-              <div className="py-24">
-                <EmptyState
-                  icon={Paperclip}
-                  title="Attachments Did Not Load"
-                  description="Check your connection, then try again."
-                  action={<Button variant="secondary" onClick={visible.retry}>Try Again</Button>}
-                />
-              </div>
-            )}
-            {loaded && shown.length === 0 && !visible.more && (
-              <div className="py-24">
-                {query.trim() ? (
-                  <EmptyState icon={Search} title="No Matches" description="Try another file name, sender or subject." />
-                ) : narrowed ? (
-                  <EmptyState icon={Paperclip} title="No Matches" description="No files fit these filters." />
-                ) : (
-                  <EmptyState
-                    icon={Paperclip}
-                    title={kind === "all" ? "No Attachments Yet" : `No ${kindLabel}`}
-                    description="Files from your conversations appear here as your accounts sync."
-                  />
-                )}
-              </div>
-            )}
-            {shown.length > 0 && (
-              <AttachmentGrid items={shown} byMonth={!largest} className="grid-cols-3 md:grid-cols-6 xl:grid-cols-8" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={visible.more && !narrowed ? visible.loadMore : undefined} />
-            )}
-            {loaded && shown.length === 0 && visible.more && (
-              <p role="status" className="py-24 text-center text-sm text-muted-foreground">Searching your files</p>
-            )}
-            {/* Hidden files (inline logos, tiny images, junk and the ones you hide) stay out of the way until asked for. */}
-            {showHiddenRow && (
-              <div className="mt-6 border-t pt-3">
-                <Button variant="ghost" aria-expanded={hiddenOpen} onClick={() => setHiddenOpen((o) => !o)} className="px-2">
-                  {hiddenOpen ? <ChevronDown /> : <ChevronRight />}
-                  {hiddenCount === null ? "Hidden Files" : filesLabel(hiddenCount).replace(/ File(s?)$/, " Hidden File$1")}
+        <PaneHeader
+          title="Attachments"
+          action={
+            <>
+              <FilterMenu value={{ source: filters.source, date: filters.date, doc, sort: filters.sort, hidden: showHidden }} sources={sources} onChange={setMenu} onClear={clearMenu} />
+              {(selecting || everything.length > 0) && (
+                <Button variant={selecting ? "secondary" : "ghost"} aria-pressed={selecting} onClick={() => (selecting ? endSelecting() : setSelecting(true))}>
+                  {selecting ? "Done" : "Select"}
                 </Button>
-                {hiddenOpen && (
-                  <div className="pt-3">
-                    {hidden.files === null && <Skeleton className="h-24 w-full rounded-lg" />}
-                    {hidden.files === false && <p className="text-sm text-muted-foreground">Hidden files did not load.</p>}
-                    {hidden.files && shownHidden.length === 0 && !hidden.more && <p className="text-sm text-muted-foreground">{narrowed ? "No hidden files fit these filters." : "Nothing is hidden."}</p>}
-                    {shownHidden.length > 0 && (
-                      <AttachmentGrid items={shownHidden} byMonth={!largest} className="grid-cols-3 md:grid-cols-6 xl:grid-cols-8" onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={{ selecting, selected, onToggle: (id) => setSelected((s) => toggled(s, id)) }} onEnd={hidden.more && !narrowed ? hidden.loadMore : undefined} />
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </ScrollArea>
-      </section>
+              )}
+            </>
+          }
+          // While selecting, the bar holds the views row's 40px slot, as in Conversations.
+          views={selecting ? (
+            <SelectionBar
+              files={picked}
+              total={everything.length}
+              busy={working}
+              onSelectAll={() => setSelected(new Set(everything.map((a) => a.id)))}
+              onClear={() => setSelected(new Set())}
+              onDownload={() => void downloadPicked()}
+              onHide={() => void hidePicked()}
+              onDelete={() => void requestDelete(picked)}
+              onDone={endSelecting}
+            />
+          ) : (
+            <ViewButtons label="Type" value={kind} items={KINDS} onSelect={(k: Kind) => go({ kind: k })} />
+          )}
+          search={{ value: query, onChange: search, placeholder: "Search Attachments" }}
+        />
+      </div>
+      <ScrollArea className="min-h-0 flex-1 bg-muted/50">
+        <div className="p-3 md:p-6">
+          {loaded === null && <LoadingTiles className={COLUMNS} />}
+          {loaded === false && (
+            <div className="py-24">
+              <EmptyState icon={Paperclip} title="Attachments Did Not Load" action={<Button variant="secondary" onClick={visible.retry}>Try Again</Button>} />
+            </div>
+          )}
+          {nothing && (
+            <div className="py-24">
+              {query.trim() ? (
+                <EmptyState icon={Search} title="No Matches" />
+              ) : narrowed ? (
+                <EmptyState icon={Paperclip} title="No Matches" />
+              ) : (
+                <EmptyState icon={Paperclip} title={kind === "all" ? "No Attachments Yet" : `No ${kindLabel}`} />
+              )}
+            </div>
+          )}
+          {shown.length > 0 && (
+            <AttachmentGrid items={shown} byMonth={!largest} className={COLUMNS} tileClassName={TILE} onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={selection} onEnd={visible.more && !narrowed ? visible.loadMore : undefined} />
+          )}
+          {loaded && shown.length === 0 && visible.more && <LoadingTiles label="Searching Your Files" className={COLUMNS} />}
+          {/* Hidden files (inline logos, tiny images, junk and the ones you hide) come under the grid with Show Hidden. */}
+          {showHidden && loaded && (
+            <section aria-label="Hidden Files" className="mt-6 flex flex-col gap-2 first:mt-0">
+              {(shownHidden.length > 0 || hidden.files === null || hidden.files === false) && <h2 className="text-sm font-medium">Hidden Files</h2>}
+              {hidden.files === null && <LoadingTiles label="Loading Hidden Files" count={6} className={COLUMNS} />}
+              {hidden.files === false && <div><Button variant="secondary" onClick={hidden.retry}>Try Again</Button></div>}
+              {shownHidden.length > 0 && (
+                <AttachmentGrid items={shownHidden} byMonth={!largest} className={COLUMNS} tileClassName={TILE} onToggleHidden={toggleHidden} onDelete={(a) => requestDelete([a])} selection={selection} onEnd={hidden.more && !narrowed ? hidden.loadMore : undefined} />
+              )}
+            </section>
+          )}
+        </div>
+      </ScrollArea>
       <DeleteFilesDialog files={asking?.files ?? null} busy={working} onCancel={cancelDelete} onConfirm={() => void confirmDelete()} />
     </div>
   );

@@ -18,7 +18,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { IconCircle } from "@/components/surface";
+import { IconAction } from "@/components/tip";
 
 const PROVIDER: Record<string, string> = { gmail: "Gmail", outlook: "Outlook", imap: "Email", icloud: "iCloud+ Mail", whatsapp: "WhatsApp" };
 
@@ -42,7 +44,7 @@ function AccessDialog({ inbox, team, onClose, onSaved }: { inbox: SharedInbox | 
   };
   return (
     <Dialog open={!!inbox} onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="inbox_access" className="sm:max-w-md">
+      <DialogContent track="inbox_access" showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Who Uses {inbox?.name}</DialogTitle>
           <DialogDescription>
@@ -61,6 +63,7 @@ function AccessDialog({ inbox, team, onClose, onSaved }: { inbox: SharedInbox | 
           })}
         </div>
         <div className={DIALOG_BUTTONS}>
+          <Button variant="ghost" type="button" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="button" disabled={busy} onClick={() => void save()}>{busy ? "Saving" : "Save"}</Button>
         </div>
       </DialogContent>
@@ -90,7 +93,7 @@ function ShareDialog({ open, onClose, onShared }: { open: boolean; onClose: () =
   };
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
-      <DialogContent track="share_account" className="sm:max-w-md">
+      <DialogContent track="share_account" showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Make a Shared Inbox</DialogTitle>
           <DialogDescription>
@@ -113,11 +116,11 @@ function ShareDialog({ open, onClose, onShared }: { open: boolean; onClose: () =
             <div className="grid gap-2">
               <Label htmlFor="inbox-name">Name</Label>
               <Input id="inbox-name" value={name} maxLength={80} placeholder="Sales" onChange={(e) => setName(e.target.value)} />
-              <p className="text-xs text-muted-foreground">What the team sees it as. It is shown in plain text to every member.</p>
             </div>
           </div>
         )}
         <div className={DIALOG_BUTTONS}>
+          <Button variant="ghost" type="button" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="button" disabled={busy || !account || !name.trim()} onClick={() => void submit()}>{busy ? "Sharing" : "Make Shared Inbox"}</Button>
         </div>
       </DialogContent>
@@ -139,30 +142,27 @@ export function SharedInboxesSection({ team }: { team: TeamState }) {
   if (!manages && inboxes && inboxes.length === 0) return null;
 
   return (
-    <SettingsSection
-      id="inboxes"
-      title="Shared Inboxes"
-      description="An account the business owns, such as info@ or the business WhatsApp number. Every chat on it is shared with the people you choose, who can assign chats, add internal notes and reply from it."
-    >
-      {manages && <div><Button variant="secondary" onClick={() => setSharing(true)}><Plus /> Make Shared Inbox</Button></div>}
+    <SettingsSection id="inboxes" title="Shared Inboxes" action={manages && <IconAction label="Make Shared Inbox" icon={Plus} onClick={() => setSharing(true)} />}>
       {failed && !inboxes ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could Not Load Shared Inboxes</AlertTitle>
-          <AlertDescription>
-            <p>Check your connection and try again.</p>
-            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
-          </AlertDescription>
-        </Alert>
+        <SettingsBody>
+          <Alert variant="destructive">
+            <AlertTitle>Could Not Load Shared Inboxes</AlertTitle>
+            <AlertDescription>
+              <p>Check your connection and try again.</p>
+              <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        </SettingsBody>
       ) : !inboxes ? (
-        <Skeleton className="h-20 w-full rounded-lg" />
+        <SettingsBody><Skeleton className="h-20 w-full rounded-lg" /></SettingsBody>
       ) : inboxes.length === 0 ? (
-        <SettingsEmpty>No shared inbox yet. Connect the business account in Connected Accounts, then make it a shared inbox here.</SettingsEmpty>
+        <SettingsEmpty>No shared inbox yet.</SettingsEmpty>
       ) : (
-        <SettingsRows>
+        <SettingsRows inset="lead">
           {inboxes.map((i) => (
             <SettingsRow
               key={i.accountId}
-              leading={<Inbox className="size-4 text-muted-foreground" />}
+              leading={<IconCircle icon={Inbox} />}
               title={
                 <>
                   {i.name}

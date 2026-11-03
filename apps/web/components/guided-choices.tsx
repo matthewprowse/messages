@@ -1,8 +1,14 @@
 "use client";
 
-// The decision buttons above the reply box, offered when triage found a choice only the user can make. Used by thread-view.tsx.
+// The decision buttons above the reply box, offered when triage found a choice only the user can make, with Add to Calendar
+// on the right when the message proposes something with a date (a trip, a meeting), which opens New Event filled in.
+// Used by thread-view.tsx.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CalendarPlus } from "lucide-react";
+import { useApp } from "@/lib/store";
+import { scheduleDefaults } from "@/lib/schedule";
+import { NewEventDialog } from "@/components/new-event-dialog";
 import type { Decision, Message, Thread } from "@/lib/types";
 import { clashes, freeSlots, loadChoices, otherTimeDecision, slotButton, slotLabel, type Busy, type ReplyChoices } from "@/lib/choices";
 import { loadEvents } from "@/lib/calendar";
@@ -23,6 +29,8 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
   const [choices, setChoices] = useState<{ id: string; value: ReplyChoices | null } | null>(null);
   const [events, setEvents] = useState<Busy[] | null>(null);
   const [picking, setPicking] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const { contacts } = useApp();
 
   // Read again when triage updates the conversation (its summary), as that is when choices arrive.
   useEffect(() => {
@@ -88,13 +96,30 @@ export function GuidedChoices({ thread, msgs, disabled, onPick }: { thread: Thre
             <Button variant="ghost" disabled={disabled} onClick={() => setPicking(false)}>Back</Button>
           </>
         ) : (
-          value.options.map((o) => (
-            <Button key={o.label} variant="secondary" disabled={disabled} onClick={() => (o.kind === "other_time" ? setPicking(true) : pick({ text: o.decision, kind: o.kind }))}>
-              {o.label}
-            </Button>
-          ))
+          <>
+            {value.options.map((o) => (
+              <Button key={o.label} variant="secondary" disabled={disabled} onClick={() => (o.kind === "other_time" ? setPicking(true) : pick({ text: o.decision, kind: o.kind }))}>
+                {o.label}
+              </Button>
+            ))}
+            {value.plan && <Button variant="ghost" className="ml-auto" onClick={() => { track("feature_used", { feature: "add_plan_to_calendar" }); setAdding(true); }}><CalendarPlus />Add to Calendar</Button>}
+          </>
         )}
       </div>
+      {value.plan && (
+        <NewEventDialog
+          open={adding}
+          onOpenChange={setAdding}
+          title={value.plan.title}
+          day={value.plan.day}
+          time={value.plan.time}
+          until={value.plan.until}
+          allDay={!value.plan.time}
+          endDay={value.plan.endDay}
+          location={value.plan.place}
+          guests={scheduleDefaults(thread, contacts).guests}
+        />
+      )}
     </div>
   );
 }

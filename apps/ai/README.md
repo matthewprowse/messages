@@ -26,8 +26,9 @@ Settings live in `apps/ai/.env` (see `.env.example`). It never logs message cont
 - **Drafts.** The app adds a pending row to `drafts`; this fills in the body within a few seconds.
   It writes from the conversation, what you told it about yourself, learned style rules, saved
   writing examples and your own recent sent mail, to that person first. All of it is read in one call
-  to `public.draft_context` (`20261028110700_draft_context`), so the model is asked after one trip
-  to the database instead of three or four. The table is checked every
+  to `public.draft_context` (`20261028110700_draft_context`); the few reads it does not cover (settings,
+  calendar, files on offer, the budget, the draft limit, the key, similar replies, rules) run at the same
+  time as it or right after it (`ai/drafts_gather.py`), not one after another. The table is checked every
   1.5 seconds, and every half second for two minutes after a draft was asked for; up to 4 drafts are
   written at once, one at a time per conversation. The prompt starts with what is the same for all
   your drafts, so asking again with another tone is mostly billed at Gemini's cached rate.
@@ -60,8 +61,9 @@ Settings live in `apps/ai/.env` (see `.env.example`). It never logs message cont
   768 dimensions, newest first and then older mail 48 at a time, into `message_embeddings` (not
   `messages`, which Realtime sends to the app on every change). Each vector is stored sealed with the
   user's data key (`embedding_data`), so the database never holds one readable. The search runs in this
-  worker (`ai/similar.py`): the user's newest 3000 vectors are opened in memory, cached for 5 minutes,
-  and compared by cosine; `public.reply_pairs` then returns each nearest incoming message with its reply,
+  worker (`ai/similar.py`): the user's newest 2000 vectors are read (every page at once), opened in memory,
+  cached for 45 minutes and then searched as they are for up to 6 hours more while a fresh read runs in the
+  background (so only a cold start waits for the read), and compared by cosine; `public.reply_pairs` then returns each nearest incoming message with its reply,
   so mail nobody answered is not embedded. A trigger queues a message when its reply is stored
   (`20261027100100_embed_replied_mail_only`); the mail being drafted for is embedded on the spot.
   A user with no key yet is not embedded. To seal vectors made before this, apply

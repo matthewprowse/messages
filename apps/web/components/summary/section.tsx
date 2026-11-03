@@ -1,13 +1,12 @@
 "use client";
 
-// The Summary page's section frame: a sticky titled band over its rows, and a row list with rules between rows.
+// The Summary page's section frame: a sticky titled band over its rows. Rows with rules between them are the shared Separated.
 
 import Link from "next/link";
-import { Children, Fragment, isValidElement, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 
 /**
  * True once the band has scrolled away from its place at the top of its section. A 1px sentinel sits where the band
@@ -57,16 +56,4 @@ export function Section({ title, count, separated = false, headerHeight, action,
   );
 }
 
-/** Rows with a rule between each, inset past the avatar. Children keep their own keys. */
-export function Separated({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2">
-      {Children.toArray(children).map((child, i) => (
-        <Fragment key={isValidElement(child) ? child.key : i}>
-          {i > 0 && <div className="pl-16"><Separator /></div>}
-          {child}
-        </Fragment>
-      ))}
-    </div>
-  );
-}
+export { Separated } from "@/components/surface";

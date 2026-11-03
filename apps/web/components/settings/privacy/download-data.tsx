@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Profile and Privacy: Download My Data (POPIA right of access). Builds a zip of everything the person owns in THIS
+// Settings, Privacy and Data: Download My Data (POPIA right of access). Builds a zip of everything the person owns in THIS
 // browser, opening it with their own key, so the server never sees a readable word of it. Shows progress, can be cancelled, and
 // says plainly that it takes a while. The work is in lib/data-export/.
 
@@ -63,15 +63,12 @@ export function DownloadDataSection() {
 
   const percent = progress && progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
   return (
-    <SettingsSection id="download-data" title="Download My Data" description="Get a copy of what Konva holds for you: conversations, contacts, notes, tasks, calendar, your profile and AI settings.">
+    <SettingsSection id="download-data" title="Download My Data">
       <SettingsRows>
         <SettingsRow title="Include Files" description={estimateText(usage ? totalUsage(usage) : null)}>
           <Switch checked={files} onCheckedChange={setFiles} disabled={running} aria-label="Include Files" />
         </SettingsRow>
-        <SettingsRow
-          title="Make My Download"
-          description="Your messages are opened with your key on this device, then zipped here. Nothing readable goes through our servers. It can take several minutes for a large account, so keep this page open."
-        >
+        <SettingsRow title="Make My Download">
           {running ? (
             <Button variant="secondary" onClick={() => controller.current?.abort()}>Cancel</Button>
           ) : (
@@ -80,7 +77,7 @@ export function DownloadDataSection() {
         </SettingsRow>
       </SettingsRows>
       {running && progress && (
-        <div className="space-y-2 px-3" role="status" aria-live="polite">
+        <div className="space-y-2 p-3" role="status" aria-live="polite">
           <Progress value={percent} aria-label="Download progress" />
           <p className="text-xs text-muted-foreground">{progress.stage}{progress.total > 1 ? `, ${progress.done.toLocaleString("en-GB")} of ${progress.total.toLocaleString("en-GB")}` : ""}</p>
         </div>

@@ -24,7 +24,7 @@ export function AttachmentTile({ attachment: a, onOpen, className, showName = tr
       aria-label={selecting ? `Select ${a.name}` : `Open ${a.name}`}
       aria-pressed={selecting ? selected : undefined}
       title={a.name}
-      className={cn("group/tile relative flex size-24 overflow-hidden rounded-lg bg-muted text-left outline-none ring-1 ring-foreground/5 focus-visible:ring-2 focus-visible:ring-ring/50", selected && "ring-2 ring-primary", className)}
+      className={cn("group/tile relative flex size-24 overflow-hidden rounded-lg bg-muted text-left outline-none ring-1 ring-foreground/5 focus-visible:ring-2 focus-visible:ring-ring/50", className, selected && "ring-2 ring-primary")}
     >
       {/* Only the picture dims for a hidden file; its badge stays readable. */}
       <span className={cn("flex size-full", a.hiddenReason && "opacity-60")}><Thumb attachment={a} onReady={setShown} /></span>

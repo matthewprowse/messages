@@ -1,21 +1,18 @@
 "use client";
 
-// Admin, Audit: the last 100 admin actions (budget saves, switch changes, seat changes, approvals) with who, when and the
-// old and new values. The database writes it from triggers, so it cannot be skipped. Values are numbers, flags and ids only:
-// an email, a name or message text is never stored in it.
+// Admin's Audit view: the last 100 admin actions (budget saves, switch changes, seat changes, approvals) with who, when and
+// the old and new values of the fields that changed. The database writes it from triggers, so it cannot be skipped. Values
+// are numbers, flags and ids only: an email, a name or message text is never stored in it.
 
 import { useCallback, useEffect, useState } from "react";
 import { ScrollText } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { AUDIT_LABELS, auditChanges } from "@/lib/admin-ops";
-import { EmptyState } from "@/components/primitives";
-import { AdminHeading, AdminRow } from "@/components/admin/parts";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, IconCircle, Row, Separated } from "@/components/surface";
+import { when } from "./format";
+import { Failed, LoadingCard, Quiet } from "./parts";
 
 type Entry = { id: number; at: string; actor_email: string | null; action: string; target: string | null; old_value: unknown; new_value: unknown };
-
-const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 export function AuditLog({ version, onBusy }: { version: number; onBusy: (busy: boolean) => void }) {
   const [rows, setRows] = useState<Entry[] | null>(null);
@@ -30,33 +27,32 @@ export function AuditLog({ version, onBusy }: { version: number; onBusy: (busy: 
   }, [onBusy]);
   useEffect(() => { void load(); }, [load, version]);
 
+  if (failed) return <Failed title="Could Not Load The Audit Log" onRetry={() => void load()} />;
+  if (rows === null) return <LoadingCard title="Audit Log" rows={3} />;
   return (
-    <div className="flex flex-col gap-3">
-      <AdminHeading title="Audit Log" description="Who changed what in Admin, newest first. Old and new values are shown for the fields that changed." />
-      {failed ? (
-        <EmptyState icon={ScrollText} title="Could Not Load the Audit Log" description="Check your connection and refresh. If it keeps failing, the flags migration may not be applied." />
-      ) : rows === null ? (
-        <div className="flex flex-col gap-3"><Skeleton className="h-14 w-full rounded-lg" /><Skeleton className="h-14 w-full rounded-lg" /></div>
-      ) : rows.length === 0 ? (
-        <div className="py-8"><EmptyState icon={ScrollText} title="Nothing Yet" description="Admin changes will be listed here." /></div>
-      ) : (
-        <div>
-          {rows.map((r, i) => (
-            <div key={r.id}>
-              {i > 0 && <Separator className="ml-3" />}
-              <AdminRow
-                title={AUDIT_LABELS[r.action] ?? r.action}
-                description={
-                  <>
-                    <div>{when(r.at)}, {r.actor_email ?? "System"}{r.target ? `, ${r.target.length > 24 ? r.target.slice(0, 8) : r.target}` : ""}</div>
-                    {auditChanges(r.old_value, r.new_value).map((c) => <div key={c.key} className="font-mono">{c.key}: {c.from} to {c.to}</div>)}
-                  </>
-                }
-              />
-            </div>
-          ))}
-        </div>
+    <Card title="Audit Log">
+      {rows.length === 0 ? <Quiet>Nothing Yet</Quiet> : (
+        <Separated>
+          {rows.map((r) => {
+            const changes = auditChanges(r.old_value, r.new_value);
+            return (
+              <div key={r.id}>
+                <Row
+                  lead={<IconCircle icon={ScrollText} />}
+                  title={AUDIT_LABELS[r.action] ?? r.action}
+                  meta={when(r.at)}
+                  detail={`${r.actor_email ?? "System"}${r.target ? `, ${r.target.length > 24 ? r.target.slice(0, 8) : r.target}` : ""}`}
+                />
+                {changes.length > 0 && (
+                  <div className="-mt-2 flex flex-col gap-1 pr-3 pb-3 pl-16 font-mono text-xs text-muted-foreground">
+                    {changes.map((c) => <span key={c.key} className="break-all">{c.key}: {c.from} to {c.to}</span>)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </Separated>
       )}
-    </div>
+    </Card>
   );
 }

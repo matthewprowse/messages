@@ -5,7 +5,7 @@
 
 import { createContext, useSyncExternalStore } from "react";
 import { type CalendarEvent, type EventResponse, type UpdateScope } from "@/lib/calendar";
-import type { Task } from "@/lib/types";
+import type { Provider, Task } from "@/lib/types";
 
 
 export const WIDE = "(min-width: 768px)";
@@ -47,6 +47,8 @@ export interface PageContext {
   openTask: (id: string) => void;
   /** Where a task is from, such as "Google Tasks". */
   sourceOf: (task: Task) => string | undefined;
+  /** The provider of the account an event is in, for its row's logo. */
+  providerOf: (accountId: string | undefined) => Provider | undefined;
 }
 
 export const Page = createContext<PageContext>({
@@ -60,5 +62,6 @@ export const Page = createContext<PageContext>({
   answer: () => undefined,
   openTask: () => undefined,
   sourceOf: () => undefined,
+  providerOf: () => undefined,
 });
 

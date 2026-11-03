@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Check, Copy, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
-import { ROLE_HELP, ROLE_LABEL, assignableRoles, inviteLink, type TeamPerson, type TeamRole, type TeamState } from "@/lib/team";
+import { ROLE_LABEL, assignableRoles, inviteLink, type TeamPerson, type TeamRole, type TeamState } from "@/lib/team";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { IconAction } from "@/components/tip";
 
 const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const problem = (error: { message: string } | null) => error?.message || "Something went wrong. Try again.";
@@ -60,7 +61,7 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
-      <DialogContent track="invite_member" className="sm:max-w-md">
+      <DialogContent track="invite_member" showCloseButton={false} className="sm:max-w-md">
         {link ? (
           <>
             <DialogHeader>
@@ -81,7 +82,6 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
           <form onSubmit={submit} className="space-y-3">
             <DialogHeader>
               <DialogTitle>Invite Person</DialogTitle>
-              <DialogDescription>They get a link to join your team. Nothing is emailed from here.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-2">
               <Label htmlFor="invite-email">Email</Label>
@@ -95,9 +95,9 @@ function InviteDialog({ open, strict, myRole, onClose, onInvited }: { open: bool
                   {assignableRoles(myRole, strict).map((r) => <SelectItem key={r} value={r}>{ROLE_LABEL[r]}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">{ROLE_HELP[role]}</p>
             </div>
             <div className={DIALOG_BUTTONS}>
+              <Button variant="ghost" type="button" onClick={close}>Cancel</Button>
               <Button variant="secondary" type="submit" disabled={busy || !email.trim()}>{busy ? "Creating Link" : "Create Invite Link"}</Button>
             </div>
           </form>
@@ -156,14 +156,9 @@ export function MembersSection({ team, userId, onChanged }: { team: TeamState; u
   return (
     <SettingsSection
       id="members"
-      title="Members"
-      description={`${used} of ${workspace.seats} seats in use.${manages ? "" : " Only an owner or admin can make changes."}`}
+      title={`Members, ${used} of ${workspace.seats} Seats`}
+      action={manages && <IconAction label="Invite Person" icon={UserPlus} disabled={used >= workspace.seats} onClick={() => setInviting(true)} />}
     >
-      {manages && (
-        <Button variant="secondary" disabled={used >= workspace.seats} onClick={() => setInviting(true)}>
-          <UserPlus /> Invite Person
-        </Button>
-      )}
       <SettingsRows>
         {sorted.map((p) => {
           const label = p.name || p.email;

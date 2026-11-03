@@ -39,7 +39,7 @@ export async function loadSmall() {
     allRows("Load drafts", (from, to) => supabase.from("drafts").select(DRAFT_COLUMNS).eq("status", "active").not("thread_id", "is", null).order("id").range(from, to)),
     allRows("Load unsubscribes", (from, to) => supabase.from("unsubscribes").select(UNSUBSCRIBE_COLUMNS).order("id").range(from, to)),
     // Not required: without it (the table not there yet) the Waiting filter is just empty.
-    allRows("Load follow-ups", (from, to) => supabase.from("follow_ups").select("thread_id").eq("expects_reply", true).order("id").range(from, to)).catch(() => []),
+    allRows("Load follow-ups", (from, to) => supabase.from("follow_ups").select("thread_id").eq("expects_reply", true).order("thread_id").range(from, to)).catch(() => []),
     // Not required either: without it (no task account, or the table not there yet) Calendar shows events only.
     loadTasks().catch(() => []),
   ]);

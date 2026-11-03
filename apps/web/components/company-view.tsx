@@ -1,23 +1,26 @@
 "use client";
 
-// A company's page under Contacts: its summary, details, people and conversations. Renaming happens here and is reported to the list.
+// A company's page under Contacts, laid out like a contact's: the header with Rename, then on the grey the numbers
+// (addresses, conversations), its summary, its people and its conversations. A rename is reported to the list.
 
 import { useContext, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Building2 } from "lucide-react";
+import { Building2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { renameCompany, type CompanyDetail } from "@/lib/organizations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CompanyAvatar, ContactAvatar, EmptyState } from "@/components/primitives";
 import { formatPhone, niceName } from "@/lib/format";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { CompaniesContext } from "@/components/contacts-shell";
-import { ConversationRows, DetailList, DetailPage, Divided, ListRow, Section } from "@/components/contact-list";
+import { ConversationRows, DetailHeading, DetailPage } from "@/components/contact-list";
+import { Card, Row, Separated, StatCard } from "@/components/surface";
+import { IconAction } from "@/components/tip";
 import { withQuery } from "@/lib/utils";
 
 // Mounted only while the dialog is open, so it starts from the current name every time.
@@ -50,6 +53,7 @@ function RenameForm({ company, onDone, onRenamed }: { company: CompanyDetail; on
         <Input id="company-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} disabled={saving} autoFocus />
       </div>
       <div className={DIALOG_BUTTONS}>
+        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
         <Button type="submit" variant="secondary" disabled={!ready}>{saving ? "Saving" : "Save"}</Button>
       </div>
     </form>
@@ -65,30 +69,25 @@ export function CompanyView({ company: loaded }: { company: CompanyDetail | null
   const [renaming, setRenaming] = useState(false);
 
   if (!company) {
-    return <EmptyState icon={Building2} title="Company Not Found" description="It may have been removed." action={<Button variant="secondary" asChild><Link href="/contacts?view=companies">Back to Companies</Link></Button>} />;
+    return <EmptyState icon={Building2} title="Company Not Found" action={<Button variant="secondary" asChild><Link href="/contacts?view=companies">Back to Companies</Link></Button>} />;
   }
 
   const addresses = company.people.reduce((n, p) => n + p.emails.length, 0);
+  const logo = <CompanyAvatar logoPath={company.logoPath} className="size-10" />;
 
   return (
-    // Same structure as a contact: the header sticks to the scroll area and content scrolls underneath it.
     <DetailPage
       backHref={`/contacts?${query || "view=companies"}`}
       header={
         <>
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <CompanyAvatar logoPath={company.logoPath} className="size-8" />
-            <div className="flex min-w-0 flex-col">
-              <h1 className="truncate text-sm font-medium">{company.name}</h1>
-              <span className="truncate text-xs text-muted-foreground">{company.domain}</span>
-            </div>
+          <DetailHeading avatar={logo} title={company.name} subtitle={company.domain} />
+          <div className="flex shrink-0 items-center gap-1">
+            <IconAction label="Rename" icon={Pencil} onClick={() => setRenaming(true)} />
           </div>
-          <Button variant="secondary" onClick={() => setRenaming(true)}>Rename</Button>
           <Dialog open={renaming} onOpenChange={setRenaming}>
-            <DialogContent track="rename_company" className="sm:max-w-sm">
+            <DialogContent track="rename_company" showCloseButton={false} aria-describedby={undefined} className="sm:max-w-sm">
               <DialogHeader>
                 <DialogTitle>Rename Company</DialogTitle>
-                <DialogDescription>Everyone at {company.domain} stays filed under it.</DialogDescription>
               </DialogHeader>
               <RenameForm
                 company={company}
@@ -103,45 +102,38 @@ export function CompanyView({ company: loaded }: { company: CompanyDetail | null
         </>
       }
     >
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard label="Addresses" value={addresses} />
+        <StatCard label="Conversations" value={company.conversations.length} />
+      </div>
+
       {company.summary && (
-        <Section title="Summary">
-          <p className="text-sm leading-6 text-muted-foreground">{company.summary}</p>
-        </Section>
+        <Card title="Summary">
+          <p className="px-3 pb-3 text-sm leading-6">{company.summary}</p>
+        </Card>
       )}
 
-      <Section title="Details">
-        <DetailList
-          items={[
-            { label: "Domain", value: company.domain },
-            { label: "Addresses", value: String(addresses) },
-            { label: "Conversations", value: String(company.conversations.length) },
-          ]}
-        />
-      </Section>
-
-      <Section title="People">
-        <div className="-mx-3 flex flex-col gap-2">
-          <Divided className="pr-3 pl-14">
+      {company.people.length > 0 && (
+        <Card title="People">
+          <Separated>
             {company.people.map((p) => (
-              <ListRow
+              <Row
                 key={p.id}
                 href={withQuery(`/contacts/${p.id}`, query)}
-                avatar={<ContactAvatar contact={{ avatarPath: p.avatarPath, isCompany: false }} className="size-8" />}
+                lead={<ContactAvatar contact={{ avatarPath: p.avatarPath, isCompany: false }} className="size-10" />}
                 title={niceName(p.name)}
-                detail={[p.role, ...p.emails, ...p.phones.map(formatPhone)].filter(Boolean).join(" · ")}
+                detail={p.role || p.emails[0] || (p.phones[0] ? formatPhone(p.phones[0]) : undefined)}
               />
             ))}
-          </Divided>
-        </div>
-      </Section>
+          </Separated>
+        </Card>
+      )}
 
-      <Section title="Conversations">
-        {company.conversations.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No conversations yet.</p>
-        ) : (
-          <ConversationRows items={company.conversations} avatar={<CompanyAvatar logoPath={company.logoPath} className="size-8" />} />
-        )}
-      </Section>
+      {company.conversations.length > 0 && (
+        <Card title="Conversations">
+          <ConversationRows items={company.conversations} avatar={logo} />
+        </Card>
+      )}
     </DetailPage>
   );
 }

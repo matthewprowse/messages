@@ -1,44 +1,49 @@
 "use client";
 
-// Team Clients on the Contacts page: the clients everyone on the team looks after, with their company and the agent
-// or agents who look after them. A row above People opens this page, so the person's own contacts are untouched. It
-// holds names only: a chat is read by its agent and whoever it is assigned to, and an assigned chat is in the
-// assignee's Conversations (step 5), never here.
+// Team Clients under Contacts: the clients everyone on the team looks after, with their company and the agent or agents
+// who look after them, and a card of the first few on the empty Contacts pane, so the person's own contacts are
+// untouched. It holds names only: a chat is read by its agent and whoever it is assigned to, and an assigned chat is in
+// the assignee's Conversations (step 5), never here.
 
 import { Suspense, useDeferredValue, useState } from "react";
 import { Briefcase } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { useMyTeam } from "@/lib/share";
-import { agentsText, useTeamClients } from "@/lib/team-clients";
-import { cn, withQuery } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
+import { agentsText, useTeamClients, type TeamClient } from "@/lib/team-clients";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ContactAvatar, EmptyState } from "@/components/primitives";
-import { DetailPage, Divided, LoadFailed, plural, ListRow } from "@/components/contact-list";
+import { SearchBand } from "@/components/pane";
+import { Card, IconCircle, Row, Separated } from "@/components/surface";
+import { DetailHeading, DetailPage, LoadFailed, plural } from "@/components/contact-list";
 import { ClientMenu, TeamCompanies } from "@/components/team-client-manage";
 
 const HREF = "/contacts/team";
+/** Clients on the empty pane's card: a glance, with See All for the rest. */
+const SHOWN = 3;
 
-/** The row above People for someone in a team. */
-export function TeamClientsRow({ selected, query }: { selected: boolean; query: string }) {
-  const team = useMyTeam();
-  if (!team) return null;
+/** One client as a row: who looks after them, and on the full page their company first. */
+function ClientRow({ client, me, full = false, end }: { client: TeamClient; me: string | undefined; full?: boolean; end?: React.ReactNode }) {
+  const agents = `Looked after by ${agentsText(client.agents, me)}`;
   return (
-    <>
-      <ListRow
-        href={withQuery(HREF, query)}
-        avatar={
-          <div className={cn("flex size-10 items-center justify-center rounded-full", selected ? "bg-background" : "bg-muted")}>
-            <Briefcase className="size-4" />
-          </div>
-        }
-        title="Team Clients"
-        detail="Everyone your team looks after"
-        selected={selected}
-      />
-      <div className="my-2 pl-16"><Separator /></div>
-    </>
+    <Row
+      lead={<ContactAvatar contact={{ isCompany: false }} className="size-10" />}
+      title={client.name}
+      detail={full && client.company ? `${client.company}, ${agents}` : agents}
+      end={end}
+    />
+  );
+}
+
+/** The empty Contacts pane's Team Clients card, for someone in a team. Nothing until there is a client. */
+export function TeamClientsCard() {
+  const { session } = useAuth();
+  const { clients } = useTeamClients();
+  if (!clients?.length) return null;
+  return (
+    <Card title="Team Clients" href={HREF}>
+      <Separated>
+        {clients.slice(0, SHOWN).map((c) => <ClientRow key={c.id} client={c} me={session?.user.id} />)}
+      </Separated>
+    </Card>
   );
 }
 
@@ -50,49 +55,28 @@ function Clients() {
   const shown = (clients ?? []).filter((c) => !q || `${c.name} ${c.company}`.toLowerCase().includes(q));
 
   return (
-    <DetailPage backHref="/contacts" header={<h1 className="min-w-0 flex-1 truncate text-lg font-medium">Team Clients</h1>}>
+    <DetailPage backHref="/contacts" header={<DetailHeading avatar={<IconCircle icon={Briefcase} />} title="Team Clients" subtitle={clients?.length ? plural(clients.length, "Client") : undefined} />}>
       {clients === null ? (
         <LoadFailed icon={Briefcase} title="Team Clients Did Not Load" backHref="/contacts" backLabel="Back to Contacts" onRetry={reload} />
       ) : clients === undefined ? (
-        <div className="space-y-3" aria-label="Loading team clients">
-          {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+        <div className="flex flex-col gap-3" aria-label="Loading team clients">
+          {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}
         </div>
       ) : !clients.length ? (
-        <EmptyState icon={Briefcase} title="No Team Clients Yet" description="Clients appear here when someone on your team marks a chat with them as work." />
+        <EmptyState icon={Briefcase} title="No Team Clients Yet" />
       ) : (
         <>
-          <Input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Escape") { setSearch(""); e.currentTarget.blur(); } }}
-            placeholder="Search Team Clients"
-            aria-label="Search Team Clients"
-            maxLength={120}
-            autoComplete="off"
-          />
-          <p className="text-xs text-muted-foreground">
-            {plural(clients.length, "client")} your team looks after. Only names, companies and who looks after them are shared here. Messages stay with the chat and the agent it belongs to.
-          </p>
+          <SearchBand value={search} onChange={setSearch} placeholder="Search Team Clients" maxLength={120} className="border-b-0 p-0" inputClassName="h-10 bg-background" />
           {shown.length ? (
-            <div className="-mx-3 flex flex-col gap-2">
-              <Divided className="pr-3 pl-16">
+            <Card>
+              <Separated>
                 {shown.map((c) => (
-                  <div key={c.id} className="flex items-center gap-3 rounded-lg p-3">
-                    <ContactAvatar contact={{ isCompany: false }} className="size-10" />
-                    <div className="flex min-w-0 flex-1 flex-col gap-1">
-                      <span className="truncate text-sm font-medium">{c.name}</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {[c.company, `Looked after by ${agentsText(c.agents, session?.user.id)}`].filter(Boolean).join(" · ")}
-                      </span>
-                    </div>
-                    <ClientMenu client={c} onChanged={reload} />
-                  </div>
+                  <ClientRow key={c.id} client={c} me={session?.user.id} full end={<ClientMenu client={c} onChanged={reload} />} />
                 ))}
-              </Divided>
-            </div>
+              </Separated>
+            </Card>
           ) : (
-            <EmptyState icon={Briefcase} title="No Matches" description={`Nothing matches "${search.trim()}".`} />
+            <EmptyState icon={Briefcase} title="No Matches" />
           )}
           <TeamCompanies onChanged={reload} />
         </>

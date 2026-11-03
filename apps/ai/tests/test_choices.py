@@ -6,6 +6,7 @@ import unittest
 
 from ai.drafts import build_prompt as draft_prompt
 from ai.triage import NO_CHOICES, UserContext, apply_signals, read_choices, read_results, sent_label, triage_prompt
+from ai.triage_prompt import read_plan
 
 OPTIONS = [
     {"label": "Yes, Available", "decision": "I am free on Thursday at 15:00.", "kind": "accept"},
@@ -20,6 +21,24 @@ class Choices(unittest.TestCase):
         self.assertEqual(got["asked"], "2026-10-29T15:00")
         self.assertEqual(got["minutes"], 60)
         self.assertEqual([o["kind"] for o in got["options"]], ["accept", "decline", "other_time"])
+
+    def test_a_trip_over_several_days_is_kept_as_a_plan(self):
+        plan = {"title": "  Onrus\nTrip ", "start": "2026-11-13", "end": "2026-11-15", "place": "Onrus"}
+        got = json.loads(read_choices({"choices": OPTIONS[:2], "asked_time": "", "asked_minutes": 0, "plan": plan}))
+        self.assertEqual(got["plan"], {"title": "Onrus Trip", "start": "2026-11-13", "end": "2026-11-15", "place": "Onrus"})
+
+    def test_a_plan_needs_a_title_and_a_real_start_and_keeps_a_time(self):
+        self.assertIsNone(read_plan({"plan": {"title": "Lunch", "start": "next week", "end": "", "place": ""}}))
+        self.assertIsNone(read_plan({"plan": {"title": "", "start": "2026-11-13", "end": "", "place": ""}}))
+        self.assertIsNone(read_plan({}))
+        timed = read_plan({"plan": {"title": "Coffee With Sam", "start": "2026-11-13T10:30", "end": "2026-11-13T11:00", "place": ""}})
+        self.assertEqual((timed["start"], timed["end"]), ("2026-11-13T10:30", "2026-11-13T11:00"))
+        # An end before the start, or more than a month on, is dropped and the plan is one day.
+        self.assertEqual(read_plan({"plan": {"title": "X", "start": "2026-11-13", "end": "2026-11-12", "place": ""}})["end"], "")
+        self.assertEqual(read_plan({"plan": {"title": "X", "start": "2026-11-13", "end": "2027-01-01", "place": ""}})["end"], "")
+
+    def test_no_plan_leaves_the_choices_as_they_were(self):
+        self.assertNotIn("plan", json.loads(read_choices({"choices": OPTIONS[:2], "asked_time": "", "asked_minutes": 0})))
 
     def test_choices_drop_bad_options_and_need_two(self):
         self.assertEqual(read_choices({"choices": [OPTIONS[0]], "asked_time": "", "asked_minutes": 0}), NO_CHOICES)

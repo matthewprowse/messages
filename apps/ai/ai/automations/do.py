@@ -6,8 +6,7 @@ writes down in `effects` exactly what it did, as ids, so Undo in the app can rev
   task     a task in the user's own task list through the task_updates queue ("Call Back Within 5 Minutes")
   draft    a pending draft the normal draft loop writes in the user's voice, with the lead's own address as its recipient;
            never the portal, and never sent: a draft only appears in the reply box
-  urgent   the conversation is made urgent, which the existing push sender notices (its text carries no content), with the
-           reason "automation" so the badge says why
+  urgent   the conversation is made urgent, which the existing push sender notices (its text carries no content)
 
 Nothing here sends anything. Names, addresses and message text are sealed on the way in and never logged."""
 
@@ -20,7 +19,6 @@ from typing import Any
 from .. import log
 from ..crypto import address_index
 from ..fields import ADDRESS, CONTACT_RELATIONSHIP, DRAFT, INSTRUCTION, LEAD_SOURCE, NAME, SUMMARY, TASK_NOTES, TASK_TITLE
-from ..triage_extras import reason_phrase
 from ..text import plain_dashes
 from .spec import Do
 
@@ -196,8 +194,6 @@ class Doer:
         if before is None:
             return
         out.effects["thread_before"] = {k: before.get(k) for k in ("priority", "junk", "needs_reply")}
-        # The urgent badge shows the reason; without one it reads as the AI not knowing why. The words are sealed like triage's.
-        now_urgent = {"priority": "urgent", "junk": False, "needs_reply": True, "triage_reason": "automation",
-                      "triage_reason_text": self.vault.seal(user, SUMMARY, reason_phrase("automation"))}
+        now_urgent = {"priority": "urgent", "junk": False, "needs_reply": True}
         self.db.update("threads", {"id": f"eq.{thread}", "user_id": f"eq.{user}"}, now_urgent, minimal=True)
         self.db.update("message_ai", {"message_id": f"eq.{message['id']}"}, now_urgent, minimal=True)

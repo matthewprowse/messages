@@ -13,7 +13,7 @@ import type { Task } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -70,20 +70,24 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track={edit ? "edit_task" : "new_task"} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track={edit ? "edit_task" : "new_task"} showCloseButton={false} aria-describedby={undefined} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{edit ? "Edit Task" : "New Task"}</DialogTitle>
-          {(edit || choices.length > 0) && <DialogDescription>{edit ? "Changed" : "Created"} in your task list, then shown on the Calendar page.</DialogDescription>}
         </DialogHeader>
         {!edit && choices.length === 0 ? (
-          <Alert>
-            <AlertTitle>Connect a Task List to Add Tasks</AlertTitle>
-            <AlertDescription>
-              <p>
-                Open <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Settings, Connected Accounts</Link>, connect Microsoft To Do, Google Tasks or iCloud Reminders, then try again.
-              </p>
-            </AlertDescription>
-          </Alert>
+          <>
+            <Alert>
+              <AlertTitle>Connect a Task List to Add Tasks</AlertTitle>
+              <AlertDescription>
+                <p>
+                  Open <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Settings, Connected Accounts</Link>, connect Microsoft To Do, Google Tasks or iCloud Reminders, then try again.
+                </p>
+              </AlertDescription>
+            </Alert>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+            </DialogFooter>
+          </>
         ) : (
           <form className="grid gap-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
             <div className="grid gap-2">
@@ -158,6 +162,7 @@ export function NewTaskDialog({ open, onOpenChange, editing }: { open: boolean; 
               </div>
             )}
             <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
               <Button type="submit" variant="secondary" disabled={!account || unchanged || (checked && !!problem)}>{edit ? "Save" : "Create"}</Button>
             </DialogFooter>
           </form>

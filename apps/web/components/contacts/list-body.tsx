@@ -7,14 +7,14 @@ import type { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/primitives";
-import { Divided } from "./list-rows";
+import { Separated } from "@/components/surface";
 
 function LoadingRows({ label }: { label: string }) {
   return (
     <div className="flex flex-col gap-2" role="status" aria-busy="true" aria-label={label}>
       {Array.from({ length: 8 }, (_, i) => (
         <div key={i} className="flex items-center gap-3 p-3">
-          <Skeleton className="size-8 shrink-0 rounded-full" />
+          <Skeleton className="size-10 shrink-0 rounded-full" />
           <div className="flex flex-1 flex-col gap-1">
             <Skeleton className="h-5 w-2/3" />
             <Skeleton className="h-4 w-5/6" />
@@ -34,7 +34,7 @@ export function ListBody({ items, label, icon, failed, empty, onRetry, children 
   label: string;
   icon: typeof Users;
   failed: string;
-  empty: { title: string; description: string; action?: React.ReactNode };
+  empty: { title: string; action?: React.ReactNode };
   onRetry: () => void;
   children: React.ReactNode;
 }) {
@@ -61,16 +61,16 @@ export function ListBody({ items, label, icon, failed, empty, onRetry, children 
     return (
       <div className="py-24">
         {items === null ? (
-          <EmptyState icon={icon} title={failed} description="Check your connection, then try again." action={<Button variant="secondary" onClick={onRetry}>Retry</Button>} />
+          <EmptyState icon={icon} title={failed} action={<Button variant="secondary" onClick={onRetry}>Retry</Button>} />
         ) : (
-          <EmptyState icon={icon} title={empty.title} description={empty.description} action={empty.action || undefined} />
+          <EmptyState icon={icon} title={empty.title} action={empty.action || undefined} />
         )}
       </div>
     );
   }
   return (
     <div className="flex flex-col gap-2">
-      <Divided className="pl-14">{rows.slice(0, count)}</Divided>
+      <Separated>{rows.slice(0, count)}</Separated>
       {more && <div ref={end} className="h-px" aria-hidden />}
     </div>
   );

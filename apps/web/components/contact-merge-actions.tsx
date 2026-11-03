@@ -1,7 +1,7 @@
 "use client";
 
-// The ways to change who a contact is: merge with another person, split addresses off to a new one, delete, and undo an automatic merge.
-// Opened from the contact page's menu.
+// The ways to change who a contact is: merge with another person, split addresses off to a new one, hide, delete, and
+// undo an automatic merge. Opened from the contact page's More menu; the automatic merges are a card on its Overview.
 
 import { useEffect, useMemo, useState } from "react";
 import { markSubmitted } from "@/lib/analytics";
@@ -18,7 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,13 +32,15 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { ContactAvatar } from "@/components/primitives";
 import { DIALOG_BUTTONS, MergeDialog, useCloseOnOverlay } from "@/components/merge-dialog";
 import { useContactsData } from "@/components/contacts-data";
-import { byRecent, Divided, firstReach, Section } from "@/components/contact-list";
+import { byRecent, Divided, firstReach } from "@/components/contact-list";
+import { Card, Row, Separated } from "@/components/surface";
+import { Tip } from "@/components/tip";
 import { fold, haystack, matchesQuery } from "@/lib/contact-list-helpers";
 import { searchDigits } from "@/lib/phone-search";
+import { withQuery } from "@/lib/utils";
 
 // The most people the Merge With list draws at once.
 const MERGE_RESULTS = 50;
-import { withQuery } from "@/lib/utils";
 
 function useContactHref() {
   const query = useSearchParams().toString();
@@ -170,10 +172,9 @@ function SplitForm({ contact, onDone }: { contact: ContactDetail; onDone: () => 
 function SplitDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="split_contact" showCloseButton={false} className="sm:max-w-md">
+      <DialogContent track="split_contact" showCloseButton={false} aria-describedby={undefined} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Split Contact</DialogTitle>
-          <DialogDescription>Choose what belongs to someone else. Their messages and conversations move with them.</DialogDescription>
         </DialogHeader>
         <SplitForm contact={contact} onDone={() => onOpenChange(false)} />
       </DialogContent>
@@ -232,8 +233,8 @@ function DeleteDialog({ contact, backHref, open, onOpenChange }: { contact: Cont
   );
 }
 
-/** The contact page's menu: Edit (on phones, where the header has no room for its button), Merge With..., Split and Delete Contact. */
-export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDetail; backHref: string; onEdit?: () => void }) {
+/** The contact page's More menu: Edit, Merge With..., Split, Hide, This Is a Company and Delete Contact. */
+export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDetail; backHref: string; onEdit: () => void }) {
   const [open, setOpen] = useState<"merge" | "split" | "delete" | null>(null);
   const set = (item: "merge" | "split" | "delete") => (value: boolean) => setOpen(value ? item : null);
   const canSplit = useMemo(() => identityGroups(contact.identityRows).filter((g) => !g.social).length > 1, [contact.identityRows]);
@@ -269,11 +270,13 @@ export function ContactMenu({ contact, backHref, onEdit }: { contact: ContactDet
   return (
     <>
       <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label="More"><MoreHorizontal /></Button>
-        </DropdownMenuTrigger>
+        <Tip label="More">
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label="More"><MoreHorizontal /></Button>
+          </DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent align="end" className="w-max">
-          {onEdit && <DropdownMenuItem className="sm:hidden" onSelect={onEdit}>Edit</DropdownMenuItem>}
+          <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setOpen("merge")}>Merge With...</DropdownMenuItem>
           <DropdownMenuItem disabled={!canSplit} onSelect={() => setOpen("split")}>Split</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void toggleHidden()}>{hidden ? "Show Contact" : "Hide Contact"}</DropdownMenuItem>
@@ -310,15 +313,14 @@ export function MergedAutomatically({ contact }: { contact: ContactDetail }) {
 
   if (merges.length === 0) return null;
   return (
-    <Section title="Merged Automatically">
-      <div className="rounded-lg border px-4">
-        <Divided>
-          {merges.map((m) => (
-            <div key={m.id} className="flex items-center justify-between gap-4 py-3">
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate text-sm">{m.mergedName}</span>
-                <span className="truncate text-xs text-muted-foreground">{mergeReasonText(m.reason, m.providers)}, {relTime(m.createdAt)}</span>
-              </div>
+    <Card title="Merged Automatically">
+      <Separated inset="none">
+        {merges.map((m) => (
+          <Row
+            key={m.id}
+            title={m.mergedName}
+            detail={`${mergeReasonText(m.reason, m.providers)}, ${relTime(m.createdAt)}`}
+            end={
               <Button
                 variant="secondary"
                 disabled={busy !== null}
@@ -335,10 +337,10 @@ export function MergedAutomatically({ contact }: { contact: ContactDetail }) {
               >
                 {busy === m.id ? "Undoing" : "Undo"}
               </Button>
-            </div>
-          ))}
-        </Divided>
-      </div>
-    </Section>
+            }
+          />
+        ))}
+      </Separated>
+    </Card>
   );
 }

@@ -143,7 +143,7 @@ class ContextMixin:
         rows = self.db.select(
             "messages",
             {
-                "select": "user_id,provider_message_id,message_ai!inner(priority,category,summary,needs_reply,junk,reply_choices,model,triage_reason,triage_reason_text,suspicious)",
+                "select": "user_id,provider_message_id,message_ai!inner(priority,category,summary,needs_reply,junk,reply_choices,model,suspicious)",
                 "account_id": in_list(accounts),  # with the Message-ID, this is the (account_id, provider_message_id) index
                 "provider_message_id": in_list(ids),
                 "direction": "eq.inbound",
@@ -158,8 +158,6 @@ class ContextMixin:
                 copied = {k: ai[k] for k in ("priority", "category", "summary", "needs_reply", "junk")}
                 copied["summary"] = self.vault.open(r["user_id"], SUMMARY, copied["summary"])  # sealed again when written
                 copied["choices"] = self.vault.open(r["user_id"], CHOICES, ai.get("reply_choices"))
-                copied["reason_code"] = ai.get("triage_reason") or "copied"
-                copied["reason_text"] = self.vault.open(r["user_id"], SUMMARY, ai.get("triage_reason_text")) or ""
                 copied["suspicious"] = ai.get("suspicious")
                 out[(r["user_id"], r["provider_message_id"])] = (copied, ai.get("model"))
         return out

@@ -1,7 +1,7 @@
 "use client";
 
-// An open note, laid out like a conversation: a header, then the toolbar, then the note in the same 672px
-// column as chat bubbles. Files picked, dropped or pasted show in the note at once and fill in as they upload.
+// An open note, laid out like a conversation: a borderless header, then the toolbar and the note as one white card on
+// the grey, in the same 672px column as the reply box. Files picked, dropped or pasted show in the note at once and fill in as they upload.
 
 import { exportNotePdf } from "@/components/note-export";
 import { loadPdfJs } from "@/lib/pdf";
@@ -13,7 +13,6 @@ import { ArrowLeft, MoreHorizontal, NotebookPen } from "lucide-react";
 import { toast } from "sonner";
 import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
-import { relTime } from "@/lib/format";
 import { displayName, mimeOf, pastedName, UploadError } from "@/lib/outbox-files";
 import { MAX_NOTE_FILE_BYTES, noteAttachment, noteFileError, removeNoteFiles, takeNoteFiles, uploadNoteFile, type Note, type NoteFile } from "@/lib/notes";
 import { noteReady, useNotes, useSaveState } from "@/components/notes-data";
@@ -22,7 +21,7 @@ import { DraftsBadge, useDraftFacts } from "@/components/note-drafts-badge";
 import { factStatus } from "@/lib/note-facts";
 import { NoteToolbar, useKeyboardInset, useNoteEditor } from "@/components/note-editor";
 import { NoteFilesContext, type NoteFilesValue } from "@/components/note-file-node";
-import { DeleteNoteDialog } from "@/components/note-list";
+import { DeleteNoteDialog } from "@/components/notes/delete-note-dialog";
 import { LinkChips, LinkMenu, useNoteLinks } from "@/components/note-links";
 import { ExtractTasksDialog } from "@/components/note-extract-tasks";
 import { useApp } from "@/lib/store";
@@ -30,6 +29,7 @@ import { AttachmentViewer } from "@/components/attachments";
 import { CloudAttachDialog } from "@/components/attachments/cloud-attach-dialog";
 import { availableSources } from "@/lib/cloud-pick/config";
 import { EmptyState } from "@/components/primitives";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -56,9 +56,9 @@ export function NoteView({ noteId }: { noteId: string }) {
   // A note's text is downloaded when the note is opened, ahead of the rest of the list.
   useEffect(() => { if (unloaded) void ensureBody(noteId); }, [unloaded, noteId, ensureBody]);
   if (!note || note.unloaded) {
-    if (note?.failed) return <EmptyState icon={NotebookPen} title="Could Not Open Note" description="Check your connection and try again." action={<Button variant="link" size="sm" onClick={() => void ensureBody(noteId)}>Try Again</Button>} />;
+    if (note?.failed) return <EmptyState icon={NotebookPen} title="Could Not Open Note" action={<Button variant="link" size="sm" onClick={() => void ensureBody(noteId)}>Try Again</Button>} />;
     if (loading || note) return <NoteSkeleton />;
-    return <EmptyState icon={NotebookPen} title="Note Not Found" description="It may have been deleted." action={<Button variant="secondary" asChild><Link href="/notes">Back to Notes</Link></Button>} />;
+    return <EmptyState icon={NotebookPen} title="Note Not Found" action={<Button variant="secondary" asChild><Link href="/notes">Back to Notes</Link></Button>} />;
   }
   // A new revision means the text was replaced from outside the editor (the other version was taken): it opens afresh.
   return <OpenNote key={`${noteId}:${note.revision ?? 0}`} note={note} />;
@@ -202,9 +202,6 @@ function OpenNote({ note }: { note: Note }) {
   const contactLink = links.find((l) => l.kind === "contact");
   const contactName = contactLink ? contactById(contactLink.id)?.name : undefined;
   const offline = useOffline();
-  const status = state === "conflict" ? "Changed Elsewhere"
-    : state === "failed" ? (offline ? "Offline, Will Save When Back Online" : "Not Saved, Retrying")
-    : state === "saving" ? "Saving" : state === "saved" ? "Saved" : `Edited ${relTime(note.updatedAt)}`;
   const drafts = factStatus(facts, note);
   // With a cloud source set up, Attach Files asks where from; otherwise it opens the device's file chooser at once.
   const [attachOpen, setAttachOpen] = useState(false);
@@ -229,20 +226,20 @@ function OpenNote({ note }: { note: Note }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown}>
-      <header className="flex h-[57px] shrink-0 items-center gap-2 border-b bg-background px-3 md:px-4">
+      <header className="flex shrink-0 items-center gap-2 p-3 md:px-4">
         <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
           <Link href="/notes"><ArrowLeft /></Link>
         </Button>
         {/* The title field below carries the name for screen readers, so this copy is hidden from them. */}
-        <h1 aria-hidden className="min-w-0 flex-1 truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
+        <div className="flex h-10 min-w-0 flex-1 items-center">
+          <h1 aria-hidden className="truncate text-sm font-medium">{note.title.trim() || "Untitled Note"}</h1>
+        </div>
         <DraftsBadge status={drafts} />
         <LinkMenu links={links} onAdd={addLink} />
-        <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
-          <span className={state === "failed" || state === "conflict" ? "text-destructive" : undefined}>{status}</span>
-          {state === "failed" && <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => void flush(id)}>Try Again</Button>}
-        </div>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+          <Tip label="More">
+            <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+          </Tip>
           <DropdownMenuContent align="end" className="w-max">
             <DropdownMenuItem onClick={() => pin(id, !note.pinned)}>{note.pinned ? "Unpin" : "Pin"}</DropdownMenuItem>
             <DropdownMenuCheckboxItem checked={note.useInDrafts} onCheckedChange={(on) => draftWith(id, on)}>Use in Drafts</DropdownMenuCheckboxItem>
@@ -256,22 +253,19 @@ function OpenNote({ note }: { note: Note }) {
         </DropdownMenu>
       </header>
 
-      {state === "conflict" && <NoteConflictBar id={id} />}
-
-      {/* Padding sits outside the 672px column, as in a conversation, so the note lines up with the bubbles. */}
-      {/* On phones the toolbar is pinned just above the on-screen keyboard (or the screen's bottom edge). */}
-      <div
-        className={cn(
-          "bg-background p-3 md:static md:z-auto md:shrink-0 md:border-b md:px-4",
-          "max-md:fixed max-md:inset-x-0 max-md:z-30 max-md:border-t",
-          keyboard === 0 && "max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
+      {/* Saving is quiet: only a save that failed says so. The region stays mounted so the failure is announced. */}
+      <div aria-live="polite" className="shrink-0">
+        {state === "failed" && (
+          <div className="px-3 pb-3 md:px-4">
+            <p className="mx-auto flex w-full max-w-2xl items-center gap-2 text-xs text-destructive">
+              {offline ? "Offline, Will Save When Back Online" : "Not Saved, Retrying"}
+              <Button variant="link" size="sm" className="h-auto px-0 text-xs" onClick={() => void flush(id)}>Try Again</Button>
+            </p>
+          </div>
         )}
-        style={{ bottom: keyboard }}
-      >
-        <div className="@container mx-auto w-full max-w-2xl">
-          {editor ? <NoteToolbar editor={editor} onAttach={attach} /> : <Skeleton className="h-8 w-full max-w-md" />}
-        </div>
       </div>
+
+      {state === "conflict" && <NoteConflictBar id={id} />}
 
       <div
         className="relative min-h-0 flex-1"
@@ -280,28 +274,45 @@ function OpenNote({ note }: { note: Note }) {
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
         onDrop={() => setDragging(false)}
       >
-      {dragging && <div aria-hidden className="pointer-events-none absolute inset-2 z-10 rounded-lg ring-2 ring-ring/50" />}
+      {dragging && <div aria-hidden className="pointer-events-none absolute inset-2 z-40 rounded-lg ring-2 ring-ring/50" />}
       <ScrollArea className="h-full">
-        <div className="p-3 md:px-4">
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-2 pb-24">
-            <input
-              ref={titleRef}
-              value={note.title}
-              onChange={(e) => edit(id, { title: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || (e.key === "ArrowDown" && !e.shiftKey)) {
-                  e.preventDefault();
-                  editor?.commands.focus("start");
-                }
-              }}
-              placeholder="Title"
-              aria-label="Title"
-              className="w-full bg-transparent py-1 text-2xl font-semibold outline-none placeholder:text-muted-foreground/60"
-            />
-            <LinkChips links={links} onRemove={removeLink} />
-            <NoteFilesContext.Provider value={filesValue}>
-              {editor ? <EditorContent editor={editor} /> : <Skeleton className="h-24 w-full" />}
-            </NoteFilesContext.Provider>
+        {/* The toolbar and the note are one white card on the grey, in the same 672px column as the reply box. */}
+        <div className="px-3 pb-24 md:px-4 md:pb-6">
+          <div className="mx-auto w-full max-w-2xl rounded-lg border bg-background">
+            {/* On wider screens the toolbar stays at the top of the card as the note scrolls; on phones it is pinned just
+                above the on-screen keyboard (or the screen's bottom edge). */}
+            <div
+              className={cn(
+                "bg-background p-3 md:sticky md:top-0 md:z-10 md:rounded-t-lg md:border-b md:p-2",
+                "max-md:fixed max-md:inset-x-0 max-md:bottom-(--keyboard) max-md:z-30 max-md:border-t",
+                keyboard === 0 && "max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
+              )}
+              style={{ "--keyboard": `${keyboard}px` } as React.CSSProperties}
+            >
+              <div className="@container mx-auto w-full max-w-2xl">
+                {editor ? <NoteToolbar editor={editor} onAttach={attach} /> : <Skeleton className="h-8 w-full max-w-md" />}
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 p-3 md:p-4">
+              <input
+                ref={titleRef}
+                value={note.title}
+                onChange={(e) => edit(id, { title: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || (e.key === "ArrowDown" && !e.shiftKey)) {
+                    e.preventDefault();
+                    editor?.commands.focus("start");
+                  }
+                }}
+                placeholder="Title"
+                aria-label="Title"
+                className="w-full bg-transparent py-1 text-2xl font-medium outline-none placeholder:text-muted-foreground/60"
+              />
+              <LinkChips links={links} onRemove={removeLink} />
+              <NoteFilesContext.Provider value={filesValue}>
+                {editor ? <EditorContent editor={editor} /> : <Skeleton className="h-24 w-full" />}
+              </NoteFilesContext.Provider>
+            </div>
           </div>
         </div>
       </ScrollArea>
@@ -357,22 +368,20 @@ function useOffline(): boolean {
 function NoteSkeleton() {
   return (
     <div className="flex h-full flex-col" aria-busy aria-label="Loading Note">
-      <div className="flex shrink-0 items-center gap-3 border-b p-3 md:px-4">
-        <div className="grid gap-1.5">
-          <Skeleton className="h-4 w-36" />
-          <Skeleton className="h-3 w-24" />
-        </div>
-        <Skeleton className="ml-auto size-8 rounded-md" />
+      <div className="flex shrink-0 items-center gap-2 p-3 md:px-4">
+        <div className="flex h-10 min-w-0 flex-1 items-center"><Skeleton className="h-4 w-36" /></div>
+        <Skeleton className="size-8 rounded-md" />
+        <Skeleton className="size-8 rounded-md" />
       </div>
-      <div className="shrink-0 border-b px-3 py-2 md:px-4">
-        <div className="mx-auto w-full max-w-2xl"><Skeleton className="h-8 w-full max-w-md" /></div>
-      </div>
-      <div className="min-h-0 flex-1 p-3 md:px-4">
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-3">
-          <Skeleton className="h-8 w-1/2" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-2/3" />
+      <div className="min-h-0 flex-1 px-3 md:px-4">
+        <div className="mx-auto w-full max-w-2xl rounded-lg border bg-background">
+          <div className="border-b p-2"><Skeleton className="h-8 w-full max-w-md" /></div>
+          <div className="flex flex-col gap-3 p-3 md:p-4">
+            <Skeleton className="h-8 w-1/2" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
         </div>
       </div>
     </div>

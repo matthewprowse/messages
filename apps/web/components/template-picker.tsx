@@ -56,7 +56,7 @@ export function TemplatePicker({ workspaceId, disabled, vars = {}, onInsert }: {
           </>
         )}
         {mine.length === 0 && team.length === 0 && (
-          <DropdownMenuItem asChild><Link href="/settings/ai#templates">Add Your First Template</Link></DropdownMenuItem>
+          <DropdownMenuItem asChild><Link href="/settings/drafts#templates">Add Your First Template</Link></DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

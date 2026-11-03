@@ -37,15 +37,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const CALENDARS = ["google_calendar", "icloud_calendar", "outlook_calendar"] as const;
-const PROVIDER_NAME: Record<string, string> = { google_calendar: "Google", icloud_calendar: "iCloud", outlook_calendar: "Outlook" };
 
 // A column with a fixed header and footer and a scrolling middle. On a phone it fills the screen (padded clear of the
-// status bar and home indicator, the X moved down with it), so the keyboard and the guest list have room.
-const SHEET = "flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-lg max-sm:inset-0 max-sm:h-dvh max-sm:max-h-none max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:pt-[calc(1rem+env(safe-area-inset-top))] max-sm:pb-[calc(1rem+env(safe-area-inset-bottom))] max-sm:ring-0 max-sm:*:data-[slot=dialog-close]:top-[calc(0.5rem+env(safe-area-inset-top))]";
+// status bar and home indicator), so the keyboard and the guest list have room.
+const SHEET = "flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-lg max-sm:inset-0 max-sm:h-dvh max-sm:max-h-none max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:pt-[calc(1rem+env(safe-area-inset-top))] max-sm:pb-[calc(1rem+env(safe-area-inset-bottom))] max-sm:ring-0";
 
 /**
  * A new Google, Outlook or iCloud Calendar event, or with `editing` a change to one. The dialog closes as soon as
@@ -64,6 +63,9 @@ export function NewEventDialog({
   until,
   title: initialTitle = "",
   guests: initialGuests = [],
+  endDay,
+  allDay: initialAllDay = false,
+  location: initialLocation = "",
   onQueued,
   onCreated,
   onFailed,
@@ -83,6 +85,12 @@ export function NewEventDialog({
   until?: string;
   /** The title a new event starts with, such as a conversation's subject. */
   title?: string;
+  /** "YYYY-MM-DD", the last day of an all-day event over several days, such as a trip a message proposed. */
+  endDay?: string;
+  /** Starts as an all-day event on `day` (to `endDay`), such as a plan with no time. */
+  allDay?: boolean;
+  /** Where a new event starts, such as the place a message named. */
+  location?: string;
   guests?: string[];
   onQueued?: (event: CalendarEvent) => void;
   onCreated?: (id: string) => void;
@@ -112,6 +120,8 @@ export function NewEventDialog({
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
   const [allDay, setAllDay] = useState(false);
+  const [endDate, setEndDate] = useState("");
+  const [endDateOpen, setEndDateOpen] = useState(false);
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [location, setLocation] = useState("");
@@ -165,11 +175,12 @@ export function NewEventDialog({
     const end = until && /^\d{2}:\d{2}$/.test(until) && time && until > time ? until : undefined;
     const times = time && day && /^\d{2}:\d{2}$/.test(time) ? { date: day, startTime: time, endTime: end ?? shiftEnd("00:00", "01:00", time) } : base;
     setTitle(initialTitle);
-    setDate(times.date);
-    setAllDay(false);
+    setDate(initialAllDay && day ? day : times.date);
+    setAllDay(initialAllDay && !!day);
+    setEndDate(initialAllDay && day && endDay && endDay > day ? endDay : "");
     setStartTime(times.startTime);
     setEndTime(times.endTime);
-    setLocation("");
+    setLocation(initialLocation);
     setDescription("");
     setRepeat("");
     setGuests(parseGuests(initialGuests.join(" ")).valid);
@@ -180,12 +191,12 @@ export function NewEventDialog({
     setChecked(false);
     setRow(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, day, time, until, initialTitle, guestKey, editing?.id]);
+  }, [open, day, time, until, initialTitle, guestKey, editing?.id, endDay, initialAllDay, initialLocation]);
 
   const pending = parseGuests(guestQuery);
   // Google and iCloud repeat events; Outlook's are shown, not changed, from here.
   const repeats = account?.provider === "google_calendar" || account?.provider === "icloud_calendar";
-  const form = { title, date, allDay, startTime, endTime, location, description, guests, sendInvites: outlook || sendInvites, addMeet: addMeet && google, repeat: repeats ? repeat : "" };
+  const form = { title, date, allDay, endDate: allDay && !edit && endDate ? endDate : undefined, startTime, endTime, location, description, guests, sendInvites: outlook || sendInvites, addMeet: addMeet && google, repeat: repeats ? repeat : "" };
   const timeZone = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ""; }
   }, []);
@@ -330,13 +341,15 @@ export function NewEventDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track={edit ? "edit_event" : "new_event"} className={SHEET}>
+      <DialogContent track={edit ? "edit_event" : "new_event"} showCloseButton={false} aria-describedby={undefined} className={SHEET}>
         <DialogHeader className="shrink-0">
           <DialogTitle>{edit ? "Edit Event" : "New Event"}</DialogTitle>
-          <DialogDescription>{edit ? "Changed" : "Created"} in your {PROVIDER_NAME[account?.provider ?? ""] ?? "Google"} Calendar, then shown on the Calendar page.</DialogDescription>
         </DialogHeader>
         {!account ? (
-          <Reconnect change={edit} />
+          <>
+            <Reconnect change={edit} />
+            <DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Close</Button></DialogFooter>
+          </>
         ) : (
           <form className="flex min-h-0 flex-1 flex-col gap-4" onSubmit={(e) => { e.preventDefault(); void (edit ? (repeating && (!repeatChanged || othersChanged) ? askScope() : submitEdit(repeating ? "series" : "occurrence")) : submit()); }}>
             {/* Only the fields scroll; the title and the Create button stay put. The negative margin keeps focus rings unclipped. */}
@@ -361,7 +374,13 @@ export function NewEventDialog({
               {errorFor("title") && <p className="text-xs text-destructive">{errorFor("title")}</p>}
             </div>
             {!editableTime && <p className="text-xs text-muted-foreground">This event runs over several days. Change its time in your calendar.</p>}
-            {editableTime && <DateField date={date} onChange={setDate} open={dateOpen} onOpenChange={setDateOpen} error={errorFor("date")} disabled={locked} />}
+            {editableTime && (allDay && !edit ? (
+              // An all-day event can run over several days: From and Until, Until the same day for one.
+              <div className="grid grid-cols-2 gap-4">
+                <DateField label="From" date={date} onChange={(d) => { setDate(d); if (endDate && endDate < d) setEndDate(""); }} open={dateOpen} onOpenChange={setDateOpen} error={errorFor("date")} disabled={locked} />
+                <DateField label="Until" id="event-end-date" date={endDate || date} onChange={(d) => setEndDate(d > date ? d : "")} open={endDateOpen} onOpenChange={setEndDateOpen} error={null} disabled={locked} />
+              </div>
+            ) : <DateField date={date} onChange={setDate} open={dateOpen} onOpenChange={setDateOpen} error={errorFor("date")} disabled={locked} />)}
             {editableTime && <SwitchRow id="event-all-day" label="All Day" checked={allDay} onChange={setAllDay} disabled={locked} />}
             {editableTime && !allDay && (
               <div className="grid gap-2">
@@ -408,6 +427,7 @@ export function NewEventDialog({
             {failed && !needsOutlookWrite(row?.error) && (reconnect ? <Reconnect provider={account.provider} change={edit} /> : <p className="text-xs text-destructive">{row?.error ?? (edit ? "The event could not be changed." : "The event could not be created.")}</p>)}
             </div>
             <DialogFooter className="shrink-0">
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
               {!edit ? (
                 <Button type="submit" variant="secondary" disabled={locked || (checked && !!problem)}>{queueing ? "Creating" : "Create"}</Button>
               ) : (

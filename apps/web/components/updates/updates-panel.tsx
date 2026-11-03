@@ -1,19 +1,19 @@
 "use client";
 
-// The changelog list with its filters, search, New Update and a Publish switch on each release, shown as the
-// Updates tab in Admin. The owner gate is the caller's; the database refuses anyone else. The public /updates page
-// shows the published ones.
+// The changelog for Settings, Updates: its views, search and New Update, then each release as a card with its version and
+// date in the title row and Publish or Unpublish beside them. The owner gate is the caller's; the database refuses anyone
+// else. Settings, What's New shows the published ones.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Megaphone } from "lucide-react";
 import { toast } from "sonner";
 import { CHANGE_KINDS, StaleUpdateError, dayLabel, loadUpdates, nextVersion, publishWarning, saveUpdate, sortUpdates, type ChangeKind, type Update } from "@/lib/updates";
 import { PaneControls, SearchBand, ViewButtons } from "@/components/pane";
+import { Card } from "@/components/surface";
 import { EmptyState } from "@/components/primitives";
 import { UpdateDialog } from "@/components/updates/update-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type View = "all" | "drafts" | "published";
@@ -65,39 +65,29 @@ export function UpdatesPanel() {
         <ViewButtons label="Show" value={view} onSelect={setView} items={[{ key: "all", label: `All (${counts.all})` }, { key: "drafts", label: `Drafts (${counts.drafts})` }, { key: "published", label: `Published (${counts.published})` }]} />
         <Button variant="secondary" className="ml-auto shrink-0" onClick={() => edit()}>New Update</Button>
       </PaneControls>
-      <p className="text-xs text-muted-foreground">To start from your commits, run pnpm updates:draft in the terminal. It prints a rough list of changes to rewrite in plain words; nothing is saved.</p>
-      {updates && updates.length > 0 && <SearchBand value={search} onChange={setSearch} placeholder="Search Updates" />}
-      <div>
-        {updates === null && !failed && <div className="flex flex-col gap-3"><Skeleton className="h-32 w-full rounded-lg" /><Skeleton className="h-32 w-full rounded-lg" /></div>}
-        {failed && <EmptyState icon={Megaphone} title="Could Not Load Updates" description="Check your connection and try again." action={<Button variant="secondary" onClick={load}>Retry</Button>} />}
-        {updates && shown.length === 0 && (
-          <div className="py-24">
-            <EmptyState icon={Megaphone} title={updates.length === 0 ? "No Updates Yet" : "Nothing Here"} description={updates.length === 0 ? "Write what changed before you push, so it is ready to show people." : "No updates match this view."} action={updates.length === 0 ? <Button variant="secondary" onClick={() => edit()}>New Update</Button> : undefined} />
+      {updates && updates.length > 0 && <SearchBand value={search} onChange={setSearch} placeholder="Search Updates" className="border-b-0 p-0" inputClassName="h-10" />}
+      {updates === null && !failed && <div className="flex flex-col gap-3"><Skeleton className="h-32 w-full rounded-lg" /><Skeleton className="h-32 w-full rounded-lg" /></div>}
+      {failed && <EmptyState icon={Megaphone} title="Could Not Load Updates" description="Check your connection and try again." action={<Button variant="secondary" onClick={load}>Retry</Button>} />}
+      {updates && shown.length === 0 && (
+        <div className="py-24">
+          <EmptyState icon={Megaphone} title={updates.length === 0 ? "No Updates Yet" : "Nothing Here"} action={updates.length === 0 ? <Button variant="secondary" onClick={() => edit()}>New Update</Button> : undefined} />
+        </div>
+      )}
+      {shown.map((u) => (
+        <Card
+          key={u.id}
+          title={<span className="flex items-center gap-2">{[u.version, dayLabel(u.releasedOn)].filter(Boolean).join(", ")}{!u.published && <Badge variant="outline">Draft</Badge>}</span>}
+          action={<Button variant="ghost" disabled={saving === u.id} onClick={() => void togglePublished(u)}>{u.published ? "Unpublish" : "Publish"}</Button>}
+        >
+          <button type="button" onClick={() => edit(u)} aria-label={`Edit ${u.title}`} className="flex w-full flex-col gap-1 rounded-lg p-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset">
+            <span className="text-sm font-medium">{u.title}</span>
+            {u.summary && <span className="text-sm text-muted-foreground">{u.summary}</span>}
+          </button>
+          <div className="flex flex-col gap-3 px-3 pb-3 empty:hidden">
+            {CHANGE_KINDS.map(({ key, label }) => <Changes key={key} kind={key} label={label} update={u} />)}
           </div>
-        )}
-        {shown.map((u, i) => (
-          <div key={u.id}>
-            {i > 0 && <Separator />}
-            <article aria-label={u.title} className="rounded-lg hover:bg-muted/50">
-              <div className="flex items-start gap-3 p-3">
-                <button type="button" onClick={() => edit(u)} aria-label={`Edit ${u.title}`} className="flex min-w-0 flex-1 flex-col gap-1 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
-                  <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    {u.version && <Badge variant="secondary">{u.version}</Badge>}
-                    <span>{dayLabel(u.releasedOn)}</span>
-                    {!u.published && <Badge variant="outline">Draft</Badge>}
-                  </span>
-                  <span className="text-sm font-medium">{u.title}</span>
-                  {u.summary && <span className="text-xs text-muted-foreground">{u.summary}</span>}
-                </button>
-                <Button variant="ghost" disabled={saving === u.id} onClick={() => void togglePublished(u)}>{u.published ? "Unpublish" : "Publish"}</Button>
-              </div>
-              <div className="flex flex-col gap-3 px-3 pb-3">
-                {CHANGE_KINDS.map(({ key, label }) => <Changes key={key} kind={key} label={label} update={u} />)}
-              </div>
-            </article>
-          </div>
-        ))}
-      </div>
+        </Card>
+      ))}
       <UpdateDialog open={open} onOpenChange={setOpen} editing={editing} suggestedVersion={nextVersion(updates ?? [])} onSaved={saved} onDeleted={removed} onStale={load} />
     </div>
   );

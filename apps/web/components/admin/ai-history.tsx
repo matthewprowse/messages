@@ -1,70 +1,54 @@
 "use client";
 
-// Admin, AI Usage (below the per person list): spend over time. Month over month across everyone, then each person with a
-// 30 day sparkline, this month against last, and the cost per feature. Email is the only identifier, as in AI Usage;
-// dollars only, never message content. The arithmetic is in lib/admin-ops.ts.
+// Admin's AI view, spend over time: month over month across everyone (setup work included; the current month is partial),
+// then each person with a 30 day sparkline, this month against last, and the cost per feature. Email is the only
+// identifier; dollars only, never message content. The arithmetic is in lib/admin-ops.ts.
 
-import { LineChart } from "lucide-react";
+import { User } from "lucide-react";
 import { featureLabel, spend } from "@/lib/ai-features";
 import { monthTotals, personHistories, type History } from "@/lib/admin-ops";
-import { EmptyState } from "@/components/primitives";
-import { AdminHeading, AdminRow } from "@/components/admin/parts";
-import { Sparkline } from "@/components/admin/ops-parts";
-import { Separator } from "@/components/ui/separator";
-
-const monthName = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
+import { Card, IconCircle, Row, Separated } from "@/components/surface";
+import { monthName } from "./format";
+import { Failed, LoadingCard, Quiet, Sparkline, Stat, Stats } from "./parts";
 
 export function AiHistory({ history, failed }: { history: History | null; failed: boolean }) {
-  if (!history) return failed ? <EmptyState icon={LineChart} title="Could Not Load AI History" description="Check your connection and refresh." /> : null;
+  if (!history) return failed ? <Failed title="Could Not Load AI History" /> : <LoadingCard title="Spend By Person, Last 30 Days" />;
   const now = new Date();
-  const months = monthTotals(history.monthly);
+  // The last four months, so the number cards stay one row.
+  const all = monthTotals(history.monthly);
+  const months = all.slice(-4);
   const people = personHistories(history, now);
   return (
-    <div className="mt-6 flex flex-col gap-3">
-      <AdminHeading title="Month over Month" description="What Google was billed for everyone, setup work included. The current month is partial." />
-      {months.length === 0 ? (
-        <p className="px-3 text-sm text-muted-foreground">No history yet.</p>
-      ) : (
-        <div className="flex flex-wrap gap-3 px-3">
+    <>
+      {months.length > 0 && (
+        <Stats>
           {months.map((m, i) => {
-            const before = months[i - 1]?.usd;
-            return (
-              <div key={m.month} className="min-w-28 flex-1 rounded-lg border p-3">
-                <div className="text-xs text-muted-foreground">{monthName(m.month)}</div>
-                <div className="text-sm font-medium tabular-nums">{spend(m.usd)}</div>
-                {before != null && before > 0 && <div className="text-xs text-muted-foreground tabular-nums">{m.usd >= before ? "Up" : "Down"} {Math.abs(Math.round(((m.usd - before) / before) * 100))}%</div>}
-              </div>
-            );
+            const before = all[all.length - months.length + i - 1]?.usd;
+            return <Stat key={m.month} label={monthName(m.month)} value={spend(m.usd)} note={before != null && before > 0 ? `${m.usd >= before ? "Up" : "Down"} ${Math.abs(Math.round(((m.usd - before) / before) * 100))}% Month Over Month` : undefined} />;
           })}
-        </div>
+        </Stats>
       )}
-      <AdminHeading title="Spend by Person, Last 30 Days" description="One line per person, a point for each day. The percent compares this month so far with the whole of last month." />
-      {people.length === 0 ? (
-        <p className="px-3 text-sm text-muted-foreground">No AI use in the last 30 days.</p>
-      ) : (
-        <div>
-          {people.map((p, i) => (
-            <div key={p.userId}>
-              {i > 0 && <Separator className="ml-3" />}
-              <AdminRow
-                title={p.email ?? p.userId.slice(0, 8)}
-                description={
-                  <>
-                    <div>{p.features.length > 0 ? p.features.map((f) => `${featureLabel(f.feature)} ${spend(f.usd)}`).join(", ") : "No feature spend"}</div>
-                    <div>{p.months.length > 0 ? p.months.map((m) => `${monthName(m.month)} ${spend(m.usd)}`).join(", ") : "No monthly totals"}{p.monthChangePct == null ? "" : `. ${p.monthChangePct >= 0 ? "Up" : "Down"} ${Math.abs(Math.round(p.monthChangePct))}% on last month so far`}</div>
-                  </>
-                }
-              >
-                <Sparkline values={p.series} label={`Daily spend for ${p.email ?? "this person"} over 30 days`} />
-                <div className="w-20 text-right">
-                  <div className="text-sm font-medium tabular-nums">{spend(p.total30)}</div>
-                  <div className="text-xs text-muted-foreground tabular-nums">Today {spend(p.today)}</div>
+      <Card title="Spend By Person, Last 30 Days">
+        {people.length === 0 ? <Quiet>No AI Use In The Last 30 Days</Quiet> : (
+          <Separated>
+            {people.map((p) => (
+              <div key={p.userId}>
+                <Row
+                  lead={<IconCircle icon={User} />}
+                  title={p.email ?? p.userId.slice(0, 8)}
+                  meta={spend(p.total30)}
+                  detail={`Today ${spend(p.today)}${p.monthChangePct == null ? "" : `, ${p.monthChangePct >= 0 ? "Up" : "Down"} ${Math.abs(Math.round(p.monthChangePct))}% On Last Month So Far`}`}
+                  end={<Sparkline values={p.series} label={`Daily spend for ${p.email ?? "this person"} over 30 days`} />}
+                />
+                <div className="-mt-2 flex flex-col gap-1 pr-3 pb-3 pl-16 text-xs text-muted-foreground">
+                  <span>{p.features.length > 0 ? p.features.map((f) => `${featureLabel(f.feature)} ${spend(f.usd)}`).join(", ") : "No Feature Spend"}</span>
+                  {p.months.length > 0 && <span>{p.months.map((m) => `${monthName(m.month)} ${spend(m.usd)}`).join(", ")}</span>}
                 </div>
-              </AdminRow>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+              </div>
+            ))}
+          </Separated>
+        )}
+      </Card>
+    </>
   );
 }

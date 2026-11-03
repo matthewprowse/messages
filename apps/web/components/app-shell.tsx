@@ -10,7 +10,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useIsOwner } from "@/lib/auth";
 import { NewMenu } from "@/components/new-menu";
 import { Logo } from "@/components/logo";
-import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Ellipsis, type LucideIcon } from "lucide-react";
+import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ShieldCheck, Ellipsis, type LucideIcon } from "lucide-react";
 import { useOnboardingMeta } from "@/lib/onboarding";
 import { isMarketingPath } from "@/lib/marketing-routes";
 import { useMyTeam } from "@/lib/share";
@@ -92,7 +92,6 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
         {NAV.map((item) => <RailButton key={item.href} {...item} active={pathname.startsWith(item.href)} />)}
       </div>
       <div className="mt-auto flex flex-col gap-1">
-        {isOwner && <RailButton href="/analytics" label="Analytics" icon={ChartColumn} active={pathname.startsWith("/analytics")} />}
         {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin")} />}
         <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings") && !pathname.startsWith("/settings/usage")} />
         <UsageRing />
@@ -108,7 +107,7 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
 function BottomBar({ hidden, onSearch }: { hidden: boolean; onSearch: () => void }) {
   const pathname = usePathname();
   // More is its own screen (app/more), so it is lit there and on the places it leads to that the bar does not have.
-  const moreActive = ["/more", ...SECONDARY.map((m) => m.href), "/analytics", "/admin", "/settings"].some((href) => pathname.startsWith(href));
+  const moreActive = ["/more", ...SECONDARY.map((m) => m.href), "/admin", "/settings"].some((href) => pathname.startsWith(href));
   if (hidden) return null;
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">

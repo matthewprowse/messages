@@ -1,8 +1,8 @@
 "use client";
 
-// Loads one thing for the Analytics page when it is wanted (its tab is open) and again when its inputs change. A failure
-// keeps what is already on screen; "denied" is the database refusing a non-owner. Each tab has its own, so opening Health
-// does not run the heavier summary and the other way round.
+// Loads one analytics result for Admin when it is wanted (a view that shows it is open) and again when its inputs change.
+// A failure keeps what is already on screen; "denied" is the database refusing a non-owner. use-analytics.ts holds one for
+// Overview's health and one for the Usage and AI summary.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnalyticsError } from "@/lib/analytics-data";

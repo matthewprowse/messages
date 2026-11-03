@@ -1,7 +1,7 @@
 "use client";
 
 // A client's timeline on their contact page: every channel, meeting, note, promise, task, document and lead in one list, newest
-// first and grouped by day, with a search, a type filter and a matter picker. Messages come a page at a time; viewing it never
+// first and grouped by day (a card each), with a search, a type filter and a matter picker. Messages come a page at a time; viewing it never
 // marks a conversation read, so no WhatsApp read receipt goes out. Render it with key={contact.id}.
 
 import { useMemo, useState } from "react";
@@ -9,6 +9,7 @@ import { History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/primitives";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Card, Separated } from "@/components/surface";
 import type { ContactDetail } from "@/lib/contacts";
 import { countByType, filterTimeline, groupByDay } from "@/lib/timeline/build";
 import { linkRefOf, matterRefs, type Matter, type MatterKind } from "@/lib/timeline/matters";
@@ -49,10 +50,10 @@ export function TimelineTab({ contact }: { contact: ContactDetail }) {
   const filtering = term.trim() !== "" || types.length > 0 || !!chosen;
 
   if (!timeline.ready && timeline.items.length === 0) {
-    return <div className="grid gap-3">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}</div>;
+    return <div className="grid gap-3">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}</div>;
   }
   if (timeline.all.length === 0) {
-    return <EmptyState icon={History} title="Nothing Yet" description="Messages, meetings, notes and promises with this client appear here as they happen." />;
+    return <EmptyState icon={History} title="Nothing Yet" />;
   }
 
   return (
@@ -72,14 +73,13 @@ export function TimelineTab({ contact }: { contact: ContactDetail }) {
 
       {days.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">
-          {chosen && !term && types.length === 0 ? "Nothing in this matter yet. Use the plus on any entry to add it." : "Nothing matches."}
+          {chosen && !term && types.length === 0 ? "Nothing in this matter yet." : "Nothing matches."}
           {!timeline.messagesDone && " Older history is not loaded yet."}
         </p>
       ) : (
         days.map((g) => (
-          <section key={g.day} aria-label={g.label}>
-            <h2 className="sticky top-0 z-10 bg-background py-1 text-xs font-medium text-muted-foreground">{g.label}</h2>
-            <ul className="divide-y">
+          <Card key={g.day} title={g.label}>
+            <Separated inset="none">
               {g.items.map((item) => (
                 <TimelineRow
                   key={item.key}
@@ -92,8 +92,8 @@ export function TimelineTab({ contact }: { contact: ContactDetail }) {
                   }}
                 />
               ))}
-            </ul>
-          </section>
+            </Separated>
+          </Card>
         ))
       )}
 
@@ -102,7 +102,7 @@ export function TimelineTab({ contact }: { contact: ContactDetail }) {
           {timeline.paging ? "Loading..." : filtering ? "Load Earlier History" : "Load Earlier"}
         </Button>
       )}
-      {timeline.failed && <p className="text-center text-xs text-muted-foreground">Some of this timeline could not be loaded. Check your connection and reopen the page.</p>}
+      {timeline.failed && <p className="text-center text-xs text-muted-foreground">Some of this timeline did not load. Reopen the page to try again.</p>}
 
       <MatterDialog open={!!dialog} onOpenChange={(open) => { if (!open) setDialog(null); }} matter={dialog?.matter} onSave={(n, k) => void save(n, k)} />
     </div>

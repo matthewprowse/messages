@@ -5,7 +5,7 @@
 // the rail's New menu (NewMenu stays mounted and listens for NEW_ITEM_EVENT).
 
 import Link from "next/link";
-import { CalendarPlus, ChartColumn, CircleCheck, Mail, Megaphone, MessageCircle, NotebookPen, Paperclip, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
+import { CalendarPlus, CircleCheck, Mail, MessageCircle, NotebookPen, Paperclip, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
 import { useIsOwner } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { NEW_ITEM_EVENT } from "@/components/new-menu";
@@ -58,12 +58,10 @@ export default function MorePage() {
           {isOwner && (
             <>
               <Separator className="my-2" />
-              <LinkRow href="/analytics" label="Analytics" icon={ChartColumn} />
               <LinkRow href="/admin" label="Admin" icon={ShieldCheck} />
             </>
           )}
           <Separator className="my-2" />
-          <LinkRow href="/whats-new" label="What's New" icon={Megaphone} />
           <LinkRow href="/settings" label="Settings" icon={Settings} />
         </div>
       </ScrollArea>

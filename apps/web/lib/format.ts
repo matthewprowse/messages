@@ -69,6 +69,7 @@ const shortDate = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "sho
 const dayMonth = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long" });
 const dayMonthYear = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric" });
 const fullDay = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long" });
+const shortDay = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "long" });
 
 const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 
@@ -95,6 +96,12 @@ export function timeOf(iso: string) {
 /** "10 October 2026". */
 export function fullDate(iso: string) {
   return dayMonthYear.format(new Date(iso));
+}
+
+/** "Tue, 3 November": the short weekday, then the day and month. */
+export function dayDate(iso: string) {
+  const parts = Object.fromEntries(shortDay.formatToParts(new Date(iso)).map((p) => [p.type, p.value]));
+  return `${parts.weekday}, ${parts.day} ${parts.month}`;
 }
 
 export function longDate(iso: string) {

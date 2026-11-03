@@ -4,10 +4,9 @@
 // View, date and open event live in the address (?view, ?date, ?event), so a reload or shared link opens the same place.
 
 
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, CalendarDays, Clock } from "lucide-react";
+import { CalendarDays } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { visibleEvents } from "@/lib/event-filter";
@@ -17,27 +16,31 @@ import { addDays, dayKey, fromKey, parseKey, startOfDay, startOfMonth, startOfWe
 import { syncNotice } from "@/lib/sync-window";
 import { tasksByDay, undatedTasks, visibleTasks, type DayTask } from "@/lib/tasks";
 import type { Task } from "@/lib/types";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PaneControls, PaneHeader, SearchBand, ViewButtons } from "@/components/pane";
+import { PaneHeader, ViewButtons } from "@/components/pane";
 import { EmptyState, providerLabel } from "@/components/primitives";
 import { NewEventDialog } from "@/components/new-event-dialog";
 import { NewTaskDialog } from "@/components/new-task-dialog";
 import { DeleteEventDialog } from "@/components/delete-event-dialog";
 
+import { CalendarActions } from "@/components/calendar/calendar-actions";
+import { CalendarEmpty } from "@/components/calendar/calendar-empty";
 import { DAY_MIN, LABELS, View, byTime, rangeLabel } from "@/components/calendar/dates";
 import { CopyFreeTimes } from "@/components/calendar/copy-free-times";
 import { EventDialog } from "@/components/calendar/event-details";
 import { EventList } from "@/components/calendar/event-list";
+import { GridBar, GridNotes } from "@/components/calendar/grid-bar";
 import { MonthView } from "@/components/calendar/month-view";
 import { Now, Page, PageContext, useWide } from "@/components/calendar/page-context";
 import { TaskDialog } from "@/components/calendar/task-parts";
 import { UndatedTasks } from "@/components/calendar/undated-tasks";
 import { useCalendarData } from "@/components/calendar/use-calendar-data";
 import { useCalendarKeys } from "@/components/calendar/use-calendar-input";
+import { usePaneWidth } from "@/components/calendar/use-pane-width";
 import { usePendingChanges } from "@/components/calendar/use-pending-changes";
 import { useReload } from "@/components/calendar/use-reload";
+import { WeekStrip } from "@/components/calendar/week-strip";
 import { WeekView } from "@/components/calendar/week-view";
 import { cn } from "@/lib/utils";
 
@@ -52,10 +55,13 @@ function CalendarPageContent() {
   const eventParam = searchParams.get("event");
   const wide = useWide();
   // The view and date come from the address, so a reload or a shared link opens the same place.
-  const [view, setView] = useState<View>(() => {
+  const [view, setGridView] = useState<View>(() => {
     const asked = searchParams.get("view");
     return asked === "week" || asked === "day" ? asked : "agenda";
   });
+  // No Date swaps the list for the tasks with no day; the grid keeps the view it had.
+  const [undated, setUndated] = useState(false);
+  const setView = (next: View) => { setUndated(false); setGridView(next); };
   const [now, setNow] = useState(() => new Date());
   const [search, setSearch] = useState("");
   const term = search.trim().toLowerCase();
@@ -68,16 +74,7 @@ function CalendarPageContent() {
   useEffect(() => setVisibleKey(null), [anchorKey, view]);
 
   // How many days the week view shows: seven when they fit, else as many as do, starting on the selected day.
-  const paneRef = useRef<HTMLDivElement>(null);
-  const [paneWidth, setPaneWidth] = useState(0);
-  useLayoutEffect(() => {
-    const el = paneRef.current;
-    if (!el) return;
-    setPaneWidth(el.clientWidth);
-    const observer = new ResizeObserver(() => setPaneWidth(el.clientWidth));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const { ref: paneRef, width: paneWidth } = usePaneWidth();
   const fits = paneWidth === 0 ? 7 : Math.floor((paneWidth - LABELS) / DAY_MIN);
   const weekDays = fits >= 7 ? 7 : Math.max(1, Math.min(5, Math.floor((paneWidth - LABELS) / 100)));
 
@@ -150,7 +147,7 @@ function CalendarPageContent() {
   }, [events, days]);
   // Tasks on the days shown, with open overdue ones on today. Shown once events have loaded, so the grid draws once.
   const tasksOnDays = useMemo(() => (events ? tasksByDay(visibleTasks(tasks, term), days, now) : new Map<string, DayTask[]>()), [events, tasks, term, days, now]);
-  const undated = useMemo(() => undatedTasks(tasks, term), [tasks, term]);
+  const undatedList = useMemo(() => undatedTasks(tasks, term), [tasks, term]);
   const openTask = openTaskId ? (tasks.find((t) => t.id === openTaskId) ?? null) : null;
 
   const shownDetails = useMemo(() => {
@@ -168,20 +165,24 @@ function CalendarPageContent() {
     const first = new Date(anchor.getFullYear(), anchor.getMonth() + n, 1);
     setAnchor(first.getMonth() === today.getMonth() && first.getFullYear() === today.getFullYear() ? today : first);
   };
-  const move = (n: number) => (timeGrid ? setAnchor(addDays(anchor, length * n)) : moveMonth(n));
+  // The month grid follows the day at the top of the agenda list as it scrolls, inside the days already loaded.
+  const gridAnchor = view === "agenda" && visibleKey ? fromKey(visibleKey) : anchor;
+  // A phone's agenda shows a week strip in place of the month grid, so its arrows move a week.
+  const byWeek = view === "agenda" && !wide;
+  const move = (n: number) => (timeGrid ? setAnchor(addDays(anchor, length * n)) : byWeek ? setAnchor(addDays(startOfWeek(gridAnchor), 7 * n)) : moveMonth(n));
   const label =
     view === "day" ? anchor.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", ...(anchor.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) })
     : view === "week" ? rangeLabel(start, addDays(start, length), today)
     : (visibleKey ? fromKey(visibleKey) : anchor).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
-  // The month grid follows the day at the top of the agenda list as it scrolls, inside the days already loaded.
-  const gridAnchor = view === "agenda" && visibleKey ? fromKey(visibleKey) : anchor;
   const gridDays = useMemo(() => {
     if (view !== "agenda") return days;
     const first = dayKey(startOfWeek(startOfMonth(gridAnchor)));
     const at = days.indexOf(first);
     return at >= 0 && at + 42 <= days.length ? days.slice(at, at + 42) : days.slice(0, 42);
   }, [view, days, gridAnchor]);
-  const unit = view === "day" ? "Day" : view === "week" ? (length === 7 ? "Week" : "Days") : "Month";
+  const unit = view === "day" ? "Day" : view === "week" ? (length === 7 ? "Week" : "Days") : byWeek ? "Week" : "Month";
+  const stripStart = startOfWeek(gridAnchor);
+  const stripDays = Array.from({ length: 7 }, (_, i) => dayKey(addDays(stripStart, i)));
 
   const openNew = (day: string, time?: string, until?: string) => {
     setNewDay(day);
@@ -192,27 +193,6 @@ function CalendarPageContent() {
 
   useCalendarKeys({ today, blocked: newOpen || freeOpen || editOpen || !!deleteFor || !!openKey || !!openTask || newTaskOpen, setAnchor, setView, onNewEvent: () => openNew(anchorKey), onNewTask: () => setNewTaskOpen(true) });
 
-  // With no account connected at all, the first step is connecting one.
-  const noAccounts = !accounts.some((a) => a.status !== "disconnected");
-  const notConnected = !calendarConnected && events && events.length === 0 && tasks.length === 0 && (
-    <div className="py-12">
-      {noAccounts ? (
-        <EmptyState
-          icon={CalendarDays}
-          title="Connect an Account"
-          description="Connect Google, Outlook or iCloud Calendar to see your events here."
-          action={<Button asChild><Link href="/settings/accounts">Connect an Account</Link></Button>}
-        />
-      ) : (
-        <EmptyState
-          icon={CalendarDays}
-          title="Nothing Scheduled"
-          description="Connect Google, Outlook or iCloud Calendar in Settings to see your events here."
-          action={<Button variant="secondary" asChild><Link href="/settings/accounts">Connected Accounts</Link></Button>}
-        />
-      )}
-    </div>
-  );
   // The days listed: the month view's list follows the date picked, the week view's lists the week's events.
   const listed = timeGrid
     ? days.filter((key) => byDay.has(key) || tasksOnDays.has(key))
@@ -220,16 +200,12 @@ function CalendarPageContent() {
         const day = fromKey(key);
         return day >= startOfMonth(anchor) && day < listEnd && (byDay.has(key) || tasksOnDays.has(key) || key === anchorKey);
       });
-  const noEvents = events && listed.length === 0 && (
-    <div className="py-12">
-      <EmptyState
-        icon={CalendarDays}
-        title="No Events"
-        description={view === "day" ? "Nothing is scheduled this day." : view === "week" ? "Nothing is scheduled in these days." : "Nothing is scheduled this month."}
-        action={calendarConnected ? <Button variant="secondary" onClick={() => openNew(anchorKey)}>New Event</Button> : undefined}
-      />
-    </div>
-  );
+  // With no account connected at all, the first step is connecting one; with no calendar, connecting a calendar.
+  const noAccounts = !accounts.some((a) => a.status !== "disconnected");
+  const notConnected = !calendarConnected && events?.length === 0 && tasks.length === 0;
+  const empty = events && (notConnected || listed.length === 0) ? (
+    <CalendarEmpty kind={notConnected ? (noAccounts ? "no_accounts" : "no_calendar") : "no_events"} onNewEvent={calendarConnected ? () => openNew(anchorKey) : undefined} />
+  ) : null;
 
   const deleteProvider = accounts.find((a) => a.id === deleteFor?.event.accountId)?.provider;
   const deletedFrom = deleteProvider ? providerLabel[deleteProvider] : "your calendar";
@@ -251,106 +227,79 @@ function CalendarPageContent() {
         const provider = accounts.find((a) => a.id === task.accountId)?.provider;
         return provider ? providerLabel[provider] : undefined;
       },
+      providerOf: (accountId) => (accountId ? accounts.find((a) => a.id === accountId)?.provider : undefined),
     }),
     [wide, openKey, shownDetails, detailsFailed, pending.answer, accounts],
   );
 
-  // The same split as Conversations and Summary: the header and the list on the left, what they are about
-  // beside it. Phones stack them, the grid between the header and the list. On a phone the agenda keeps the header
-  // and the month grid in place and scrolls only the list; the day and week views are taller than the screen, so
-  // there the column scrolls as one.
-  const pinned = view === "agenda";
+  // The same split as Conversations and Summary: the header and the list on the left, the grid in a white card on the
+  // grey beside it. Phones stack them, the grid between the header and the list. On a phone the agenda (and No Date)
+  // keeps the header and the week strip in place and scrolls only the list; the day and week views are taller than the
+  // screen, so there the column scrolls as one.
+  const pinned = view === "agenda" || undated;
   return (
     <Now.Provider value={now}>
     <Page.Provider value={context}>
       <div className={cn("flex h-full min-h-0 flex-col md:grid md:grid-cols-[20rem_minmax(0,1fr)] md:grid-rows-[auto_minmax(0,1fr)] md:overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]", pinned ? "overflow-hidden" : "overflow-y-auto")}>
-        {/* The same two bands as Conversations: title and views, then search. */}
-        <div className="shrink-0 bg-background md:col-start-1 md:row-start-1 md:border-r">
+        <div className="shrink-0 md:col-start-1 md:row-start-1">
           <PaneHeader
             title="Calendar"
-            action={
-              <div className="flex shrink-0 items-center gap-2">
-                <Button variant="ghost" size="icon" aria-label="Copy Free Times" title="Copy Free Times" onClick={() => setFreeOpen(true)}><Clock /></Button>
-                <Button variant="secondary" onClick={() => setNewTaskOpen(true)}>New Task</Button>
-                <Button variant="secondary" onClick={() => openNew(anchorKey)}>New Event</Button>
-              </div>
+            action={<CalendarActions onNewEvent={() => openNew(anchorKey)} onNewTask={() => setNewTaskOpen(true)} onFreeTimes={() => setFreeOpen(true)} />}
+            views={
+              <ViewButtons
+                label="View"
+                value={undated ? "undated" : view}
+                onSelect={(key) => (key === "undated" ? setUndated(true) : setView(key))}
+                items={[{ key: "agenda", label: "Agenda" }, { key: "day", label: "Day" }, { key: "week", label: "Week" }, { key: "undated", label: "No Date", count: undatedList.length }]}
+              />
             }
-          >
-            <PaneControls>
-              <ViewButtons label="View" value={view} onSelect={setView} items={[{ key: "agenda", label: "Agenda" }, { key: "day", label: "Day" }, { key: "week", label: "Week" }]} />
-            </PaneControls>
-          </PaneHeader>
-          <SearchBand value={search} onChange={setSearch} placeholder="Filter This View" />
-          <UndatedTasks tasks={undated} onNewTask={() => setNewTaskOpen(true)} />
+            search={{ value: search, onChange: setSearch, placeholder: "Search Calendar" }}
+          />
         </div>
 
-        {/* The month or dates on show, with the arrows on the far right, like the header of every other page. */}
-        <div className="min-w-0 shrink-0 md:col-start-2 md:row-span-2 md:row-start-1 md:flex md:min-h-0 md:flex-col">
-          <header className="flex shrink-0 items-center justify-between gap-2 border-b bg-background p-3 md:px-4">
-            <span className="flex h-8 min-w-0 items-center truncate text-sm text-muted-foreground tabular-nums">{label}</span>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button variant="ghost" size="icon" aria-label={`Previous ${unit}`} onClick={() => move(-1)}><ArrowLeft /></Button>
-              <Button variant="ghost" size="icon" aria-label={`Next ${unit}`} onClick={() => move(1)}><ArrowRight /></Button>
-            </div>
-          </header>
-          {loadingOther && <div className="h-0.5 w-full animate-pulse bg-primary/50" role="progressbar" aria-label="Loading events" />}
-          {(refreshFailed || notice) && (
-            <div className="flex shrink-0 flex-col gap-2 border-b p-3">
-              {refreshFailed && (
-                <Alert>
-                  <AlertTitle>Events Did Not Refresh</AlertTitle>
-                  <AlertDescription>
-                    <p>Check your connection. The events shown may be out of date.</p>
-                    <Button variant="secondary" size="sm" className="mt-2" onClick={() => setVersion((v) => v + 1)}>Try Again</Button>
-                  </AlertDescription>
-                </Alert>
+        {/* The grid is too wide for a narrow column, so it keeps the wide side, whole in one card. No Date on a phone hides it. */}
+        <div className={cn("min-w-0 shrink-0 md:col-start-2 md:row-span-2 md:row-start-1 md:flex md:min-h-0 md:flex-col md:bg-muted/50", undated && "max-md:hidden")}>
+          <div className="flex min-w-0 flex-col border-b md:m-3 md:min-h-0 md:flex-1 md:overflow-hidden md:rounded-lg md:border md:bg-background">
+            <GridBar label={label} unit={unit} onMove={move} onToday={() => setAnchor(today)} />
+            {loadingOther && <div className="h-0.5 w-full shrink-0 animate-pulse bg-primary/50" role="progressbar" aria-label="Loading events" />}
+            <GridNotes refreshFailed={refreshFailed} notice={notice} onRetry={() => setVersion((v) => v + 1)} />
+            {/* On phones the page scrolls as one column, so the grid and the list keep their full height (shrink-0):
+                allowed to shrink, the column squeezed them and the grid's weeks drew over the list. */}
+            <div ref={paneRef} className="min-w-0 shrink-0 md:min-h-0 md:flex-1">
+              {events === undefined && (
+                <div className="flex flex-col p-3 md:h-full" aria-label="Loading events">
+                  <Skeleton className="h-16 w-full rounded-lg md:h-full" />
+                </div>
               )}
-              {notice && (
-                <Alert>
-                  <AlertTitle>{notice.title}</AlertTitle>
-                  <AlertDescription>{notice.text}</AlertDescription>
-                </Alert>
+              {events === null && (
+                <div className="py-24">
+                  <EmptyState icon={CalendarDays} title="Events Did Not Load" action={<Button variant="secondary" onClick={() => { setLoaded(undefined); setVersion((v) => v + 1); }}>Try Again</Button>} />
+                </div>
               )}
-            </div>
-          )}
-          {/* On phones the page scrolls as one column, so the grid and the list keep their full height (shrink-0):
-              allowed to shrink, the column squeezed them and the grid's weeks drew over the list. */}
-          <div ref={paneRef} className="min-w-0 shrink-0 md:min-h-0 md:flex-1">
-            {events === undefined && (
-              <div className="flex flex-col gap-3 p-3" aria-label="Loading events">
-                <Skeleton className="h-8 w-full" />
-                <Skeleton className="h-96 w-full rounded-lg" />
-              </div>
-            )}
-            {events === null && (
-              <div className="py-24">
-                <EmptyState
-                  icon={CalendarDays}
-                  title="Events Did Not Load"
-                  description="Check your connection, then try again."
-                  action={<Button variant="secondary" onClick={() => { setLoaded(undefined); setVersion((v) => v + 1); }}>Try Again</Button>}
+              {events && view === "agenda" && (wide
+                ? <MonthView days={gridDays} byDay={byDay} tasksByDay={tasksOnDays} today={today} selected={gridAnchor} monthOf={gridAnchor} onSelect={setAnchor} onCreate={(key) => openNew(key)} />
+                : <WeekStrip days={stripDays} byDay={byDay} tasksByDay={tasksOnDays} today={today} selectedKey={anchorKey} onSelect={(key) => setAnchor(fromKey(key))} />)}
+              {events && timeGrid && (
+                <WeekView
+                  days={days}
+                  byDay={byDay}
+                  tasksByDay={tasksOnDays}
+                  today={today}
+                  now={now}
+                  selectedKey={anchorKey}
+                  inline={!wide}
+                  onSelectDay={(key) => setAnchor(fromKey(key))}
+                  onCreateAt={openNew}
                 />
-              </div>
-            )}
-            {events && view === "agenda" && <MonthView days={gridDays} byDay={byDay} tasksByDay={tasksOnDays} today={today} selected={gridAnchor} monthOf={gridAnchor} onSelect={setAnchor} onCreate={(key) => openNew(key)} />}
-            {events && timeGrid && (
-              <WeekView
-                days={days}
-                byDay={byDay}
-                tasksByDay={tasksOnDays}
-                today={today}
-                now={now}
-                selectedKey={anchorKey}
-                inline={!wide}
-                onSelectDay={(key) => setAnchor(fromKey(key))}
-                onCreateAt={openNew}
-              />
-            )}
+              )}
+            </div>
           </div>
         </div>
 
-        <div data-calendar-list className={cn("border-t md:col-start-1 md:row-start-2 md:min-h-0 md:border-t-0 md:border-r", pinned ? "min-h-0 flex-1" : "shrink-0")}>
-          {events !== null && (
+        <div data-calendar-list className={cn("md:col-start-1 md:row-start-2 md:min-h-0", pinned ? "min-h-0 flex-1" : "shrink-0")}>
+          {undated ? (
+            <UndatedTasks tasks={undatedList} onNewTask={() => setNewTaskOpen(true)} />
+          ) : events !== null && (
             <EventList
               keys={listed}
               byDay={byDay}
@@ -358,7 +307,7 @@ function CalendarPageContent() {
               today={today}
               selectedKey={view === "agenda" ? anchorKey : undefined}
               loading={events === undefined}
-              empty={notConnected || noEvents || null}
+              empty={empty}
               // A year ahead at most.
               onEnd={view === "agenda" && !loadingMore && extraMonths < 12 ? () => setMore({ month: monthKey, months: extraMonths + 1 }) : undefined}
               loadingMore={loadingMore}
@@ -413,7 +362,7 @@ export default function CalendarPage() {
     <Suspense
       fallback={
         <div className="flex flex-col gap-3 p-3" aria-label="Loading events">
-          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-10 w-full" />
           <Skeleton className="h-96 w-full rounded-lg" />
         </div>
       }

@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { download } from "@/lib/compliance-export";
@@ -39,7 +40,9 @@ export function TransferMenu() {
   return (
     <>
       <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+        <Tip label="More">
+          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent align="end" className="w-max">
           <DropdownMenuItem onSelect={() => setImporting(true)}>Import Contacts</DropdownMenuItem>
           <DropdownMenuSeparator />

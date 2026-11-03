@@ -318,7 +318,7 @@ export function SharedChatView({ threadId }: { threadId: string }) {
   const [busy, setBusy] = useState(false);
   const myName = profile.name || session?.user.email || "Someone";
   const presence = useReplyingPresence(threadId, info?.reply === "inbox", myName);
-  const backHref = params.get("from") === "work" ? "/settings/team/work-chats" : "/inbox";
+  const backHref = params.get("from") === "work" ? "/settings/team?view=work-chats" : "/inbox";
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const names = useMemo(() => {

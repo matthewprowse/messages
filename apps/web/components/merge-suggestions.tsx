@@ -20,7 +20,6 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
-  AlertDialogDescription,
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
@@ -28,7 +27,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ContactAvatar, EmptyState } from "@/components/primitives";
 import { DIALOG_BUTTONS, MergeDialog, useCloseOnOverlay } from "@/components/merge-dialog";
 import { useContactsData } from "@/components/contacts-data";
-import { DetailPage, plural } from "@/components/contact-list";
+import { DetailHeading, DetailPage, plural } from "@/components/contact-list";
+import { IconCircle } from "@/components/surface";
 import { withQuery } from "@/lib/utils";
 
 function Person({ contact, query, keeping }: { contact: ContactSummary; query: string; keeping?: boolean }) {
@@ -85,7 +85,7 @@ function SuggestionCard({ suggestion, a, b, query, locked }: { suggestion: Merge
   };
 
   return (
-    <div className="rounded-lg border">
+    <div className="rounded-lg border bg-background">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-3">
         <p className="text-xs text-muted-foreground">{[suggestionReasonText(suggestion.reason, ...sides, organization), ...evidence].join(". ")}</p>
         <Badge variant="secondary">{suggestion.score >= CERTAIN_SCORE ? "Very Likely" : "Possible"}</Badge>
@@ -95,8 +95,8 @@ function SuggestionCard({ suggestion, a, b, query, locked }: { suggestion: Merge
         <Person contact={b} query={query} keeping={!namesDiffer(a.name, b.name) && keepId === b.id} />
       </div>
       <div className="flex justify-end gap-2 px-4 pb-3">
-        <Button variant="secondary" className="max-sm:h-10" disabled={busy !== null || locked} onClick={notSame}>Not the Same</Button>
-        <Button size="sm" className="max-sm:h-10" disabled={busy !== null || locked} onClick={() => (namesDiffer(a.name, b.name) ? setAsking(true) : merge())}>{busy === "merging" ? "Merging" : "Merge"}</Button>
+        <Button variant="secondary" disabled={busy !== null || locked} onClick={notSame}>Not the Same</Button>
+        <Button disabled={busy !== null || locked} onClick={() => (namesDiffer(a.name, b.name) ? setAsking(true) : merge())}>{busy === "merging" ? "Merging" : "Merge"}</Button>
       </div>
       <MergeDialog a={a} b={b} open={asking} onOpenChange={setAsking} onConfirm={(name) => merge(name)} />
     </div>
@@ -108,12 +108,9 @@ function MergeAllDialog({ count, certainOnly, open, merging, onOpenChange, onCon
   useCloseOnOverlay(open && !merging, onOpenChange);
   return (
     <AlertDialog open={open} onOpenChange={(next) => !merging && onOpenChange(next)}>
-      <AlertDialogContent track="merge_all_contacts">
+      <AlertDialogContent track="merge_all_contacts" aria-describedby={undefined}>
         <AlertDialogHeader>
           <AlertDialogTitle>{certainOnly ? "Merge Very Likely" : "Merge All"} {plural(count, "Pair")}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Each pair becomes one contact with all their addresses, numbers and conversations. Where the two names differ, the person with more conversations keeps their name. You can undo each merge.
-          </AlertDialogDescription>
         </AlertDialogHeader>
         <div className={DIALOG_BUTTONS}>
           <AlertDialogCancel disabled={merging}>Cancel</AlertDialogCancel>
@@ -135,7 +132,7 @@ function MergeAllDialog({ count, certainOnly, open, merging, onOpenChange, onCon
 }
 
 export function MergeSuggestions() {
-  const { contacts, suggestions, suggestionsMore, removeSuggestion, reload } = useContactsData();
+  const { contacts, suggestions, removeSuggestion, reload } = useContactsData();
   const { mergeContacts, undoMerge, refreshContacts, notify } = useApp();
   const query = useSearchParams().toString();
   // Which pairs the confirmation is about: every pair, or only those the linker is sure of.
@@ -191,19 +188,17 @@ export function MergeSuggestions() {
   return (
     <DetailPage
       backHref={withQuery("/contacts", query)}
-      className="flex flex-col gap-3"
       header={
         <>
-          <div className="flex h-10 min-w-0 flex-1 flex-col justify-center">
-            <h1 className="truncate text-base font-medium">Suggested Merges</h1>
-            {!loading && rows.length > 0 && <span className="truncate text-xs text-muted-foreground">People who may be the same person</span>}
+          <DetailHeading avatar={<IconCircle icon={Users} />} title="Suggested Merges" />
+          <div className="flex shrink-0 items-center gap-1">
+            {!loading && certain.length > 0 && certain.length < rows.length && (
+              <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll("certain")}>Merge Very Likely</Button>
+            )}
+            {!loading && rows.length > 1 && (
+              <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll("all")}>{mergingAll ? "Merging" : "Merge All"}</Button>
+            )}
           </div>
-          {!loading && certain.length > 0 && certain.length < rows.length && (
-            <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll("certain")}>Merge Very Likely</Button>
-          )}
-          {!loading && rows.length > 1 && (
-            <Button variant="secondary" disabled={mergingAll} onClick={() => setConfirmingAll("all")}>{mergingAll ? "Merging" : "Merge All"}</Button>
-          )}
         </>
       }
     >
@@ -211,16 +206,15 @@ export function MergeSuggestions() {
       {!loading && rows.length === 0 && (
         <div className="py-24">
           {suggestions === null || contacts === null ? (
-            <EmptyState icon={Users} title="Suggestions Did Not Load" description="Check your connection, then try again." action={<Button variant="secondary" onClick={reload}>Retry</Button>} />
+            <EmptyState icon={Users} title="Suggestions Did Not Load" action={<Button variant="secondary" onClick={reload}>Retry</Button>} />
           ) : (
-            <EmptyState icon={Users} title="No Suggested Merges" description="When two contacts look like the same person, they show here." />
+            <EmptyState icon={Users} title="No Suggested Merges" />
           )}
         </div>
       )}
       {rows.map(({ s, a, b }) => (
         <SuggestionCard key={s.id} suggestion={s} a={a} b={b} query={query} locked={mergingAll} />
       ))}
-      {suggestionsMore > 0 && <p className="text-xs text-muted-foreground">{plural(suggestionsMore, "more pair")} will show as you work through these.</p>}
       <MergeAllDialog
         count={confirmingAll === "certain" ? certain.length : rows.length}
         certainOnly={confirmingAll === "certain"}

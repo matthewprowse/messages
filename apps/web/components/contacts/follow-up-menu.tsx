@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { BellPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tip } from "@/components/tip";
 import { NUDGES, nudgeAccount, nudgeForm } from "@/lib/contact-nudge";
 import { queueNudge } from "@/lib/contact-nudge-io";
 import { useApp } from "@/lib/store";
@@ -28,13 +29,15 @@ export function FollowUpMenu({ contactId, name }: { contactId: string; name: str
 
   return (
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button variant="secondary" disabled={busy}><BellPlus />Follow Up</Button>
-      </DropdownMenuTrigger>
+      <Tip label="Follow Up">
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" aria-label="Follow Up" disabled={busy}><BellPlus /></Button>
+        </DropdownMenuTrigger>
+      </Tip>
       <DropdownMenuContent align="end" className="w-max">
         {account ? (
           <>
-            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Remind Me to Check In</DropdownMenuLabel>
+            <DropdownMenuLabel>Remind Me to Check In</DropdownMenuLabel>
             {NUDGES.map((n) => <DropdownMenuItem key={n.key} onSelect={() => void remind(n.days)}>{n.label}</DropdownMenuItem>)}
           </>
         ) : (

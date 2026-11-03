@@ -1,10 +1,11 @@
 "use client";
 
-// Settings, AI, Templates and Snippets: your own reusable text. A template is picked from the reply box menu; a snippet is
+// Settings, Drafts, Templates and Snippets: your own reusable text. A template is picked from the reply box menu; a snippet is
 // typed as ;shortcut. Both can hold {first_name}, {name}, {company} and {my_name}. Sealed with your key (use-user-templates.ts).
 
 import { useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useApp } from "@/lib/store";
 import { TEMPLATE_LIMITS, useUserTemplates, type UserTemplate } from "@/lib/use-user-templates";
 import { MAX_SHORTCUT, normaliseShortcut } from "@/lib/snippets";
@@ -12,8 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { IconAction, Tip } from "@/components/tip";
 
 type Editing = { id?: string; kind: UserTemplate["kind"]; title: string; shortcut: string; body: string };
 
@@ -38,16 +41,15 @@ function EditDialog({ editing, onClose }: { editing: Editing | null; onClose: ()
   };
   return (
     <Dialog open={!!editing} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent track="edit_template" className="sm:max-w-md">
+      <DialogContent track="edit_template" showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{draft?.id ? "Edit" : "Add"} {snippet ? "Snippet" : "Template"}</DialogTitle>
-          <DialogDescription>Use {"{first_name}"}, {"{name}"}, {"{company}"} and {"{my_name}"} and they are filled in for the person you write to.</DialogDescription>
         </DialogHeader>
         {draft && (
           <div className="grid gap-4">
             <div className="grid gap-2">
               <Label htmlFor="template-title">Name</Label>
-              <Input id="template-title" value={draft.title} maxLength={TEMPLATE_LIMITS.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder={snippet ? "Thank you" : "Meeting follow-up"} autoFocus />
+              <Input id="template-title" value={draft.title} maxLength={TEMPLATE_LIMITS.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder={snippet ? "Thank you" : "Meeting follow up"} autoFocus />
             </div>
             {snippet && (
               <div className="grid gap-2">
@@ -63,9 +65,10 @@ function EditDialog({ editing, onClose }: { editing: Editing | null; onClose: ()
             {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
           </div>
         )}
-        <DialogFooter>
+        <div className={DIALOG_BUTTONS}>
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
           <Button type="button" variant="secondary" disabled={saving || !draft?.title.trim() || !draft?.body.trim()} onClick={submit}>Save</Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -78,21 +81,29 @@ export function TemplatesSection() {
   const [editing, setEditing] = useState<Editing | null>(null);
   const add = (kind: UserTemplate["kind"]) => setEditing({ kind, title: "", shortcut: "", body: "" });
   return (
-    <SettingsSection id="templates" title="Templates and Snippets" description="Reusable text for the reply box. Pick a template from its menu, or type a snippet's shortcut, like ;thanks, and a space.">
+    <SettingsSection
+      id="templates"
+      title="Templates and Snippets"
+      action={
+        <DropdownMenu>
+          <Tip label="Add"><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="Add"><Plus /></Button></DropdownMenuTrigger></Tip>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => add("template")}>Add Template</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => add("snippet")}>Add Snippet</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      }
+    >
       {items.length === 0 ? <SettingsEmpty>Nothing here yet.</SettingsEmpty> : (
         <SettingsRows>
           {items.map((t) => (
-            <SettingsRow key={t.id} title={t.title} description={t.kind === "snippet" ? `Snippet, type ;${t.shortcut}` : "Template"}>
-              <Button variant="ghost" size="icon" aria-label={`Edit ${t.title}`} onClick={() => setEditing({ ...t })}><Pencil /></Button>
-              <Button variant="ghost" size="icon" aria-label={`Remove ${t.title}`} onClick={async () => { if (await remove(t.id)) notify(`${t.title} removed`, () => void save(t)); else notify("Could not remove it. Try again."); }}><Trash2 /></Button>
+            <SettingsRow key={t.id} title={t.title} description={t.kind === "snippet" ? `;${t.shortcut}` : "Template"}>
+              <IconAction label={`Edit ${t.title}`} icon={Pencil} onClick={() => setEditing({ ...t })} />
+              <IconAction label={`Remove ${t.title}`} icon={Trash2} onClick={async () => { if (await remove(t.id)) notify(`${t.title} removed`, () => void save(t)); else notify("Could not remove it. Try again."); }} />
             </SettingsRow>
           ))}
         </SettingsRows>
       )}
-      <div className="flex gap-2">
-        <Button variant="secondary" onClick={() => add("template")}>Add Template</Button>
-        <Button variant="secondary" onClick={() => add("snippet")}>Add Snippet</Button>
-      </div>
       <EditDialog editing={editing} onClose={() => setEditing(null)} />
     </SettingsSection>
   );

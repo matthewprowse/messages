@@ -84,6 +84,17 @@ class BudgetMixin:
                 del self._spent[key]
         return read
 
+    def preload(self, user_id: str, feature: str) -> None:
+        """Reads what _check_budget reads for this person and feature (the owner's switches and their allowance), so a
+        call made soon after finds them cached instead of waiting on up to three reads in a row: a draft starts this
+        while its context is read. Never raises; the call itself checks again and fails closed."""
+        try:
+            flags_for(self._db).blocks_feature(feature, user_id)
+            if feature not in BUDGET_EXEMPT and not (feature in SETUP_FEATURES and self._setup_left(user_id) > 0):
+                self._allowance(user_id)
+        except Exception:
+            pass
+
     def _check_budget(self, ctx: UsageContext, estimate: float = 0.0, *, strict: bool = False) -> float:
         """Raises GeminiError(budget_paused) once the person has used their share of the monthly AI budget for
         this feature, or of its weekly limit (ai_budget, set in the admin panel; ai_allowance_for works the

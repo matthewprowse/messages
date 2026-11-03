@@ -12,7 +12,8 @@ import { loadPublishedUpdates, markWhatsNewSeen } from "@/lib/updates-reader";
 import { latestUpdate, seenFromMetadata, shouldShowWhatsNew, type ReaderUpdate } from "@/lib/updates-seen";
 import { WhatsNewEntry } from "@/components/whats-new/whats-new-entry";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 /** Loads the published updates once per sign-in and opens the dialog when there is something new to show. Renders nothing otherwise. */
@@ -49,7 +50,7 @@ export function WhatsNewDialog() {
   if (!latest) return null;
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>What's New</DialogTitle>
           <DialogDescription>{latest.title}{latest.version ? ` (${latest.version})` : ""}</DialogDescription>
@@ -57,10 +58,10 @@ export function WhatsNewDialog() {
         <ScrollArea className="max-h-[50vh]">
           <div className="pr-3"><WhatsNewEntry update={latest} compact /></div>
         </ScrollArea>
-        <DialogFooter>
-          <Button variant="outline" asChild><Link href="/whats-new" onClick={close}>See All Updates</Link></Button>
+        <div className={DIALOG_BUTTONS}>
+          <Button variant="ghost" asChild><Link href="/settings/whats-new" onClick={close}>See All Updates</Link></Button>
           <Button onClick={close}>Got It</Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

@@ -3,57 +3,52 @@
 // The Contacts list. The pieces the Contacts pages share (rows, detail page frame, form fields) live in
 // components/contacts/ and are re-exported here, so contact-view.tsx, company-view.tsx and merge-suggestions.tsx
 // keep importing from this file. Search and ordering rules are in lib/contact-list-helpers.ts. People shows starred
-// contacts first with how to reach each and their unread count; Going Quiet lists starred people and clients you have not been in touch with.
+// contacts first with their unread count; Going Quiet lists starred people and clients you have not been in touch with.
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Building2, Sparkles, Star, Users } from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Building2, Plus, Sparkles, Star, Users } from "lucide-react";
 import type { ContactSummary } from "@/lib/contacts";
 import type { CompanySummary } from "@/lib/organizations";
 import { isCompanySender } from "@/lib/people";
 import { searchDigits } from "@/lib/phone-search";
-import { bySort, byVipThen, detailOf, fold, haystack, matchesQuery, plural, queryOf, sortAndView, unreadByPerson, type Filters, type Sort, type View } from "@/lib/contact-list-helpers";
+import { bySort, byVipThen, fold, haystack, matchesQuery, plural, queryOf, sortAndView, unreadByPerson, type Filters, type Sort, type View } from "@/lib/contact-list-helpers";
 import { goingQuiet } from "@/lib/going-quiet";
 import { matchesRelationship } from "@/lib/relationships";
-import { tidyCounts } from "@/lib/tidy-up";
-import { isPlaceholderName } from "@/lib/merging";
 import { niceName } from "@/lib/format";
 import { withQuery } from "@/lib/utils";
+import { useApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Kbd } from "@/components/ui/kbd";
-import { PaneControls, PaneHeader, SearchBand, ViewButtons } from "@/components/pane";
-import { Separator } from "@/components/ui/separator";
+import { PaneHeader, ViewButtons } from "@/components/pane";
+import { IconAction } from "@/components/tip";
 import { CompanyAvatar, ContactAvatar } from "@/components/primitives";
-import { Badge } from "@/components/ui/badge";
 import { useContactsData } from "@/components/contacts-data";
-import { useApp } from "@/lib/store";
-import { TeamClientsRow } from "@/components/team-clients";
 import { ListRow } from "./contacts/list-rows";
 import { ListBody } from "./contacts/list-body";
-import { QuietDaysMenu, RelationshipFilter, SortMenu, useSlashFocus } from "./contacts/list-controls";
+import { ContactsFilter, factOf, mainProviders, useSlashFocus } from "./contacts/list-controls";
 import { NewContactDialog } from "./contacts/new-contact-dialog";
 import { TransferMenu } from "./contacts/transfer-menu";
 
 export { byRecent, firstReach, plural } from "@/lib/contact-list-helpers";
-export { ConversationRows, DetailList, Divided, ListRow, Section } from "./contacts/list-rows";
-export { DetailPage, DetailSkeleton, LoadFailed } from "./contacts/detail-page";
+export { BadgedAvatar, ConversationRows, DetailList, Divided, ListRow } from "./contacts/list-rows";
+export { DetailHeading, DetailPage, DetailSkeleton, LoadFailed } from "./contacts/detail-page";
 export { ContactFields, MultiInput, useContactFields } from "./contacts/contact-fields";
 
-function useSort(): { sort: Sort; view: View; query: string } & Filters {
-  return sortAndView(useSearchParams());
-}
+const searchText = (c: ContactSummary) => haystack([c.name, c.company, c.organizationName, c.role, ...c.emails, ...c.handles], c.phones);
+const searchPhones = (c: ContactSummary) => c.phones.map(searchDigits).join(" ");
 
 export function ContactList({ contacts, companies }: { contacts: ContactSummary[] | null | undefined; companies: CompanySummary[] | null | undefined }) {
-  const { sort, view, query, rel, quiet } = useSort();
+  const { sort, view, query, rel, quiet } = sortAndView(useSearchParams());
   const router = useRouter();
   const params = useParams<{ id?: string }>();
-  const pathname = usePathname();
-  const { suggestions, suggestionsMore, needCompanies, reload } = useContactsData();
+  const { needCompanies, reload } = useContactsData();
   // The same conversations the Inbox lists (not junk, archived or deleted), so a row's count matches what the Inbox shows.
   const { listThreads } = useApp();
   const inboxThreads = listThreads("all", "none");
   const unread = useMemo(() => unreadByPerson(inboxThreads), [inboxThreads]);
+  const providers = useMemo(() => mainProviders(inboxThreads), [inboxThreads]);
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -67,11 +62,7 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
   // Brands and role senders (noreply@, info@) are listed under Companies, not People. Hidden shows everyone hidden, so
   // a hidden sender can be shown again whichever tab it would have been on.
   const people = useMemo(
-    () => (contacts ?? []).filter((c) => (view === "hidden" ? c.hidden : !c.hidden && !isCompanySender(c)) && matchesRelationship(c, rel)).map((c) => ({
-      c,
-      hay: haystack([c.name, c.company, c.organizationName, c.role, ...c.emails, ...c.handles], c.phones),
-      digits: c.phones.map(searchDigits).join(" "),
-    })),
+    () => (contacts ?? []).filter((c) => (view === "hidden" ? c.hidden : !c.hidden && !isCompanySender(c)) && matchesRelationship(c, rel)).map((c) => ({ c, hay: searchText(c), digits: searchPhones(c) })),
     [contacts, view, rel],
   );
   const hiddenCount = useMemo(() => (contacts ?? []).filter((c) => c.hidden).length, [contacts]);
@@ -80,16 +71,11 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
     [people, q, sort, view],
   );
   // Starred people and clients with no contact for `quiet` days, longest silence first; it is not re-sorted.
-  const quietList = useMemo(
-    () => goingQuiet(contacts ?? [], quiet).filter((c) => matchesRelationship(c, rel)),
-    [contacts, quiet, rel],
-  );
   const shownQuiet = useMemo(
-    () => quietList.filter((c) => matchesQuery(q, haystack([c.name, c.company, c.organizationName, c.role, ...c.emails, ...c.handles], c.phones), c.phones.map(searchDigits).join(" "))),
-    [quietList, q],
+    () => goingQuiet(contacts ?? [], quiet).filter((c) => matchesRelationship(c, rel) && matchesQuery(q, searchText(c), searchPhones(c))),
+    [contacts, quiet, rel, q],
   );
   const allQuietCount = useMemo(() => goingQuiet(contacts ?? [], quiet).length, [contacts, quiet]);
-  const tidy = useMemo(() => tidyCounts(contacts ?? [], (suggestions?.length ?? 0) + suggestionsMore, suggestionsMore > 0), [contacts, suggestions, suggestionsMore]);
   const shownCompanies = useMemo(
     () => (companies ?? []).filter((c) => !q || haystack([c.name, c.domain]).includes(q)).sort(bySort(sort)),
     [companies, q, sort],
@@ -97,18 +83,17 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
   // When nothing in People matches, say what the other tabs hold for the same search.
   const elsewhere = useMemo(() => {
     if (!q || view !== "people" || shownPeople.length > 0) return null;
-    const hidden = (contacts ?? []).filter((c) => c.hidden && matchesQuery(q, haystack([c.name, c.company, c.organizationName, c.role, ...c.emails, ...c.handles], c.phones), c.phones.map(searchDigits).join(" "))).length;
+    const hidden = (contacts ?? []).filter((c) => c.hidden && matchesQuery(q, searchText(c), searchPhones(c))).length;
     return { companies: shownCompanies.length, hidden };
   }, [q, view, shownPeople.length, contacts, shownCompanies.length]);
   // Every contact is a company sender or hidden, so People is empty for a reason other than a new account.
   const allElsewhere = !!contacts?.length && view === "people" && !people.length;
   // A tab or sort change replaces the entry rather than adding one, so Back leaves Contacts in one step.
   const go = (nextSort: Sort, nextView: View, filters: Filters = { rel, quiet }) => router.replace(withQuery("/contacts", queryOf(nextSort, nextView, filters)));
-  const relationships = (contacts ?? []).filter((c) => c.relationship?.trim());
-  const noMatches = { title: "No Matches", description: `Nothing matches "${search.trim()}".` };
+  const relationships = useMemo(() => (contacts ?? []).filter((c) => c.relationship?.trim()), [contacts]);
   const peopleEmpty = q
     ? {
-        ...noMatches,
+        title: "No Matches",
         // Buttons to the tabs that do have a match.
         action: elsewhere && (elsewhere.companies > 0 || elsewhere.hidden > 0) && (
           <div className="flex flex-wrap justify-center gap-2">
@@ -118,125 +103,115 @@ export function ContactList({ contacts, companies }: { contacts: ContactSummary[
         ),
       }
     : view === "hidden"
-      ? { title: "No Hidden Contacts", description: "Contacts you hide appear here." }
+      ? { title: "No Hidden Contacts" }
       : allElsewhere
-        ? { title: "Everyone Is Under Companies or Hidden", description: "Nobody is listed under People right now.", action: <Button variant="secondary" onClick={() => go(sort, "companies")}>Open Companies</Button> }
-        : { title: "No Contacts Yet", description: "People appear here as your accounts sync." };
+        ? { title: "Everyone Is Under Companies or Hidden", action: <Button variant="secondary" onClick={() => go(sort, "companies")}>Open Companies</Button> }
+        : { title: "No Contacts Yet" };
 
   return (
-    // The scrollbar starts below the 158px header (with its line) instead of running behind it.
-    <ScrollArea className="h-full" scrollbarClassName="data-vertical:top-[158px]! data-vertical:h-auto!">
-      {/* Solid, with a line under it, like the Summary and Conversations headers. */}
-      <div className="sticky top-0 z-10 bg-background">
-        <PaneHeader title="Contacts" action={<div className="flex items-center gap-2"><TransferMenu /><Button variant="secondary" onClick={() => setAdding(true)}>New Contact</Button></div>}>
-          <PaneControls>
-            <ViewButtons
-              label="Show"
-              value={view}
-              onSelect={(v) => go(sort, v)}
-              items={[
-                { key: "people", label: "People" },
-                { key: "companies", label: "Companies" },
-                ...((allQuietCount > 0 || view === "quiet") ? [{ key: "quiet" as const, label: "Going Quiet" }] : []),
-                ...((hiddenCount > 0 || view === "hidden") ? [{ key: "hidden" as const, label: "Hidden" }] : []),
-              ]}
+    // The header sits above the scroll area, so the rows and their scrollbar both start below it.
+    <div className="flex h-full min-h-0 flex-col">
+      <PaneHeader
+        className="shrink-0"
+        title="Contacts"
+        action={
+          <>
+            <ContactsFilter
+              view={view}
+              sort={sort}
+              rel={rel}
+              quiet={quiet}
+              contacts={relationships}
+              onSort={(next) => go(next, view)}
+              onRel={(next) => go(sort, view, { rel: next, quiet })}
+              onQuiet={(days) => go(sort, view, { rel, quiet: days })}
             />
-            {view === "quiet" ? <QuietDaysMenu days={quiet} onChange={(days) => go(sort, view, { rel, quiet: days })} /> : <SortMenu sort={sort} onChange={(next) => go(next, view)} />}
-          </PaneControls>
-        </PaneHeader>
-        <SearchBand
-          inputRef={searchRef}
-          value={search}
-          onChange={setSearch}
-          placeholder="Search Contacts"
-          keyShortcut="/"
-          hint={<>Search Contacts <Kbd>/</Kbd></>}
-          maxLength={120}
-          onKeyDown={(e) => {
+            <IconAction label="New Contact" icon={Plus} onClick={() => setAdding(true)} />
+            <TransferMenu />
+          </>
+        }
+        views={
+          <ViewButtons
+            label="Show"
+            value={view}
+            onSelect={(v) => go(sort, v)}
+            items={[
+              { key: "people", label: "People" },
+              { key: "companies", label: "Companies" },
+              ...((allQuietCount > 0 || view === "quiet") ? [{ key: "quiet" as const, label: "Going Quiet" }] : []),
+              ...((hiddenCount > 0 || view === "hidden") ? [{ key: "hidden" as const, label: "Hidden" }] : []),
+            ]}
+          />
+        }
+        search={{
+          inputRef: searchRef,
+          hint: <>Search Contacts <Kbd>/</Kbd></>,
+          maxLength: 120,
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search Contacts",
+          keyShortcut: "/",
+          onKeyDown: (e) => {
             if (e.key === "Escape") {
               setSearch("");
               e.currentTarget.blur();
             }
-          }}
-        />
-      </div>
+          },
+        }}
+      />
       <NewContactDialog open={adding} onOpenChange={setAdding} />
-      <div className="p-3">
-        {view === "companies" ? (
-          <ListBody
-            key={`companies|${sort}|${q}`}
-            items={companies}
-            label="Loading companies"
-            icon={Building2}
-            failed="Companies Did Not Load"
-            empty={q ? noMatches : { title: "No Companies Yet", description: "People who write from a work address are grouped here by company." }}
-            onRetry={reload}
-          >
-            {shownCompanies.map((c) => (
-              <ListRow
-                key={c.id}
-                href={withQuery(`/contacts/companies/${c.id}`, query)}
-                avatar={<CompanyAvatar logoPath={c.logoPath} className="size-8" />}
-                title={niceName(c.name)}
-                at={c.lastAt}
-                detail={[c.domain, plural(c.addresses, "address", "addresses"), plural(c.conversations, "conversation")].join(" · ")}
-                selected={params.id === c.id}
-                className="scroll-mt-[157px]"
-              />
-            ))}
-          </ListBody>
-        ) : (
-          <>
-            {!q && view !== "quiet" && <TeamClientsRow selected={pathname === "/contacts/team"} query={query} />}
-            {/* Duplicates to review and contacts with no name, in one place. */}
-            {!q && view !== "quiet" && tidy.total > 0 && (
-              <>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="p-3">
+          {view === "companies" ? (
+            <ListBody
+              key={`companies|${sort}|${q}`}
+              items={companies}
+              label="Loading companies"
+              icon={Building2}
+              failed="Companies Did Not Load"
+              empty={{ title: q ? "No Matches" : "No Companies Yet" }}
+              onRetry={reload}
+            >
+              {shownCompanies.map((c) => (
                 <ListRow
-                  href={withQuery("/contacts/tidy", query)}
-                  avatar={
-                    <div className={pathname === "/contacts/tidy" ? "flex size-8 items-center justify-center rounded-full bg-background" : "flex size-8 items-center justify-center rounded-full bg-muted"}>
-                      <Sparkles className="size-4" />
-                    </div>
-                  }
-                  title="Tidy Up"
-                  aside={<Badge variant="secondary">{tidy.total}{tidy.more && "+"}</Badge>}
-                  detail={tidy.detail}
-                  selected={pathname === "/contacts/tidy" || pathname === "/contacts/merges"}
+                  key={c.id}
+                  href={withQuery(`/contacts/companies/${c.id}`, query)}
+                  avatar={<CompanyAvatar logoPath={c.logoPath} className="size-10" />}
+                  title={niceName(c.name)}
+                  at={c.lastAt}
+                  detail={c.domain}
+                  selected={params.id === c.id}
                 />
-                <div className="my-2 pl-14"><Separator /></div>
-              </>
-            )}
-            {(relationships.length > 0 || rel !== "all") && (
-              <div className="mb-2"><RelationshipFilter contacts={relationships} value={rel} onChange={(next) => go(sort, view, { rel: next, quiet })} /></div>
-            )}
+              ))}
+            </ListBody>
+          ) : (
             <ListBody
               key={`${view}|${sort}|${q}|${rel}|${quiet}`}
               items={contacts}
               label="Loading contacts"
               icon={view === "quiet" ? Sparkles : Users}
               failed="Contacts Did Not Load"
-              empty={view === "quiet" && !q ? { title: "No One Is Going Quiet", description: `Starred people and clients you have been in touch with in the last ${quiet} days show nothing here.` } : peopleEmpty}
+              empty={view === "quiet" && !q ? { title: "No One Is Going Quiet" } : peopleEmpty}
               onRetry={reload}
             >
               {(view === "quiet" ? shownQuiet : shownPeople).map((c) => (
                 <ListRow
                   key={c.id}
                   href={withQuery(`/contacts/${c.id}`, query)}
-                  avatar={<ContactAvatar contact={c} className="size-8" />}
+                  avatar={<ContactAvatar contact={c} className="size-10" />}
+                  provider={providers.get(c.id)}
                   title={niceName(c.name)}
                   badge={c.vip ? <Star aria-label="Starred" className="size-3.5 shrink-0 fill-current text-muted-foreground" /> : undefined}
                   at={c.lastAt}
-                  detail={detailOf(c)}
+                  detail={factOf(c)}
                   unread={unread.get(c.id)}
-                  aside={isPlaceholderName(c.name) ? <Badge variant="outline">Needs a Name</Badge> : undefined}
                   selected={params.id === c.id}
-                  className="scroll-mt-[157px]"
                 />
               ))}
             </ListBody>
-          </>
-        )}
-      </div>
-    </ScrollArea>
+          )}
+        </div>
+      </ScrollArea>
+    </div>
   );
 }

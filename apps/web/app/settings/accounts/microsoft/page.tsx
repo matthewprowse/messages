@@ -11,29 +11,24 @@ import { track } from "@/lib/analytics";
 import { connectMicrosoft, microsoftErrorText } from "@/lib/onboarding";
 import { BrandLogo } from "@/components/provider-logo";
 import { Button } from "@/components/ui/button";
-import { SettingsHeader } from "@/components/settings-header";
-import { SettingsRow, SettingsRows } from "@/components/settings/primitives";
+import { SettingsBody, SettingsSection } from "@/components/settings/primitives";
+import { SettingsPage } from "@/components/settings/settings-page";
 import { ConnectForm, PartsStatus, type Part } from "@/components/settings/connect-family";
 
 const PARTS: Part[] = [
-  { provider: "outlook", label: "Outlook", detail: "Mail from the last 30 days, then new mail within seconds." },
-  { provider: "outlook_calendar", label: "Outlook Calendar", detail: "Your calendars and their events." },
-  { provider: "microsoft_todo", label: "Microsoft To Do", detail: "Lists and tasks, synced every few minutes." },
-  { provider: "teams", label: "Microsoft Teams", detail: "Chats, and meeting transcripts once Teams has written them. Work or school accounts only." },
+  { provider: "outlook", label: "Outlook" },
+  { provider: "outlook_calendar", label: "Outlook Calendar" },
+  { provider: "microsoft_todo", label: "Microsoft To Do" },
+  { provider: "teams", label: "Microsoft Teams" },
 ];
 
 export default function MicrosoftSetup() {
   useEffect(() => { track("account_connect", { provider: "microsoft", step: "setup", outcome: "start" }); }, []);
   return (
-    <>
-      <SettingsHeader
-        title="Connect Microsoft"
-        description="Outlook, Outlook Calendar and Microsoft To Do connect with one Microsoft sign-in, and Teams chats and meeting transcripts with it when you choose, for work or school accounts. The sign-in is stored encrypted and only used to sync."
-        back="/settings/accounts"
-      />
-      <div className="mb-3"><Suspense><ConnectMicrosoft /></Suspense></div>
+    <SettingsPage title="Connect Microsoft" back="/settings/accounts">
+      <SettingsSection id="connect" title="Sign In"><SettingsBody><Suspense><ConnectMicrosoft /></Suspense></SettingsBody></SettingsSection>
       <PartsStatus parts={PARTS} goToInbox="outlook" />
-    </>
+    </SettingsPage>
   );
 }
 
@@ -94,7 +89,6 @@ function ConnectMicrosoft() {
     <ConnectForm
       optionId="microsoft-teams"
       optionLabel="Also Connect Teams (Work or School Accounts)"
-      optionHint="Brings in your Teams chats and meeting transcripts. Personal Microsoft accounts have neither, and Microsoft turns the whole sign-in away if you tick this for one. Your IT admin may need to approve it."
       checked={teams}
       onChecked={setTeams}
       busy={busy}
@@ -105,15 +99,11 @@ function ConnectMicrosoft() {
       notice={notice}
     >
       {adminLink && (
-        <SettingsRows>
-          <SettingsRow
-            title="Ask Your IT Admin to Approve"
-            description="An admin can approve Konva for everyone by opening this link and accepting. Then connect again. The last page may not load; the approval is saved regardless."
-          >
-            <Button variant="secondary" onClick={copyLink}>Copy Link</Button>
-          </SettingsRow>
-          <div className="p-3"><code className="block break-all text-xs text-muted-foreground">{adminLink}</code></div>
-        </SettingsRows>
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium">Ask Your IT Admin to Approve</p>
+          <code className="block break-all text-xs text-muted-foreground">{adminLink}</code>
+          <div><Button variant="secondary" onClick={copyLink}>Copy Link</Button></div>
+        </div>
       )}
     </ConnectForm>
   );

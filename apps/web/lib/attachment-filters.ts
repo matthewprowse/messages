@@ -2,9 +2,8 @@
 // the data, the date and search matching, and the honest header labels. No React, so it is
 // tested here (attachment-filters.test.ts); the page only wires state to it.
 
-import { filesLabel, SOURCE_LABEL, sourceOf, type Source } from "./attachment-view";
+import { SOURCE_LABEL, sourceOf, type Source } from "./attachment-view";
 import type { Sort } from "./attachment-actions/selection";
-import { formatSize } from "./format";
 import type { Attachment, FiledAttachment, Provider } from "./types";
 
 export type Kind = "all" | "image" | "pdf" | "video" | "audio" | "file";
@@ -99,25 +98,3 @@ export function filterFiles(files: FiledAttachment[], f: Filters, ctx: FilterCon
   });
 }
 
-export type CountInput = {
-  shown: number;
-  /** Files the server says exist for this tab, when it can say (the Audio tab cannot: voice notes are dropped here). */
-  total: number | null;
-  /** More pages remain on the server. */
-  more: boolean;
-  /** A filter or search is on, so only the files loaded so far were looked at. */
-  narrowed: boolean;
-};
-
-/** The header count. It is exact when nothing is narrowed or every page is loaded, and says so when it is still counting. */
-export function countLabel({ shown, total, more, narrowed }: CountInput): string {
-  if (!more) return filesLabel(shown);
-  if (!narrowed && total !== null) return filesLabel(total);
-  return `${filesLabel(shown)}, Still Searching`;
-}
-
-/** The size total of what is shown, marked as a floor while pages are still arriving. */
-export function sizeLabel(files: Pick<Attachment, "path" | "bytes">[], more: boolean): string {
-  const bytes = files.reduce((sum, f) => sum + (f.path ? f.bytes ?? 0 : 0), 0);
-  return `${more ? "At Least " : ""}${formatSize(bytes)}`;
-}

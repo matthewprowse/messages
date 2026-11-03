@@ -5,7 +5,7 @@
 
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/lib/store";
-import { filesLabel, messageHref, monthKey, monthTitle } from "@/lib/attachment-view";
+import { messageHref, monthKey, monthTitle } from "@/lib/attachment-view";
 import type { FiledAttachment } from "@/lib/types";
 import { fullDate, stampOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -31,7 +31,7 @@ function MoreSentinel({ onSeen }: { onSeen: () => void }) {
 }
 
 /** One tile in the grid. Memoized with a stable onView, so loading more files or a store change does not redraw every tile. */
-const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecting, selected, onToggle, card }: { card?: DocCard; attachment: FiledAttachment; sender: string; onView: (a: FiledAttachment) => void; selecting: boolean; selected: boolean; onToggle: (id: string) => void }) {
+const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecting, selected, onToggle, card, tileClassName }: { card?: DocCard; tileClassName?: string; attachment: FiledAttachment; sender: string; onView: (a: FiledAttachment) => void; selecting: boolean; selected: boolean; onToggle: (id: string) => void }) {
   return (
     <>
       <AttachmentTile
@@ -42,7 +42,7 @@ const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecti
         card={card}
         showName={false}
         overlay={<><span className="truncate">{sender}</span><span className="truncate text-[10px] opacity-80">{fullDate(a.sentAt)}</span></>}
-        className="aspect-square size-auto w-full"
+        className={cn("aspect-square size-auto w-full", tileClassName)}
       />
       {/* A document is told apart by its name, so it is written under the tile; a photo or video needs no caption. */}
       {a.kind !== "image" && a.kind !== "video" && <span className="line-clamp-2 break-words text-xs text-muted-foreground">{a.name}</span>}
@@ -52,20 +52,15 @@ const GridTile = memo(function GridTile({ attachment: a, sender, onView, selecti
 
 /**
  * Files gathered from many messages, newest first; a document shows its name, and everything shows who sent it and when
- * on hover. With byMonth, a header with a count starts each month. Given onToggleHidden, the viewer offers Hide and Unhide; given onDelete, Delete and the conversations a duplicate is also in.
+ * on hover. With byMonth, the month's name starts each month. Given onToggleHidden, the viewer offers Hide and Unhide; given onDelete, Delete and the conversations a duplicate is also in.
  */
-export function AttachmentGrid({ items, hrefFor = messageHref, className, byMonth = false, onToggleHidden, onDelete, selection, onEnd }: { items: FiledAttachment[]; hrefFor?: (a: FiledAttachment) => string; className?: string; byMonth?: boolean; /** Hides or unhides a file; resolves true when it was saved. */ onToggleHidden?: (a: FiledAttachment) => Promise<boolean>; /** Deletes a file from Konva's storage after asking; resolves true when it went. Also turns on "Also in N Conversations". */ onDelete?: (a: FiledAttachment) => Promise<boolean>; /** Multi-select (the Attachments page): clicking a tile picks it instead of opening it. */ selection?: { selecting: boolean; selected: ReadonlySet<string>; onToggle: (id: string) => void }; /** Called when the end of the files scrolls near, to load the next page. */ onEnd?: () => void }) {
+export function AttachmentGrid({ items, hrefFor = messageHref, className, tileClassName, byMonth = false, onToggleHidden, onDelete, selection, onEnd }: { items: FiledAttachment[]; hrefFor?: (a: FiledAttachment) => string; className?: string; /** Added to every tile, such as white cards on the grey Attachments page. */ tileClassName?: string; byMonth?: boolean; /** Hides or unhides a file; resolves true when it was saved. */ onToggleHidden?: (a: FiledAttachment) => Promise<boolean>; /** Deletes a file from Konva's storage after asking; resolves true when it went. Also turns on "Also in N Conversations". */ onDelete?: (a: FiledAttachment) => Promise<boolean>; /** Multi-select (the Attachments page): clicking a tile picks it instead of opening it. */ selection?: { selecting: boolean; selected: ReadonlySet<string>; onToggle: (id: string) => void }; /** Called when the end of the files scrolls near, to load the next page. */ onEnd?: () => void }) {
   const { contactById } = useApp();
   const [viewing, setViewing] = useState<FiledAttachment | null>(null);
   const [limit, setLimit] = useState(GRID_PAGE);
   const shownIds = useMemo(() => items.slice(0, limit).filter((a) => a.path && (a.kind === "pdf" || a.kind === "image")).map((a) => a.id), [items, limit]);
   const cardOf = useDocumentCards(shownIds);
   const who = (from: string) => (from === "me" ? "You" : contactById(from)?.name ?? "Unknown");
-  const perMonth = useMemo(() => {
-    const counts = new Map<string, number>();
-    if (byMonth) for (const a of items) counts.set(monthKey(a.sentAt), (counts.get(monthKey(a.sentAt)) ?? 0) + 1);
-    return counts;
-  }, [items, byMonth]);
   const at = viewing ? items.findIndex((a) => a.id === viewing.id) : -1;
   // A file that is hidden or unhidden leaves this list: the viewer moves to its neighbour, or closes on the last one.
   const toggleHidden = onToggleHidden && viewing
@@ -93,13 +88,10 @@ export function AttachmentGrid({ items, hrefFor = messageHref, className, byMont
           return (
             <Fragment key={a.id}>
               {header && (
-                <h2 className="col-span-full flex items-baseline gap-2 pt-2 first:pt-0">
-                  <span className="text-sm font-medium">{monthTitle(a.sentAt)}</span>
-                  <span className="text-xs text-muted-foreground">{filesLabel(perMonth.get(key) ?? 0)}</span>
-                </h2>
+                <h2 className="col-span-full pt-2 text-sm font-medium first:pt-0">{monthTitle(a.sentAt)}</h2>
               )}
               <div className="flex min-w-0 flex-col gap-1">
-                <GridTile card={(() => { const e = cardOf(a.id); return e?.state === "card" ? e.card : undefined; })()} attachment={a} sender={who(a.from)} onView={setViewing} selecting={selecting} selected={!!selection?.selected.has(a.id)} onToggle={toggleSelected} />
+                <GridTile card={(() => { const e = cardOf(a.id); return e?.state === "card" ? e.card : undefined; })()} attachment={a} sender={who(a.from)} onView={setViewing} selecting={selecting} selected={!!selection?.selected.has(a.id)} onToggle={toggleSelected} tileClassName={tileClassName} />
               </div>
             </Fragment>
           );

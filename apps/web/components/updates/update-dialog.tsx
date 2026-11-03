@@ -1,6 +1,6 @@
 "use client";
 
-// The dialog for writing or editing a changelog release, used on the Updates page. Closing with unsaved text asks first, a
+// The dialog for writing or editing a changelog release, used in Settings, Updates. Closing with unsaved text asks first, a
 // save from a stale copy is refused (lib/updates.ts), and Enter in a change adds the next change instead of saving.
 
 import { useEffect, useState } from "react";
@@ -8,10 +8,11 @@ import { ChevronDownIcon, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { dateKey } from "@/lib/new-items";
 import { CHANGE_KINDS, StaleUpdateError, dayLabel, deleteUpdate, draftSnapshot, fromDateKey, publishWarning, saveUpdate, updateProblem, type Change, type Update, type UpdateDraft } from "@/lib/updates";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -103,10 +104,9 @@ export function UpdateDialog({ open, onOpenChange, editing, suggestedVersion, on
   return (
     <>
       <Dialog open={open} onOpenChange={requestClose}>
-        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
+        <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Update" : "New Update"}</DialogTitle>
-            <DialogDescription>What changed in a release. Only you can see updates for now.</DialogDescription>
           </DialogHeader>
           <form id="update-form" onSubmit={save} className="grid gap-3">
             <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
@@ -163,18 +163,16 @@ export function UpdateDialog({ open, onOpenChange, editing, suggestedVersion, on
               ))}
             </div>
             <div className="flex items-center justify-between gap-3">
-              <div className="grid gap-0.5">
-                <Label htmlFor="update-published">Published</Label>
-                <span className="text-xs text-muted-foreground">Ready to show people. Leave it off while you are still writing it.</span>
-              </div>
+              <Label htmlFor="update-published">Published</Label>
               <Switch id="update-published" checked={draft.published} onCheckedChange={(published) => set({ published })} />
             </div>
             {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           </form>
-          <DialogFooter>
+          <div className={DIALOG_BUTTONS}>
             {editing && <Button type="button" variant="ghost" className="sm:mr-auto" onClick={() => setConfirmDelete(true)}>Delete</Button>}
+            <Button type="button" variant="ghost" onClick={() => requestClose(false)}>Cancel</Button>
             <Button type="submit" form="update-form" variant="secondary" disabled={saving}>{saving ? "Saving" : "Save"}</Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
       <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
@@ -183,10 +181,10 @@ export function UpdateDialog({ open, onOpenChange, editing, suggestedVersion, on
             <AlertDialogTitle>Discard Changes?</AlertDialogTitle>
             <AlertDialogDescription>What you wrote in this update has not been saved.</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel>Keep Writing</AlertDialogCancel>
             <AlertDialogAction variant="secondary" onClick={() => { setConfirmClose(false); onOpenChange(false); }}>Discard</AlertDialogAction>
-          </AlertDialogFooter>
+          </div>
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -195,10 +193,10 @@ export function UpdateDialog({ open, onOpenChange, editing, suggestedVersion, on
             <AlertDialogTitle>Delete Update?</AlertDialogTitle>
             <AlertDialogDescription>This removes it from the changelog for good.</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction variant="secondary" onClick={() => void remove()}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
+          </div>
         </AlertDialogContent>
       </AlertDialog>
     </>

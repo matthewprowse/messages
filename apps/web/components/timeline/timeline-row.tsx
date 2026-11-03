@@ -30,7 +30,7 @@ export function TimelineRow({ item, matters }: { item: TimelineItem; matters: Ro
   const heldIn = new Set(ref ? matters.links.filter((l) => refKey(l.kind, l.targetId) === refKey(ref.kind, ref.id)).map((l) => l.matterId) : []);
   const open = matters.matters.filter((m) => !m.closed || heldIn.has(m.id));
   return (
-    <li className="group flex gap-3 py-2.5">
+    <div className="group flex gap-3 p-3">
       <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground" title={TYPE_LABEL[item.type]}>
         {item.type === "message" ? <ChannelMark channel={(item.channel ?? "email") as Channel} /> : (() => { const Icon = ICON[item.type]; return <Icon aria-hidden className="size-3.5" />; })()}
       </span>
@@ -47,7 +47,7 @@ export function TimelineRow({ item, matters }: { item: TimelineItem; matters: Ro
       {ref && (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-7 shrink-0 opacity-60 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100" aria-label="Add to Matter"><Plus /></Button>
+            <Button variant="ghost" size="icon" className="shrink-0 opacity-60 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100" aria-label="Add to Matter"><Plus /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="max-h-72 w-max min-w-52 overflow-y-auto">
             <DropdownMenuLabel className="text-xs text-muted-foreground">{ref.kind === "thread" ? "Add This Conversation To" : "Add To"}</DropdownMenuLabel>
@@ -61,6 +61,6 @@ export function TimelineRow({ item, matters }: { item: TimelineItem; matters: Ro
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-    </li>
+    </div>
   );
 }

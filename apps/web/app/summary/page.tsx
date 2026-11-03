@@ -1,10 +1,9 @@
 "use client";
 
-// With no conversation open, the space beside the Summary is the same greeting, numbers and sent heatmap as the empty
-// Conversations page, without its lists (the Summary beside it is those lists).
+// With no conversation open, the space beside the Summary is Your Day: the numbers, today's brief and the week ahead.
 
-import { InboxHome } from "@/components/inbox-home";
+import { YourDay } from "@/components/summary/your-day";
 
 export default function SummaryIndex() {
-  return <InboxHome lists={false} />;
+  return <YourDay />;
 }

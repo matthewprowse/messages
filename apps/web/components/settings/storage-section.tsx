@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Storage: what is stored against the plan's allowance.
+// Settings, Usage, Storage: what is stored against the plan's allowance, by kind, and the biggest files.
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -10,7 +10,7 @@ import { STORAGE_CAP_BYTES, bytesLabel, storageLevel } from "@/lib/storage";
 import { KIND_LABEL } from "@/components/attachments";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 type Kind = { kind: string; files: number; bytes: number };
 type Pool = { seats: number; members: number; bytes: number };
@@ -57,8 +57,8 @@ export function StorageSection() {
     return () => { cancelled = true; };
   }, []);
 
-  if (failed) return <SettingsSection id="storage" title="Storage" description="Could not load. Check your connection and reopen this page." children={null} />;
-  if (!kinds) return <SettingsSection id="storage" title="Storage"><Skeleton className="h-40 w-full rounded-lg" /></SettingsSection>;
+  if (failed) return <SettingsSection id="storage" title="Storage"><SettingsEmpty>Could not load. Check your connection and reopen this page.</SettingsEmpty></SettingsSection>;
+  if (!kinds) return <SettingsSection id="storage" title="Storage"><SettingsBody><Skeleton className="h-32 w-full rounded-lg" /></SettingsBody></SettingsSection>;
 
   const total = kinds.reduce((n, k) => n + k.bytes, 0);
   const count = kinds.reduce((n, k) => n + k.files, 0);
@@ -68,7 +68,7 @@ export function StorageSection() {
   const level = storageLevel(held, cap);
 
   return (
-    <SettingsSection id="storage" title="Storage" description="Pictures, video, PDFs and documents kept from your conversations. Voice notes and stickers stay in their chats and are not counted.">
+    <SettingsSection id="storage" title="Storage">
       <SettingsRows>
         <div className="space-y-2 p-3">
           <div className="flex items-baseline justify-between text-sm">

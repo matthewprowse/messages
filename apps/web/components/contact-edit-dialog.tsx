@@ -14,7 +14,7 @@ import { formatPhone } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { ContactFields, useContactFields } from "@/components/contact-list";
 
@@ -22,10 +22,9 @@ import { ContactFields, useContactFields } from "@/components/contact-list";
 export function EditContactDialog({ contact, open, onOpenChange }: { contact: ContactDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="edit_contact" showCloseButton={false} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
+      <DialogContent track="edit_contact" showCloseButton={false} aria-describedby={undefined} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit Contact</DialogTitle>
-          <DialogDescription>A name you set here stays, even when their address book or WhatsApp name changes.</DialogDescription>
         </DialogHeader>
         {/* Mounted only while open, so it starts from the contact as it is now. */}
         {open && <EditContactForm contact={contact} onDone={() => onOpenChange(false)} />}
@@ -118,7 +117,6 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
       <div className="grid gap-2">
         <Label htmlFor="edit-contact-about">About</Label>
         <Textarea id="edit-contact-about" value={about} onChange={(e) => { setAbout(e.target.value); setFailure(null); }} maxLength={MAX_ABOUT} rows={3} disabled={saving} placeholder="Optional" />
-        <p className="text-xs text-muted-foreground">Only you see this. It is used when Konva writes to them, for example how they like to be addressed.</p>
       </div>
       {failure && <p role="alert" className="text-sm text-destructive">{failure.text}</p>}
       <div className={DIALOG_BUTTONS}>

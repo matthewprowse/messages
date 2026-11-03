@@ -1,24 +1,15 @@
 "use client";
 
-// Contacts index: the empty right-hand pane on desktop, with a prompt only on the Companies view.
+// Contacts index: the right-hand pane with no one open (ContactsHome). Hidden on phones, where the list is the page.
 
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { Building2 } from "lucide-react";
-import { EmptyState } from "@/components/primitives";
-
-function Placeholder() {
-  const companies = useSearchParams().get("view") === "companies";
-  return companies ? (
-    <EmptyState icon={Building2} title="Pick a Company" description="People who write from the same work domain, with every conversation from them." />
-  ) : null;
-}
+import { ContactsHome } from "@/components/contacts/contacts-home";
 
 export default function ContactsIndex() {
   return (
-    <div className="hidden h-full items-center justify-center md:flex">
+    <div className="hidden h-full md:block">
       <Suspense fallback={null}>
-        <Placeholder />
+        <ContactsHome />
       </Suspense>
     </div>
   );

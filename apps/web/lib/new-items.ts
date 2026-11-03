@@ -140,6 +140,8 @@ export interface EventForm {
   /** "YYYY-MM-DD", a local date. */
   date: string;
   allDay: boolean;
+  /** "YYYY-MM-DD", the last day of an all-day event that runs over several days. Left out or the same as date for one day. */
+  endDate?: string;
   /** "HH:MM", local times. An end earlier than the start ends the next day. */
   startTime: string;
   endTime: string;
@@ -246,8 +248,11 @@ export function buildEventRow(
   let start: Date;
   let end: Date;
   if (form.allDay) {
+    const last = form.endDate ? parseDate(form.endDate) : day;
+    if (!last) return { ok: false, field: "date", error: "Choose the last day." };
+    if (last < day) return { ok: false, field: "date", error: "End the event on or after the day it starts." };
     start = day;
-    end = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+    end = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1);
   } else {
     const a = parseTime(form.startTime);
     const b = parseTime(form.endTime);
@@ -289,11 +294,14 @@ export function buildEventRow(
 
 /**
  * A queued event as the Calendar shows it until the worker has created it, so it appears the moment it is
- * saved. date is the form's date; an all-day event is midnight UTC on its date, as the worker stores it.
+ * saved. date is the form's date; an all-day event is midnight UTC on its dates, as the worker stores it, ending the
+ * day after its last day.
  */
 export function pendingEvent(id: string, row: CalendarOutboxInsert, date: string, contacts: Contact[]): CalendarEvent {
+  // As many days on from its date as the event runs (rounded, so a clock change in between does not matter).
   const day = parseDate(date);
-  const nextDay = day ? dayKey(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) : date;
+  const days = Math.max(1, Math.round((Date.parse(row.ends_at) - Date.parse(row.starts_at)) / 86_400_000));
+  const nextDay = day ? dayKey(new Date(day.getFullYear(), day.getMonth(), day.getDate() + days)) : date;
   return {
     id,
     title: row.title,

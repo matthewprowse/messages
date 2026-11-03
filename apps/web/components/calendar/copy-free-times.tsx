@@ -15,7 +15,7 @@ import { TimeSelect } from "@/components/time-select";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -87,10 +87,9 @@ export function CopyFreeTimes({ open, onOpenChange, queued, now }: { open: boole
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent showCloseButton={false} aria-describedby={undefined} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Copy Free Times</DialogTitle>
-          <DialogDescription>Gaps in your working hours, in your time zone ({timeZone}), ready to paste into a reply.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
@@ -131,6 +130,7 @@ export function CopyFreeTimes({ open, onOpenChange, queued, now }: { open: boole
           </div>
         </div>
         <div className={DIALOG_BUTTONS}>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button type="button" variant="secondary" disabled={!text} onClick={() => void copy()}>Copy</Button>
         </div>
       </DialogContent>

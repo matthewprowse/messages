@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Profile and Privacy: Active Sessions and Sign Out Everywhere. The list comes from list_my_sessions (the Auth API
+// Settings, Profile: Active Sessions and Sign Out Everywhere. The list comes from list_my_sessions (the Auth API
 // has no list call), showing only a browser label and when each was last used. Sign Out Everywhere is Supabase's global sign
 // out: every refresh token for the account stops working, this device included.
 
@@ -11,7 +11,8 @@ import { relTime } from "@/lib/format";
 import { sessionLabel } from "@/lib/session-label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 interface SessionRow { id: string; created_at: string; refreshed_at: string | null; user_agent: string | null; current: boolean }
@@ -37,7 +38,7 @@ export function SessionsSection() {
   }
 
   return (
-    <SettingsSection id="sessions" title="Active Sessions" description="Where you are signed in. If you do not recognise one, sign out everywhere and choose a new password.">
+    <SettingsSection id="sessions" title="Active Sessions">
       <SettingsRows>
         {sessions?.map((s) => (
           <SettingsRow
@@ -46,7 +47,7 @@ export function SessionsSection() {
             description={`Last active ${relTime(s.refreshed_at ?? s.created_at)}`}
           />
         ))}
-        <SettingsRow title="Sign Out Everywhere" description="Ends every session on every device, including this one. You will need to sign in again.">
+        <SettingsRow title="Sign Out Everywhere">
           <Button variant="secondary" onClick={() => setAsking(true)}>Sign Out Everywhere</Button>
         </SettingsRow>
       </SettingsRows>
@@ -57,10 +58,10 @@ export function SessionsSection() {
             <AlertDialogTitle>Sign Out Everywhere?</AlertDialogTitle>
             <AlertDialogDescription>Every device and browser signed in to your account is signed out, this one too.</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); void signOutEverywhere(); }}>Sign Out Everywhere</AlertDialogAction>
-          </AlertDialogFooter>
+          </div>
         </AlertDialogContent>
       </AlertDialog>
     </SettingsSection>

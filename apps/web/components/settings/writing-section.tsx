@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 /** The saved writing examples with a form to add one. A failed save puts the example back (see use-profile-dispatch.ts). */
 export function WritingSection() {
@@ -26,7 +26,7 @@ export function WritingSection() {
     notify("Example added");
   };
   return (
-    <SettingsSection id="writing-style" title="Writing Style" description="Drafts copy how you already write to each person. These examples are used for people you have not written to yet.">
+    <SettingsSection id="writing-style" title="Writing Style">
       {writingExamples.length > 0 && (
         <SettingsRows>
           {writingExamples.map((w) => (
@@ -36,11 +36,13 @@ export function WritingSection() {
           ))}
         </SettingsRows>
       )}
-      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); addExample(); }}>
-        <div className="grid gap-2"><Label htmlFor="ctx">Situation</Label><Input id="ctx" value={context} onChange={(e) => setContext(e.target.value)} placeholder="Replying to a client" required /></div>
-        <div className="grid gap-2"><Label htmlFor="txt">Example</Label><Textarea id="txt" rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste a message you actually sent" required /></div>
-        <Button variant="secondary" type="submit">Add Example</Button>
-      </form>
+      <SettingsBody>
+        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); addExample(); }}>
+          <div className="grid gap-2"><Label htmlFor="ctx">Situation</Label><Input id="ctx" value={context} onChange={(e) => setContext(e.target.value)} placeholder="Replying to a client" required /></div>
+          <div className="grid gap-2"><Label htmlFor="txt">Example</Label><Textarea id="txt" rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste a message you actually sent" required /></div>
+          <Button variant="secondary" type="submit">Add Example</Button>
+        </form>
+      </SettingsBody>
     </SettingsSection>
   );
 }

@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MovePersonalDialog } from "@/components/share-dialog";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { ShareHistory } from "@/components/settings/team-share-history";
 
 const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
@@ -26,23 +26,21 @@ export function SharedChatsSection({ strict, role }: { strict: boolean; role: Te
   const canMove = !strict || role === "owner" || role === "admin";
 
   return (
-    <SettingsSection
-      id="shared"
-      title="What You Share"
-      description="Every chat you have marked as work, and who else it is assigned to. Anything not listed here is private to you."
-    >
+    <SettingsSection id="shared" title="What You Share">
       {failed && !chats ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could Not Load Your Shared Chats</AlertTitle>
-          <AlertDescription>
-            <p>Check your connection and try again.</p>
-            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
-          </AlertDescription>
-        </Alert>
+        <SettingsBody>
+          <Alert variant="destructive">
+            <AlertTitle>Could Not Load Your Shared Chats</AlertTitle>
+            <AlertDescription>
+              <p>Check your connection and try again.</p>
+              <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        </SettingsBody>
       ) : !chats ? (
-        <Skeleton className="h-20 w-full rounded-lg" />
+        <SettingsBody><Skeleton className="h-20 w-full rounded-lg" /></SettingsBody>
       ) : chats.length === 0 ? (
-        <SettingsEmpty>Nothing is shared yet. Open a chat and choose Mark as Work from its Personal badge.</SettingsEmpty>
+        <SettingsEmpty>Nothing is shared yet.</SettingsEmpty>
       ) : (
         <SettingsRows>
           {chats.map((c) => (
@@ -72,7 +70,6 @@ export function SharedChatsSection({ strict, role }: { strict: boolean; role: Te
           ))}
         </SettingsRows>
       )}
-      {chats && chats.length > 0 && !canMove && <p className="text-xs text-muted-foreground">Strict sharing keeps work chats shared. Only an owner or admin can release one.</p>}
       <ShareHistory labels={chats ? new Map(chats.map((c) => [c.threadId, c.label])) : undefined} />
       {moving && <MovePersonalDialog threadId={moving.threadId} open onOpenChange={(open) => !open && setMoving(null)} onDone={() => void load()} />}
     </SettingsSection>

@@ -1,19 +1,22 @@
 "use client";
 
-// The client card on a contact's page: one AI paragraph on where things stand with them, with a Refresh button
-// that is capped per day. The worker writes the card; Refresh only asks, so the new text appears a little later.
+// The Summary card on a contact's page: their summary with the client card folded in, the AI paragraph on where things
+// stand with them, and Refresh (capped per day) as the card's action. The worker writes the client card; Refresh only
+// asks, so the new text appears a little later.
 
 import { useCallback, useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Section } from "@/components/contact-list";
 import { loadClientCard, requestCardRefresh, type ClientCardState } from "@/lib/prep";
+import { Card } from "@/components/surface";
+import { IconAction } from "@/components/tip";
 import { timeAgo } from "./time-ago";
 
 const POLL_MS = 10_000;
 const POLLS = 12; // two minutes of looking for the new card, then it shows when the page is next opened
 
-export function ClientCard({ contactId }: { contactId: string }) {
+/** The contact's client card, and Refresh, which polls for the new one for a while after asking. */
+function useClientCard(contactId: string) {
   const [state, setState] = useState<ClientCardState | null>(null);
   const [asking, setAsking] = useState(false);
   const [watching, setWatching] = useState(0);
@@ -49,20 +52,26 @@ export function ClientCard({ contactId }: { contactId: string }) {
     setState((s) => (s ? { ...s, pending: true, left } : s));
     setWatching(POLLS);
   };
+  return { state, busy: asking || !!state?.pending, refresh };
+}
 
-  if (!state) return null;
-  const busy = asking || state.pending;
+/** Summary on a contact's Overview: the stored summary and the client card under it, with Refresh. */
+export function SummaryCard({ contactId, summary }: { contactId: string; summary: string | null }) {
+  const { state, busy, refresh } = useClientCard(contactId);
+  // Until the client card has been read there is nothing to refresh, so a contact without a summary shows nothing yet.
+  if (!state && !summary) return null;
+  const when = state?.pending ? "Refreshing" : state?.updatedAt && state.card ? `Updated ${timeAgo(state.updatedAt)}` : "";
   return (
-    <Section title="Client Card">
-      <div className="flex flex-col gap-3 rounded-lg border p-4">
-        <p className="text-sm leading-6 whitespace-pre-line">{state.card ?? "No summary yet. It is written from your conversations and meetings with them."}</p>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-xs text-muted-foreground">{state.pending ? "Refreshing" : state.updatedAt && state.card ? `Updated ${timeAgo(state.updatedAt)}` : ""}</span>
-          <Button variant="secondary" size="sm" onClick={refresh} disabled={busy || state.left === 0}>
-            {state.left === 0 ? "Refreshed Today" : "Refresh"}
-          </Button>
-        </div>
+    <Card
+      title="Summary"
+      action={state && <IconAction label={state.left === 0 ? "Refreshed Today" : "Refresh"} icon={RefreshCw} disabled={busy || state.left === 0} onClick={() => void refresh()} />}
+    >
+      <div className="flex flex-col gap-3 px-3 pb-3 text-sm leading-6">
+        {summary && <p>{summary}</p>}
+        {state?.card && <p className="whitespace-pre-line">{state.card}</p>}
+        {!summary && !state?.card && <p className="text-muted-foreground">No Summary Yet</p>}
+        {when && <span className="text-xs text-muted-foreground">{when}</span>}
       </div>
-    </Section>
+    </Card>
   );
 }

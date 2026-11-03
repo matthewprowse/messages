@@ -1,21 +1,22 @@
 "use client";
 
-// Admin view of team workspaces: seats, owner and member counts, and making an owner's invite. Nothing is emailed from here;
-// the invite link is shown once for the admin to send themselves.
+// Admin's Teams view, the teams card: each team's seats (at least 5, what the team pays for, shared for storage and the AI
+// allowance; set by hand until billing exists), owner and member counts, and a new owner's invite. Nothing is emailed from
+// here; the invite link is shown once for the admin to send themselves.
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Copy, Users } from "lucide-react";
+import { Check, Copy, Link2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { inviteLink } from "@/lib/team";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/primitives";
-import { AdminHeading, AdminRow } from "@/components/admin/parts";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
+import { Card, IconCircle, Row, Separated } from "@/components/surface";
+import { IconAction } from "@/components/tip";
+import { Failed, LoadingCard, Quiet } from "./parts";
 
 type Team = { id: string; name: string; seats: number; strict_sharing: boolean; owner_email: string | null; invited_email: string | null; members: number };
 
@@ -43,20 +44,19 @@ export function OwnerInviteDialog({ invite, onClose }: { invite: OwnerInvite | n
 
   return (
     <Dialog open={!!invite} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent track="owner_invite" className="sm:max-w-md">
+      <DialogContent track="owner_invite" showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{shown?.name} Is Ready</DialogTitle>
-          <DialogDescription>
-            Send this link to {shown?.email}. It works once, only for that email address, and expires in 7 days. It is shown only now; New Invite Link under Teams makes another.
-          </DialogDescription>
+          {/* What the link does is the one thing to know before sending it, so it stays. */}
+          <DialogDescription>For {shown?.email} only. It works once, expires in 7 days and is shown only now.</DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-2">
           <Input readOnly value={shown?.link ?? ""} aria-label="Invite Link" onFocus={(e) => e.currentTarget.select()} />
           <Button type="button" variant="ghost" size="icon" aria-label={copied ? "Copied" : "Copy Link"} onClick={copy}>{copied ? <Check /> : <Copy />}</Button>
         </div>
-        <DialogFooter>
+        <div className={DIALOG_BUTTONS}>
           <Button type="button" variant="secondary" onClick={onClose}>Done</Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -86,15 +86,18 @@ function TeamRow({ team, onChanged, onInvite }: { team: Team; onChanged: () => v
   };
 
   return (
-    <AdminRow
-      icon={<Users />}
-      title={<>{team.name}{team.owner_email ? null : <Badge variant="outline">Owner Not Joined</Badge>}{team.strict_sharing && <Badge variant="secondary">Strict Sharing</Badge>}</>}
-      description={`${team.members} of ${team.seats} seats in use. ${team.owner_email ? `Owner: ${team.owner_email}` : `Invited: ${team.invited_email ?? "nobody"}`}`}
-    >
-      {!team.owner_email && team.invited_email && <Button variant="ghost" disabled={busy} onClick={() => void reissue()}>New Invite Link</Button>}
-      <Input aria-label={`Seats for ${team.name}`} inputMode="numeric" className="w-16 text-right" value={seats} onChange={(e) => setSeats(e.target.value)} />
-      <Button variant="secondary" disabled={busy || !valid || next === team.seats} onClick={() => void save()}>Save</Button>
-    </AdminRow>
+    <Row
+      lead={<IconCircle icon={Users} />}
+      title={<>{team.name}{team.owner_email ? null : <Badge variant="outline" className="ml-2">Owner Not Joined</Badge>}{team.strict_sharing && <Badge variant="secondary" className="ml-2">Strict Sharing</Badge>}</>}
+      detail={`${team.members} Of ${team.seats} Seats. ${team.owner_email ? `Owner ${team.owner_email}` : `Invited ${team.invited_email ?? "Nobody"}`}`}
+      end={
+        <>
+          {!team.owner_email && team.invited_email && <IconAction label="New Invite Link" icon={Link2} disabled={busy} onClick={() => void reissue()} />}
+          <Input aria-label={`Seats for ${team.name}`} inputMode="numeric" className="h-8 w-16 text-right" value={seats} onChange={(e) => setSeats(e.target.value)} />
+          <Button size="sm" variant="secondary" disabled={busy || !valid || next === team.seats} onClick={() => void save()}>Save</Button>
+        </>
+      }
+    />
   );
 }
 
@@ -113,28 +116,15 @@ export function Workspaces({ version, onInvite, onBusy }: { version: number; onI
   }, [onBusy]);
   useEffect(() => { void load(); }, [load, version]);
 
+  if (failed) return <Failed title="Could Not Load Teams" />;
+  if (teams === null) return <LoadingCard title="Teams" />;
   return (
-    <div className="flex flex-col gap-3">
-      <AdminHeading
-        title="Teams"
-        description="Approving a team request makes its team and an invite link for its owner. Seats are what the team pays for: at least 5, shared for storage and the AI allowance. Change them here until billing is built."
-      />
-      {failed ? (
-        <EmptyState icon={Users} title="Could Not Load Teams" description="Check your connection and refresh." />
-      ) : teams === null ? (
-        <Skeleton className="h-24 w-full rounded-lg" />
-      ) : teams.length === 0 ? (
-        <div className="py-12"><EmptyState icon={Users} title="No Teams Yet" description="Approve a team request under Requests to make one." /></div>
-      ) : (
-        <div>
-          {teams.map((t, i) => (
-            <div key={`${t.id}:${t.seats}`}>
-              {i > 0 && <Separator className="ml-3" />}
-              <TeamRow team={t} onChanged={() => void load()} onInvite={onInvite} />
-            </div>
-          ))}
-        </div>
+    <Card title="Teams">
+      {teams.length === 0 ? <Quiet>No Teams Yet</Quiet> : (
+        <Separated>
+          {teams.map((t) => <TeamRow key={`${t.id}:${t.seats}`} team={t} onChanged={() => void load()} onInvite={onInvite} />)}
+        </Separated>
       )}
-    </div>
+    </Card>
   );
 }

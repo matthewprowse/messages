@@ -106,7 +106,7 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
             <DropdownMenuItem onClick={() => setJunk(thread.id, !thread.junk)}>{thread.junk ? "Not Junk" : "Move to Junk"}</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
-              <Link href={`/settings/personalisation?add=${encodeURIComponent(primary?.emails[0] ?? primary?.phones[0] ?? "")}#priorities`}>Add Priority Rule</Link>
+              <Link href={`/settings/ai?add=${encodeURIComponent(primary?.emails[0] ?? primary?.phones[0] ?? "")}#priorities`}>Add Priority Rule</Link>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

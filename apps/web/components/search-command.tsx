@@ -75,17 +75,16 @@ export const GO_TO: { href: string; label: string; icon: LucideIcon; key: string
 
 // Settings pages the palette can open directly. Keywords are other ways to spell or name the page.
 const SETTINGS_PAGES: { href: string; label: string; keywords?: string }[] = [
-  { href: "/settings/accounts", label: "Connected Accounts", keywords: "connectors connect email whatsapp calendar linkedin instagram" },
-  { href: "/settings/personalisation", label: "Personalisation", keywords: "personalization personalize personalise voice tone" },
-  { href: "/settings/writing", label: "Writing", keywords: "voice style signature drafts" },
-  { href: "/settings/rules", label: "Rules", keywords: "filters automation" },
-  { href: "/settings/notifications", label: "Notifications", keywords: "alerts push" },
-  { href: "/settings/appearance", label: "Appearance", keywords: "theme dark light" },
-  { href: "/settings/profile", label: "Profile", keywords: "name photo account" },
-  { href: "/settings/usage", label: "Usage", keywords: "billing plan cost" },
-  { href: "/settings/team", label: "Team", keywords: "workspace members" },
-  { href: "/settings/data", label: "Data", keywords: "export delete privacy storage" },
-  { href: "/settings/general", label: "General" },
+  { href: "/settings/accounts", label: "Connected Accounts", keywords: "connectors connect email whatsapp calendar linkedin instagram sending signatures" },
+  { href: "/settings/ai", label: "AI", keywords: "personalisation personalization voice tone writing style priorities rules brief" },
+  { href: "/settings/drafts", label: "Drafts", keywords: "templates snippets learned style" },
+  { href: "/settings/automations", label: "Automations", keywords: "rules automation leads" },
+  { href: "/settings/notifications", label: "Notifications", keywords: "alerts push quiet hours" },
+  { href: "/settings/profile", label: "Profile", keywords: "name photo account appearance theme dark light sign in two factor sessions" },
+  { href: "/settings/privacy", label: "Privacy and Data", keywords: "export download delete privacy data" },
+  { href: "/settings/usage", label: "Usage", keywords: "billing plan cost storage" },
+  { href: "/settings/team", label: "Team", keywords: "workspace members sharing" },
+  { href: "/settings/whats-new", label: "What's New", keywords: "updates changelog release" },
 ];
 
 /** The chord shown beside a place, in the palette and in rail tooltips. */
@@ -145,7 +144,7 @@ export function SearchCommand({ open, onOpenChange }: { open: boolean; onOpenCha
 
   return (
     // Top-aligned on phones so the keyboard does not cover the list; a third of the way down from sm up.
-    <CommandDialog open={open} onOpenChange={onOpenChange} title="Search" description="Search conversations, messages, contacts, notes, events, tasks and files." className="top-4 sm:top-1/3 sm:max-w-xl">
+    <CommandDialog open={open} onOpenChange={onOpenChange} title="Search" description="Search conversations, messages, contacts, notes, events, tasks and files." className="top-[calc(env(safe-area-inset-top)+1rem)] sm:top-1/3 sm:max-w-xl">
       {/* The dialog mounts this only while open, so a closed palette does no work and each search starts empty. */}
       <SearchResults onPick={() => onOpenChange(false)} />
     </CommandDialog>

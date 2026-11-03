@@ -18,7 +18,7 @@ export function NoteConflictBar({ id }: { id: string }) {
     try { await resolveConflict(id, how); } finally { setBusy(false); }
   };
   return (
-    <div className="shrink-0 border-b bg-background p-3 md:px-4">
+    <div className="shrink-0 px-3 pb-3 md:px-4">
       <Alert className="mx-auto max-w-2xl">
         <TriangleAlert />
         <AlertTitle>{other === null ? "This Note Was Deleted Elsewhere" : "This Note Changed Elsewhere"}</AlertTitle>

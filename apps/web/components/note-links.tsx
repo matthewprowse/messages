@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tip } from "@/components/tip";
 
 const ICON = { contact: User, thread: MessageSquare, event: CalendarDays } as const;
 /** The picker shows this many matches per group, so a big address book is not drawn all at once. */
@@ -101,7 +102,7 @@ export function LinkChips({ links, onRemove }: { links: LinkTarget[]; onRemove: 
   );
 }
 
-/** The header button: search your contacts, conversations and recent or coming events, and link one. */
+/** The header's Link icon button: search your contacts, conversations and recent or coming events, and link one. */
 export function LinkMenu({ links, onAdd }: { links: LinkTarget[]; onAdd: (t: LinkTarget) => void }) {
   const { contacts, threads, contactById } = useApp();
   const [open, setOpen] = useState(false);
@@ -133,7 +134,9 @@ export function LinkMenu({ links, onAdd }: { links: LinkTarget[]; onAdd: (t: Lin
   };
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild><Button variant="secondary" aria-label="Link Note"><Link2 />Link</Button></PopoverTrigger>
+      <Tip label="Link">
+        <PopoverTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label="Link"><Link2 /></Button></PopoverTrigger>
+      </Tip>
       <PopoverContent align="end" className="w-80 p-0">
         <Command shouldFilter={false}>
           <CommandInput value={term} onValueChange={setTerm} placeholder="Link to a Person, Chat or Event" />

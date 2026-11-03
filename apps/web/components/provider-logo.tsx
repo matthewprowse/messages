@@ -26,6 +26,10 @@ const BY_PROVIDER: Partial<Record<Provider, Brand>> = {
   outlook: "outlook",
   instagram: "instagram",
   linkedin: "linkedin",
+  // Calendars carry the company's mark, as connecting one does.
+  google_calendar: "google",
+  outlook_calendar: "outlook",
+  icloud_calendar: "icloud",
 };
 
 /** A brand's logo. Decorative unless `label` is set, since it usually sits beside the brand's name. */

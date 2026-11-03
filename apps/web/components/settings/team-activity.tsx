@@ -1,17 +1,17 @@
 "use client";
 
-// Owner-only team activity in Settings, Team: response times per person and how many chats were moved back to personal.
-// Counts only, never the chats themselves.
+// The Activity view of Settings, Team, for an owner or admin: response times per person and how many chats were moved back
+// to personal. Counts only, never the chats themselves.
 
 import { useState } from "react";
-import { replyTime, type ResponseStat, type WeekCount } from "@/lib/team-work";
+import { replyTime, useResponseStats, type ResponseStat, type WeekCount } from "@/lib/team-work";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ROLE_LABEL, type TeamRole } from "@/lib/team";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -68,30 +68,32 @@ export function ResponseSection({ stats, failed, load }: { stats: ResponseStat[]
     <SettingsSection
       id="response"
       title="Response Times"
-      description="Work chats waiting for an answer, and the median time from a client's message to the first answer. It uses message times only, on chats shared with the team. Personal chats are never counted, and nothing of what was said is read."
+      action={
+        <Tabs value={String(days)} onValueChange={(v) => setDays(v === "7" ? 7 : 30)}>
+          <TabsList>
+            <TabsTrigger value="7">7 Days</TabsTrigger>
+            <TabsTrigger value="30">30 Days</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      }
     >
-      <Tabs value={String(days)} onValueChange={(v) => setDays(v === "7" ? 7 : 30)}>
-        <TabsList>
-          <TabsTrigger value="7">Last 7 Days</TabsTrigger>
-          <TabsTrigger value="30">Last 30 Days</TabsTrigger>
-        </TabsList>
-      </Tabs>
       {failed && !stats ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could Not Load Response Times</AlertTitle>
-          <AlertDescription>
-            <p>Check your connection and try again.</p>
-            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
-          </AlertDescription>
-        </Alert>
+        <SettingsBody>
+          <Alert variant="destructive">
+            <AlertTitle>Could Not Load Response Times</AlertTitle>
+            <AlertDescription>
+              <p>Check your connection and try again.</p>
+              <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        </SettingsBody>
       ) : !stats ? (
-        <Skeleton className="h-40 w-full rounded-lg" />
+        <SettingsBody><Skeleton className="h-32 w-full rounded-lg" /></SettingsBody>
       ) : rows.length === 0 ? (
-        <SettingsEmpty>No work chats yet, so there is nothing to time.</SettingsEmpty>
+        <SettingsEmpty>No work chats yet.</SettingsEmpty>
       ) : (
         <SettingsRows>{rows.map((s) => <PersonRow key={s.userId ?? "none"} s={s} days={days} />)}</SettingsRows>
       )}
-      <p className="text-xs text-muted-foreground">An answer from the shared account or from a colleague&apos;s own account counts for the person the chat belongs to. Newsletters and notifications are left out.</p>
     </SettingsSection>
   );
 }
@@ -101,13 +103,9 @@ export function MovedBackSection({ weeks, ready }: { weeks: WeekCount[]; ready: 
   const byWeek = new Map<string, WeekCount[]>();
   for (const w of weeks) byWeek.set(w.week, [...(byWeek.get(w.week) ?? []), w]);
   return (
-    <SettingsSection
-      id="moved-back"
-      title="Chats Moved Back to Personal"
-      description="How many chats each person shared and moved back to personal, by week. You see the counts only: never which chats, or what was in them."
-    >
+    <SettingsSection id="moved-back" title="Chats Moved Back to Personal">
       {!ready ? (
-        <Skeleton className="h-24 w-full rounded-lg" />
+        <SettingsBody><Skeleton className="h-24 w-full rounded-lg" /></SettingsBody>
       ) : byWeek.size === 0 ? (
         <SettingsEmpty>No chats were shared or moved back in the last 8 weeks.</SettingsEmpty>
       ) : (
@@ -125,5 +123,16 @@ export function MovedBackSection({ weeks, ready }: { weeks: WeekCount[]; ready: 
         </SettingsRows>
       )}
     </SettingsSection>
+  );
+}
+
+/** The Activity view: both cards, loaded when the view opens. */
+export function TeamActivity() {
+  const { stats, weeks, failed, load } = useResponseStats();
+  return (
+    <>
+      <ResponseSection stats={stats} failed={failed} load={load} />
+      <MovedBackSection weeks={weeks} ready={!!stats} />
+    </>
   );
 }

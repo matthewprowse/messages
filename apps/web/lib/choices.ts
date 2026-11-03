@@ -18,6 +18,22 @@ export interface ReplyChoices {
   /** How long it would take, when the message said. */
   minutes?: number;
   options: ChoiceOption[];
+  /** Something the message proposes that belongs in the calendar, for Add to Calendar. */
+  plan?: Plan;
+}
+
+/** A proposed event as New Event takes it: an all-day plan over one or more days, or a time on one day. */
+export interface Plan {
+  title: string;
+  /** "YYYY-MM-DD", the first day. */
+  day: string;
+  /** "HH:MM" start, for a timed plan. */
+  time?: string;
+  /** "HH:MM" end on the same day, when the message gave one. */
+  until?: string;
+  /** "YYYY-MM-DD", the last day of an all-day plan over several days. */
+  endDay?: string;
+  place: string;
 }
 
 export interface Busy {
@@ -32,7 +48,7 @@ const KINDS = new Set<ChoiceKind>(["accept", "decline", "other_time", "answer"])
 /** message_ai.reply_choices, opened, as choices to show: null when there are none to offer. */
 export function parseChoices(json: string | null | undefined): ReplyChoices | null {
   if (!json) return null;
-  let raw: { asked?: unknown; minutes?: unknown; options?: unknown };
+  let raw: { asked?: unknown; minutes?: unknown; options?: unknown; plan?: unknown };
   try {
     raw = JSON.parse(json);
   } catch {
@@ -48,7 +64,32 @@ export function parseChoices(json: string | null | undefined): ReplyChoices | nu
     asked: asked && !Number.isNaN(asked.getTime()) ? asked : undefined,
     minutes: typeof raw.minutes === "number" && raw.minutes > 0 ? raw.minutes : undefined,
     options,
+    plan: parsePlan(raw.plan),
   };
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const AT_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
+
+/**
+ * The plan triage found, as New Event takes it, or undefined. A start with a time is a timed event on that day (with
+ * its end time when it is the same day); a start with no time is all day, to its last day when there is one.
+ */
+export function parsePlan(raw: unknown): Plan | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const p = raw as Record<string, unknown>;
+  const title = typeof p.title === "string" ? p.title.trim() : "";
+  const start = typeof p.start === "string" ? p.start : "";
+  const end = typeof p.end === "string" ? p.end : "";
+  const place = typeof p.place === "string" ? p.place.trim() : "";
+  if (!title) return undefined;
+  const at = AT_RE.exec(start);
+  if (at) {
+    const until = AT_RE.exec(end);
+    return { title, day: at[1], time: at[2], until: until && until[1] === at[1] && until[2] > at[2] ? until[2] : undefined, place };
+  }
+  if (!DAY_RE.test(start)) return undefined;
+  return { title, day: start, endDay: DAY_RE.test(end) && end > start ? end : undefined, place };
 }
 
 /** The choices for one message, or null: none, not looked at yet, or the column is not there yet. */

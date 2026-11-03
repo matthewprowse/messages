@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Two-Factor Sign-In: add, check and remove an authenticator app (TOTP, Supabase Auth MFA). With a verified
+// Settings, Profile, Two Factor Sign In: add, check and remove an authenticator app (TOTP, Supabase Auth MFA). With a verified
 // factor, signing in asks for a six digit code and /api/keys only opens your messages for a session that passed it.
 // Removing the factor asks for a current code first (an aal2 session), so a stolen session cannot switch it off.
 
@@ -11,7 +11,8 @@ import { cleanCode, verifiedTotp } from "@/lib/mfa";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 interface Enrolment { id: string; qr: string; secret: string }
@@ -40,7 +41,7 @@ export function TwoFactorSection() {
     for (const f of all?.all ?? []) if (f.factor_type === "totp" && f.status === "unverified") await supabase.auth.mfa.unenroll({ factorId: f.id });
     const { data, error } = await supabase.auth.mfa.enroll({ factorType: "totp", friendlyName: "Authenticator App" });
     setBusy(false);
-    if (error || !data) return toast.error("Two-factor sign-in could not be started. Try again.");
+    if (error || !data) return toast.error("Two factor sign in could not be started. Try again.");
     setEnrol({ id: data.id, qr: data.totp.qr_code, secret: data.totp.secret });
   }
 
@@ -58,7 +59,7 @@ export function TwoFactorSection() {
 
   async function confirmEnrol() {
     if (!enrol || !(await verify(enrol.id))) return;
-    toast.success("Two-factor sign-in is on.");
+    toast.success("Two factor sign in is on.");
     close();
     await load();
   }
@@ -68,8 +69,8 @@ export function TwoFactorSection() {
     setBusy(true);
     const { error } = await supabase.auth.mfa.unenroll({ factorId });
     setBusy(false);
-    if (error) return setError("Two-factor sign-in could not be removed. Try again.");
-    toast.success("Two-factor sign-in is off.");
+    if (error) return setError("Two factor sign in could not be removed. Try again.");
+    toast.success("Two factor sign in is off.");
     close();
     await load();
   }
@@ -84,40 +85,40 @@ export function TwoFactorSection() {
   );
 
   return (
-    <SettingsSection id="two-factor" title="Two-Factor Sign-In">
+    <SettingsSection id="two-factor" title="Two Factor Sign In">
       <SettingsRows>
-        <SettingsRow title="Authenticator App" description={factorId === undefined ? "Checking…" : factorId ? "On. A code is asked for each time you sign in." : "Off. Add a code from an authenticator app to protect your messages."}>
+        <SettingsRow title="Authenticator App" description={factorId === undefined ? "Checking" : factorId ? "On" : "Off"}>
           {factorId === null && <Button variant="secondary" disabled={busy} onClick={start}>Turn On</Button>}
           {factorId && <Button variant="secondary" onClick={() => setRemoving(true)}>Turn Off</Button>}
         </SettingsRow>
       </SettingsRows>
 
       <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-        <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
+        <DialogContent showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
           {enrol ? (
             <form onSubmit={(e) => { e.preventDefault(); void confirmEnrol(); }} className="space-y-4">
               <DialogHeader>
                 <DialogTitle>Add an Authenticator App</DialogTitle>
-                <DialogDescription>Scan this with an authenticator app, then enter the code it shows.</DialogDescription>
               </DialogHeader>
               {/* A data: SVG made by Supabase, shown as an image so it cannot run anything. */}
               <img src={enrol.qr} alt="QR code for your authenticator app" className="mx-auto size-44 rounded-lg border bg-white p-2" />
               <p className="break-all text-center text-xs text-muted-foreground">Or enter this key by hand: <span className="font-mono">{enrol.secret}</span></p>
               {codeField}
-              <DialogFooter>
+              <div className={DIALOG_BUTTONS}>
+                <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
                 <Button type="submit" disabled={busy}>{busy ? "Checking…" : "Turn On"}</Button>
-              </DialogFooter>
+              </div>
             </form>
           ) : (
             <form onSubmit={(e) => { e.preventDefault(); void confirmRemove(); }} className="space-y-4">
               <DialogHeader>
-                <DialogTitle>Turn Off Two-Factor Sign-In</DialogTitle>
-                <DialogDescription>Enter a current code from your authenticator app to confirm.</DialogDescription>
+                <DialogTitle>Turn Off Two Factor Sign In</DialogTitle>
               </DialogHeader>
               {codeField}
-              <DialogFooter>
+              <div className={DIALOG_BUTTONS}>
+                <Button type="button" variant="ghost" onClick={close}>Cancel</Button>
                 <Button type="submit" variant="destructive" disabled={busy}>{busy ? "Checking…" : "Turn Off"}</Button>
-              </DialogFooter>
+              </div>
             </form>
           )}
         </DialogContent>

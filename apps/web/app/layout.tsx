@@ -29,7 +29,8 @@ export const metadata: Metadata = {
   description: "One inbox for email and WhatsApp, with AI triage and drafts in your voice.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Konva" },
-  icons: { icon: "/icon.svg", apple: "/apple-touch-icon.png" },
+  // ?v=2 since the K replaced the old icon: browsers and phones keep a favicon for a long time under the same address.
+  icons: { icon: "/icon.svg?v=2", apple: "/apple-touch-icon.png?v=2" },
 };
 
 // iPhone and iPad Safari zoom the page when a field under 16px takes focus. maximumScale: 1 stops that, and iOS still
@@ -41,8 +42,8 @@ export async function generateViewport(): Promise<Viewport> {
   const ua = (await headers()).get("user-agent") ?? "";
   return {
     themeColor: [
-      { media: "(prefers-color-scheme: light)", color: "#f7f6f3" },
-      { media: "(prefers-color-scheme: dark)", color: "#121210" },
+      { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+      { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
     ],
     width: "device-width",
     initialScale: 1,

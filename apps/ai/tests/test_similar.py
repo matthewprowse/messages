@@ -4,6 +4,7 @@ vector cache, queued messages being embedded and saved sealed, and the seal_embe
 import base64
 import random
 import unittest
+import unittest.mock
 
 from ai.crypto import is_sealed_bytes
 from ai.embed import Embeddings
@@ -127,22 +128,76 @@ class Index(unittest.TestCase):
         [call] = [c for c in self.db.calls if c[0] == "rpc"]
         self.assertEqual(call[2]["p_ids"], ["b", "c"])  # nothing readable ever sent to the database
 
+    def loads(self, db=None):
+        """How many times the vectors were read: each read asks for every page at once, so its first page counts."""
+        return len([c for c in (db or self.db).calls if c[0] == "select" and c[2] == "0"])
+
     def test_vectors_are_cached_then_reloaded(self):
         index = SimilarIndex(self.db, self.vault)
         index.replies("u", vec(1, 0), None, 3)
         index.replies("u", vec(1, 0), None, 3)
-        self.assertEqual(len([c for c in self.db.calls if c[0] == "select"]), 1)
-        expired = SimilarIndex(self.db, self.vault, cache_s=0)
+        self.assertEqual(self.loads(), 1)
+        expired = SimilarIndex(self.db, self.vault, cache_s=0, stale_s=0)
         expired.replies("u", vec(1, 0), None, 3)
         expired.replies("u", vec(1, 0), None, 3)
-        self.assertEqual(len([c for c in self.db.calls if c[0] == "select"]), 3)
+        self.assertEqual(self.loads(), 3)
+
+    def test_an_expired_entry_is_searched_while_it_is_read_again(self):
+        import threading
+
+        index = SimilarIndex(self.db, self.vault, cache_s=0)
+        first = index._items("u")
+        gate = threading.Event()
+        load = index._load
+        index._load = lambda user: (gate.wait(5), load(user))[1]  # the background read holds until released
+        self.assertIs(index._items("u"), first)  # answered at once from the expired entry, not after the read
+        self.assertIn("u", index._loading)
+        self.assertIs(index._items("u"), first)
+        gate.set()
+        reading = index._loading.get("u")
+        if reading is not None:
+            reading.result(timeout=5)
+        self.assertEqual(self.loads(), 2)  # one read in the background, however many asked meanwhile
+
+    def test_one_read_is_shared_by_everyone_waiting_for_it(self):
+        import threading
+
+        index = SimilarIndex(self.db, self.vault)
+        gate = threading.Event()
+        load = index._load
+        index._load = lambda user: (gate.wait(5), load(user))[1]
+        got: list = []
+        threads = [threading.Thread(target=lambda: got.append(index._items("u"))) for _ in range(3)]
+        for t in threads:
+            t.start()
+        gate.set()
+        for t in threads:
+            t.join(5)
+        self.assertEqual(len(got), 3)
+        self.assertEqual(self.loads(), 1)
+
+    def test_pages_are_read_at_the_same_time(self):
+        import threading
+
+        many = [stored(f"{i:04d}", "t", vec(1, i)) for i in range(25)]
+        both = threading.Barrier(3, timeout=5)  # each of the three pages waits until all three were asked for
+
+        class Slow(Db):
+            def select(self, table, params):
+                both.wait()
+                return super().select(table, params)
+
+        db = Slow(many)
+        with unittest.mock.patch("ai.similar.PAGE", 10):
+            items = SimilarIndex(db, Vault(db, MASTER_B64, True), max_vectors=25)._items("u")
+        self.assertEqual([m for m, _, _ in items], [f"{i:04d}" for i in range(25)])  # in order, none twice
 
     def test_forget_drops_only_that_users_entry(self):
         index = SimilarIndex(self.db, self.vault)
         index.replies("u", vec(1, 0), None, 3)
         index.forget("u")
         index.replies("u", vec(1, 0), None, 3)
-        self.assertEqual(len([c for c in self.db.calls if c[0] == "select"]), 2)
+        self.assertEqual(self.loads(), 2)
 
     def test_defaults_keep_worst_case_memory_under_200_mb(self):
         from ai.similar import CACHE_S, MAX_USERS, MAX_VECTORS

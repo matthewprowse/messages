@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Profile and Privacy: Connected Accounts, with the two ways to let one go. Disconnect stops syncing and forgets the
+// Settings, Privacy and Data: Connected Accounts, with the two ways to let one go. Disconnect stops syncing and forgets the
 // stored sign-in but keeps every message. Remove also deletes that account's conversations, files and sign-in, after typing
 // REMOVE; the sync worker does the deleting (apps/worker/src/account), so it can take a few minutes.
 
@@ -11,10 +11,11 @@ import { useApp } from "@/lib/store";
 import { groupAccounts, partsOf, type AccountGroup } from "@/lib/account-groups";
 import { isRemoveWord } from "@/lib/account-deletion";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { AccountStatusBadge } from "@/components/settings/connect-family";
 import { groupName } from "@/components/settings/account-dialogs";
 import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
@@ -58,7 +59,7 @@ export function ConnectedAccountsSection() {
   }
 
   return (
-    <SettingsSection id="connected-accounts" title="Connected Accounts" description="Disconnect an account to stop syncing and keep its messages, or remove it to delete them too.">
+    <SettingsSection id="connected-accounts" title="Disconnect or Remove an Account">
       {groups.length === 0 ? <SettingsEmpty>No accounts connected.</SettingsEmpty> : (
         <SettingsRows>
           {groups.map((g) => {
@@ -86,29 +87,30 @@ export function ConnectedAccountsSection() {
               {leaving && groupName(leaving)} stops syncing and Konva forgets how to sign in to it. Everything already here stays. To sync it again you connect it again.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); if (leaving) void disconnect(leaving); }}>Disconnect</AlertDialogAction>
-          </AlertDialogFooter>
+          </div>
         </AlertDialogContent>
       </AlertDialog>
 
       <Dialog open={removing !== null} onOpenChange={(o) => { if (!o && !busy) setRemoving(null); }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
           <form onSubmit={(e) => { e.preventDefault(); if (removing) void remove(removing); }} className="space-y-4">
             <DialogHeader>
               <DialogTitle>Remove Account</DialogTitle>
               <DialogDescription>
-                This deletes every conversation, message and file that came from {removing && groupName(removing)}, and forgets its sign-in. It cannot be undone. Nothing is deleted at the provider, and your other accounts are not touched.
+                This deletes every conversation, message and file that came from {removing && groupName(removing)}, and forgets its sign in. It cannot be undone. Nothing is deleted at the provider, and your other accounts are not touched.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-2">
               <Label htmlFor="remove-word">Type REMOVE to Confirm</Label>
               <Input id="remove-word" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" placeholder="REMOVE" />
             </div>
-            <DialogFooter>
+            <div className={DIALOG_BUTTONS}>
+              <Button type="button" variant="ghost" disabled={busy} onClick={() => setRemoving(null)}>Cancel</Button>
               <Button type="submit" variant="destructive" disabled={busy || !isRemoveWord(typed)}>{busy ? "Removing…" : "Remove Account"}</Button>
-            </DialogFooter>
+            </div>
           </form>
         </DialogContent>
       </Dialog>

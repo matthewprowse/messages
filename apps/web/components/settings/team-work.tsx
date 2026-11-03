@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Team, Work Chats: every work chat for owners and admins to find a client and reassign it, without showing any chat text.
+// Settings, Team, the Work Chats view: every work chat for owners and admins to find a client and reassign it, without showing any chat text.
 
 import { useState } from "react";
 import Link from "next/link";
@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram", teams: "Teams", zoom: "Zoom", google_chat: "Google Chat" };
 
@@ -57,53 +57,49 @@ export function WorkChatsSection({ team, userId }: { team: TeamState; userId: st
   const shown = (chats ?? []).filter((c) => !term || `${c.label} ${c.agentName} ${c.inboxName ?? ""}`.toLowerCase().includes(term));
 
   return (
-    <SettingsSection
-      id="work-chats"
-      title="Work Chats"
-      description={manages
-        ? "Every chat your team has marked as work, with who looks after it. You see that a chat exists and who it is with, never what was said. To read one, assign it to yourself."
-        : "Every work chat in the team. Opening one is logged: the agent whose chat it is can see that Compliance opened it, and on which day."}
-    >
-      {failed && !chats ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could Not Load Work Chats</AlertTitle>
-          <AlertDescription>
-            <p>Check your connection and try again.</p>
-            <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
-          </AlertDescription>
-        </Alert>
-      ) : null}
+    <SettingsSection id="work-chats" title="Work Chats" action={chats && chats.length > 0 && <span className="text-sm tabular-nums text-muted-foreground">{chats.length < total ? `${chats.length} of ${total}` : total}</span>}>
+      <SettingsBody>
+        {failed && !chats ? (
+          <Alert variant="destructive">
+            <AlertTitle>Could Not Load Work Chats</AlertTitle>
+            <AlertDescription>
+              <p>Check your connection and try again.</p>
+              <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
-      {manages && leftAgents.length > 0 && (
-        <Alert>
-          <AlertTitle>{leftAgents.length === 1 ? `${leftAgents[0].name} Has Left the Team` : "Some People Have Left the Team"}</AlertTitle>
-          <AlertDescription>
-            <p>Their clients stay with the team. Give each person&apos;s chats to someone who can read them and reply.</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {leftAgents.map((a) => (
-                <Button key={a.id} variant="secondary" disabled={busy} onClick={() => setReassigning(a)}>
-                  Reassign {a.name}&apos;s {a.chats === 1 ? "Chat" : `${a.chats} Chats`}
-                </Button>
-              ))}
-            </div>
-          </AlertDescription>
-        </Alert>
-      )}
+        {manages && leftAgents.length > 0 && (
+          <Alert>
+            <AlertTitle>{leftAgents.length === 1 ? `${leftAgents[0].name} Has Left the Team` : "Some People Have Left the Team"}</AlertTitle>
+            <AlertDescription>
+              <p>Their clients stay with the team. Give each person&apos;s chats to someone who can read them and reply.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {leftAgents.map((a) => (
+                  <Button key={a.id} variant="secondary" disabled={busy} onClick={() => setReassigning(a)}>
+                    Reassign {a.name}&apos;s {a.chats === 1 ? "Chat" : `${a.chats} Chats`}
+                  </Button>
+                ))}
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Select value={filter} onValueChange={(v) => setFilter(v as WorkFilter)}>
-          <SelectTrigger aria-label="Show" className="w-52"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {WORK_FILTERS.map((f) => <SelectItem key={f.key} value={f.key}>{f.label} ({counts[f.key]})</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search Clients or Agents" aria-label="Search Work Chats" className="w-64 max-w-full" />
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={filter} onValueChange={(v) => setFilter(v as WorkFilter)}>
+            <SelectTrigger aria-label="Show" className="w-52"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {WORK_FILTERS.map((f) => <SelectItem key={f.key} value={f.key}>{f.label} ({counts[f.key]})</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search Clients or Agents" aria-label="Search Work Chats" className="w-64 max-w-full" />
+        </div>
+      </SettingsBody>
 
       {!chats ? (
-        failed ? null : <Skeleton className="h-40 w-full rounded-lg" />
+        failed ? null : <SettingsBody><Skeleton className="h-32 w-full rounded-lg" /></SettingsBody>
       ) : chats.length === 0 ? (
-        <SettingsEmpty>{filter === "all" ? "No work chats yet. A chat appears here once someone on the team marks it as work." : "Nothing matches this filter."}</SettingsEmpty>
+        <SettingsEmpty>{filter === "all" ? "No work chats yet." : "Nothing matches this filter."}</SettingsEmpty>
       ) : shown.length === 0 ? (
         <SettingsEmpty>No chat on this page matches your search.</SettingsEmpty>
       ) : (
@@ -161,12 +157,7 @@ export function WorkChatsSection({ team, userId }: { team: TeamState; userId: st
           })}
         </SettingsRows>
       )}
-      {chats && chats.length > 0 && (
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">{chats.length < total ? `Showing ${chats.length} of ${total}.` : `${total} ${total === 1 ? "chat" : "chats"}.`}</p>
-          {more && <Button variant="secondary" onClick={() => void loadMore()}>Show More</Button>}
-        </div>
-      )}
+      {chats && chats.length > 0 && more && <div className="p-1"><Button variant="ghost" onClick={() => void loadMore()}>Show More</Button></div>}
 
       <ReassignDialog
         agent={reassigning}
@@ -194,7 +185,7 @@ function ReassignDialog({ agent, members, onClose, onDone }: { agent: { id: stri
   };
   return (
     <Dialog open={!!agent} onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent track="reassign_agent_chats" className="sm:max-w-md">
+      <DialogContent track="reassign_agent_chats" showCloseButton={false} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Reassign {agent?.name}&apos;s Chats</DialogTitle>
           <DialogDescription>
@@ -209,6 +200,7 @@ function ReassignDialog({ agent, members, onClose, onDone }: { agent: { id: stri
           </Select>
         </div>
         <div className={DIALOG_BUTTONS}>
+          <Button variant="ghost" type="button" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="button" disabled={busy || !to} onClick={() => void submit()}>{busy ? "Assigning" : "Assign All"}</Button>
         </div>
       </DialogContent>

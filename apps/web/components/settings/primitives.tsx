@@ -1,56 +1,82 @@
-// The building blocks every Settings page is made of: headings, sections and the one row style (a title and
-// description with any controls on the right). No state and no data, so any settings component can use them.
+"use client";
 
+// The building blocks every Settings card is made of: a section is a white Card (components/surface.tsx), and inside a card a
+// section is a titled group. Rows are a title, an optional live detail line (an address, "Last synced 2m") and the control at
+// the end, with a rule between each. No state and no data, so any settings component can use them. The connect components
+// outside Settings (whatsapp-link, linkedin-connect, instagram-setup...) still pass descriptions, so those still render.
+
+import { createContext, useContext } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { Card, Separated } from "@/components/surface";
 
-/** A section or group title with its description. */
-export function SettingsHeading({ title, description, level = 2 }: { title: React.ReactNode; description?: React.ReactNode; level?: 2 | 3 | 4 }) {
+// True inside a card, so a section there is a group in it rather than a second card.
+const InCard = createContext(false);
+
+/** A group's title. Level 3 is a group in a card, level 4 a quieter label over a few rows (an account's name). */
+export function SettingsHeading({ title, description, level = 3 }: { title: React.ReactNode; description?: React.ReactNode; level?: 2 | 3 | 4 }) {
   const Tag = `h${level}` as const;
-  // A page's sections (level 2) are a step above the rows' titles so the page scans by section; groups inside stay row-sized.
   return (
     <div>
-      <Tag className={cn("flex min-h-8 items-center", level === 2 ? "text-base font-semibold" : "text-sm font-medium")}>{title}</Tag>
-      {description && <div className="text-sm text-muted-foreground">{description}</div>}
+      <Tag className={cn("flex items-center", level === 4 ? "h-8 text-xs text-muted-foreground" : "h-10 text-sm font-medium")}>{title}</Tag>
+      {description && <div className="pb-2 text-sm text-muted-foreground">{description}</div>}
     </div>
   );
 }
 
-/** A titled block of rows or a form. The first one on a page has no rule above it. */
-export function SettingsSection({ id, title, description, level, children }: { id?: string; title: React.ReactNode; description?: React.ReactNode; level?: 2 | 3 | 4; children: React.ReactNode }) {
+/** A card of settings, or inside one a titled group. `id` is what search and links scroll to; `action` sits in the title row. */
+export function SettingsSection({ id, title, description, action, level, children }: { id?: string; title?: React.ReactNode; description?: React.ReactNode; action?: React.ReactNode; level?: 2 | 3 | 4; children: React.ReactNode }) {
+  const inCard = useContext(InCard);
+  if (!inCard && (level ?? 2) === 2) {
+    return (
+      <Card id={id} title={title} action={action}>
+        <InCard.Provider value>
+          {description && <p className="px-3 pb-2 text-sm text-muted-foreground">{description}</p>}
+          <div className="flex flex-col">{children}</div>
+        </InCard.Provider>
+      </Card>
+    );
+  }
   return (
-    <section id={id} className={cn("scroll-mt-16 space-y-3", (level ?? 2) === 2 && "[&:not(:first-child)]:border-t [&:not(:first-child)]:pt-3")}>
-      <SettingsHeading title={title} description={description} level={level} />
+    <section id={id} className="flex scroll-mt-3 flex-col not-first:mt-2">
+      {title && <div className="flex items-center justify-between gap-3 px-3"><SettingsHeading title={title} description={description} level={level === 4 ? 4 : 3} />{action}</div>}
       {children}
     </section>
   );
 }
 
-// The one row style in Settings: Inbox-style rows, each a title and description with any controls on the right.
-export function SettingsRows({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-col gap-1">{children}</div>;
+/** Text, forms and buttons in a card, set in to line up with the rows' text. */
+export function SettingsBody({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn("flex flex-col gap-3 p-3", className)}>{children}</div>;
 }
 
-/** One row: optional leading icon, title, description, and controls that wrap under the text when narrow. A row with `href` is a link. */
+/** Rows with a rule between each, inset past a 40px lead when the rows have one. */
+export function SettingsRows({ children, inset = "none" }: { children: React.ReactNode; inset?: "lead" | "none" }) {
+  return <Separated inset={inset}>{children}</Separated>;
+}
+
+/**
+ * One row: an optional lead, the title, an optional detail line under it (live data only) and the controls at the end, which
+ * wrap under the text when the row is narrow so a long title is never squashed. A row with `href` is a link.
+ */
 export function SettingsRow({ title, description, leading, href, children }: { title: React.ReactNode; description?: React.ReactNode; leading?: React.ReactNode; href?: string; children?: React.ReactNode }) {
-  // The controls wrap under the text when the row is narrow, so a long title is never squashed beside them.
   const body = (
     <>
       <div className="flex min-w-[12rem] flex-1 items-center gap-3">
         {leading}
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">{title}</div>
-          {description && <div className="text-xs text-muted-foreground">{description}</div>}
+          <div className="flex min-h-5 flex-wrap items-center gap-2 text-sm font-medium">{title}</div>
+          {description && <div className="mt-1 text-xs text-muted-foreground">{description}</div>}
         </div>
       </div>
       {children && <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div>}
     </>
   );
-  const className = "flex flex-wrap items-center gap-x-3 gap-y-3 rounded-lg p-3";
-  return href ? <Link href={href} className={cn(className, "hover:bg-muted/50")}>{body}</Link> : <div className={className}>{body}</div>;
+  const className = "flex flex-wrap items-center gap-3 rounded-lg p-3";
+  return href ? <Link href={href} className={cn(className, "outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset")}>{body}</Link> : <div className={className}>{body}</div>;
 }
 
 /** The line shown in place of an empty list. */
 export function SettingsEmpty({ children }: { children: React.ReactNode }) {
-  return <p className="rounded-lg p-3 text-sm text-muted-foreground">{children}</p>;
+  return <p className="p-3 text-sm text-muted-foreground">{children}</p>;
 }

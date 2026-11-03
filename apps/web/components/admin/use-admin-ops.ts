@@ -1,7 +1,7 @@
 "use client";
 
 // Loads what the operator sections need in one go: system health, connector health, AI spend history, the billing state, the
-// unpriced models and the daily spend limit. One load, so Health, Alerts and the tab badge never disagree. Owner only: every
+// unpriced models and the daily spend limit. One load, so System, Alerts and the Overview count never disagree. Owner only: every
 // source refuses anyone else in the database. A section that fails shows its own message; the rest still load.
 
 import { useCallback, useEffect, useState } from "react";

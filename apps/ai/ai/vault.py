@@ -38,6 +38,7 @@ class Vault:
         self.encrypt = encrypt
         self._lock = threading.Lock()
         self._keys: dict[str, tuple[float, UserKeys]] = {}  # user_id -> (valid until, keys)
+        self._reading: dict[str, threading.Lock] = {}  # user_id -> held while their key is read, so threads asking at once read it once
         self._credential_keys: dict[str, tuple[float, bytes]] = {}
         self._unwrap_failed: dict[str, float] = {}  # user_id -> until when a key that exists but would not unwrap is not retried
         self._missing: dict[str, float] = {}  # user_id -> monotonic time to look for their key again
@@ -47,13 +48,30 @@ class Vault:
 
     def keys_for(self, user_id: str) -> UserKeys | None:
         """The user's derived keys, read and cached for KEY_CACHE_S. None when they have no usable key yet. The
-        read happens outside the lock, so one slow read never holds up threads whose keys are cached."""
+        read happens outside the lock, so one slow read never holds up threads whose keys are cached; threads that
+        need the same user's key at once (a draft's reads run together) wait for one read and KMS unwrap."""
+        cached = self._cached_keys(user_id)
+        if cached is not False:
+            return cached
+        with self._lock:
+            reading = self._reading.setdefault(user_id, threading.Lock())
+        with reading:
+            cached = self._cached_keys(user_id)  # read by the thread this one waited for
+            if cached is not False:
+                return cached
+            return self._read_keys(user_id)
+
+    def _cached_keys(self, user_id: str) -> UserKeys | None | bool:
+        """The cached keys, None when the user is known to have none for now, or False when they must be read."""
         with self._lock:
             hit = self._keys.get(user_id)
             if hit and hit[0] > time.monotonic():
                 return hit[1]
             if time.monotonic() < self._missing.get(user_id, 0.0) or time.monotonic() < self._unwrap_failed.get(user_id, 0.0):
                 return None
+        return False
+
+    def _read_keys(self, user_id: str) -> UserKeys | None:
         row = self.db.first("user_keys", {"select": "wrapped_key,wrapped_by", "user_id": f"eq.{user_id}"})
         keys = None
         cred = None

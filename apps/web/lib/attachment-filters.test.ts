@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { countLabel, filterFiles, filtersHref, isNarrowed, isVoiceNote, NO_FILTERS, parseFilters, searchTextOf, sizeLabel, sourcesIn, type FilterContext } from "./attachment-filters";
+import { filterFiles, filtersHref, isNarrowed, isVoiceNote, NO_FILTERS, parseFilters, searchTextOf, sourcesIn, type FilterContext } from "./attachment-filters";
 import type { FiledAttachment } from "./types";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -62,18 +62,4 @@ test("the Audio tab leaves voice notes out and keeps real audio files", () => {
   const files = [file("v", { kind: "audio", name: "Voice Note.ogg" }), file("s", { kind: "audio", name: "song.mp3" })];
   assert.equal(isVoiceNote(files[0]), true);
   assert.deepEqual(filterFiles(files, { ...NO_FILTERS, kind: "audio" }, ctx()).map((a) => a.id), ["s"]);
-});
-
-test("the count is exact when every page is in or nothing is narrowed, and admits it is still searching otherwise", () => {
-  assert.equal(countLabel({ shown: 3, total: 3, more: false, narrowed: true }), "3 Files");
-  assert.equal(countLabel({ shown: 200, total: 5400, more: true, narrowed: false }), "5,400 Files");
-  assert.equal(countLabel({ shown: 12, total: 5400, more: true, narrowed: true }), "12 Files, Still Searching");
-  assert.equal(countLabel({ shown: 200, total: null, more: true, narrowed: false }), "200 Files, Still Searching");
-  assert.equal(countLabel({ shown: 1, total: 1, more: false, narrowed: false }), "1 File");
-});
-
-test("the size counts only stored files, and is a floor while more pages are coming", () => {
-  const files = [{ path: "p", bytes: 1024 * 1024 }, { path: undefined, bytes: 5 * 1024 * 1024 }];
-  assert.equal(sizeLabel(files, false), "1.0 MB");
-  assert.equal(sizeLabel(files, true), "At Least 1.0 MB");
 });

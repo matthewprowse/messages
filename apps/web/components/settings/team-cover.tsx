@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { IconAction } from "@/components/tip";
 
 const day = (d: Date | string) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -48,7 +49,7 @@ function CoverDialog({ team, userId, open, onClose, onSaved }: { team: TeamState
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && close()}>
-      <DialogContent track="set_cover" className="sm:max-w-md">
+      <DialogContent track="set_cover" showCloseButton={false} className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-3">
           <DialogHeader>
             <DialogTitle>Set Cover</DialogTitle>
@@ -85,6 +86,7 @@ function CoverDialog({ team, userId, open, onClose, onSaved }: { team: TeamState
             </div>
           </div>
           <div className={DIALOG_BUTTONS}>
+            <Button variant="ghost" type="button" disabled={busy} onClick={close}>Cancel</Button>
             <Button variant="secondary" type="submit" disabled={!valid || busy}>{busy ? "Setting" : "Set Cover"}</Button>
           </div>
         </form>
@@ -117,12 +119,7 @@ export function CoverSection({ team, userId }: { team: TeamState; userId: string
   const past = shown.filter((p) => !live.includes(p)).slice(0, 5);
 
   return (
-    <SettingsSection
-      id="cover"
-      title="Cover"
-      description="While someone is away, a colleague reads their work chats and answers them from their own account. It starts and ends on the dates you choose, by itself. Personal chats are never covered."
-    >
-      <Button variant="secondary" disabled={!canSet} onClick={() => setSetting(true)}><CalendarClock /> Set Cover</Button>
+    <SettingsSection id="cover" title="Cover" action={<IconAction label="Set Cover" icon={CalendarClock} disabled={!canSet} onClick={() => setSetting(true)} />}>
       {periods === null ? (
         <SettingsEmpty>Cover did not load. Reload the page to try again.</SettingsEmpty>
       ) : periods === undefined ? null : shown.length === 0 ? (
@@ -149,7 +146,6 @@ export function CoverSection({ team, userId }: { team: TeamState; userId: string
           })}
         </SettingsRows>
       )}
-      <p className="text-xs text-muted-foreground">The person covering answers from their own account. Replying from someone else&apos;s number is not available.</p>
       <CoverDialog team={team} userId={userId} open={setting} onClose={() => setSetting(false)} onSaved={reload} />
     </SettingsSection>
   );

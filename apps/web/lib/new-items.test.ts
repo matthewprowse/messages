@@ -163,6 +163,17 @@ test("buildEventRow makes all-day events midnight to midnight", () => {
   assert.equal(r.row.ends_at, new Date(2026, 9, 24).toISOString());
 });
 
+test("buildEventRow runs an all-day event to the day after its last day", () => {
+  const r = buildEventRow(form({ allDay: true, startTime: "", endTime: "", date: "2026-11-13", endDate: "2026-11-15" }), "acc", "Africa/Johannesburg");
+  assert.ok(r.ok);
+  assert.equal(r.row.starts_at, new Date(2026, 10, 13).toISOString());
+  assert.equal(r.row.ends_at, new Date(2026, 10, 16).toISOString());
+  const d = pendingEvent("q3", r.row, "2026-11-13", []);
+  assert.deepEqual([d.startsAt, d.endsAt], ["2026-11-13T00:00:00.000Z", "2026-11-16T00:00:00.000Z"]);
+  const back = buildEventRow(form({ allDay: true, date: "2026-11-13", endDate: "2026-11-12" }), "acc", "Africa/Johannesburg");
+  assert.deepEqual(back, { ok: false, field: "date", error: "End the event on or after the day it starts." });
+});
+
 test("pendingEvent is the queued event as the Calendar shows it", () => {
   const people = [{ id: "c1", name: "Jane Doe", emails: ["Jane@x.com"] }] as Contact[];
   const timed = buildEventRow(form({ guests: ["jane@x.com", "bob@y.com"], location: "Cafe" }), "acc", "Europe/London");

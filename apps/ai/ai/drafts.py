@@ -154,6 +154,7 @@ class Drafts(GatherMixin):
         self.vault = vault or Vault(db)  # without one, plaintext passes through and nothing is encrypted
         self._runner = ThreadPoolExecutor(max_workers=MAX_RUNNING, thread_name_prefix="draft")
         self._calls = ThreadPoolExecutor(max_workers=MAX_RUNNING * 2, thread_name_prefix="draft-call")
+        self._reads = ThreadPoolExecutor(max_workers=MAX_RUNNING * 8, thread_name_prefix="draft-read")  # a draft's reads at once (drafts_gather)
         self._lock = threading.Lock()
         self._running: dict[str, str] = {}  # draft id -> thread id, while it is being written
         self._attempts: dict[str, int] = {}
@@ -213,7 +214,6 @@ class Drafts(GatherMixin):
         for d in pending:
             self.vault.open_row(d["user_id"], d, [("instruction", INSTRUCTION), ("decision", INSTRUCTION), ("source", DRAFT)])
         started = pick_drafts(pending, running, MAX_RUNNING - len(running))
-        started = [d for d in started if not self._limited(d)]
         if self.claims and started:  # a second AI worker never writes (and pays for) the same draft
             got = self.claims.claim("draft", [d["id"] for d in started])
             started = [d for d in started if d["id"] in got]
@@ -277,7 +277,12 @@ class Drafts(GatherMixin):
         return (data, AUDIO_TYPES.get(ext, "audio/webm")) if data else None
 
     def _write(self, d: dict[str, Any]) -> None:
-        gathered = self._gather(d) if d.get("thread_id") else self._gather_compose(d)
+        # The draft limit is read alongside the context and checked before the model is asked.
+        limited = self._start(self._limited, d)
+        early = self._early(d)
+        gathered = self._gather(d, early) if d.get("thread_id") else self._gather_compose(d, early)
+        if limited.result():  # the draft was failed (or a pre-draft expired) with the reason
+            return
         if gathered is None:
             self._expire(d)
             log.info("pre-draft dropped", draft=d["id"])
@@ -290,7 +295,7 @@ class Drafts(GatherMixin):
         adjust = edit and is_adjust(d.get("tone"))
         model = self.fast_model if edit else self.predraft_model if d.get("auto") else self.model
         # A next step (book, task, file, template) may ride on a fresh reply draft; edits, adjustments and new messages get none.
-        offer = actions.gather(self.db, self.vault, d["user_id"], thread["id"]) if not edit and not compose else None
+        offer = early["offer"].result() if not edit and not compose and "offer" in early else None
         if offer is not None:
             prompt += actions.prompt_block(offer, d["id"])
         audio = self._recording(d) if d.get("audio_path") and not edit else None

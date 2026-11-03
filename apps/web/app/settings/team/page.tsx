@@ -1,12 +1,14 @@
 "use client";
 
-// Settings, Team: the workspace and its people, loaded with useTeam, with Retry when the load fails.
+// Settings, Team: the workspace and its people, loaded with useTeam, with Retry when the load fails. The team's longer lists
+// are views in the pane (?view=work-chats, activity, voice, exports), each shown only to the roles that may see it.
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { ROLE_LABEL, useTeam } from "@/lib/team";
+import { ROLE_LABEL, useTeam, type TeamState } from "@/lib/team";
 import { refreshMyTeam } from "@/lib/share";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -15,20 +17,92 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-import { SettingsHeader } from "@/components/settings-header";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { ViewButtons } from "@/components/pane";
+import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsPage } from "@/components/settings/settings-page";
 import { MembersSection } from "@/components/settings/team-members";
 import { SharedChatsSection } from "@/components/settings/team-shared";
-import { TeamOwnerSection } from "@/components/settings/team-owner";
-import { TeamAfterSection } from "@/components/settings/team-after";
+import { SharedInboxesSection } from "@/components/settings/team-inboxes";
+import { CoverSection } from "@/components/settings/team-cover";
+import { WorkChatsSection } from "@/components/settings/team-work";
+import { TeamActivity } from "@/components/settings/team-activity";
+import { CompanyVoiceSections } from "@/components/settings/team-voice";
+import { ExportLogSection } from "@/components/settings/team-exports";
+
+type View = "team" | "work-chats" | "activity" | "voice" | "exports";
+
+/** The views this person's role may open, in order. Compliance sees work chats and exports only while strict sharing is on. */
+function viewsFor(team: TeamState): { key: View; label: string }[] {
+  const manages = team.role === "owner" || team.role === "admin";
+  const oversees = manages || (team.role === "compliance" && !!team.workspace?.strictSharing);
+  return [
+    { key: "team" as const, label: "Team" },
+    ...(oversees ? [{ key: "work-chats" as const, label: "Work Chats" }] : []),
+    ...(manages ? [{ key: "activity" as const, label: "Activity" }] : []),
+    { key: "voice" as const, label: "Company Voice" },
+    ...(oversees ? [{ key: "exports" as const, label: "Exports" }] : []),
+  ];
+}
 
 export default function TeamPage() {
+  return (
+    <SettingsPage title="Team">
+      <Suspense fallback={null}><Team /></Suspense>
+    </SettingsPage>
+  );
+}
+
+function Team() {
   const { session } = useAuth();
   const { state, failed, load } = useTeam();
+  const params = useSearchParams();
+  const userId = session?.user.id;
+
+  if (failed) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Could Not Load Your Team</AlertTitle>
+        <AlertDescription>
+          <p>Check your connection and try again.</p>
+          <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (!state || !userId) return <Skeleton className="h-40 w-full rounded-lg" />;
+  if (!state.workspace) {
+    return (
+      <SettingsSection id="team" title="No Team Yet">
+        <SettingsEmpty>Teams are set up for a business by Konva. If you have been invited, open the invite link you were sent.</SettingsEmpty>
+      </SettingsSection>
+    );
+  }
+  const views = viewsFor(state);
+  // An address for a view this role cannot open (an old link, a changed role) shows the team instead.
+  const asked = params.get("view");
+  const view = views.find((v) => v.key === asked)?.key ?? "team";
+  return (
+    <>
+      <div className="flex h-10 items-center">
+        <ViewButtons label="Team" items={views} value={view} hrefFor={(key) => (key === "team" ? "/settings/team" : `/settings/team?view=${key}`)} />
+      </div>
+      {view === "work-chats" ? <WorkChatsSection team={state} userId={userId} />
+        : view === "activity" ? <TeamActivity />
+        : view === "voice" ? <CompanyVoiceSections team={state} />
+        : view === "exports" ? <ExportLogSection />
+        : <Overview team={state} userId={userId} load={load} />}
+    </>
+  );
+}
+
+/** The team view: members, strict sharing, what you share, shared inboxes, cover and, for anyone but the owner, leaving. */
+function Overview({ team, userId, load }: { team: TeamState; userId: string; load: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [confirmOff, setConfirmOff] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const userId = session?.user.id;
+  const workspace = team.workspace;
+  if (!workspace) return null;
+  const hasCompliance = team.people.some((p) => p.role === "compliance" && p.status !== "removed");
 
   const setStrict = async (strict: boolean) => {
     setBusy(true);
@@ -42,7 +116,6 @@ export default function TeamPage() {
   };
 
   const leave = async () => {
-    if (!userId) return;
     setBusy(true);
     const { error } = await supabase.rpc("remove_member", { p_user: userId });
     setBusy(false);
@@ -52,60 +125,31 @@ export default function TeamPage() {
     void load();
   };
 
-  const workspace = state?.workspace ?? null;
-  const hasCompliance = !!state?.people.some((p) => p.role === "compliance" && p.status !== "removed");
-
   return (
     <>
-      <SettingsHeader title="Team" description={workspace ? workspace.name : "People you work with, and what the team can see."} />
-      <div className="space-y-3">
-        {failed && (
-          <Alert variant="destructive">
-            <AlertTitle>Could Not Load Your Team</AlertTitle>
-            <AlertDescription>
-              <p>Check your connection and try again.</p>
-              <Button variant="secondary" className="mt-2" onClick={() => void load()}>Retry</Button>
-            </AlertDescription>
-          </Alert>
-        )}
-        {!state ? (
-          failed ? null : <Skeleton className="h-40 w-full rounded-lg" />
-        ) : !workspace || !userId ? (
-          <SettingsSection id="team" title="No Team Yet" description="Nothing is shared with anyone. Your mail and chats are private to you.">
-            <SettingsRows>
-              <SettingsRow title="Start a Team" description="Teams are set up for a business by Konva. Ask for one when you request access (choose the team option and give your company name), and once it is approved you get an invite link as its owner, then invite each person." />
-              <SettingsRow title="Join a Team" description="If you have been invited, open the invite link you were sent." />
-            </SettingsRows>
-          </SettingsSection>
-        ) : (
-          <>
-            <MembersSection team={state} userId={userId} onChanged={() => void load()} />
+      <MembersSection team={team} userId={userId} onChanged={() => void load()} />
 
-            <SettingsSection id="sharing" title="Sharing" description="Only chats marked as work are shared with the team. Everything else stays private to each person.">
-              <SettingsRows>
-                <SettingsRow
-                  title={<>Strict Sharing{state.role !== "owner" && <Badge variant="secondary">{workspace.strictSharing ? "On" : "Off"}</Badge>}</>}
-                  description="Keeps work chats shared until the owner releases them, so a person cannot move one back to personal. It also turns on the Compliance role, for someone who supervises client communication in a regulated firm. Compliance can read every work chat in the team, never a personal one. People are told before they join. Only the owner can change this or give the Compliance role."
-                >
-                  {state.role === "owner" && <Switch checked={workspace.strictSharing} disabled={busy} aria-label="Strict Sharing" onCheckedChange={(on) => (on ? void setStrict(true) : hasCompliance ? setConfirmOff(true) : void setStrict(false))} />}
-                </SettingsRow>
-              </SettingsRows>
-            </SettingsSection>
+      <SettingsSection id="sharing" title="Sharing">
+        <SettingsRows>
+          <SettingsRow title={<>Strict Sharing{team.role !== "owner" && <Badge variant="secondary">{workspace.strictSharing ? "On" : "Off"}</Badge>}</>}>
+            {team.role === "owner" && <Switch checked={workspace.strictSharing} disabled={busy} aria-label="Strict Sharing" onCheckedChange={(on) => (on ? void setStrict(true) : hasCompliance ? setConfirmOff(true) : void setStrict(false))} />}
+          </SettingsRow>
+        </SettingsRows>
+      </SettingsSection>
 
-            <SharedChatsSection strict={workspace.strictSharing} role={state.role} />
+      <SharedChatsSection strict={workspace.strictSharing} role={team.role} />
+      <SharedInboxesSection team={team} />
+      <CoverSection team={team} userId={userId} />
 
-            <TeamOwnerSection team={state} />
-
-            <TeamAfterSection team={state} userId={userId} />
-
-            {state.role !== "owner" && (
-              <SettingsSection id="membership" title="Your Membership" description={`You are ${state.role ? ROLE_LABEL[state.role] : "a member"} of ${workspace.name}. Leaving ends your access to what the team shares. Your own mail and chats stay with you.`}>
-                <Button variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={() => setLeaving(true)}>Leave Team</Button>
-              </SettingsSection>
-            )}
-          </>
-        )}
-      </div>
+      {team.role !== "owner" && (
+        <SettingsSection id="membership" title="Your Membership">
+          <SettingsRows>
+            <SettingsRow title={workspace.name} description={team.role ? ROLE_LABEL[team.role] : "Member"}>
+              <Button variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={() => setLeaving(true)}>Leave Team</Button>
+            </SettingsRow>
+          </SettingsRows>
+        </SettingsSection>
+      )}
 
       <AlertDialog open={confirmOff} onOpenChange={(open) => !busy && setConfirmOff(open)}>
         <AlertDialogContent track="strict_sharing_off">
@@ -125,7 +169,7 @@ export default function TeamPage() {
       <AlertDialog open={leaving} onOpenChange={(open) => !busy && setLeaving(open)}>
         <AlertDialogContent track="leave_team">
           <AlertDialogHeader>
-            <AlertDialogTitle>Leave {workspace?.name}?</AlertDialogTitle>
+            <AlertDialogTitle>Leave {workspace.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               You lose access to anything the team shares. Your own mail and chats stay with you, and nothing of yours is deleted. To join again, the owner must invite you.
             </AlertDialogDescription>

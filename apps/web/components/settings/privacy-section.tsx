@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Profile and Privacy: theme, the usage-data switch, setup again, and signing out.
+// Settings cards: theme and who is signed in (with setup again) for Profile, and the usage data switch for Privacy and Data.
 
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
@@ -20,7 +20,7 @@ export function AppearanceSection() {
   return (
     <SettingsSection id="appearance" title="Appearance">
       <SettingsRows>
-        <SettingsRow title="Theme" description="Match your device, or always use light or dark.">
+        <SettingsRow title="Theme">
           {mounted && (
             <Select value={theme} onValueChange={setTheme}>
               <SelectTrigger className="w-32" aria-label="Theme"><SelectValue /></SelectTrigger>
@@ -33,13 +33,13 @@ export function AppearanceSection() {
   );
 }
 
-/** What is stored and shared: the usage-data switch. Deleting and exporting your data are planned (docs/PLAN.md). */
+/** The usage data switch. Counts and screens only, never content (packages/analytics). */
 export function PrivacySection() {
   const { dispatch, profile } = useApp();
   return (
-    <SettingsSection id="privacy" title="Privacy" description="Everything lives in your own database. Credentials and WhatsApp session keys are encrypted at rest, and message content never goes to logs.">
+    <SettingsSection id="usage-data" title="Usage Data">
       <SettingsRows>
-        <SettingsRow title="Share Usage Data" description="Counts of which screens and features are used, how long things take and how the AI did. Never message text, names, addresses or anything you type.">
+        <SettingsRow title="Share Usage Data">
           <Switch checked={profile.shareUsage} onCheckedChange={(v) => dispatch({ type: "patchProfile", patch: { shareUsage: v } })} aria-label="Share Usage Data" />
         </SettingsRow>
       </SettingsRows>
@@ -53,12 +53,12 @@ export function SignInSection() {
   const { notify } = useApp();
   const setup = () => saveOnboarding({ onboarding: "accounts", tour: "done" }).catch(() => notify("Could not start that. Try again."));
   return (
-    <SettingsSection id="account" title="Account">
+    <SettingsSection id="account" title="Sign In">
       <SettingsRows>
         <SettingsRow title="Signed In" description={session?.user.email}>
           <Button variant="secondary" onClick={() => signOut()}>Sign Out</Button>
         </SettingsRow>
-        <SettingsRow title="Run Setup Again" description="Accounts, what Konva knows about you, contacts and a practice reply.">
+        <SettingsRow title="Run Setup Again">
           <Button variant="secondary" onClick={setup}>Run Setup</Button>
         </SettingsRow>
       </SettingsRows>

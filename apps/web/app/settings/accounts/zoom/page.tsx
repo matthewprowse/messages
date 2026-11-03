@@ -17,7 +17,6 @@ export default function ZoomSetup() {
     <SetupSteps
       provider="zoom"
       title="Connect Zoom"
-      description="Your Zoom meetings with their transcripts, and your Team Chat conversations. The sign-in is stored encrypted and only used to sync and to send the replies you write."
       label="Zoom"
       watch={["zoom"]}
       connect={<Suspense><ConnectZoom /></Suspense>}
@@ -27,10 +26,10 @@ export default function ZoomSetup() {
 
 /** What ?connect_error= from the Zoom callback means, in words. */
 function zoomErrorText(code: string): string {
-  if (code === "cancelled") return "Zoom sign-in was cancelled. Try again when you are ready.";
+  if (code === "cancelled") return "Zoom sign in was cancelled. Try again when you are ready.";
   if (code === "not_granted") return "Zoom gave no access to recordings or Team Chat. Check the app's scopes, then try again.";
   if (code === "no_refresh") return "Zoom did not give lasting access. Try again.";
-  if (code === "expired") return "That sign-in took too long or was opened in another browser. Try again.";
+  if (code === "expired") return "That sign in took too long or was opened in another browser. Try again.";
   return "Zoom could not be connected. Try again.";
 }
 
@@ -69,7 +68,7 @@ function ConnectZoom() {
 
   return (
     <div className="space-y-2">
-      <Button variant="secondary" disabled={busy} onClick={start}><Video /> Connect Zoom</Button>
+      <div><Button variant="secondary" disabled={busy} onClick={start}><Video /> Connect Zoom</Button></div>
       {error && <FieldError>{error}</FieldError>}
     </div>
   );

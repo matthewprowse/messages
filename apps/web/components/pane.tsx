@@ -12,14 +12,36 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-/** The 40px title row, with the page's actions (h-8 buttons) on the right, and the controls row under it. */
-export function PaneHeader({ title, action, children, className }: { title: ReactNode; action?: ReactNode; children?: ReactNode; className?: string }) {
+/** What a header's search needs: the same 40px search as Conversations. */
+export interface PaneSearchProps {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  inputRef?: Ref<HTMLInputElement>;
+  onKeyDown?: KeyboardEventHandler<HTMLInputElement>;
+  keyShortcut?: string;
+  maxLength?: number;
+  /** What a hover says, such as the shortcut that jumps here. */
+  hint?: ReactNode;
+}
+
+/**
+ * The 40px title row, with the page's actions (ghost h-8 icon buttons, 4px apart) on the right. Then, as in Conversations,
+ * `views` in a 40px row and `search` as a 40px search 4px under it, level with the rail's items, and `children` after.
+ */
+export function PaneHeader({ title, action, views, search, children, className }: { title: ReactNode; action?: ReactNode; views?: ReactNode; search?: PaneSearchProps; children?: ReactNode; className?: string }) {
   return (
     <div className={cn("space-y-3 border-b p-3", className)}>
       <div className="flex h-10 items-center justify-between gap-3">
         <h1 className="min-w-0 truncate text-xl font-medium">{title}</h1>
         {action && <div className="flex shrink-0 items-center gap-1">{action}</div>}
       </div>
+      {(views || search) && (
+        <div className="flex flex-col gap-1">
+          {views && <div className="flex h-10 flex-col justify-center">{views}</div>}
+          {search && <SearchBand {...search} className="border-b-0 p-0" inputClassName="h-10" />}
+        </div>
+      )}
       {children}
     </div>
   );

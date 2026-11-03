@@ -40,13 +40,13 @@ export function SwitchRow({ id, label, checked, onChange, disabled }: { id: stri
 }
 
 /** The Date field: a button that opens a calendar. `date` is "YYYY-MM-DD". */
-export function DateField({ date, onChange, open, onOpenChange, error, disabled }: { date: string; onChange: (key: string) => void; open: boolean; onOpenChange: (open: boolean) => void; error: string | null; disabled: boolean }) {
+export function DateField({ date, onChange, open, onOpenChange, error, disabled, label = "Date", id = "event-date" }: { date: string; onChange: (key: string) => void; open: boolean; onOpenChange: (open: boolean) => void; error: string | null; disabled: boolean; label?: string; id?: string }) {
   return (
     <div className="grid gap-2">
-      <Label htmlFor="event-date">Date</Label>
+      <Label htmlFor={id}>{label}</Label>
       <Popover open={open} onOpenChange={onOpenChange}>
         <PopoverTrigger asChild>
-          <Button id="event-date" type="button" variant="outline" className="w-full justify-between font-normal" aria-invalid={!!error} disabled={disabled}>
+          <Button id={id} type="button" variant="outline" className="w-full justify-between font-normal" aria-invalid={!!error} disabled={disabled}>
             {fromDateKey(date)?.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) ?? "Pick a Date"}
             <ChevronDownIcon className="text-muted-foreground" />
           </Button>

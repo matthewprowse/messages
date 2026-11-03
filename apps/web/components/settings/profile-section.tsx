@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Profile: your name and photo, shown wherever "You" appears. The photo is cut to a square and shrunk in the
+// Settings, Profile, the Profile card: your name and photo, shown wherever "You" appears. The photo is cut to a square and shrunk in the
 // browser before it is saved.
 
 import { useEffect, useState } from "react";
@@ -14,14 +14,16 @@ import { MyAvatar } from "@/components/my-avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 /** The name form and the photo row. */
 export function ProfileSection() {
   return (
     <SettingsSection id="profile" title="Profile">
-      <NameRow />
-      <PhotoRow />
+      <SettingsRows>
+        <NameRow />
+        <PhotoRow />
+      </SettingsRows>
     </SettingsSection>
   );
 }
@@ -37,10 +39,12 @@ function NameForm() {
   const [name, setName] = useState(profile.name);
   const changed = name.trim() !== profile.name;
   return (
-    <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!changed) return; dispatch({ type: "patchProfile", patch: { name: name.trim() } }); notify("Saved"); }}>
-      <div className="grid gap-2"><Label htmlFor="name">Name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Thandi Nkosi" /></div>
-      <Button variant="secondary" type="submit" disabled={!changed}>Save</Button>
-    </form>
+    <SettingsBody>
+      <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); if (!changed) return; dispatch({ type: "patchProfile", patch: { name: name.trim() } }); notify("Saved"); }}>
+        <div className="grid flex-1 gap-2"><Label htmlFor="name">Name</Label><Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Thandi Nkosi" /></div>
+        <Button variant="secondary" type="submit" disabled={!changed}>Save</Button>
+      </form>
+    </SettingsBody>
   );
 }
 
@@ -84,18 +88,16 @@ function PhotoRow() {
   }
 
   return (
-    <SettingsRows>
-      <SettingsRow title="Your Photo" description="Shown beside the files and messages you send." leading={<MyAvatar className="size-12" previewUrl={preview} />}>
-        <Button variant="secondary" disabled={busy} onClick={() => document.getElementById("profile-photo-input")?.click()}>Upload Photo</Button>
-        {profile.avatarPath && <Button variant="ghost" disabled={busy} onClick={remove}>Remove</Button>}
-        <input
-          id="profile-photo-input"
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; void upload(f); }}
-        />
-      </SettingsRow>
-    </SettingsRows>
+    <SettingsRow title="Your Photo" leading={<MyAvatar className="size-10" previewUrl={preview} />}>
+      <Button variant="secondary" disabled={busy} onClick={() => document.getElementById("profile-photo-input")?.click()}>Upload Photo</Button>
+      {profile.avatarPath && <Button variant="ghost" disabled={busy} onClick={remove}>Remove</Button>}
+      <input
+        id="profile-photo-input"
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; void upload(f); }}
+      />
+    </SettingsRow>
   );
 }

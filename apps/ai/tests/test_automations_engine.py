@@ -155,7 +155,7 @@ class LiveRun(unittest.TestCase):
         self.assertNotIn("property24.com", draft["reply_to"])
         self.assertIn("not to the portal", draft["instruction"])
         self.assertNotIn("is this still available", draft["instruction"], "the enquirer's own words never go into the instruction")
-        urgent = {"priority": "urgent", "junk": False, "needs_reply": True, "triage_reason": "automation", "triage_reason_text": "s:summary:Your automation marked this urgent"}
+        urgent = {"priority": "urgent", "junk": False, "needs_reply": True}
         self.assertIn(("threads", {"id": f"eq.{THREAD}", "user_id": f"eq.{USER}"}, urgent), db.updates, "urgent from an automation says why")
         run = db.run_patch()
         self.assertEqual((run["status"], run["read_by"], run["error"]), ("done", "parser", None))

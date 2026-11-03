@@ -19,7 +19,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -71,22 +71,21 @@ export function ExtractTasksDialog({ open, onOpenChange, title, body, contactNam
   const noTaskList = choices.length === 0;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="extract_tasks" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      {/* The title says what happens, so there is no description to point at. */}
+      <DialogContent track="extract_tasks" showCloseButton={false} aria-describedby={undefined} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Extract Tasks</DialogTitle>
-          <DialogDescription>Unchecked items in this note become tasks in your task list, shown on the Calendar page.</DialogDescription>
         </DialogHeader>
         {noTaskList ? (
           <Alert>
             <AlertTitle>Connect a Task List to Add Tasks</AlertTitle>
             <AlertDescription>
-              <p>Open <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Settings, Connected Accounts</Link>, connect Microsoft To Do, Google Tasks or iCloud Reminders, then try again.</p>
+              <p>Connect Microsoft To Do, Google Tasks or iCloud Reminders in <Link href="/settings/accounts" className="text-foreground underline underline-offset-2">Connected Accounts</Link>.</p>
             </AlertDescription>
           </Alert>
         ) : items.length === 0 ? (
           <Alert>
             <AlertTitle>No Unchecked Items</AlertTitle>
-            <AlertDescription><p>Add a checklist to the note, then try again.</p></AlertDescription>
           </Alert>
         ) : (
           <div className="grid gap-4">
@@ -123,11 +122,11 @@ export function ExtractTasksDialog({ open, onOpenChange, title, body, contactNam
             </div>
           </div>
         )}
-        {!noTaskList && items.length > 0 && (
-          <div className={DIALOG_BUTTONS}>
-            <Button type="button" disabled={picked.size === 0 || !date} onClick={submit}>{picked.size === 1 ? "Make 1 Task" : `Make ${picked.size} Tasks`}</Button>
-          </div>
-        )}
+        {/* Without the close button, Cancel (or Close, when there is nothing to make) is the way out. */}
+        <div className={DIALOG_BUTTONS}>
+          <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>{noTaskList || items.length === 0 ? "Close" : "Cancel"}</Button>
+          {!noTaskList && items.length > 0 && <Button type="button" disabled={picked.size === 0 || !date} onClick={submit}>{picked.size === 1 ? "Make 1 Task" : `Make ${picked.size} Tasks`}</Button>}
+        </div>
       </DialogContent>
     </Dialog>
   );

@@ -1,40 +1,39 @@
 "use client";
 
-// Admin view for the monthly AI budget: how it is shared between features, weekly limits, the setup allowance and the abuse
-// limits. Reads and saves through Supabase. The page keeps it mounted so edits survive a tab switch; the rules (what is
-// invalid, which keys a save keeps, what would pause a feature) are in lib/admin-budget.ts.
+// Admin's AI view, the budget: the most the AI may cost for each seat in a month (a team shares its seats times it), how it
+// is divided between features (a feature pauses for a person once their share is spent, until the 1st; people see
+// percentages only), weekly limits, the setup allowance and the abuse limits. One card per group and a sticky save bar.
+// The page keeps it mounted so edits survive a view switch; the rules are in lib/admin-budget.ts.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Wallet } from "lucide-react";
+import { CalendarClock, CircleDollarSign, Percent, ShieldAlert, Sparkles, Sigma } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
-import { AI_FEATURES, PRICES_CHANGE, PRICES_CHECKED, featureLabel, money } from "@/lib/ai-features";
+import { AI_FEATURES, PRICES_CHANGE, featureLabel, money } from "@/lib/ai-features";
 import { LIMITS, badFields, budgetProblem, formSnapshot, mergeShares, sharesOf, shareTotal, unknownShares, zeroedFeatures, type BudgetForm, type LimitKey } from "@/lib/admin-budget";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/primitives";
-import { AdminHeading, AdminRow } from "@/components/admin/parts";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
+import { Card, IconCircle, Row, Separated } from "@/components/surface";
+import { when } from "./format";
+import { Failed, LoadingCard } from "./parts";
 
 const COLUMNS = "monthly_usd, shares, weekly_pct, weekly_features, setup_usd, setup_days, regen_per_hour, auto_drafts_per_day, summaries_per_day, flag_multiple, flag_day_usd, updated_at";
 
-/** A number box with its unit; marked invalid when the form says so. */
-function Field({ label, value, onChange, bad, before, after, wide, numeric }: { label: string; value: string; onChange: (v: string) => void; bad: boolean; before?: string; after?: string; wide?: boolean; numeric?: boolean }) {
+/** An h-8 number box with its unit; marked invalid when the form says so. */
+function Field({ label, value, onChange, bad, before, after, numeric }: { label: string; value: string; onChange: (v: string) => void; bad: boolean; before?: string; after?: string; numeric?: boolean }) {
   return (
-    <div className="flex items-center gap-2">
+    <span className="flex items-center gap-2">
       {before && <span className="text-sm text-muted-foreground">{before}</span>}
-      <Input aria-label={label} aria-invalid={bad || undefined} inputMode={numeric ? "numeric" : "decimal"} className={wide ? "w-24 text-right" : "w-20 text-right"} value={value} onChange={(e) => onChange(e.target.value)} />
+      <Input aria-label={label} aria-invalid={bad || undefined} inputMode={numeric ? "numeric" : "decimal"} className="h-8 w-20 text-right" value={value} onChange={(e) => onChange(e.target.value)} />
       {after && <span className="text-sm text-muted-foreground">{after}</span>}
-    </div>
+    </span>
   );
 }
 
-/**
- * The most the AI may cost for each seat in a month, and how it is divided between features. A team shares its seats times this amount. A feature
- * pauses for a person when their share of it is spent, until the 1st. People are shown percentages only.
- */
+/** Reloads when `version` changes (the header Refresh), unless there are unsaved edits, which it keeps. */
 export function AiBudget({ version, onBusy }: { version: number; onBusy: (busy: boolean) => void }) {
   const [form, setForm] = useState<BudgetForm | null>(null);
   const [original, setOriginal] = useState<Record<string, number>>({});
@@ -73,12 +72,12 @@ export function AiBudget({ version, onBusy }: { version: number; onBusy: (busy: 
   useEffect(() => {
     if (version === seen.current) return;
     seen.current = version;
-    if (dirtyRef.current) toast("Unsaved changes kept. Discard them to load the saved budget.");
+    if (dirtyRef.current) toast("Unsaved Changes Kept. Discard Them To Load The Saved Budget.");
     else void load();
   }, [version, load]);
 
-  if (failed) return <EmptyState icon={Wallet} title="Could Not Load the AI Budget" description="Check your connection and refresh." />;
-  if (!form) return <Skeleton className="h-40 w-full rounded-lg" />;
+  if (failed) return <Failed title="Could Not Load The AI Budget" onRetry={() => void load()} />;
+  if (!form) return <LoadingCard title="AI Budget" rows={3} />;
 
   const set = (patch: Partial<BudgetForm>) => setForm((f) => (f ? { ...f, ...patch } : f));
   const bad = badFields(form);
@@ -100,7 +99,7 @@ export function AiBudget({ version, onBusy }: { version: number; onBusy: (busy: 
       ...Object.fromEntries(LIMITS.map((x) => [x.key, Number(form.limits[x.key])])), updated_at: new Date().toISOString(),
     }).eq("id", true).eq("updated_at", updatedAt).select("updated_at");
     setBusy(false);
-    if (error) return void toast.error(error.message || "Could Not Save the AI Budget");
+    if (error) return void toast.error(error.message || "Could Not Save The AI Budget");
     if (!data?.length) return void toast.error("The AI Budget Changed Elsewhere. Discard your edits to load it, then try again.");
     setOriginal(shares);
     setSaved(formSnapshot(form));
@@ -116,73 +115,79 @@ export function AiBudget({ version, onBusy }: { version: number; onBusy: (busy: 
   const pct = (key: string) => Number(form.shares[key]);
   return (
     <div className="flex flex-col gap-3">
-      <AdminHeading
-        title="AI Budget"
-        description={`The most the AI may cost for each seat in a month, and how it is divided between features. A team shares its seats times this amount. A feature pauses for a person once their share is spent, until the 1st. People see percentages only, never dollars. Changes apply within a minute. Last saved ${new Date(updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`}
-      />
-      <AdminRow title="Monthly Budget per Seat" description={`In US dollars, at Google's Gemini prices checked on ${PRICES_CHECKED}. They change on ${PRICES_CHANGE}, so review the shares then.`}>
-        <Field label="Monthly budget per seat in dollars" value={form.monthly} onChange={(monthly) => set({ monthly })} bad={bad.has("monthly")} before="$" wide />
-      </AdminRow>
+      <Card title="AI Budget" action={<span className="shrink-0 text-xs text-muted-foreground">Saved {when(updatedAt)}</span>}>
+        <Row
+          lead={<IconCircle icon={CircleDollarSign} />}
+          title="Monthly Budget Per Seat"
+          detail={`Gemini Prices Change ${PRICES_CHANGE}`}
+          end={<Field label="Monthly budget per seat in dollars" value={form.monthly} onChange={(monthly) => set({ monthly })} bad={bad.has("monthly")} before="$" />}
+        />
+      </Card>
 
-      <AdminHeading title="Monthly Shares" description="Each feature's share of the monthly budget, and whether it also has a weekly limit. A share of 0% pauses the feature for everyone." />
-      <div>
-        {AI_FEATURES.map((f) => (
-          <AdminRow key={f.key} title={f.label} description={`${f.note}${Number.isFinite(pct(f.key)) && total > 0 ? ` Up to ${money((total * pct(f.key)) / 100)} a month.` : ""}`}>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              Weekly
-              <Switch aria-label={`Weekly limit on ${f.label}`} checked={form.weekly.includes(f.key)} onCheckedChange={(on) => set({ weekly: on ? [...form.weekly, f.key] : form.weekly.filter((k) => k !== f.key) })} />
-            </label>
-            <Field label={`${f.label} share in percent`} value={form.shares[f.key]} onChange={(v) => set({ shares: { ...form.shares, [f.key]: v } })} bad={bad.has(`share:${f.key}`)} after="%" />
-          </AdminRow>
-        ))}
-        {extra.map(([key, value]) => (
-          <AdminRow key={key} title={featureLabel(key)} description="Set outside this page. It is kept as it is when you save, and counts toward the total.">
-            <span className="text-sm tabular-nums">{value}%</span>
-          </AdminRow>
-        ))}
-        <AdminRow title="Total" description={sumOk ? undefined : <span className="text-destructive">Must Add Up to 100%.</span>}>
-          <span className={sumOk ? "text-sm tabular-nums" : "text-sm tabular-nums text-destructive"}>{Number.isFinite(sum) ? `${Math.round(sum * 10) / 10}%` : "Not a Number"}</span>
-        </AdminRow>
-      </div>
+      <Card title="Monthly Shares" action={<span className={sumOk ? "shrink-0 text-sm tabular-nums" : "shrink-0 text-sm tabular-nums text-destructive"}>{Number.isFinite(sum) ? `${Math.round(sum * 10) / 10}% Of 100%` : "Not A Number"}</span>}>
+        <Separated>
+          {AI_FEATURES.map((f) => (
+            <Row
+              key={f.key}
+              lead={<IconCircle icon={Sparkles} />}
+              title={f.label}
+              detail={Number.isFinite(pct(f.key)) && total > 0 ? `Up To ${money((total * pct(f.key)) / 100)} A Month` : f.note}
+              end={
+                <>
+                  <Switch aria-label={`Weekly limit on ${f.label}`} checked={form.weekly.includes(f.key)} onCheckedChange={(on) => set({ weekly: on ? [...form.weekly, f.key] : form.weekly.filter((k) => k !== f.key) })} />
+                  <Field label={`${f.label} share in percent`} value={form.shares[f.key]} onChange={(v) => set({ shares: { ...form.shares, [f.key]: v } })} bad={bad.has(`share:${f.key}`)} after="%" />
+                </>
+              }
+            />
+          ))}
+          {extra.map(([key, value]) => (
+            <Row key={key} lead={<IconCircle icon={Sigma} />} title={featureLabel(key)} detail="Set Outside This Page, Kept On Save" end={<span className="text-sm tabular-nums">{value}%</span>} />
+          ))}
+        </Separated>
+      </Card>
 
-      <AdminHeading title="Weekly Limit" description="Applies to the features switched on above. Weeks start on Monday." />
-      <AdminRow title="Weekly Limit" description={`A share of each switched-on feature's monthly amount.${total > 0 && Number(form.weeklyPct) > 0 ? ` For example, Drafts get up to ${money((total * Number(form.shares.draft || 0) * Number(form.weeklyPct)) / 10000)} a week.` : ""}`}>
-        <Field label="Weekly limit in percent of the monthly share" value={form.weeklyPct} onChange={(weeklyPct) => set({ weeklyPct })} bad={bad.has("weeklyPct")} after="%" />
-      </AdminRow>
+      <Card title="Weekly Limit">
+        <Row
+          lead={<IconCircle icon={Percent} />}
+          title="Of Each Switched On Share"
+          detail={total > 0 && Number(form.weeklyPct) > 0 ? `Drafts Get Up To ${money((total * Number(form.shares.draft || 0) * Number(form.weeklyPct)) / 10000)} A Week` : "Weeks Start On Monday"}
+          end={<Field label="Weekly limit in percent of the monthly share" value={form.weeklyPct} onChange={(weeklyPct) => set({ weeklyPct })} bad={bad.has("weeklyPct")} after="%" />}
+        />
+      </Card>
 
-      <AdminHeading title="Setup" description="For each newly connected account: the first sort, search index and learning. It is not counted in the week or the month. Sorting and learning only." />
-      <AdminRow title="Setup Allowance" description="Dollars each new account gets.">
-        <Field label="Setup allowance in dollars per account" value={form.setupUsd} onChange={(setupUsd) => set({ setupUsd })} bad={bad.has("setupUsd")} before="$" />
-      </AdminRow>
-      <AdminRow title="Setup Period" description="How long after connecting an account the setup allowance can be used.">
-        <Field label="Setup period in days" value={form.setupDays} onChange={(setupDays) => set({ setupDays })} bad={bad.has("setupDays")} after="Days" numeric />
-      </AdminRow>
+      <Card title="Setup">
+        <Separated>
+          <Row lead={<IconCircle icon={CircleDollarSign} />} title="Setup Allowance" detail="Per New Account" end={<Field label="Setup allowance in dollars per account" value={form.setupUsd} onChange={(setupUsd) => set({ setupUsd })} bad={bad.has("setupUsd")} before="$" />} />
+          <Row lead={<IconCircle icon={CalendarClock} />} title="Setup Period" detail="After Connecting" end={<Field label="Setup period in days" value={form.setupDays} onChange={(setupDays) => set({ setupDays })} bad={bad.has("setupDays")} after="Days" numeric />} />
+        </Separated>
+      </Card>
 
-      <AdminHeading title="Abuse Limits" />
-      <div>
-        {LIMITS.map((x) => (
-          <AdminRow key={x.key} title={x.title} description={x.description}>
-            <Field label={x.title} value={form.limits[x.key]} onChange={(v) => set({ limits: { ...form.limits, [x.key]: v } })} bad={bad.has(`limit:${x.key}`)} after={x.unit} numeric={x.whole} />
-          </AdminRow>
-        ))}
-      </div>
+      <Card title="Abuse Limits">
+        <Separated>
+          {LIMITS.map((x) => (
+            <Row key={x.key} lead={<IconCircle icon={ShieldAlert} />} title={x.title} detail={x.description} end={<Field label={x.title} value={form.limits[x.key]} onChange={(v) => set({ limits: { ...form.limits, [x.key]: v } })} bad={bad.has(`limit:${x.key}`)} after={x.unit} numeric={x.whole} />} />
+          ))}
+        </Separated>
+      </Card>
 
-      <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-3 border-t bg-background px-3 py-2">
-        {changed && <span className="mr-auto text-xs text-muted-foreground">{problem ?? "Unsaved Changes"}</span>}
-        {changed && <Button variant="ghost" disabled={busy} onClick={() => void load()}>Discard</Button>}
-        <Button variant="secondary" disabled={!!problem || !changed || busy} onClick={askSave}>Save</Button>
+      <div className="sticky bottom-0 flex items-center gap-3 rounded-lg border bg-background p-2 pl-4">
+        <span className={problem && changed ? "min-w-0 flex-1 truncate text-sm text-destructive" : "min-w-0 flex-1 truncate text-sm text-muted-foreground"}>{changed ? (problem ?? "Unsaved Changes") : "No Changes"}</span>
+        <div className="flex shrink-0 gap-2">
+          <Button variant="ghost" disabled={!changed || busy} onClick={() => void load()}>Discard</Button>
+          <Button variant="secondary" disabled={!!problem || !changed || busy} onClick={askSave}>Save</Button>
+        </div>
       </div>
 
       <AlertDialog open={!!confirm} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Pause {confirm?.map(featureLabel).join(" and ")}?</AlertDialogTitle>
-            <AlertDialogDescription>A share of 0% stops {confirm && confirm.length > 1 ? "these features" : "this feature"} for everyone within a minute, until the share is raised again.</AlertDialogDescription>
+            <AlertDialogTitle>Pause {confirm?.map(featureLabel).join(" And ")}?</AlertDialogTitle>
+            <AlertDialogDescription>A share of 0% stops {confirm && confirm.length > 1 ? "these features" : "this feature"} for everyone within a minute.</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="secondary" onClick={() => { setConfirm(null); void save(); }}>Save and Pause</AlertDialogAction>
-          </AlertDialogFooter>
+            <AlertDialogAction variant="secondary" onClick={() => { setConfirm(null); void save(); }}>Save And Pause</AlertDialogAction>
+          </div>
         </AlertDialogContent>
       </AlertDialog>
     </div>

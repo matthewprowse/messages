@@ -19,7 +19,6 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { ContactAvatar, GroupAvatar } from "@/components/primitives";
 import { ProviderBadge } from "@/components/provider-logo";
 import { WorkTag } from "@/components/work-badge";
-import { WhyTag } from "@/components/triage/why-tag";
 import { LabelItems } from "@/components/labels/label-items";
 import { CONTEXT_KIT } from "@/components/snooze/menu-kit";
 import { SnoozeItems } from "@/components/snooze/snooze-items";
@@ -178,7 +177,7 @@ export const ThreadRow = memo(function ThreadRow({
                   {accountName && <span className="min-w-0 shrink-[2] truncate text-xs text-muted-foreground">{accountName}</span>}
                   <WorkTag thread={thread} />
                   {/* One quiet marker for what the AI found: Urgent, or Needs Reply. */}
-                  {marker && <WhyTag thread={thread} marker={marker} />}
+                  {marker && <Badge variant="secondary">{marker === "urgent" ? "Urgent" : "Needs Reply"}</Badge>}
                   {snoozedNow && <Badge variant="secondary">{thread.snoozeKind === "reminder" ? "Reminder" : "Snoozed"} {returnText(thread.snoozedUntil!)}</Badge>}
                   {mark && <Badge variant="secondary">{mark === "follow_up" ? "Follow Up" : "Snoozed"}</Badge>}
                   {labels?.slice(0, 2).map((l) => <span key={l.id} className="flex min-w-0 shrink-[3] items-center gap-1 text-xs text-muted-foreground"><span className={cn("size-2 shrink-0 rounded-full", labelDot(l.color))} aria-hidden /><span className="truncate">{l.name}</span></span>)}

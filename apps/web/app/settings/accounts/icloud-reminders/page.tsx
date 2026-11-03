@@ -5,24 +5,17 @@
 
 import { useEffect } from "react";
 import { track } from "@/lib/analytics";
-import { SettingsHeader } from "@/components/settings-header";
-import { SettingsHeading, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsHeading, SettingsSection } from "@/components/settings/primitives";
+import { SettingsPage } from "@/components/settings/settings-page";
 import { ICloudRemindersConnect } from "@/components/icloud-reminders-connect";
 
 export default function ICloudRemindersSetup() {
   useEffect(() => { track("account_connect", { provider: "icloud_reminders", step: "setup", outcome: "start" }); }, []);
   return (
-    <>
-      <SettingsHeader
-        title="Connect iCloud Reminders"
-        description="Konva signs in to iCloud on your behalf, the way icloud.com does, so your reminders show in Calendar and the Summary on the day they are due. There is nothing to install."
-        back="/settings/accounts"
-      />
-
-      <ICloudRemindersConnect />
-
-      <div className="mt-3">
-        <SettingsSection id="before-you-connect" title="Before You Connect">
+    <SettingsPage title="Connect iCloud Reminders" back="/settings/accounts">
+      <SettingsSection id="connect" title="Sign In"><SettingsBody><ICloudRemindersConnect /></SettingsBody></SettingsSection>
+      <SettingsSection id="before-you-connect" title="Before You Connect">
+        <SettingsBody className="gap-0">
           <SettingsHeading level={3} title="Signing In to iCloud for You" description={<>
             <p>
               You type your Apple ID and password here, and Konva signs in to iCloud on your behalf. Konva only reads and updates your
@@ -44,7 +37,7 @@ export default function ICloudRemindersSetup() {
           </>} />
           <SettingsHeading level={3} title="The Code From Apple" description={<>
             <p>
-              Apple asks for a 6-digit code to confirm it is you. It appears on an Apple device that is signed in to the same Apple ID.
+              Apple asks for a six digit code to confirm it is you. It appears on an Apple device that is signed in to the same Apple ID.
               Type it here. If you would rather get it by text message, choose Send a Text Instead.
             </p>
           </>} />
@@ -62,8 +55,8 @@ export default function ICloudRemindersSetup() {
               Reminders, and iCloud passes it to your other devices. Nothing else is ever changed.
             </p>
           </>} />
-        </SettingsSection>
-      </div>
-    </>
+        </SettingsBody>
+      </SettingsSection>
+    </SettingsPage>
   );
 }

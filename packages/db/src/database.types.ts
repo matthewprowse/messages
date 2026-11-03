@@ -2441,8 +2441,6 @@ export type Database = {
           user_id: string
           workspace_id: string | null
           suspicious: string | null
-          triage_reason: string | null
-          triage_reason_text: string | null
         }
         Insert: {
           bulk_read?: string | null
@@ -2460,8 +2458,6 @@ export type Database = {
           user_id: string
           workspace_id?: string | null
           suspicious?: string | null
-          triage_reason?: string | null
-          triage_reason_text?: string | null
         }
         Update: {
           bulk_read?: string | null
@@ -2479,8 +2475,6 @@ export type Database = {
           user_id?: string
           workspace_id?: string | null
           suspicious?: string | null
-          triage_reason?: string | null
-          triage_reason_text?: string | null
         }
         Relationships: [
           {
@@ -3842,8 +3836,6 @@ export type Database = {
           user_id: string
           workspace_id: string | null
           suspicious: string | null
-          triage_reason: string | null
-          triage_reason_text: string | null
         }
         Insert: {
           account_id: string
@@ -3887,8 +3879,6 @@ export type Database = {
           user_id: string
           workspace_id?: string | null
           suspicious?: string | null
-          triage_reason?: string | null
-          triage_reason_text?: string | null
         }
         Update: {
           account_id?: string
@@ -3932,8 +3922,6 @@ export type Database = {
           user_id?: string
           workspace_id?: string | null
           suspicious?: string | null
-          triage_reason?: string | null
-          triage_reason_text?: string | null
         }
         Relationships: [
           {

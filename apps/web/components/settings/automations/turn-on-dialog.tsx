@@ -8,7 +8,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { dropPreview, requestPreview, saveAutomation, setEnabled, waitForPreview, type Automation } from "@/lib/automations/io";
 import { previewHeadline, previewNote, type PreviewResult } from "@/lib/automations/preview";
@@ -60,10 +61,9 @@ export function TurnOnDialog({ target, onClose, onDone }: { target: TurnOn | nul
   const result = state && "result" in state ? state.result : null;
   return (
     <Dialog open={target !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent>
+      <DialogContent showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>Turn On {target?.spec.name}</DialogTitle>
-          <DialogDescription>Here is what it would have done over the last 30 days. Nothing is made until you turn it on, and then only for new email.</DialogDescription>
         </DialogHeader>
         <div className="min-h-24 space-y-3 text-sm">
           {state === null && (
@@ -92,9 +92,10 @@ export function TurnOnDialog({ target, onClose, onDone }: { target: TurnOn | nul
           )}
           {target && <p className="text-xs text-muted-foreground">When it is on, each new match: {doSummary(target.spec).join(", ").toLowerCase() || "does nothing"}. Nothing is ever sent without you.</p>}
         </div>
-        <DialogFooter>
+        <div className={DIALOG_BUTTONS}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="secondary" disabled={busy} onClick={() => void turnOn()}>Turn On</Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

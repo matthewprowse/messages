@@ -1,6 +1,6 @@
 "use client";
 
-// Settings, Team, Company Voice: the team's tone, sign-off, templates and facts, read by everyone and edited by owners and admins.
+// Settings, Team, the Company Voice view: the team's tone, sign-off, templates and facts, read by everyone and edited by owners and admins.
 
 import { useEffect, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
@@ -10,13 +10,14 @@ import type { TeamState } from "@/lib/team";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { IconAction } from "@/components/tip";
 
 const snip = (text: string, n = 110) => (text.length > n ? `${text.slice(0, n).trimEnd()}...` : text);
 
@@ -46,26 +47,23 @@ function ProfileSection({ voice, manages, reload }: { voice: CompanyVoice; manag
   };
 
   return (
-    <SettingsSection
-      id="company-profile"
-      title="How the Business Writes"
-      description="The AI reads this with each draft in a work chat. A person's own style still decides the wording, and these rules decide what a reply must and must not say."
-    >
+    <SettingsSection id="company-profile" title="How the Business Writes">
       {manages ? (
-        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (changed && !busy) void save(); }}>
-          {PROFILE_PARTS.map((p) => (
-            <div key={p.slot} className="grid gap-2">
-              <Label htmlFor={`voice-${p.slot}`}>{p.label}</Label>
-              {p.lines ? (
-                <Textarea id={`voice-${p.slot}`} rows={4} maxLength={p.max} value={form[p.slot]} placeholder={p.placeholder} disabled={busy} onChange={(e) => setForm({ ...form, [p.slot]: e.target.value })} />
-              ) : (
-                <Input id={`voice-${p.slot}`} maxLength={p.max} value={form[p.slot]} placeholder={p.placeholder} disabled={busy} onChange={(e) => setForm({ ...form, [p.slot]: e.target.value })} />
-              )}
-              <p className="text-xs text-muted-foreground">{p.hint}</p>
-            </div>
-          ))}
-          <Button variant="secondary" type="submit" disabled={!changed || busy}>{busy ? "Saving" : "Save"}</Button>
-        </form>
+        <SettingsBody>
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (changed && !busy) void save(); }}>
+            {PROFILE_PARTS.map((p) => (
+              <div key={p.slot} className="grid gap-2">
+                <Label htmlFor={`voice-${p.slot}`}>{p.label}</Label>
+                {p.lines ? (
+                  <Textarea id={`voice-${p.slot}`} rows={4} maxLength={p.max} value={form[p.slot]} placeholder={p.placeholder} disabled={busy} onChange={(e) => setForm({ ...form, [p.slot]: e.target.value })} />
+                ) : (
+                  <Input id={`voice-${p.slot}`} maxLength={p.max} value={form[p.slot]} placeholder={p.placeholder} disabled={busy} onChange={(e) => setForm({ ...form, [p.slot]: e.target.value })} />
+                )}
+              </div>
+            ))}
+            <Button variant="secondary" type="submit" disabled={!changed || busy}>{busy ? "Saving" : "Save"}</Button>
+          </form>
+        </SettingsBody>
       ) : PROFILE_PARTS.some((p) => voice.profile[p.slot].text) ? (
         <SettingsRows>
           {PROFILE_PARTS.filter((p) => voice.profile[p.slot].text).map((p) => (
@@ -105,15 +103,10 @@ function ItemDialog({ kind, item, open, onClose, onSaved }: { kind: "template" |
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
-      <DialogContent track={template ? "company_template" : "company_fact"} className="sm:max-w-md">
+      <DialogContent track={template ? "company_template" : "company_fact"} showCloseButton={false} className="sm:max-w-md">
         <form onSubmit={submit} className="space-y-3">
           <DialogHeader>
             <DialogTitle>{item ? (template ? "Edit Template" : "Edit Fact") : template ? "Add Template" : "Add Fact"}</DialogTitle>
-            <DialogDescription>
-              {template
-                ? `Anyone on the team can insert it into a reply in a work chat. The AI also reads the first ${LIMITS.templateRead} characters as approved wording.`
-                : "A short entry the AI can quote exactly when a reply needs it, such as a price, a listing, office hours or an answer to a common question."}
-            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">
             <Label htmlFor="voice-item-title">{template ? "Name" : "Title"}</Label>
@@ -124,6 +117,7 @@ function ItemDialog({ kind, item, open, onClose, onSaved }: { kind: "template" |
             <Textarea id="voice-item-body" rows={template ? 6 : 4} maxLength={bodyMax} value={body} disabled={busy} placeholder={template ? "Thanks for your interest. When would suit you to view it?" : "8 to 5 on weekdays, closed on public holidays"} onChange={(e) => setBody(e.target.value)} />
           </div>
           <div className={DIALOG_BUTTONS}>
+            <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
             <Button type="submit" variant="secondary" disabled={busy || !title.trim() || !body.trim()}>{busy ? "Saving" : "Save"}</Button>
           </div>
         </form>
@@ -153,14 +147,9 @@ function ItemsSection({ kind, items, manages, reload }: { kind: "template" | "fa
   return (
     <SettingsSection
       id={template ? "company-templates" : "company-facts"}
-      title={template ? "Templates" : "Company Facts"}
-      description={template
-        ? "Messages the business sends often. Anyone can insert one into a reply in a work chat from the reply box."
-        : "Short entries such as prices, listings, office hours and answers to common questions. The AI quotes them exactly, and only in a work chat."}
+      title={template ? "Company Templates" : "Company Facts"}
+      action={manages && <IconAction label={template ? "Add Template" : "Add Fact"} icon={Plus} onClick={() => setEditing("new")} />}
     >
-      {manages && (
-        <Button variant="secondary" onClick={() => setEditing("new")}><Plus /> {template ? "Add Template" : "Add Fact"}</Button>
-      )}
       {items.length === 0 ? (
         <SettingsEmpty>{template ? "No templates yet." : "No company facts yet."}</SettingsEmpty>
       ) : (
@@ -169,8 +158,8 @@ function ItemsSection({ kind, items, manages, reload }: { kind: "template" | "fa
             <SettingsRow key={i.id} title={i.title} description={snip(i.body)}>
               {manages && (
                 <>
-                  <Button variant="ghost" size="icon" aria-label={`Edit ${i.title}`} onClick={() => setEditing(i)}><Pencil /></Button>
-                  <Button variant="ghost" size="icon" aria-label={`Remove ${i.title}`} onClick={() => setRemoving(i)}><Trash2 /></Button>
+                  <IconAction label={`Edit ${i.title}`} icon={Pencil} onClick={() => setEditing(i)} />
+                  <IconAction label={`Remove ${i.title}`} icon={Trash2} onClick={() => setRemoving(i)} />
                 </>
               )}
             </SettingsRow>

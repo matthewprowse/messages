@@ -1,62 +1,20 @@
 "use client";
 
-// A fixed-width list on the left, the selected section filling the rest. On desktop the rows are compact, plain icons at the size of
-// the app rail's 32px buttons, so the list reads as navigation rather than a page of cards; phones keep larger touch rows.
+// Settings is laid out like Conversations: the list of sections in the aside, the open section in the grey pane beside it.
+// Below the md breakpoint only one shows: the list at /settings, the section anywhere under it.
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, ChevronRight, Gauge, Link2, Megaphone, Sparkles, UserRound, Users, Zap, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { PaneHeader } from "@/components/pane";
-import { ScrollArea } from "@/components/ui/scroll-area";
-
-const SECTIONS: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: "/settings/accounts", label: "Accounts", icon: Link2 },
-  { href: "/settings/ai", label: "AI", icon: Sparkles },
-  { href: "/settings/automations", label: "Automations", icon: Zap },
-  { href: "/settings/notifications", label: "Notifications", icon: Bell },
-  { href: "/settings/usage", label: "Usage", icon: Gauge },
-  { href: "/settings/team", label: "Team", icon: Users },
-  { href: "/settings/profile", label: "Profile and Privacy", icon: UserRound },
-  { href: "/whats-new", label: "What's New", icon: Megaphone },
-];
+import { SettingsList } from "@/components/settings/settings-list";
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const isIndex = pathname === "/settings";
+  const isIndex = usePathname() === "/settings";
   return (
     <div className="flex h-full min-h-0">
-      <aside className={cn("h-full w-full shrink-0 flex-col border-r-0 md:flex md:w-56 md:border-r", isIndex ? "flex" : "hidden")}>
-        <div className="shrink-0"><PaneHeader title="Settings" /></div>
-        <ScrollArea className="min-h-0 flex-1">
-          <nav aria-label="Settings" className="flex flex-col gap-1 p-3 md:gap-0.5">
-            {SECTIONS.map((s) => {
-              const selected = pathname === s.href || pathname.startsWith(`${s.href}/`);
-              return (
-                <Link
-                  key={s.href}
-                  href={s.href}
-                  aria-current={selected ? "page" : undefined}
-                  className={cn(
-                    "flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset md:h-8 md:gap-2 md:rounded-md md:px-2 md:py-0",
-                    selected ? "bg-secondary text-secondary-foreground" : "hover:bg-muted/50",
-                  )}
-                >
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted md:size-auto md:bg-transparent"><s.icon className="size-4" /></span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{s.label}</span>
-                  <ChevronRight className="size-4 text-muted-foreground md:hidden" aria-hidden />
-                </Link>
-              );
-            })}
-          </nav>
-        </ScrollArea>
+      <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-80 lg:w-1/3", isIndex ? "flex" : "hidden")}>
+        <SettingsList />
       </aside>
-      <section className={cn("h-full w-full min-w-0 shrink-0 md:block md:w-auto md:flex-1", isIndex ? "hidden" : "block")}>
-        <ScrollArea className="h-full">
-          {/* The page's header is a full-width band; everything after it is set in by 12px. */}
-          <div className="w-full pb-3 [&>*:not([data-settings-header])]:mx-3 [&>*:not([data-settings-header])]:max-w-2xl [&>[data-settings-header]+*]:mt-3">{children}</div>
-        </ScrollArea>
-      </section>
+      <section className={cn("h-full w-full min-w-0 shrink-0 flex-col bg-muted/50 md:flex md:flex-1", isIndex ? "hidden" : "flex")}>{children}</section>
     </div>
   );
 }

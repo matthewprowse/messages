@@ -44,12 +44,3 @@ export function sortLargest<T extends Pick<FiledAttachment, "bytes" | "sentAt" |
   return [...files].sort((a, b) => (b.bytes ?? -1) - (a.bytes ?? -1) || b.sentAt.localeCompare(a.sentAt) || b.id.localeCompare(a.id));
 }
 
-/** The delete dialog's words. Only files with a stored copy are deleted, so the count is theirs. */
-export function deleteWords(files: Pick<FiledAttachment, "path" | "name">[]): { title: string; body: string } {
-  const stored = files.filter((f) => !!f.path);
-  const what = stored.length === 1 ? `Delete ${stored[0].name}?` : `Delete ${stored.length.toLocaleString()} Files?`;
-  return {
-    title: stored.length === 1 ? "Delete File" : "Delete Files",
-    body: `${what} This removes the stored copy from Konva only. The emails and chats it came with are not touched. If the same file is also in other conversations, those copies stay until you delete them too.`,
-  };
-}

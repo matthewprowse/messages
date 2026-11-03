@@ -55,13 +55,13 @@ export function TaskChip({ item, className, style }: { item: DayTask; className?
   );
 }
 
-/** A task in the list, laid out like an event row with its checkbox where the icon goes. */
+/** A task in the list, laid out like an event row with its checkbox in the 40px slot where the circle goes. */
 export function TaskRow({ item }: { item: DayTask }) {
   const { openTask, sourceOf } = useContext(Page);
   const { task, overdue } = item;
   return (
     <div className={cn("flex w-full items-center gap-3 rounded-lg p-3 hover:bg-muted/50", (task.completed || task.pending) && "opacity-60")}>
-      <div className="flex size-8 shrink-0 items-center justify-center">
+      <div className="flex size-10 shrink-0 items-center justify-center">
         <TaskCheckbox task={task} via="calendar" />
       </div>
       <button type="button" onClick={() => openTask(task.id)} className="flex min-w-0 flex-1 flex-col gap-1 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
@@ -70,14 +70,14 @@ export function TaskRow({ item }: { item: DayTask }) {
           <span className={cn("shrink-0 text-xs tabular-nums text-muted-foreground", overdue && !task.pending && "text-destructive")}>{taskWhen(item, timeOf)}</span>
         </div>
         <div className="flex h-4 items-center">
-          <span className="min-w-0 truncate text-xs">{taskDetail(task, sourceOf(task))}</span>
+          <span className="min-w-0 truncate text-xs text-muted-foreground">{taskDetail(task, sourceOf(task))}</span>
         </div>
       </button>
     </div>
   );
 }
 
-/** Everything the app has about a task, with Mark as Done (or Not Done) in its button row. */
+/** Everything the app has about a task, with Mark as Done (or Not Done) in its button row. Its due date is the description. */
 export function TaskDialog({ task, onClose, onEdit }: { task: Task | null; onClose: () => void; onEdit: (task: Task) => void }) {
   // The last task stays drawn while the dialog animates closed.
   const last = useRef<Task | null>(null);
@@ -85,7 +85,7 @@ export function TaskDialog({ task, onClose, onEdit }: { task: Task | null; onClo
   const shown = task ?? last.current;
   return (
     <Dialog open={!!task} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent track="task_details" className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent track="task_details" showCloseButton={false} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg">
         {shown && <TaskDialogBody task={shown} onClose={onClose} onEdit={onEdit} />}
       </DialogContent>
     </Dialog>
@@ -126,6 +126,7 @@ export function TaskDialogBody({ task, onClose, onEdit }: { task: Task; onClose:
         </dl>
       </div>
       <div className={DIALOG_BUTTONS}>
+        <Button variant="ghost" onClick={onClose}>Close</Button>
         {saved && <Button variant="ghost" onClick={() => setConfirmDelete(true)}>Delete</Button>}
         {saved && <Button variant="secondary" onClick={() => onEdit(task)}>Edit</Button>}
         <Button variant="secondary" disabled={!saved} onClick={() => tickTask(task, !task.completed, "details")}>{task.completed ? "Mark as Not Done" : "Mark as Done"}</Button>

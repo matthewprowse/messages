@@ -4,9 +4,11 @@
 // Custom automations, and the New Custom row. Turning anything on goes through the 30 day preview (turn-on-dialog.tsx).
 
 import { useMemo, useState } from "react";
-import { Building2, Home, Wand2 } from "lucide-react";
+import { Building2, Home, Wand2, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
+import { IconCircle } from "@/components/surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -17,11 +19,7 @@ import { customSpec, TEMPLATES, type Template } from "@/lib/automations/template
 import { BuilderDialog } from "./builder-dialog";
 import { TurnOnDialog, type TurnOn } from "./turn-on-dialog";
 
-const ICON: Record<string, React.ComponentType<{ className?: string }>> = { property24: Home, private_property: Building2 };
-
-function RowIcon({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
-  return <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted"><Icon className="size-4" /></div>;
-}
+const ICON: Record<string, LucideIcon> = { property24: Home, private_property: Building2 };
 
 export function AutomationGallery({ automations, onChanged }: { automations: Automation[]; onChanged: () => void }) {
   const [turnOn, setTurnOn] = useState<TurnOn | null>(null);
@@ -55,12 +53,12 @@ export function AutomationGallery({ automations, onChanged }: { automations: Aut
 
   return (
     <>
-      <SettingsSection id="templates" title="Templates" description="Ready made for the portals your leads come from. Each one shows you what it would have done before it runs.">
-        <SettingsRows>
+      <SettingsSection id="templates" title="Templates">
+        <SettingsRows inset="lead">
           {TEMPLATES.map((t) => {
             const saved = forTemplate(t);
             return (
-              <SettingsRow key={t.key} leading={<RowIcon icon={ICON[t.key]} />} title={<>{t.name} {saved?.enabled && <Badge variant="secondary">On</Badge>}</>} description={t.description}>
+              <SettingsRow key={t.key} leading={<IconCircle icon={ICON[t.key]} />} title={<>{t.name} {saved?.enabled && <Badge variant="secondary">On</Badge>}</>}>
                 {saved ? controls(saved) : <Button variant="secondary" onClick={() => setTurnOn({ templateKey: t.key, spec: t.spec })}>Set Up</Button>}
               </SettingsRow>
             );
@@ -68,14 +66,14 @@ export function AutomationGallery({ automations, onChanged }: { automations: Aut
         </SettingsRows>
       </SettingsSection>
 
-      <SettingsSection id="custom" title="Custom" description="Your own: pick which emails, name the details to read, and choose what happens.">
-        <SettingsRows>
+      <SettingsSection id="custom" title="Custom">
+        <SettingsRows inset="lead">
           {custom.map((a) => (
-            <SettingsRow key={a.id} leading={<RowIcon icon={Wand2} />} title={<>{a.spec.name} {a.enabled && <Badge variant="secondary">On</Badge>}</>} description={<><span className="block truncate">{whenSummary(a.spec)}</span><span className="block truncate">{doSummary(a.spec).join(", ")}</span></>}>
+            <SettingsRow key={a.id} leading={<IconCircle icon={Wand2} />} title={<>{a.spec.name} {a.enabled && <Badge variant="secondary">On</Badge>}</>} description={<><span className="block truncate">{whenSummary(a.spec)}</span><span className="block truncate">{doSummary(a.spec).join(", ")}</span></>}>
               {controls(a)}
             </SettingsRow>
           ))}
-          <SettingsRow leading={<RowIcon icon={Wand2} />} title="New Custom Automation" description="Website contact forms, Gumtree, Facebook Lead Ads, or any email that carries a lead.">
+          <SettingsRow leading={<IconCircle icon={Wand2} />} title="New Custom Automation">
             <Button variant="secondary" onClick={() => setEditing({})}>Create</Button>
           </SettingsRow>
         </SettingsRows>
@@ -89,10 +87,10 @@ export function AutomationGallery({ automations, onChanged }: { automations: Aut
             <AlertDialogTitle>Delete {removing?.spec.name}?</AlertDialogTitle>
             <AlertDialogDescription>It stops running and its run history is deleted. The contacts, tasks and drafts it already made stay where they are.</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => void remove()}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
+          </div>
         </AlertDialogContent>
       </AlertDialog>
     </>

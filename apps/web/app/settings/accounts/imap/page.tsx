@@ -14,7 +14,6 @@ export default function ImapSetup() {
     <SetupSteps
       provider="imap"
       title="Connect Other Email"
-      description="Any mailbox with IMAP and SMTP, like mail on your own domain at Afrihost, xneelo, Domains.co.za or a cPanel host. The password is checked with your mail server and stored encrypted."
       label="Email"
       watch={["imap"]}
       connect={

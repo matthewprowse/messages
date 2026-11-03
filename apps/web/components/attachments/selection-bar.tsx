@@ -1,17 +1,19 @@
 "use client";
 
-// The bar over the Attachments grid while selecting: how many files are picked, Select All, Download Selected (a zip),
-// Hide Selected (or Unhide Selected), Delete and Done. The rules for what each button does are in
-// lib/attachment-actions/selection.ts; the page does the work.
+// The bar that takes the views row's place on the Attachments page while selecting, built on Conversations' BulkBar: Select
+// All with the count, then Download (a zip), Hide or Unhide, Delete and Done as icons. The rules for what each button does
+// are in lib/attachment-actions/selection.ts; the page does the work.
 
-import { actionsFor, selectedLabel } from "@/lib/attachment-actions/selection";
+import { Download, Eye, EyeOff, Trash2 } from "lucide-react";
+import { actionsFor } from "@/lib/attachment-actions/selection";
 import type { FiledAttachment } from "@/lib/types";
-import { Button } from "@/components/ui/button";
+import { IconAction } from "@/components/tip";
+import { BulkBar } from "@/components/thread-list/selection-bar";
 
 export function SelectionBar({ files, total, busy, onSelectAll, onClear, onDownload, onHide, onDelete, onDone }: {
   /** The selected files. */
   files: FiledAttachment[];
-  /** How many files are in view, so Select All can say it is already everything. */
+  /** How many files are in view, so Select All can turn into Deselect All. */
   total: number;
   busy: boolean;
   onSelectAll: () => void;
@@ -24,13 +26,10 @@ export function SelectionBar({ files, total, busy, onSelectAll, onClear, onDownl
   const a = actionsFor(files);
   const none = files.length === 0;
   return (
-    <div role="toolbar" aria-label="Selected Files" className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background p-3 md:px-4">
-      <span className="mr-auto text-sm tabular-nums" aria-live="polite">{selectedLabel(files.length)}</span>
-      {files.length < total ? <Button variant="ghost" onClick={onSelectAll}>Select All</Button> : <Button variant="ghost" onClick={onClear}>Select None</Button>}
-      <Button variant="secondary" disabled={busy || a.downloadable === 0} onClick={onDownload}>Download Selected</Button>
-      <Button variant="secondary" disabled={busy || none} onClick={onHide}>{a.hide ? "Hide Selected" : "Unhide Selected"}</Button>
-      <Button variant="secondary" disabled={busy || a.deletable === 0} onClick={onDelete}>Delete</Button>
-      <Button variant="secondary" disabled={busy} onClick={onDone}>Done</Button>
-    </div>
+    <BulkBar allPicked={total > 0 && files.length >= total} count={files.length} onAll={onSelectAll} onClear={onClear} onDone={onDone}>
+      <IconAction label="Download" icon={Download} disabled={busy || a.downloadable === 0} onClick={onDownload} />
+      <IconAction label={a.hide ? "Hide" : "Unhide"} icon={a.hide ? EyeOff : Eye} disabled={busy || none} onClick={onHide} />
+      <IconAction label="Delete" icon={Trash2} disabled={busy || a.deletable === 0} onClick={onDelete} />
+    </BulkBar>
   );
 }

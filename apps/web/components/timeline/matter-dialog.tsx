@@ -4,7 +4,8 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { checkMatterName, KIND_LABEL, MATTER_KINDS, MATTER_NAME_MAX, type Matter, type MatterKind } from "@/lib/timeline/matters";
@@ -12,19 +13,18 @@ import { checkMatterName, KIND_LABEL, MATTER_KINDS, MATTER_NAME_MAX, type Matter
 export function MatterDialog({ open, onOpenChange, matter, onSave }: { open: boolean; onOpenChange: (open: boolean) => void; matter?: Matter; onSave: (name: string, kind: MatterKind) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent track="matter" className="sm:max-w-sm">
+      <DialogContent track="matter" showCloseButton={false} aria-describedby={undefined} className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>{matter ? "Rename Matter" : "New Matter"}</DialogTitle>
-          <DialogDescription>A deal, listing, policy or matter for this client. Add conversations, notes and files to it to see just that job.</DialogDescription>
         </DialogHeader>
         {/* Mounted only while open, so it starts from the matter as it is now. */}
-        {open && <MatterForm matter={matter} onSave={(n, k) => { onSave(n, k); onOpenChange(false); }} />}
+        {open && <MatterForm matter={matter} onCancel={() => onOpenChange(false)} onSave={(n, k) => { onSave(n, k); onOpenChange(false); }} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function MatterForm({ matter, onSave }: { matter?: Matter; onSave: (name: string, kind: MatterKind) => void }) {
+function MatterForm({ matter, onCancel, onSave }: { matter?: Matter; onCancel: () => void; onSave: (name: string, kind: MatterKind) => void }) {
   const [name, setName] = useState(matter?.name ?? "");
   const [kind, setKind] = useState<MatterKind>(matter?.kind ?? "matter");
   const [tried, setTried] = useState(false);
@@ -41,9 +41,10 @@ function MatterForm({ matter, onSave }: { matter?: Matter; onSave: (name: string
         <SelectTrigger aria-label="Kind"><SelectValue /></SelectTrigger>
         <SelectContent>{MATTER_KINDS.map((k) => <SelectItem key={k} value={k}>{KIND_LABEL[k]}</SelectItem>)}</SelectContent>
       </Select>
-      <DialogFooter>
+      <div className={DIALOG_BUTTONS}>
+        <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
         <Button type="submit">{matter ? "Save" : "Create"}</Button>
-      </DialogFooter>
+      </div>
     </form>
   );
 }

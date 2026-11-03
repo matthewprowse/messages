@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { actionsFor, deleteWords, selectedFiles, selectedLabel, sortLargest, toggled } from "./selection";
+import { actionsFor, selectedFiles, selectedLabel, sortLargest, toggled } from "./selection";
 import type { FiledAttachment } from "../types";
 
 const f = (id: string, extra: Partial<FiledAttachment> = {}) => ({ id, name: id, kind: "file", size: "", messageId: "m", threadId: "t", sentAt: "2026-11-01T10:00:00Z", from: "me", ...extra }) as FiledAttachment;
@@ -33,10 +33,4 @@ test("Largest puts the biggest first, unknown sizes last, ties newest first", ()
 
 test("the count reads as a label", () => {
   assert.equal(selectedLabel(1200), "1,200 Selected");
-});
-
-test("the delete dialog names one file or counts several, and says the email stays", () => {
-  assert.match(deleteWords([{ name: "a.pdf", path: "p" }]).body, /^Delete a\.pdf\?/);
-  assert.match(deleteWords([{ name: "a", path: "p" }, { name: "b", path: "q" }, { name: "c" }]).body, /^Delete 2 Files\?/);
-  assert.match(deleteWords([{ name: "a", path: "p" }]).body, /not touched/);
 });

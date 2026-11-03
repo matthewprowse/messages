@@ -1,9 +1,9 @@
 "use client";
 
-// Access requests, shown at the top of Admin's Teams view. The marketing site's Request Access form writes them
-// (/api/waitlist). Approving or rejecting changes the status;
-// nobody is emailed. Approving a team request makes its team in the same database call (create_workspace) and shows an
-// invite link for its owner, to send by hand.
+// Access requests, the first card of Admin's Teams view, filtered by status and kind from its title row. The marketing
+// site's Request Access form writes them (/api/waitlist). Approving or rejecting changes the status; nobody is emailed.
+// Approving a team request makes its team in the same database call (create_workspace) and shows an invite link for its
+// owner, to send by hand.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { User, Users } from "lucide-react";
@@ -11,13 +11,11 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { inviteLink } from "@/lib/team";
 import { teamSeats, teamSizeLabel, type WaitlistKind, type WaitlistStatus } from "@/lib/waitlist";
-import { PaneControls, PaneSelect, ViewButtons } from "@/components/pane";
-import { EmptyState } from "@/components/primitives";
-import { AdminHeading, AdminRow } from "@/components/admin/parts";
-import type { OwnerInvite } from "@/components/admin/workspaces";
+import { PaneSelect } from "@/components/pane";
+import { Card, IconCircle, Row, Separated } from "@/components/surface";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Failed, LoadingCard, Quiet } from "./parts";
+import type { OwnerInvite } from "./workspaces";
 
 interface Entry {
   id: string;
@@ -103,36 +101,36 @@ export function Requests({ version, onInvite, onTeamsChanged, onBusy, onPending 
   useEffect(() => { onPending(pending); }, [pending, onPending]);
   const shown = useMemo(() => (entries ?? []).filter((e) => e.status === status && (kind === "all" || e.kind === kind)), [entries, status, kind]);
 
-  return (
-    <div className="flex flex-col gap-3">
-      <AdminHeading title="Requests" description="People asking for access. Approving a team request makes its team and an invite link for its owner." />
-      <PaneControls>
-        <ViewButtons label="Request Status" value={status} onSelect={setStatus} items={STATUSES.map((x) => ({ key: x.key, label: `${x.label} (${counts[x.key]})` }))} />
-        <PaneSelect label="Account Type" value={kind} onChange={(v) => setKind(v as KindFilter)} options={KINDS} className="w-32 shrink-0" />
-      </PaneControls>
-      {failed ? (
-        <EmptyState icon={Users} title="Could Not Load Requests" description="Check your connection and try again." action={<Button variant="secondary" onClick={() => void load()}>Retry</Button>} />
-      ) : !entries ? (
-        <div className="flex flex-col gap-3"><Skeleton className="h-14 w-full rounded-lg" /><Skeleton className="h-14 w-full rounded-lg" /></div>
-      ) : shown.length === 0 ? (
-        <div className="py-12">
-          <EmptyState icon={Users} title={`No ${STATUSES.find((x) => x.key === status)?.label} Requests`} description={status === "pending" ? "New requests show up here." : "Requests you decide on show up here."} />
-        </div>
-      ) : (
-        shown.map((e, i) => (
-          <div key={e.id}>
-            {i > 0 && <Separator className="ml-14" />}
-            <AdminRow
-              icon={e.kind === "team" ? <Users /> : <User />}
-              title={e.email}
-              description={`${e.kind === "team" ? `${e.company ?? "Team"}, ${teamSizeLabel(e.team_size)}` : "Individual"}, requested ${day(e.created_at)}`}
-            >
-              {e.status !== "rejected" && <Button variant="ghost" onClick={() => void decide(e, "rejected")}>Reject</Button>}
-              {e.status !== "approved" && <Button variant="secondary" onClick={() => void decide(e, "approved")}>Approve</Button>}
-            </AdminRow>
-          </div>
-        ))
-      )}
+  const statusLabel = STATUSES.find((x) => x.key === status)?.label;
+  const pickers = (
+    <div className="flex shrink-0 items-center gap-1">
+      <PaneSelect label="Request Status" value={status} onChange={(v) => setStatus(v as WaitlistStatus)} options={STATUSES.map((x) => ({ value: x.key, label: `${x.label} ${counts[x.key]}` }))} className="w-32" />
+      <PaneSelect label="Account Type" value={kind} onChange={(v) => setKind(v as KindFilter)} options={KINDS} className="w-32" />
     </div>
+  );
+  if (failed) return <Failed title="Could Not Load Requests" onRetry={() => void load()} />;
+  if (!entries) return <LoadingCard title="Requests" />;
+  return (
+    <Card title="Requests" action={pickers}>
+      {shown.length === 0 ? <Quiet>No {statusLabel} Requests</Quiet> : (
+        <Separated>
+          {shown.map((e) => (
+            <Row
+              key={e.id}
+              lead={<IconCircle icon={e.kind === "team" ? Users : User} />}
+              title={e.email}
+              meta={day(e.created_at)}
+              detail={e.kind === "team" ? `${e.company ?? "Team"}, ${teamSizeLabel(e.team_size)}` : "Individual"}
+              end={
+                <>
+                  {e.status !== "rejected" && <Button size="sm" variant="ghost" onClick={() => void decide(e, "rejected")}>Reject</Button>}
+                  {e.status !== "approved" && <Button size="sm" variant="secondary" onClick={() => void decide(e, "approved")}>Approve</Button>}
+                </>
+              }
+            />
+          ))}
+        </Separated>
+      )}
+    </Card>
   );
 }

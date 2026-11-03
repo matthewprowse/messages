@@ -1,13 +1,10 @@
-"""Tests for ai/triage_extras.py and how triage uses it: reasons (and that they reach both writes), the suspicious flag,
+"""Tests for ai/triage_extras.py and how triage uses it: signals, the suspicious flag,
 Auto labels, the junk summary, what counts as urgent and that chats are not called emails."""
 
 import unittest
 
-from ai.triage import Triage
-from tests.test_ai import FakeTriageDb, FakeTriageGemini
-
 from ai.triage import SCHEMA, SYSTEM, apply_signals, known_outcome, read_results, triage_prompt
-from ai.triage_extras import AutoLabel, label_to_add, read_label, read_reason, read_suspicious, with_subject_summary
+from ai.triage_extras import AutoLabel, label_to_add, read_label, read_suspicious, with_subject_summary
 from ai.triage_signals import UserContext
 
 LABELS = [AutoLabel("l1", "Active Deals", "Clients with a live deal"), AutoLabel("l2", "Tenants", "")]
@@ -18,57 +15,17 @@ def item(**kw):
     return {**base, **kw}
 
 
-class ReasonTests(unittest.TestCase):
-    def test_an_unknown_code_becomes_other_and_words_are_cut_to_one_line(self):
-        code, words = read_reason({"reason": "made_up", "reason_text": "  a\nb  " + "x" * 100})
-        self.assertEqual(code, "other")
-        self.assertEqual(len(words), 60)
-        self.assertTrue(words.startswith("a b"))
-
-    def test_missing_words_fall_back_to_the_codes_phrase(self):
-        self.assertEqual(read_reason({"reason": "newsletter"}), ("newsletter", "Newsletter"))
-
-    def test_a_rule_overrides_the_model_reason_with_fixed_words(self):
-        ctx = UserContext(always=["boss@x.com"])
-        out = apply_signals({**item(), "reason_code": "personal", "reason_text": "A person"}, "boss@x.com", ctx, [])
-        self.assertEqual(out["reason_code"], "rule_always")
-        self.assertEqual(out["reason_text"], "Marked always important by you")
-
-    def test_the_model_reason_stands_when_no_signal_applies(self):
-        out = apply_signals({**item(), "reason_code": "asked_you", "reason_text": "You asked a question"}, "a@b.com", UserContext(), [])
-        self.assertEqual((out["reason_code"], out["reason_text"]), ("asked_you", "You asked a question"))
-
+class SignalTests(unittest.TestCase):
     def test_no_reply_needed_feedback_clears_needs_reply(self):
         out = apply_signals(item(needs_reply=True, choices="{}"), "a@b.com", UserContext(), ["no_reply_needed"])
         self.assertFalse(out["needs_reply"])
-        self.assertEqual(out["reason_code"], "no_reply_needed")
         self.assertIsNone(out["choices"])
 
-    def test_settled_outcomes_carry_a_reason(self):
-        got = known_outcome({"sender_address": "a@b.com", "subject": "Hi"}, UserContext(unsubscribed={"a@b.com"}), [])
-        self.assertEqual(got["reason_code"], "unsubscribed")
-        got = known_outcome({"sender_address": "c@d.com", "subject": "Hi"}, UserContext(), ["junk"])
-        self.assertEqual(got["reason_code"], "marked_junk")
-
-    def test_the_models_reason_is_written_to_the_message_and_the_conversation(self):
-        # Pins the 2 Nov bug report: every reason was null because the running worker predated the columns (v0.0.15).
-        class WithReason(FakeTriageGemini):
-            def json(self, model, system, prompt, schema, usage, **kw):
-                self.calls.append((prompt, usage, kw))
-                return {"results": [{"message": 1, "priority": "urgent", "category": "work", "junk": False, "needs_reply": True, "summary": "s",
-                                     "reason": "deadline", "reason_text": "Payment due today"}]}
-
-        m = {"id": "m1", "user_id": "u", "account_id": "acc1", "thread_id": "t1", "provider_message_id": "<m1@x>", "subject": "S",
-             "sender_address": "sam@x.com", "sender_contact_id": None, "list_unsubscribe": None, "sent_at": "2026-10-20T10:00:00+00:00"}
-        db = FakeTriageDb([m], [{"id": "m1", "thread_id": "t1", "direction": "inbound"}])
-        Triage(db, WithReason(), "fast").run_once()
-        [(_, [row])] = db.upserts
-        self.assertEqual((row["triage_reason"], row["triage_reason_text"]), ("deadline", "Payment due today"))
-        self.assertEqual((db.thread_updates["t1"]["triage_reason"], db.thread_updates["t1"]["triage_reason_text"]), ("deadline", "Payment due today"))
-
-    def test_an_answer_without_a_reason_still_gets_one(self):
-        got = read_results({"results": [item(priority="urgent")]}, 1)[1]
-        self.assertEqual((got["reason_code"], got["reason_text"]), ("other", "Sorted by the AI"))
+    def test_reasons_are_no_longer_asked_for_or_written(self):
+        # The "why" popover was removed (3 Nov 2026): the model is not asked for a reason and none is stored.
+        self.assertNotIn("reason", SCHEMA["properties"]["results"]["items"]["properties"])
+        self.assertNotIn("reason_code", read_results({"results": [item(priority="urgent")]}, 1)[1])
+        self.assertNotIn("reason_code", known_outcome({"sender_address": "a@b.com", "subject": "Hi"}, UserContext(unsubscribed={"a@b.com"}), []))
 
 
 class UrgentAndChannelTests(unittest.TestCase):
@@ -97,9 +54,8 @@ class SuspiciousTests(unittest.TestCase):
         self.assertIsNone(read_suspicious({"suspicious": "yes please act"}))
 
     def test_it_is_read_with_the_result(self):
-        got = read_results({"results": [item(suspicious="phishing", reason="security", reason_text="Asks for a login")]}, 1)
+        got = read_results({"results": [item(suspicious="phishing")]}, 1)
         self.assertEqual(got[1]["suspicious"], "phishing")
-        self.assertEqual(got[1]["reason_code"], "security")
 
 
 class AutoLabelTests(unittest.TestCase):
@@ -130,7 +86,7 @@ class AutoLabelTests(unittest.TestCase):
 
     def test_the_schema_asks_for_the_extras(self):
         required = SCHEMA["properties"]["results"]["items"]["required"]
-        for key in ("reason", "reason_text", "suspicious", "label"):
+        for key in ("suspicious", "label"):
             self.assertIn(key, required)
 
 

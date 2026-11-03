@@ -1,20 +1,10 @@
 "use client";
 
-// On a phone this is the list of sections (drawn by the layout, which hides this page's own content). From tablet
-// width up the list is always beside a section, so the first one opens straight away. It draws nothing itself, so
-// there is no empty screen to flash before the redirect.
+// Settings with nothing chosen. On a phone the layout shows the list and hides this; from tablet up Profile opens beside the
+// list (its row is lit), so there is no empty pane and no redirect to flash through.
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import ProfilePage from "./profile/page";
 
 export default function SettingsIndex() {
-  const router = useRouter();
-  useEffect(() => {
-    const wide = window.matchMedia("(min-width: 768px)");
-    const go = () => { if (wide.matches) router.replace("/settings/accounts"); };
-    go();
-    wide.addEventListener("change", go);
-    return () => wide.removeEventListener("change", go);
-  }, [router]);
-  return null;
+  return <ProfilePage />;
 }

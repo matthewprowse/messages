@@ -176,6 +176,8 @@
 }
 
 .safe-top { padding-top: env(safe-area-inset-top); }
+/* Phones: iOS softens the strip just under the status bar, so the first row of the page starts a little below it. */
+@media (max-width: 767px) and (pointer: coarse) { .safe-top { padding-top: calc(env(safe-area-inset-top) + 0.5rem); } }
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }

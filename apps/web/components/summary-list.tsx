@@ -4,22 +4,24 @@
 // hover actions, context menu, checkboxes and shortcuts. Rows open beside it under /summary. The sections and rows
 // are in components/summary/; this file wires them to the store. The section rules are in lib/summary.ts.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { track } from "@/lib/analytics";
+import { SearchX } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/store";
 import { dayKey } from "@/lib/calendar";
 import type { ListFilter, Thread } from "@/lib/types";
-import { longDate } from "@/lib/format";
+import { dayDate } from "@/lib/format";
 import { shortcutAction } from "@/lib/selection";
 import { isSnoozed, tomorrowMorning } from "@/lib/snooze";
 import { digest, olderWaiting, summarise } from "@/lib/summary";
 import { filterOf, filterOptions, listHref, OLDER_SHOWN, SUMMARY_BASE as BASE } from "@/lib/summary-list";
-import { channelsOf } from "@/lib/thread-list";
+import { channelsOf, matchesSearch } from "@/lib/thread-list";
 import { tasksForToday } from "@/lib/tasks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { providerLabel } from "@/components/primitives";
+import { EmptyState, providerLabel } from "@/components/primitives";
+import { SearchBand } from "@/components/pane";
 import { AccountsNotice } from "@/components/summary/accounts-notice";
 import { useAdvanceAfterDone } from "@/components/summary/use-advance-after-done";
 import { useNow } from "@/components/summary/use-now";
@@ -69,8 +71,12 @@ export function SummaryList() {
 
   // A snoozed conversation returns on the minute it falls due, not at the next slow tick of `now`.
   const sectionsNow = useMemo(() => new Date(), [now, snoozeClock]);
-  const sections = useMemo(() => summarise(threads, filter, sectionsNow), [threads, filter, sectionsNow]);
-  const older = useMemo(() => olderWaiting(threads, filter, sectionsNow), [threads, filter, sectionsNow]);
+  // The search narrows conversations by name, subject and latest message, and events and tasks by title.
+  const [search, setSearch] = useState("");
+  const term = useDeferredValue(search.trim().toLowerCase());
+  const found = useMemo(() => (term ? threads.filter((t) => matchesSearch(t, term, (x) => contactOf(x.participantIds[0])?.name)) : threads), [threads, term, contactOf]);
+  const sections = useMemo(() => summarise(found, filter, sectionsNow), [found, filter, sectionsNow]);
+  const older = useMemo(() => olderWaiting(found, filter, sectionsNow), [found, filter, sectionsNow]);
   // Older is collapsed to its newest few, so the page's own sections stay in view.
   const [allOlder, setAllOlder] = useState(false);
   const olderShown = allOlder ? older : older.slice(0, OLDER_SHOWN);
@@ -78,9 +84,9 @@ export function SummaryList() {
   const options = useMemo(() => filterOptions(channelsOf(threads)), [threads]);
   const { events: loadedEvents, failed: calendarFailed, retry: retryCalendar } = useTodaysEvents(eventsNow);
   // The calendar is not filtered: events are neither email nor WhatsApp nor unread, but they are still today.
-  const events = loadedEvents ?? [];
+  const events = useMemo(() => (loadedEvents ?? []).filter((e) => !term || e.title.toLowerCase().includes(term)), [loadedEvents, term]);
   // Nor are tasks: open ones due today, and overdue ones, from Microsoft To Do, Google Tasks and iCloud Reminders.
-  const todaysTasks = useMemo(() => tasksForToday(tasks, now), [tasks, now]);
+  const todaysTasks = useMemo(() => tasksForToday(tasks, now).filter((t) => !term || t.task.title.toLowerCase().includes(term)), [tasks, now, term]);
   const sourceOf = (accountId: string) => {
     const provider = accounts.find((a) => a.id === accountId)?.provider;
     return provider ? providerLabel[provider] : undefined;
@@ -178,17 +184,19 @@ export function SummaryList() {
       scrollbarClassName="z-20 data-vertical:top-[calc(var(--summary-header)+var(--summary-band))]! data-vertical:h-auto!"
     >
       {/* Plain white like the Conversations header, so the rows scrolling under it do not show through. */}
-      <div ref={headerRef} className="sticky top-0 z-10 space-y-3 border-b bg-background p-3">
-        {/* The same 40px rows as the Conversations header, so the title and the row under it line up with the rail. */}
+      <div ref={headerRef} className="sticky top-0 z-10 border-b bg-background p-3">
+        {/* The same 40px title row as the Conversations header, level with the rail's logo, with the date on the right. */}
         <div className="flex h-10 items-center justify-between gap-3">
-          <h1 className="min-w-0 truncate text-xl font-medium">Summary</h1>
-          <div className="flex shrink-0 items-center gap-1">
+          <h1 className="shrink-0 text-xl font-medium">Summary</h1>
+          <div className="flex min-w-0 items-center gap-1">
+            <time dateTime={today} className="min-w-0 truncate pr-2 text-sm text-muted-foreground">{dayDate(now.toISOString())}</time>
             <BriefPlayer />
             <SummaryFilter filter={filter} options={options} openId={params.id} />
           </div>
         </div>
-        <div className="flex h-10 flex-col justify-center">
-          {picked.length > 0 ? (
+        {/* Checked rows bring the selection bar, then the 40px search, level with the rail's Search as in Conversations. */}
+        {picked.length > 0 && (
+          <div className="mt-3 flex h-10 flex-col justify-center">
             <SelectionBar
               allPicked={picked.length === order.length}
               anyUnread={threads.some((t) => t.unread && pickedIds.has(t.id))}
@@ -197,18 +205,17 @@ export function SummaryList() {
               onClear={() => setChecked([])}
               onAction={(action) => (action === "snooze" ? snoozePick.request(picked) : run(picked, action))}
             />
-          ) : (
-            <time dateTime={today} className="min-w-0 truncate text-sm text-muted-foreground">{longDate(now.toISOString())}</time>
-          )}
-        </div>
+          </div>
+        )}
+        <SearchBand value={search} onChange={setSearch} placeholder="Search Summary" className={picked.length > 0 ? "mt-1 border-b-0 p-0" : "mt-3 border-b-0 p-0"} inputClassName="h-10" />
       </div>
       <div ref={rowsRef} className="px-3">
         {busy && <LoadingSummary />}
         {!busy && stalled > 0 && <AccountsNotice count={stalled} />}
-        {!busy && empty && <SummaryEmpty noAccounts={noAccounts} importing={importing} filter={filter} onClearFilter={() => router.replace(listHref("none", params.id))} />}
+        {!busy && empty && term && <div className="py-24"><EmptyState icon={SearchX} title="No Matches" description="Nothing on the Summary matches your search." /></div>}
+        {!busy && empty && !term && <SummaryEmpty noAccounts={noAccounts} importing={importing} filter={filter} onClearFilter={() => router.replace(listHref("none", params.id))} />}
         {!busy && !empty && (
           <div>
-            {headline && <p className="pt-3 text-xs text-muted-foreground">{headline}</p>}
             {calendarShown && (
               <Section title="Today's Calendar" count={calendarFailed || calendarPending ? undefined : events.length} headerHeight={headerHeight} action={{ label: "Open", href: "/calendar" }} separated>
                 <CalendarBody failed={calendarFailed} pending={calendarPending} events={events} today={today} onRetry={retryCalendar} />
@@ -228,7 +235,7 @@ export function SummaryList() {
               <Section title="Older" count={older.length} headerHeight={headerHeight} separated={!calendarShown && todaysTasks.length === 0 && sections.reply.length + sections.priority.length + sections.updates.length === 0}>
                 {rows(olderShown)}
                 {older.length > OLDER_SHOWN && (
-                  <Button type="button" variant="ghost" size="sm" className="mt-2 w-full" onClick={() => setAllOlder((a) => !a)}>{allOlder ? "Show Fewer" : "Show All"}</Button>
+                  <Button type="button" variant="ghost" className="mt-2 h-10 w-full" onClick={() => setAllOlder((a) => !a)}>{allOlder ? "Show Fewer" : "Show All"}</Button>
                 )}
               </Section>
             )}

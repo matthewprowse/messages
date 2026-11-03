@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 /** When the daily brief is written, which voice reads it and how fast it plays, with a sample of each voice. */
 export function BriefSection() {
@@ -57,12 +57,12 @@ export function BriefSection() {
   };
 
   return (
-    <SettingsSection id="daily-brief" title="Daily Brief" description="A short spoken summary of your day, ready on the Summary page each morning.">
-      {!settings ? <Skeleton className="h-40 w-full rounded-lg" /> : <SettingsRows>
-        <SettingsRow title="Time" description="Written each morning at this time.">
+    <SettingsSection id="daily-brief" title="Daily Brief">
+      {!settings ? <SettingsBody><Skeleton className="h-32 w-full rounded-lg" /></SettingsBody> : <SettingsRows>
+        <SettingsRow title="Time">
           <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} onBlur={saveTime} className="w-28" aria-label="Brief Time" />
         </SettingsRow>
-        <SettingsRow title="Voice" description="Used from the next brief. Play a sample to hear it.">
+        <SettingsRow title="Voice">
           <Button variant="secondary" size="icon" onClick={playSample} aria-label={sampling ? "Stop Sample" : "Play Sample"}>
             {sampling ? <Pause /> : <Play />}
           </Button>
@@ -73,7 +73,7 @@ export function BriefSection() {
             </SelectContent>
           </Select>
         </SettingsRow>
-        <SettingsRow title="Speed" description="How fast the brief plays.">
+        <SettingsRow title="Speed">
           <Select value={String(settings.speed)} onValueChange={(v) => { if (sample.current) sample.current.playbackRate = Number(v); void save({ speed: Number(v) }); }}>
             <SelectTrigger className="w-28" aria-label="Speed"><SelectValue /></SelectTrigger>
             <SelectContent>

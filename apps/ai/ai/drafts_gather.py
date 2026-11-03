@@ -1,13 +1,19 @@
 """What a draft needs before the model is asked: the limits on how often a person may ask, the conversation, the
 company and personal voice, similar past replies and the new-message case. A mixin of Drafts (db, vault, gemini
-and embeddings are set up there)."""
+and embeddings are set up there).
+
+Each read is a round trip (about 0.25s from a laptop, measured), and a draft used to make a dozen one after another.
+Now the reads that need nothing from draft_context (the person's key, their vectors, settings, calendar, the files
+and templates a next step may offer, the budget) start with it (_early), and the ones that need
+the conversation (similar replies, the company voice, rules, the note on this person) start together once it is in."""
 
 from __future__ import annotations
 
+from concurrent.futures import Future, wait
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
-from . import log
+from . import actions, log
 from .company_voice import pick_company
 from .drafts_context import (
     COMPOSE_PER_HOUR,
@@ -69,7 +75,59 @@ def audit_of(you: dict[str, Any], messages: int, calendar: bool) -> dict[str, An
     }
 
 
+def asks_edit(d: dict[str, Any]) -> bool:
+    """Whether the draft revises text (an edit, or an adjustment of the reply box): the same test _gather makes."""
+    return d.get("tone") == "edit" or (is_adjust(d.get("tone")) and d.get("source") is not None)
+
+
+def ran(fn: Callable[..., Any], *args: Any) -> Future:
+    """fn(*args) run here, as a finished Future, for a host with no read pool (tests)."""
+    f: Future = Future()
+    try:
+        f.set_result(fn(*args))
+    except Exception as err:
+        f.set_exception(err)
+    return f
+
+
+def settle(f: Future | None) -> None:
+    """Waits for a started read without taking its result or its error: whoever uses it reads or reports it again."""
+    if f is not None:
+        wait([f])
+
+
+def got(f: Future | None, default: Any = None) -> Any:
+    """A started read's result, or default when it was not started."""
+    return default if f is None else f.result()
+
+
 class GatherMixin:
+    def _start(self, fn: Callable[..., Any], *args: Any) -> Future:
+        """fn(*args) on the read pool, so reads that do not need each other run at the same time."""
+        pool = getattr(self, "_reads", None)
+        return pool.submit(fn, *args) if pool is not None else ran(fn, *args)
+
+    def _early(self, d: dict[str, Any]) -> dict[str, Future]:
+        """The reads a draft needs that do not wait on draft_context, started now. None of them fails the draft: each
+        catches its own errors, and the key and the vectors are only waited for, so their use reads them again on an error."""
+        user, thread = d["user_id"], d.get("thread_id")
+        edit = asks_edit(d)
+        out: dict[str, Future] = {"composer": self._start(self._composer, user)}
+        keys_for = getattr(self.vault, "keys_for", None)
+        if keys_for is not None:  # a key read after its 10 minute cache is a KMS round trip too
+            out["keys"] = self._start(keys_for, user)
+        preload = getattr(self.gemini, "preload", None)
+        if preload is not None:
+            out["budget"] = self._start(preload, user, "draft")
+        if thread:
+            vectors = getattr(getattr(self.embeddings, "index", None), "items", None)
+            if vectors is not None:  # a cold read of the vectors is the slowest part of a draft: started first
+                out["index"] = self._start(vectors, user)
+            if not edit:
+                out["calendar"] = self._start(self._calendar, user)
+                out["offer"] = self._start(actions.gather, self.db, self.vault, user, thread)
+        return out
+
     def _limited(self, d: dict[str, Any]) -> bool:
         """True, and the draft failed, when this conversation has had its share of drafts: at most
         regen_per_hour that a person asked for in the past hour, and auto_drafts_per_day pre-drafts in the past
@@ -135,12 +193,14 @@ class GatherMixin:
         log.info("compose draft limited", draft=d["id"])
         return True
 
-    def _gather(self, d: dict[str, Any]) -> dict[str, Any] | str | None:
+    def _gather(self, d: dict[str, Any], early: dict[str, Future] | None = None) -> dict[str, Any] | str | None:
         """Everything the prompt needs, the reason the draft cannot be written, or None for a pre-draft
         that is no longer wanted. Reads only: one call to public.draft_context, plus an embedding and a
-        search when the email has no vector yet."""
+        search when the email has no vector yet. early is what _early started (started here when not given)."""
         user = d["user_id"]
+        early = self._early(d) if early is None else early
         first = self.db.rpc("draft_context", {"p_user": user, "p_thread": d["thread_id"]}) or {}
+        settle(early.get("keys"))  # read alongside draft_context, so opening it does not read them again
         thread = first.get("thread")
         # The draft row is the user's; the thread must be theirs too, or nothing read is used.
         if not thread or thread["user_id"] != user:
@@ -166,6 +226,11 @@ class GatherMixin:
             return "There is nothing to reply to yet."
 
         contact = first.get("contact") or {}
+        channel = thread.get("channel") or "email"
+        # The team's voice is for a new draft in a work chat. An edit or adjustment only corrects their own text.
+        company = self._start(self._company, user, d["thread_id"]) if edit is None else None
+        rules = self._start(self._channel_rules, user, channel, first["rules"])
+        about = self._start(self._about_note, user, contact)
         latest_in = next((m for m in reversed(messages) if m["direction"] == "inbound"), None)
         similar = self._similar(user, thread, latest_in)
         names = {cid: self.vault.open(user, NAME, name) for cid, name in (first.get("senders") or {}).items()}
@@ -179,10 +244,9 @@ class GatherMixin:
                 who = names[m["sender_contact_id"]] or "Them"
             conversation.append((who, describe(m, 1500 if i >= len(messages) - 2 else OLDER_CHARS)))
 
-        # The team's voice is for a new draft in a work chat. An edit or adjustment only corrects their own text.
-        company = self._company(user, d["thread_id"]) if edit is None else None
-        you = self._you(user, first, similar, thread.get("channel") or "email")
-        calendar = self._calendar(user) if edit is None else []
+        company = got(company)
+        you = self._you(user, first, similar, channel, composer=got(early.get("composer")), rules=got(rules), about=got(about))
+        calendar = got(early.get("calendar"), []) if edit is None else []
         return {
             "thread": thread,
             "evidence": evidence_of(you, [text for _, text in conversation], d, thread.get("subject"), calendar),
@@ -276,17 +340,29 @@ class GatherMixin:
         gone = {r.get("rule") for r in left if isinstance(r, dict)} if isinstance(left, list) else set()
         return [r for r in rules if r.get("rule") not in gone] if gone else rules
 
-    def _you(self, user: str, first: dict[str, Any], similar: list[tuple[str, str]], channel: str = "email") -> dict[str, Any]:
-        """The parts of the prompt about you and the person, from draft_context or compose_context."""
+    def _you(
+        self,
+        user: str,
+        first: dict[str, Any],
+        similar: list[tuple[str, str]],
+        channel: str = "email",
+        *,
+        composer: dict[str, Any] | None = None,
+        rules: list[dict[str, Any]] | None = None,
+        about: str | None = None,
+    ) -> dict[str, Any]:
+        """The parts of the prompt about you and the person, from draft_context or compose_context. composer, rules
+        (already without the other channel's) and about (the note on this person) are read here unless given."""
         profile = first.get("profile") or {}
         contact = first.get("contact") or {}
         contact_id = contact.get("id")
         org = contact.get("organizations") or {}
         recent = pick_voice([], first["recent"], limit=RECENT_VOICE)
         opened = lambda field, value: self.vault.open(user, field, value) or ""  # sealed or plain
-        rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in self._channel_rules(user, channel, first["rules"])]
+        kept = self._channel_rules(user, channel, first["rules"]) if rules is None else rules
+        rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in kept]
         return {
-            **self._composer(user),
+            **(self._composer(user) if composer is None else composer),
             "me": profile.get("display_name") or "",
             "about": opened(PROFILE_ABOUT, profile.get("about")),
             "rules": [r["rule"] for r in rules if r["scope"] == "global" and r["rule"]][:20],
@@ -296,17 +372,19 @@ class GatherMixin:
             "them": self.vault.open(user, NAME, contact.get("display_name")) or "",
             "relationship": opened(CONTACT_RELATIONSHIP, contact.get("relationship")),
             "style_note": opened(CONTACT_STYLE_NOTE, contact.get("style_note")),
-            "about_note": self._about_note(user, contact),
+            "about_note": self._about_note(user, contact) if about is None else about,
             "who_they_are": opened(CONTACT_SUMMARY, contact.get("ai_summary")) or (f"{opened(NAME, org.get('name'))}: {opened(ORG_SUMMARY, org['summary'])}" if org.get("summary") else ""),
             "person_rules": [r["rule"] for r in rules if contact_id and r["scope"] == "contact" and r.get("contact_id") == contact_id and r["rule"]][:10],
             "more_voice": pick_more_voice(first.get("to_them") or [], first["recent"], shown=recent, similar=similar),
             "similar": similar,
         }
 
-    def _gather_compose(self, d: dict[str, Any]) -> dict[str, Any] | str:
+    def _gather_compose(self, d: dict[str, Any], early: dict[str, Future] | None = None) -> dict[str, Any] | str:
         """A new message's prompt, from public.compose_context: no conversation, so no similar replies."""
         user = d["user_id"]
+        early = self._early(d) if early is None else early
         first = self.db.rpc("compose_context", {"p_user": user, "p_account": d.get("account_id"), "p_contact": d.get("contact_id")}) or {}
+        settle(early.get("keys"))
         account = first.get("account")
         if not account or account["user_id"] != user:
             return "This account could not be found."
@@ -318,7 +396,9 @@ class GatherMixin:
         if edit is None and not (d.get("instruction") or "").strip() and not d.get("audio_path"):
             return "Say what the message should say first."
         channel = account.get("channel") or "email"
-        you = self._you(user, first, [], channel)
+        contact = first.get("contact") or {}
+        rules, about = self._start(self._channel_rules, user, channel, first["rules"]), self._start(self._about_note, user, contact)
+        you = self._you(user, first, [], channel, composer=got(early.get("composer")), rules=got(rules), about=got(about))
         return {
             "thread": {"id": None, "account_id": account["id"]},
             "evidence": evidence_of(you, [], d, None, []),

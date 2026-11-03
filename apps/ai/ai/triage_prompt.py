@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .text import UNTRUSTED, fenced, new_fence
-from .triage_extras import LABEL_CHOICES, REASONS, SUSPICIOUS_KINDS, label_lines, read_label, read_reason, read_suspicious
+from .triage_extras import LABEL_CHOICES, SUSPICIOUS_KINDS, label_lines, read_label, read_suspicious
 from .triage_signals import CATEGORIES, CONTEXT_MESSAGES, MAX_OPTIONS, NO_CHOICES, OPTION_KINDS, PRIORITIES, UserContext
 
 SCHEMA = {
@@ -27,8 +27,6 @@ SCHEMA = {
                     "junk": {"type": "boolean"},
                     "needs_reply": {"type": "boolean"},
                     "summary": {"type": "string", "description": "One plain sentence, at most 120 characters. Empty when junk is true."},
-                    "reason": {"type": "string", "enum": REASONS, "description": "The main reason for the priority and junk decision."},
-                    "reason_text": {"type": "string", "description": "That reason in 2 to 6 plain words to them, at most 40 characters."},
                     "suspicious": {"type": "string", "enum": SUSPICIOUS_KINDS},
                     "label": {"type": "string", "enum": LABEL_CHOICES, "description": "The number of the one auto label that fits, or none."},
                     "choices": {
@@ -45,9 +43,20 @@ SCHEMA = {
                         },
                     },
                     "asked_time": {"type": "string", "description": "YYYY-MM-DDTHH:MM, or empty."},
+                    "plan": {
+                        "type": "object",
+                        "description": "Something to put in their calendar that the message proposes, or all empty.",
+                        "properties": {
+                            "title": {"type": "string", "description": "2 to 5 words, Title Case, or empty."},
+                            "start": {"type": "string", "description": "YYYY-MM-DD, or YYYY-MM-DDTHH:MM with a time, or empty."},
+                            "end": {"type": "string", "description": "YYYY-MM-DD of the last day, or YYYY-MM-DDTHH:MM with an end time, or empty."},
+                            "place": {"type": "string", "description": "Where, or empty."},
+                        },
+                        "required": ["title", "start", "end", "place"],
+                    },
                     "asked_minutes": {"type": "integer", "description": "Length in minutes, or 0."},
                 },
-                "required": ["message", "priority", "category", "junk", "needs_reply", "summary", "reason", "reason_text", "suspicious", "label", "choices", "asked_time", "asked_minutes"],
+                "required": ["message", "priority", "category", "junk", "needs_reply", "summary", "suspicious", "label", "choices", "asked_time", "asked_minutes", "plan"],
             },
         }
     },
@@ -79,7 +88,8 @@ When they are asked about a meeting, call or viewing time, include an other_time
 
 asked_time: when the message asks whether they are free at a specific date and time, that time as YYYY-MM-DDTHH:MM, as written in the message (the sender's local time), working out the date from when it was sent. Otherwise empty. asked_minutes: how long it would take in minutes when stated or obvious, otherwise 0.
 
-reason: the main reason for the priority and junk decision, from the list, with reason_text saying it in a few plain words to them, such as "You were asked a question", "Payment due today" or "Newsletter". Always give one, urgent most of all: it is shown next to the label. Write it to them, never use their name.
+plan: only when choices is not empty and the message proposes or arranges something they would put in a calendar (a meeting, call, visit, trip, booking or event) with a date. title says what it is in 2 to 5 words, Title Case, such as "Onrus Trip" or "Coffee With Sam", never their own name. start is its first day as YYYY-MM-DD, or YYYY-MM-DDTHH:MM when a time is given, working out the date from when the message was sent. end is the last day as YYYY-MM-DD when it runs over several days ("the 13th, 14th and 15th" ends on the 15th), or YYYY-MM-DDTHH:MM when an end time is given, otherwise empty. place is where, as written, or empty. Otherwise every field is empty.
+
 
 suspicious: payment_change when the message asks for money to go to new or changed bank details, or says banking details have changed, or an invoice or payment that does not fit the conversation; phishing when it tries to get a password, code, card number or login through a link or attachment, or threatens an account; impersonation when it pretends to be someone they know or a company but the sender does not fit. Otherwise none. Be careful: a normal invoice, receipt or security code they asked for is none. This only warns them, so say so when in real doubt.
 
@@ -173,6 +183,37 @@ def sent_label(sent_at: str | None, tz: str = "") -> str:
     return at.strftime("%A %d %B %Y, %H:%M %Z")
 
 
+PLAN_DAY = "%Y-%m-%d"
+PLAN_AT = "%Y-%m-%dT%H:%M"
+
+
+def read_plan(item: dict[str, Any]) -> dict[str, str] | None:
+    """The calendar plan from one model answer: a title and a start day (with a time when one was given), an end no
+    earlier than the start, and a place. None without a title and a valid start. Text is one line, cut short."""
+    plan = item.get("plan") if isinstance(item.get("plan"), dict) else {}
+    title = " ".join(str(plan.get("title") or "").split())[:60]
+
+    def when(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        for fmt, size in ((PLAN_AT, 16), (PLAN_DAY, 10)):
+            if len(text) < size:
+                continue
+            try:
+                return datetime.strptime(text[:size], fmt)
+            except ValueError:
+                continue
+        return None
+
+    start, end = when(plan.get("start")), when(plan.get("end"))
+    if not title or not start:
+        return None
+    timed = len(str(plan.get("start")).strip()) >= 16
+    out = {"title": title, "start": start.strftime(PLAN_AT if timed else PLAN_DAY), "end": "", "place": " ".join(str(plan.get("place") or "").split())[:100]}
+    if end and end >= start and (end - start).days <= 31:
+        out["end"] = end.strftime(PLAN_AT if len(str(plan.get("end")).strip()) >= 16 else PLAN_DAY)
+    return out
+
+
 def read_choices(item: dict[str, Any]) -> str:
     """The choices from one model answer as JSON for message_ai.reply_choices: NO_CHOICES when there are
     none or they are unusable. Options need a label and a decision; a known kind; at most MAX_OPTIONS."""
@@ -186,6 +227,7 @@ def read_choices(item: dict[str, Any]) -> str:
         if label and decision and label.lower() not in {x["label"].lower() for x in options}:
             options.append({"label": label, "decision": decision, "kind": kind})
     options = options[:MAX_OPTIONS]
+    plan = read_plan(item)
     if len(options) < 2:
         return NO_CHOICES
     asked = str(item.get("asked_time") or "").strip()
@@ -195,7 +237,7 @@ def read_choices(item: dict[str, Any]) -> str:
         asked = None
     minutes = item.get("asked_minutes")
     minutes = minutes if isinstance(minutes, int) and 5 <= minutes <= 24 * 60 else None
-    return json.dumps({"asked": asked, "minutes": minutes, "options": options})
+    return json.dumps({"asked": asked, "minutes": minutes, "options": options, **({"plan": plan} if plan else {})})
 
 
 def read_results(result: Any, count: int, label_count: int = 0) -> dict[int, dict[str, Any]]:
@@ -219,8 +261,6 @@ def read_results(result: Any, count: int, label_count: int = 0) -> dict[int, dic
             "needs_reply": item.get("needs_reply") is True,
             "summary": "" if item["junk"] else str(item.get("summary") or ""),
             "choices": read_choices(item),
-            "reason_code": read_reason(item)[0],
-            "reason_text": read_reason(item)[1],
             "suspicious": read_suspicious(item),
             "label_index": read_label(item, label_count),
         }

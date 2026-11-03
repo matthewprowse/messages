@@ -9,7 +9,8 @@ import { toast } from "sonner";
 import { useApp } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -99,10 +100,9 @@ export function BuilderDialog({ open, automation, initial, onClose, onSaved }: {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent showCloseButton={false} className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{automation ? "Change Automation" : "New Custom Automation"}</DialogTitle>
-          <DialogDescription>When a new email matches, Konva reads the details you name and does what you choose. It never sends anything for you.</DialogDescription>
         </DialogHeader>
         <form id="automation-form" className="space-y-5" onSubmit={(e) => { e.preventDefault(); void save(); }}>
           <div className="space-y-2">
@@ -185,9 +185,10 @@ export function BuilderDialog({ open, automation, initial, onClose, onSaved }: {
           </fieldset>
           {problem && <p className="text-sm text-destructive" role="alert">{problem}</p>}
         </form>
-        <DialogFooter>
+        <div className={DIALOG_BUTTONS}>
+          <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
           <Button variant="secondary" type="submit" form="automation-form" disabled={busy}>Save</Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

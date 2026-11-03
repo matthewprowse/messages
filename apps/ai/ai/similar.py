@@ -7,7 +7,9 @@ product because every vector is normalised (gemini.normalise). Only the most rec
 messages are searched, which is the mail drafts are written from anyway.
 
 A user's vectors are cached for CACHE_S (45 minutes; a new embedding is added to them: add, or they are dropped: forget) so drafts read them once, and at most
-MAX_USERS users are cached at a time. They are never logged or written anywhere. Once the nearest messages
+MAX_USERS users are cached at a time. Reading them is slow (about 2.5s a page of PAGE, measured), so the pages are read
+at the same time, one read per user is shared by everyone waiting on it, and an entry past CACHE_S is still searched
+for up to STALE_S while a fresh read runs in the background: only a cold start makes a draft wait for the read. They are never logged or written anywhere. Once the nearest messages
 are known, public.reply_pairs (a plain lookup, no vector) returns each one with the reply the user sent."""
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import sys
 import threading
 import time
 from array import array
+from concurrent.futures import Future, ThreadPoolExecutor
 from operator import mul
 from typing import Any, Sequence
 
@@ -30,6 +33,7 @@ from .fields import EMBEDDING_DATA
 # which is why an entry lives long (CACHE_S) and is dropped when its user gets a new embedding (forget).
 MAX_VECTORS = 2000  # the newest embedded replied-to messages searched per user
 CACHE_S = 45 * 60
+STALE_S = 6 * 60 * 60  # an entry past CACHE_S is searched for this much longer while it is read again in the background
 MAX_USERS = 32  # users whose vectors are held at once; the least recently used goes first
 PAGE = 1000  # PostgREST returns at most this many rows a request
 CANDIDATE_FACTOR = 4  # nearest messages looked up for replies, per reply wanted: some have none
@@ -86,14 +90,18 @@ def nearest(items: list[tuple[str, str | None, array]], query: Sequence[float], 
 
 
 class SimilarIndex:
-    def __init__(self, db: Any, vault: Any, *, cache_s: float = CACHE_S, max_vectors: int = MAX_VECTORS, max_users: int = MAX_USERS):
+    def __init__(self, db: Any, vault: Any, *, cache_s: float = CACHE_S, stale_s: float = STALE_S, max_vectors: int = MAX_VECTORS, max_users: int = MAX_USERS):
         self.db = db
         self.vault = vault
         self.cache_s = cache_s
+        self.stale_s = stale_s
         self.max_vectors = max_vectors
         self.max_users = max_users
         self._lock = threading.Lock()
         self._cache: dict[str, tuple[float, list[tuple[str, str | None, array]]]] = {}  # user_id -> (valid until, items)
+        self._loading: dict[str, Future] = {}  # user_id -> the read under way, which everyone wanting it waits on
+        self._readers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="similar")  # whole reads
+        self._pages = ThreadPoolExecutor(max_workers=4, thread_name_prefix="similar-page")  # their pages, apart so a read never waits on itself
 
     def forget(self, user_id: str) -> None:
         with self._lock:
@@ -139,49 +147,69 @@ class SimilarIndex:
         return self._items(user_id)
 
     def _items(self, user_id: str) -> list[tuple[str, str | None, array]]:
+        """The cached items; past CACHE_S (and within STALE_S) the old ones while a fresh read runs in the background;
+        otherwise the read, shared with any other thread already waiting on it."""
         now = time.monotonic()
         with self._lock:
             hit = self._cache.get(user_id)
             if hit and hit[0] > now:
                 self._cache[user_id] = self._cache.pop(user_id)  # most recently used last
                 return hit[1]
-        items = self._load(user_id)
+            loading = self._loading.get(user_id)
+            if loading is None:
+                loading = self._loading[user_id] = self._readers.submit(self._reload, user_id)
+        if hit and hit[0] + self.stale_s > now:
+            return hit[1]
+        return loading.result()
+
+    def _reload(self, user_id: str) -> list[tuple[str, str | None, array]]:
+        try:
+            items = self._load(user_id)
+        except Exception as err:
+            with self._lock:
+                self._loading.pop(user_id, None)
+            log.warn("embeddings not read", user=user_id, code=log.code_of(err))
+            raise
         with self._lock:
+            self._loading.pop(user_id, None)
             self._cache.pop(user_id, None)
-            self._cache[user_id] = (now + self.cache_s, items)
+            self._cache[user_id] = (time.monotonic() + self.cache_s, items)
             while len(self._cache) > self.max_users:
                 self._cache.pop(next(iter(self._cache)))
         return items
 
     def _load(self, user_id: str) -> list[tuple[str, str | None, array]]:
-        keys = self.vault.keys_for(user_id)
-        if keys is None:
-            return []
-        items: list[tuple[str, str | None, array]] = []
-        bad = 0
-        offset = 0
-        while len(items) + bad < self.max_vectors:
-            page = self.db.select(
+        def page(offset: int) -> list[dict[str, Any]]:
+            return self.db.select(
                 "message_embeddings",
                 {
                     "select": "message_id,embedding_data,messages(thread_id)",
                     "user_id": f"eq.{user_id}",
                     "embedding_data": "not.is.null",
                     "order": "sent_at.desc,message_id",
-                    "limit": str(min(PAGE, self.max_vectors - len(items) - bad)),
+                    "limit": str(min(PAGE, self.max_vectors - offset)),
                     "offset": str(offset),
                 },
             )
-            for r in page:
+
+        # Every page at once, and alongside the key (a KMS round trip when it is not cached): the newest max_vectors
+        # rows, opened or not, as before when they were read one after another.
+        pages = self._pages.map(page, range(0, self.max_vectors, PAGE))
+        keys = self.vault.keys_for(user_id)
+        if keys is None:
+            return []
+        items: list[tuple[str, str | None, array]] = []
+        bad = 0
+        for rows in pages:
+            for r in rows:
                 try:
                     vec = open_vector(keys, r["embedding_data"])
                 except Exception:
                     bad += 1
                     continue
                 items.append((r["message_id"], (r.get("messages") or {}).get("thread_id"), unit(vec)))
-            if len(page) < PAGE:
+            if len(rows) < PAGE:
                 break
-            offset += len(page)
         if bad:
             log.warn("embeddings could not be opened", user=user_id, count=bad)
         return items

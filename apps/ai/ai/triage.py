@@ -17,7 +17,7 @@ the model can tell an open question from one already answered (bulk mail gets no
 
 The same call offers guided drafting's one-tap choices, only for a message that asks about a time or for a
 decision ("Are you free Thursday at 3?"); old messages are not asked again later, since an unanswered one
-rarely gets answered. It also returns why it decided (a reason code and a few words), a flag for likely phishing
+rarely gets answered. It also returns a flag for likely phishing
 or payment fraud (shown as a warning, never acted on) and the number of at most one of your Auto labels, which is
 put on the conversation unless you took it off before. Junk gets no summary: its subject stands in."""
 
@@ -228,8 +228,6 @@ class Triage(BatchTriageMixin, ContextMixin):
                         "needs_reply": bool(final[m["id"]]["needs_reply"]),
                         "junk": bool(final[m["id"]]["junk"]),
                         "reply_choices": self.vault.seal(m["user_id"], CHOICES, final[m["id"]]["choices"]),
-                        "triage_reason": final[m["id"]].get("reason_code"),
-                        "triage_reason_text": self.vault.seal(m["user_id"], SUMMARY, final[m["id"]].get("reason_text") or None),
                         "suspicious": final[m["id"]].get("suspicious"),
                         "model": results[m["id"]][1],
                         "prompt_version": prompt_id(SYSTEM) if results[m["id"]][1] else None,
@@ -386,8 +384,6 @@ class Triage(BatchTriageMixin, ContextMixin):
                 "summary": self.vault.seal(m["user_id"], SUMMARY, result["summary"]),
                 "needs_reply": bool(result["needs_reply"]) and waiting_on_them,
                 "junk": bool(result["junk"]),
-                "triage_reason": result.get("reason_code"),
-                "triage_reason_text": self.vault.seal(m["user_id"], SUMMARY, result.get("reason_text") or None),
                 "suspicious": result.get("suspicious"),
             },
             minimal=True,

@@ -6,7 +6,8 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsEmpty, SettingsRow, SettingsRows } from "@/components/settings/primitives";
@@ -32,7 +33,7 @@ export function RunHistory({ runs, automations, onChanged }: { runs: Run[]; auto
     onChanged();
   };
 
-  if (runs.length === 0) return <SettingsEmpty>Nothing has run yet. When an email matches an automation that is on, it appears here.</SettingsEmpty>;
+  if (runs.length === 0) return <SettingsEmpty>Nothing has run yet.</SettingsEmpty>;
   return (
     <>
       <SettingsRows>
@@ -59,10 +60,10 @@ export function RunHistory({ runs, automations, onChanged }: { runs: Run[]; auto
               The draft, task and urgent mark it made are removed. {undoing?.effects.contact_created ? "The contact it made is deleted unless something else has happened to them since, in which case only the Lead mark comes off." : "The person was already a contact, so only the Lead mark and details this run added come off."} The email itself is not touched.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <div className={DIALOG_BUTTONS}>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); void undo(); }}>Undo Run</AlertDialogAction>
-          </AlertDialogFooter>
+          </div>
         </AlertDialogContent>
       </AlertDialog>
     </>

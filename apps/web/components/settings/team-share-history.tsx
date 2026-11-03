@@ -6,7 +6,7 @@ import { useCover, coverState, lastDay } from "@/lib/team-cover";
 import { useAuth } from "@/lib/auth";
 import { useExportedChats } from "@/lib/compliance-export";
 import { useTeam } from "@/lib/team";
-import { SettingsHeading, SettingsRow, SettingsRows } from "@/components/settings/primitives";
+import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const day = (d: Date | string) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
@@ -24,10 +24,9 @@ export function ShareHistory({ labels }: { labels: Map<string, string> | undefin
   const exports = [...(exported?.entries() ?? [])].flatMap(([thread, days]) => days.map((d) => ({ thread, day: d }))).sort((a, b) => b.day.localeCompare(a.day));
   if (!covered.length && !exports.length) return null;
   return (
-    <div className="space-y-3">
+    <>
       {covered.length > 0 && (
-        <div className="space-y-2">
-          <SettingsHeading level={3} title="Cover" description="Colleagues who read your work chats while you were away." />
+        <SettingsSection level={3} title="Covered for You">
           <SettingsRows>
             {covered.map((p) => {
               const state_ = coverState(p);
@@ -40,18 +39,17 @@ export function ShareHistory({ labels }: { labels: Map<string, string> | undefin
               );
             })}
           </SettingsRows>
-        </div>
+        </SettingsSection>
       )}
       {exports.length > 0 && (
-        <div className="space-y-2">
-          <SettingsHeading level={3} title="Included in Exports" description="Chats of yours that were part of a client work history export for the team's records." />
+        <SettingsSection level={3} title="Included in Exports">
           <SettingsRows>
             {exports.slice(0, 20).map((e) => (
               <SettingsRow key={`${e.thread}-${e.day}`} title={labels?.get(e.thread) || "Chat"} description={`Included in an export on ${day(e.day)}`} />
             ))}
           </SettingsRows>
-        </div>
+        </SettingsSection>
       )}
-    </div>
+    </>
   );
 }

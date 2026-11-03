@@ -1,21 +1,16 @@
 "use client";
 
 // A notice above the Summary when an account has stopped syncing, so "All Caught Up" is not read as the whole truth.
+// Its own row at the top of the list: one line of text and Reconnect, with a rule under it across the column.
 
 import Link from "next/link";
-import { TriangleAlert } from "lucide-react";
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 export function AccountsNotice({ count }: { count: number }) {
   return (
-    <Alert className="mt-3">
-      <TriangleAlert />
-      <AlertTitle>{count === 1 ? "An Account Is Not Syncing" : `${count} Accounts Are Not Syncing`}</AlertTitle>
-      <AlertDescription>New messages from {count === 1 ? "it" : "them"} will not appear here until {count === 1 ? "it is" : "they are"} reconnected.</AlertDescription>
-      <AlertAction>
-        <Button asChild variant="secondary" size="sm"><Link href="/settings/accounts">Reconnect</Link></Button>
-      </AlertAction>
-    </Alert>
+    <div role="alert" className="-mx-3 flex items-center justify-between gap-3 border-b p-3">
+      <span className="min-w-0 truncate text-sm font-medium">{count === 1 ? "1 Account Not Syncing" : `${count} Accounts Not Syncing`}</span>
+      <Button asChild variant="secondary"><Link href="/settings/accounts">Reconnect</Link></Button>
+    </div>
   );
 }

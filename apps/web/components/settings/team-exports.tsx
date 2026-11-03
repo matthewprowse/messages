@@ -1,13 +1,12 @@
 "use client";
 
-// Settings, Team, Compliance Exports: the log of client work history exports, with counts and never message text.
+// Settings, Team, the Exports view: the log of client work history exports, with counts and never message text.
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { relTime } from "@/lib/format";
 import { useExportLog } from "@/lib/compliance-export";
-import type { TeamState } from "@/lib/team";
-import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
+import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
@@ -15,27 +14,22 @@ const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "n
  * Settings, Team, Compliance Exports: the log of client work history exports. Who exported which client, when, and how many
  * chats and messages. Never a word of any chat. An owner or admin sees all of it, Compliance its own.
  */
-export function ExportLogSection({ team }: { team: TeamState }) {
-  const manages = team.role === "owner" || team.role === "admin";
+export function ExportLogSection() {
   const { rows, reload } = useExportLog(true);
   return (
-    <SettingsSection
-      id="exports"
-      title="Compliance Exports"
-      description={manages
-        ? "Each time someone exports a client's work history it is recorded here, and the agent whose chat is included is told. To export, open the client in Contacts, Team Clients. Exports need strict sharing to be on."
-        : "The exports you have made. To export a client's work history, open the client in Contacts, Team Clients."}
-    >
+    <SettingsSection id="exports" title="Compliance Exports">
       {rows === undefined ? (
-        <Skeleton className="h-24 w-full rounded-lg" />
+        <SettingsBody><Skeleton className="h-24 w-full rounded-lg" /></SettingsBody>
       ) : rows === null ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could Not Load the Log</AlertTitle>
-          <AlertDescription>
-            <p>Check your connection and try again.</p>
-            <button type="button" className="mt-2 underline underline-offset-4" onClick={() => void reload()}>Retry</button>
-          </AlertDescription>
-        </Alert>
+        <SettingsBody>
+          <Alert variant="destructive">
+            <AlertTitle>Could Not Load the Log</AlertTitle>
+            <AlertDescription>
+              <p>Check your connection and try again.</p>
+              <button type="button" className="mt-2 underline underline-offset-4" onClick={() => void reload()}>Retry</button>
+            </AlertDescription>
+          </Alert>
+        </SettingsBody>
       ) : rows.length === 0 ? (
         <SettingsEmpty>No export has been made yet.</SettingsEmpty>
       ) : (

@@ -3093,6 +3093,30 @@ Review "Do not add" list stands).
 - **Saved Views removed (3 November 2026).** The owner saw no purpose in them, so the "..." list menu went with them and
   By Person moved into the Filter menu in the Conversations title row. The app no longer reads or writes `saved_views`; the
   table stays (Download My Data still exports old rows and account deletion still clears it) until a migration drops it.
+- **Every page on one design (3 November 2026).** Conversations and Summary set the scheme; every other page now follows it,
+  built from shared parts: `components/surface.tsx` (PaneColumn, Card, StatCard, IconCircle, Row, Separated), PaneHeader's
+  `views` and `search` (a 40px views row and a 40px search under the 40px title row, level with the rail) and `IconAction`
+  (a ghost icon button with its tooltip). List and pane have no border between them; the pane is grey with white cards.
+  Dialogs drop the corner X for a plain button row; taglines and helper text are cut. Same control sizes on phones.
+  - **Settings** is a list beside a grey pane, with Search Settings over every section and setting (`lib/settings-index.ts`).
+    Sections: Profile, Notifications; Accounts (one Sending card); AI, Drafts (templates and learned data), Automations;
+    Team (its four sub-pages are views); Usage, Privacy and Data (split from Profile); What's New; Updates (owner only, the
+    changelog editor moved out of Admin). `/whats-new` and the old Team pages redirect.
+  - **Admin and Analytics are one owner-only page** at `/admin`: Overview, Usage, AI, System, Flags, Teams, Audit, Logos.
+    `/analytics` redirects there and the rail lost its Analytics item.
+  - **Contacts, Notes, Calendar and Attachments**: Filter menus in the title row instead of rows of selects, views and search
+    in the header, 40px rows with channel badges, detail pages as cards (Contacts: number cards then Timeline and Overview),
+    an empty pane of number cards and cards. Calendar's grid sits in one white card; No Date is a view; phones get a seven
+    day strip over the agenda. Attachments keeps its grid of white tiles on grey, selecting in the views row's slot.
+- **Add to Calendar from a message (3 November 2026).** When triage offers reply choices for a message that proposes something
+  with a date (a trip, a meeting, a booking), it also returns a plan: a short title, the first day (with a time when given), the
+  last day or end time, and the place, sealed inside `reply_choices` with the choices (no extra call). The reply box shows Add to
+  Calendar on the right of the choices, which opens New Event filled in. New Event now takes From and Until for an all-day event
+  over several days. Only messages triaged after the AI worker release have a plan.
+- **Summary redesign (3 November 2026).** Same header as Conversations: a 40px title row with the date ("Tue, 3 November") on the
+  right beside Listen, Refresh and Filter, then a 40px Search Summary that narrows conversations, events and tasks. The headline
+  line under it is gone. With nothing open, the pane beside it is Your Day: Replied Today, Waiting On Others and Promises, today's
+  brief as text (the script was play-only before; it is the user's own and sealed), and the week as one row of seven days.
 - **Deleted view:** read on demand (the store does not hold trash), newest 200, with Restore (email also queues `untrash`).
   Delete Forever is not offered: the mail action path has no permanent delete and non-email chats have nothing to remove at
   a provider. The 30 day auto-empty is still not built.
@@ -3248,6 +3272,10 @@ Migration `20261119120000_triage_labels_reasons.sql` (applied).
   `message_ai` and `threads`. The user's own signals set fixed words ("You unsubscribed from this sender"). The web reads them on
   demand (hover or tap of the Urgent or Needs Reply tag, and a line under the open conversation's header) with Not Right?:
   Not Junk, Not Important or No Reply Needed. No Reply Needed is a new `feedback` value the AI honours and lists in corrections.
+- **Why removed (3 November 2026).** The owner found the reasons often wrong ("Starred contact" on someone not starred, "No
+  reason was saved"), so the hover card, the line under the header and Not Right? are gone. Urgent and Needs Reply stay as plain
+  tags; Mark as Important / Not Important stay in the conversation menu. Triage no longer asks the model for a reason or writes
+  one. `20261123100000_drop_triage_reasons.sql` drops `triage_reason` and `triage_reason_text`, applied after the AI worker release.
 - **Suspicious mail:** `suspicious` (`payment_change`, `phishing`, `impersonation`) from the same call, shown as a warning
   banner in the conversation. It never blocks, deletes or drafts anything.
 - **Cost:** junk gets no summary from the model (the subject stands in). Reply choices are only for messages that ask about a time

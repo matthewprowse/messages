@@ -37,7 +37,7 @@ const nextConfig: NextConfig = {
     { source: "/settings/rules", destination: "/settings/ai#priorities", permanent: true },
     { source: "/settings/general", destination: "/settings/profile", permanent: true },
     { source: "/settings/appearance", destination: "/settings/profile#appearance", permanent: true },
-    { source: "/settings/data", destination: "/settings/profile#privacy", permanent: true },
+    { source: "/settings/data", destination: "/settings/privacy", permanent: true },
   ],
 };
 

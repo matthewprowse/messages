@@ -13,12 +13,12 @@ export const PROVIDER_ICON: Record<Provider, LucideIcon> = {
 };
 
 /** The accounts offered under Add an Account. */
-export const ADD_ACCOUNTS: { href: string; label: string; sub: string; provider: Provider }[] = [
-  { href: "/settings/accounts/google", label: "Google", sub: "Gmail, Calendar and Tasks, with one sign-in", provider: "gmail" },
-  { href: "/settings/accounts/microsoft", label: "Microsoft", sub: "Outlook, Calendar and To Do, with one sign-in", provider: "outlook" },
-  { href: "/settings/accounts/icloud", label: "iCloud", sub: "Mail, Calendar and Reminders", provider: "icloud" },
-  { href: "/settings/accounts/whatsapp", label: "WhatsApp", sub: "Scan a QR code", provider: "whatsapp" },
-  { href: "/settings/accounts/instagram", label: "Instagram", sub: "Direct messages, Business, Creator or Personal", provider: "instagram" },
-  { href: "/settings/accounts/linkedin", label: "LinkedIn", sub: "Messages, signed in with your LinkedIn account", provider: "linkedin" },
-  { href: "/settings/accounts/imap", label: "Other Email", sub: "Any IMAP mailbox, like Afrihost, xneelo or cPanel", provider: "imap" },
+export const ADD_ACCOUNTS: { href: string; label: string; provider: Provider }[] = [
+  { href: "/settings/accounts/google", label: "Google", provider: "gmail" },
+  { href: "/settings/accounts/microsoft", label: "Microsoft", provider: "outlook" },
+  { href: "/settings/accounts/icloud", label: "iCloud", provider: "icloud" },
+  { href: "/settings/accounts/whatsapp", label: "WhatsApp", provider: "whatsapp" },
+  { href: "/settings/accounts/instagram", label: "Instagram", provider: "instagram" },
+  { href: "/settings/accounts/linkedin", label: "LinkedIn", provider: "linkedin" },
+  { href: "/settings/accounts/imap", label: "Other Email", provider: "imap" },
 ];
