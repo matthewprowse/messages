@@ -66,7 +66,7 @@ const ITEM = "p-2 [&>svg:last-child]:hidden";
 export const GO_TO: { href: string; label: string; icon: LucideIcon; key: string }[] = [
   { href: "/summary", label: "Summary", icon: Newspaper, key: "s" },
   { href: "/calendar", label: "Calendar", icon: Calendar, key: "c" },
-  { href: "/inbox", label: "Inbox", icon: Inbox, key: "i" },
+  { href: "/inbox", label: "Conversations", icon: Inbox, key: "i" },
   { href: "/contacts", label: "Contacts", icon: Users, key: "o" },
   { href: "/attachments", label: "Attachments", icon: Paperclip, key: "a" },
   { href: "/notes", label: "Notes", icon: NotebookPen, key: "n" },

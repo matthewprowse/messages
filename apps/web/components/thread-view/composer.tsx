@@ -27,6 +27,7 @@ import { ReplyHeader, useReplyAll, useReplyFrom } from "@/components/reply-heade
 import { AttachButton, AttachmentChips, useOutboxFiles } from "@/components/outbox-attachments";
 import { RecordButton, RecordingActions, RecordingStatus, SpeakButton, useVoiceRecorder } from "@/components/voice-recorder";
 import { TemplatePicker } from "@/components/template-picker";
+import { Tip } from "@/components/tip";
 import { SendLaterMenu } from "@/components/send-later-menu";
 import { onRestoreReply, takeRestored } from "@/lib/reply-restore";
 import { SuggestTimesButton } from "@/components/suggest-times-button";
@@ -194,8 +195,9 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
   const untouchedDraft = !!draft && !recorder && phase !== "thinking" && text.trim() === draft.body.trim() && text.trim().length > 0;
 
   return (
-    <div className="shrink-0 border-t bg-background p-3 md:px-4">
-      <div className="mx-auto w-full max-w-2xl">
+    <div className="shrink-0 px-3 pb-3 md:px-4">
+      {/* One card for everything about the reply: the AI's choices and draft bar, the text, the tools and Send. */}
+      <div {...files.dropProps} className={cn("mx-auto w-full max-w-2xl rounded-lg border bg-background p-3 focus-within:ring-3 focus-within:ring-ring/30", files.dragging && "border-ring ring-3 ring-ring/30")}>
         {closed && <InstagramReplyNotice />}
         {!draft && !busy && <GuidedChoices thread={thread} msgs={msgs} disabled={busy} onPick={(decision) => ask("default", undefined, decision)} />}
         {!recorder && (
@@ -218,9 +220,8 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
         )}
         {!recorder && !busy && <ActionCards thread={thread} msgs={msgs} draftId={draft?.id} vars={vars} files={files} text={text} onText={type} />}
         {/* While a draft is written the text box becomes a placeholder line. */}
-        <div {...files.dropProps} className={cn("rounded-lg border bg-background/50 p-3 focus-within:ring-3 focus-within:ring-ring/30", files.dragging && "border-ring ring-3 ring-ring/30")}>
+        <div>
           <ReplyHeader thread={thread} msgs={msgs} reply={replyFrom} all={replyAll} />
-          {untouchedDraft && <Badge variant="secondary" className="mb-2">AI Draft</Badge>}
           {recorder ? (
             <RecordingStatus voice={recorder} />
           ) : phase === "thinking" ? (
@@ -243,13 +244,12 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
           )}
           {!recorder && phase !== "thinking" && <SignatureNote signature={signature} off={noSignature} hasText={!!text.trim()} onToggle={() => setNoSignature((v) => !v)} left={unresolvedVariables(text)} />}
           <div className="mt-3 empty:hidden"><AttachmentChips files={files} /></div>
-          {/* Phones have 40px controls, so the tools sit closer, Send drops "via Gmail", and Send wraps below rather than run off the edge. */}
+          {/* Send wraps below the tools rather than run off the edge on a narrow screen. */}
           <div className="mt-6 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             {recorder ? <div /> : (
-              <div className="flex items-center gap-1 md:gap-2">
+              <div className="flex items-center gap-1">
                 <AttachButton files={files} />
                 <SpeakButton voice={speech} disabled={busy} />
-                <RecordButton files={files} voice={voice} />
                 <TemplatePicker workspaceId={thread.workspaceId} disabled={busy} vars={vars} onInsert={(t) => type(addBelow(text, t))} />
                 <SuggestTimesButton disabled={busy} onInsert={(t) => type(addBelow(text, t))} />
               </div>
@@ -257,9 +257,13 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
             {recorder
               ? <RecordingActions voice={recorder} done={recorder === speech ? "Draft" : "Stop"} />
               : (
-                <div className="ml-auto flex">
-                  <Button disabled={!canSend} onClick={() => submit()} className="rounded-r-none" aria-label={`Send via ${providerLabel[thread.provider]}`}>Send<span className="max-md:hidden"> via {providerLabel[thread.provider]}</span></Button>
-                  <SendLaterMenu variant="default" disabled={!canSend} onPick={(at) => submit(at)} className="rounded-l-none border-l border-primary-foreground/20" />
+                <div className="ml-auto flex items-center gap-1">
+                  {untouchedDraft && <Badge variant="secondary">AI Draft</Badge>}
+                  <RecordButton files={files} voice={voice} />
+                  <div className="flex">
+                    <Tip label={`Send via ${providerLabel[thread.provider]}`}><Button disabled={!canSend} onClick={() => submit()} className="rounded-r-none">Send</Button></Tip>
+                    <SendLaterMenu variant="default" disabled={!canSend} onPick={(at) => submit(at)} className="rounded-l-none border-l border-primary-foreground/20" />
+                  </div>
                 </div>
               )}
           </div>

@@ -230,3 +230,8 @@
 .note-content p.is-editor-empty:first-child::before { @apply pointer-events-none float-left h-0 text-muted-foreground/60 content-[attr(data-placeholder)]; }
 /* A file block draws its own ring around just the file (note-file-node.tsx); the full-width element tiptap wraps it in gets none. */
 .note-content .ProseMirror-selectednode:not([data-node-view-wrapper], .react-renderer) { @apply rounded ring-2 ring-ring/50; }
+/* Phones: the dock floats over the bottom of list pages (app-shell.tsx), so their scrolling lists end with room to scroll
+   the last row clear of it, instead of the page stopping short above a band. */
+@media (max-width: 767px) {
+  main[data-dock] [data-slot="scroll-area-viewport"] > div { padding-bottom: calc(5rem + env(safe-area-inset-bottom)); }
+}

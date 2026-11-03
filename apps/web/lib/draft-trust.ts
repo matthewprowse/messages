@@ -45,13 +45,15 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 export function auditLine(a: DraftAudit | undefined): string {
   if (!a) return "";
   const parts: string[] = [];
-  if (a.messages) parts.push(a.messages === 1 ? "the last message" : `last ${a.messages} messages`);
+  if (a.messages) parts.push(a.messages === 1 ? "the last message" : `the last ${a.messages} messages`);
   if (a.facts) parts.push(count(a.facts, "saved fact", "saved facts"));
   if (a.note) parts.push("your note about them");
   if (a.rules) parts.push(count(a.rules, "style rule", "style rules"));
-  if (a.replies) parts.push(count(a.replies, "past reply", "past replies"));
+  if (a.replies) parts.push(a.replies === 1 ? "1 of your past replies" : `${a.replies} of your past replies`);
   if (a.calendar) parts.push("your calendar");
-  return parts.length ? `Based on: ${parts.join(", ")}` : "";
+  if (!parts.length) return "";
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+  return `Written from ${list}.`;
 }
 
 /** What to tell the person when a draft has details to check. Null when everything was found. */

@@ -51,9 +51,9 @@ export function DeletedList({ term }: { term: string }) {
         const title = niceName((t.isGroup ? t.groupName : contact?.name ?? t.fallbackName) ?? t.subject ?? "Unknown");
         return (
           <div key={t.id}>
-            {i > 0 && <div className="mb-2 pl-14"><Separator /></div>}
+            {i > 0 && <div className="mb-2 pl-16"><Separator /></div>}
             <div className="flex items-center gap-3 rounded-lg p-3 hover:bg-muted/50">
-              <ThreadAvatar thread={t} contacts={contactById} className="size-8 shrink-0" />
+              <ThreadAvatar thread={t} contacts={contactById} className="size-10 shrink-0" />
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <div className="flex h-5 items-center justify-between gap-3">
                   <span className="min-w-0 truncate text-sm font-medium">{title}</span>

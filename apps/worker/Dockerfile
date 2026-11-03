@@ -25,7 +25,8 @@ RUN pnpm install --frozen-lockfile --filter worker... \
  && pnpm --filter worker deploy --prod --legacy /out
 
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
-# ffmpeg converts voice notes recorded in the app to the Ogg Opus WhatsApp expects (src/whatsapp/voice-note.ts).
+# ffmpeg converts voice notes recorded in the app to the Ogg Opus WhatsApp expects (src/whatsapp/voice-note.ts),
+# and GIFs to the looping MP4 it plays (src/whatsapp/gif.ts).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
  && rm -rf /var/lib/apt/lists/*

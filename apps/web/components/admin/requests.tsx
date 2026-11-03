@@ -1,7 +1,7 @@
 "use client";
 
-// Access requests, shown at the top of Admin's Teams view. Nothing writes the waitlist from the website any more (the signup
-// form is gone), so this stays quiet until a request arrives some other way. Approving or rejecting changes the status;
+// Access requests, shown at the top of Admin's Teams view. The marketing site's Request Access form writes them
+// (/api/waitlist). Approving or rejecting changes the status;
 // nobody is emailed. Approving a team request makes its team in the same database call (create_workspace) and shows an
 // invite link for its owner, to send by hand.
 

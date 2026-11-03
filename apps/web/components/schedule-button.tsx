@@ -11,6 +11,7 @@ import { scheduleDefaults } from "@/lib/schedule";
 import type { Thread } from "@/lib/types";
 import { NewEventDialog } from "@/components/new-event-dialog";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export function ScheduleButton({ thread, className, open: openProp, onOpenChange }: { thread: Pick<Thread, "subject" | "participantIds">; className?: string; open?: boolean; onOpenChange?: (open: boolean) => void }) {
   const { contacts } = useApp();
@@ -20,7 +21,10 @@ export function ScheduleButton({ thread, className, open: openProp, onOpenChange
   const defaults = useMemo(() => scheduleDefaults(thread, contacts), [thread.subject, thread.participantIds, contacts]);
   return (
     <>
-      <Button variant="ghost" size="icon" className={className} aria-label="Schedule" title="Schedule" onClick={() => setOpen(true)}><CalendarPlus /></Button>
+      <Tooltip>
+        <TooltipTrigger asChild><Button variant="ghost" size="icon" className={className} aria-label="Schedule" onClick={() => setOpen(true)}><CalendarPlus /></Button></TooltipTrigger>
+        <TooltipContent>Schedule</TooltipContent>
+      </Tooltip>
       <NewEventDialog open={open} onOpenChange={setOpen} title={defaults.title} guests={defaults.guests} />
     </>
   );

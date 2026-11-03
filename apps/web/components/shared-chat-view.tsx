@@ -50,14 +50,14 @@ const SharedBubble = memo(function SharedBubble({ m, client, whatsapp, showMeta 
   return (
     <div className={cn("flex flex-col gap-2", me ? "items-end" : "items-start")}>
       {(body || m.quoted || !m.attachments?.length) && (
-        <div className="flex max-w-[80%] items-center gap-1">
+        <div className="flex max-w-[92%] items-center gap-1 md:max-w-[80%]">
           <div className={cn("min-w-0 rounded-lg p-3 text-sm leading-6", me ? "rounded-br-[2px] bg-primary text-primary-foreground" : "rounded-bl-[2px] bg-muted")}>
             {m.deleted ? <p className="opacity-70">{m.body}</p> : <MessageBody m={m} whatsapp={whatsapp && !!m.whatsapp} bulk={!!m.bulk} noRead />}
           </div>
         </div>
       )}
       {m.attachments && m.attachments.length > 0 && (
-        <div className={cn("flex max-w-[80%] flex-wrap gap-1 text-xs text-muted-foreground", me && "justify-end")}>
+        <div className={cn("flex max-w-[92%] flex-wrap gap-1 text-xs md:max-w-[80%] text-muted-foreground", me && "justify-end")}>
           {m.attachments.map((a) => <Badge key={a.id} variant="outline">{a.name || "File"}</Badge>)}
         </div>
       )}

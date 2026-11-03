@@ -1,18 +1,16 @@
-// The user's labels, the labels on each conversation, and saved Inbox views: loaded once signed in, changed at once and
-// saved after (a failure puts the change back with a toast). Names are the user's own text, so they are sealed with
-// their key (field "name") before they are stored and opened after they are read.
+// The user's labels and the labels on each conversation: loaded once signed in, changed at once and saved after (a
+// failure puts the change back with a toast). Names are the user's own text, so they are sealed with their key (field
+// "name") before they are stored and opened after they are read.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FIELD } from "@messages/crypto/fields";
 import { allRows } from "../contacts";
-import { allWear as everyWear, cleanName, linksByThread, nameTaken, nextColor, withLabel, withoutLabel, type Label, type LabelColor, type SavedView } from "../labels";
+import { allWear as everyWear, cleanName, linksByThread, nameTaken, nextColor, withLabel, withoutLabel, type Label, type LabelColor } from "../labels";
 import { supabase } from "../supabase";
-import type { ListFilter, View } from "../types";
 import { open, seal } from "../vault";
 
 export interface LabelsApi {
   labels: Label[];
-  savedViews: SavedView[];
   /** The labels a conversation wears, in the order they were put on. */
   labelsOf: (threadId: string) => Label[];
   /** Conversation ids that wear a label, for the label filter. */
@@ -26,38 +24,30 @@ export interface LabelsApi {
   deleteLabel: (id: string) => void;
   /** Puts a label on conversations (or takes it off), with an Undo toast. */
   setLabel: (threadIds: string[], labelId: string, on: boolean) => void;
-  saveView: (name: string, view: View, filter: ListFilter, labelId?: string) => Promise<boolean>;
-  deleteView: (id: string) => void;
 }
 
 const NO_LABELS: Label[] = [];
 
 export function useLabels({ userId, notify, saveFailed }: { userId: string | null; notify: (text: string, undo?: () => void) => void; saveFailed: () => void }): LabelsApi {
   const [labels, setLabels] = useState<Label[]>([]);
-  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [links, setLinks] = useState<Map<string, string[]>>(new Map());
   // Read inside callbacks, so they stay stable.
-  const latest = useRef({ labels, links, savedViews });
-  latest.current = { labels, links, savedViews };
+  const latest = useRef({ labels, links });
+  latest.current = { labels, links };
 
   useEffect(() => {
-    if (!userId) { setLabels([]); setSavedViews([]); setLinks(new Map()); return; }
+    if (!userId) { setLabels([]); setLinks(new Map()); return; }
     let cancelled = false;
     // Not required: without the tables (not applied yet) or a connection the inbox works, just without labels.
     (async () => {
-      const [l, t, v] = await Promise.all([
+      const [l, t] = await Promise.all([
         allRows("Load labels", (from, to) => supabase.from("labels").select("id, name, color").order("created_at").order("id").range(from, to)),
         allRows("Load thread labels", (from, to) => supabase.from("thread_labels").select("thread_id, label_id").order("thread_id").order("label_id").range(from, to)),
-        allRows("Load saved views", (from, to) => supabase.from("saved_views").select("id, name, view, filter, label_id").order("created_at").order("id").range(from, to)),
       ]);
-      const [names, viewNames] = await Promise.all([
-        Promise.all(l.map((r) => open(FIELD.name, r.name))),
-        Promise.all(v.map((r) => open(FIELD.name, r.name))),
-      ]);
+      const names = await Promise.all(l.map((r) => open(FIELD.name, r.name)));
       if (cancelled) return;
       setLabels(l.map((r, i) => ({ id: r.id, name: names[i] ?? "", color: r.color as LabelColor })));
       setLinks(linksByThread(t));
-      setSavedViews(v.map((r, i) => ({ id: r.id, name: viewNames[i] ?? "", view: r.view as View, filter: r.filter as ListFilter, labelId: r.label_id ?? undefined })));
     })().catch(() => undefined);
     return () => { cancelled = true; };
   }, [userId]);
@@ -111,13 +101,11 @@ export function useLabels({ userId, notify, saveFailed }: { userId: string | nul
     const before = latest.current;
     setLabels((all) => all.filter((l) => l.id !== id));
     setLinks((m) => withoutLabel(m, id));
-    setSavedViews((all) => all.map((v) => (v.labelId === id ? { ...v, labelId: undefined } : v)));
-    // The links go with the label (on delete cascade), and a saved view that used it keeps its view and filter.
+    // The links go with the label (on delete cascade).
     supabase.from("labels").delete().eq("id", id).then(({ error }) => {
       if (!error) return;
       setLabels(before.labels);
       setLinks(before.links);
-      setSavedViews(before.savedViews);
       saveFailed();
     });
   }, [saveFailed]);
@@ -147,30 +135,6 @@ export function useLabels({ userId, notify, saveFailed }: { userId: string | nul
     });
   }, [notify, saveFailed]);
 
-  const saveView = useCallback(async (raw: string, view: View, filter: ListFilter, labelId?: string) => {
-    const name = cleanName(raw);
-    if (!name) return false;
-    try {
-      const { data, error } = await supabase.from("saved_views").insert({ name: await seal(FIELD.name, name), view, filter, label_id: labelId ?? null }).select("id").single();
-      if (error || !data) { saveFailed(); return false; }
-      setSavedViews((all) => [...all, { id: data.id, name, view, filter, labelId }]);
-      return true;
-    } catch {
-      saveFailed();
-      return false;
-    }
-  }, [saveFailed]);
-
-  const deleteView = useCallback((id: string) => {
-    const removed = latest.current.savedViews.find((v) => v.id === id);
-    setSavedViews((all) => all.filter((v) => v.id !== id));
-    supabase.from("saved_views").delete().eq("id", id).then(({ error }) => {
-      if (!error) return;
-      if (removed) setSavedViews((all) => [...all, removed]);
-      saveFailed();
-    });
-  }, [saveFailed]);
-
-  return useMemo(() => ({ labels, savedViews, labelsOf, threadsWith, allWear, createLabel, updateLabel, deleteLabel, setLabel, saveView, deleteView }),
-    [labels, savedViews, labelsOf, threadsWith, allWear, createLabel, updateLabel, deleteLabel, setLabel, saveView, deleteView]);
+  return useMemo(() => ({ labels, labelsOf, threadsWith, allWear, createLabel, updateLabel, deleteLabel, setLabel }),
+    [labels, labelsOf, threadsWith, allWear, createLabel, updateLabel, deleteLabel, setLabel]);
 }

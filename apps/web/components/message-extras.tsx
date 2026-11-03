@@ -16,8 +16,11 @@ import { ViewOriginal } from "@/components/message-body";
 /** WhatsApp's own quick reactions, in its order. */
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
-/** The quoted message at the top of a reply. Clicking it jumps to that message when it is loaded. */
-export function QuoteBlock({ quote, me, nameOf, onJump }: { quote: NonNullable<Message["quote"]>; me: boolean; nameOf: NameOf; onJump?: () => void }) {
+/**
+ * The quoted message at the top of a reply. Clicking it jumps to that message when it is loaded. `alone`: above a sticker
+ * or photo sent as a reply, with no bubble around it, so it is its own grey card.
+ */
+export function QuoteBlock({ quote, me, nameOf, onJump, alone = false }: { quote: NonNullable<Message["quote"]>; me: boolean; nameOf: NameOf; onJump?: () => void; alone?: boolean }) {
   // The author was saved when the reply arrived, sometimes before the person had a name: look it up again.
   const author = quote.fromMe ? "You" : /^\+\d+$/.test(quote.author) ? nameOf(quote.author) : quote.author;
   return (
@@ -26,8 +29,9 @@ export function QuoteBlock({ quote, me, nameOf, onJump }: { quote: NonNullable<M
       onClick={onJump}
       disabled={!onJump}
       className={cn(
-        "mb-2 block w-full min-w-0 rounded-md px-2.5 py-1.5 text-left text-xs leading-5 disabled:cursor-default",
-        me ? "bg-primary-foreground/10" : "bg-background/60",
+        "block min-w-0 text-left text-xs leading-5 disabled:cursor-default",
+        // In a bubble it reads like a Markdown quote: a line down the left, no box. Alone it is a small grey card.
+        alone ? "max-w-[92%] rounded-lg bg-muted px-3 py-2 md:max-w-[80%]" : cn("mb-2 w-full border-l-2 pl-2.5", me ? "border-primary-foreground/40" : "border-border"),
       )}
     >
       <span className="block font-medium">{author}</span>

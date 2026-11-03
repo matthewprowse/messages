@@ -4,9 +4,10 @@
 // date and time picker. It only chooses a time; the caller queues the message with it (send_after on the outbox row).
 
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Ellipsis } from "lucide-react";
 import { combineDateTime, describeWhen, laterChoices, scheduleError, type LaterChoice } from "@/lib/send-schedule";
 import { cn } from "@/lib/utils";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Label } from "@/components/ui/label";
@@ -23,9 +24,11 @@ export function SendLaterMenu({ disabled, onPick, variant = "secondary", classNa
   return (
     <>
       <DropdownMenu onOpenChange={(open) => { if (open) setNow(new Date()); }}>
-        <DropdownMenuTrigger asChild>
-          <Button type="button" variant={variant} size="icon" disabled={disabled} aria-label="Send Later" className={className}><ChevronDown /></Button>
-        </DropdownMenuTrigger>
+        <Tip label="Send Later">
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant={variant} size="icon" disabled={disabled} aria-label="Send Later" className={className}><Ellipsis /></Button>
+          </DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent align="end" className="w-64">
           {choices.map((c: LaterChoice) => (
             <DropdownMenuItem key={c.key} onSelect={() => onPick(c.at)}>

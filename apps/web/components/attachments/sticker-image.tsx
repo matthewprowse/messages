@@ -15,9 +15,9 @@ export function StickerImage({ attachment: a, onOpen }: { attachment: Attachment
   const seen = useSeen(box);
   const url = useSignedUrl(BUCKET, seen ? a.path : undefined, false, a.sealed ? mimeFor(a) : undefined);
   return (
-    <button ref={box} type="button" onClick={onOpen} aria-label="Open Sticker" className="size-30 overflow-hidden rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+    <button ref={box} type="button" onClick={onOpen} aria-label="Open Sticker" className="size-30 overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      {url ? <img src={url} alt="Sticker" decoding="async" className="size-full rounded-lg object-contain" /> : <Skeleton className="size-full rounded-lg" />}
+      {url ? <img src={url} alt="Sticker" decoding="async" className="size-full scale-115 object-cover" /> : <Skeleton className="size-full rounded-2xl" />}
     </button>
   );
 }

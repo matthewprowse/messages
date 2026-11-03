@@ -1,0 +1,37 @@
+/* Motion for the marketing pages only. Sections rise in as they scroll into view (CSS scroll-driven animations, so
+   the content is there without JavaScript and browsers without support simply show it), and the integrations run
+   past as a marquee. Both stay still for anyone who asks for reduced motion. */
+
+@keyframes konva-reveal {
+  from { opacity: 0; transform: translateY(1.5rem); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes konva-marquee {
+  to { transform: translateX(-50%); }
+}
+
+@keyframes konva-progress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: konva-reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 60%;
+    }
+  }
+  .marquee-track { animation: konva-marquee 45s linear infinite; }
+  .marquee:hover .marquee-track { animation-play-state: paused; }
+}
+
+/* The marquee fades out at both ends instead of stopping at a hard edge. */
+.marquee { mask-image: linear-gradient(to right, transparent, black 12%, black 88%, transparent); }
+
+/* The bar under the chosen industry fills while it is shown, then the next one is chosen. */
+.industry-progress { transform-origin: left; animation: konva-progress var(--duration, 7s) linear both; }
+.industry-progress[data-paused="true"] { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .industry-progress { animation: none; transform: scaleX(1); } }

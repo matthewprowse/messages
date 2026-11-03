@@ -5,14 +5,17 @@
 import type { AnyMessageContent } from "baileys";
 import type { OutgoingAttachment } from "../send/compose";
 
-/** Photos WhatsApp shows inline. Others (HEIC, GIF, WebP, BMP) go as documents so nothing is lost. */
+/** Photos WhatsApp shows inline. Others (HEIC, WebP, BMP) go as documents so nothing is lost; a GIF is converted first. */
 const PHOTO = /^image\/(jpeg|png)$/;
 /** Videos every phone plays inline. */
 const VIDEO = /^video\/(mp4|3gpp)$/;
 const AUDIO = /^audio\//;
 
-/** A file ready for WhatsApp. A voice note has been converted to Ogg Opus and carries its length and waveform. */
-export type WhatsAppFile = OutgoingAttachment & { voice?: { seconds: number; waveform: Uint8Array } };
+/**
+ * A file ready for WhatsApp. A voice note has been converted to Ogg Opus and carries its length and waveform; a GIF has
+ * been converted to a silent MP4 (whatsapp/gif.ts) and plays on a loop.
+ */
+export type WhatsAppFile = OutgoingAttachment & { voice?: { seconds: number; waveform: Uint8Array }; gif?: boolean };
 
 export function fileMessage(file: WhatsAppFile, caption?: string): AnyMessageContent {
   const mimetype = file.contentType;
@@ -21,6 +24,7 @@ export function fileMessage(file: WhatsAppFile, caption?: string): AnyMessageCon
     const { seconds, waveform } = file.voice;
     return { audio: file.content, mimetype: "audio/ogg; codecs=opus", ptt: true, seconds, waveform } as AnyMessageContent;
   }
+  if (file.gif) return { video: file.content, mimetype: "video/mp4", gifPlayback: true, ...(caption ? { caption } : {}) };
   if (PHOTO.test(mimetype)) return { image: file.content, mimetype, ...(caption ? { caption } : {}) };
   if (VIDEO.test(mimetype)) return { video: file.content, mimetype, ...(caption ? { caption } : {}) };
   if (AUDIO.test(mimetype)) return { audio: file.content, mimetype, ptt: false };

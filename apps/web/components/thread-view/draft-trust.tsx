@@ -54,10 +54,10 @@ function Rating({ draft }: { draft: Draft }) {
   };
   return (
     <div className="flex items-center gap-1">
-      <Button type="button" variant="ghost" size="icon" className={cn("size-7", value === "up" && "bg-accent")} aria-label="Good Draft" aria-pressed={value === "up"} onClick={() => rate("up")}><ThumbsUp /></Button>
+      <Button type="button" variant="ghost" size="icon" className={cn(value === "up" && "bg-accent")} aria-label="Good Draft" aria-pressed={value === "up"} onClick={() => rate("up")}><ThumbsUp /></Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" className={cn("size-7", value === "down" && "bg-accent")} aria-label="Bad Draft" aria-pressed={value === "down"}><ThumbsDown /></Button>
+          <Button type="button" variant="ghost" size="icon" className={cn(value === "down" && "bg-accent")} aria-label="Bad Draft" aria-pressed={value === "down"}><ThumbsDown /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {FEEDBACK_REASONS.map((r) => <DropdownMenuItem key={r.key} onSelect={() => rate("down", r.key)}>{r.label}</DropdownMenuItem>)}

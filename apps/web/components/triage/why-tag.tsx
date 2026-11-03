@@ -19,8 +19,8 @@ function WhyCard({ thread, onDone }: { thread: Thread; onDone: () => void }) {
   const options = notRightOptions(thread);
   return (
     <div className="space-y-2">
-      {/* No stored reason means no line at all: the Not Right? choices still work without one. */}
-      {(text || !note) && <p className="text-sm">{text ?? "Loading"}</p>}
+      {/* Older labels have no stored reason: saying so beats a card with only the Not Right? choices. */}
+      <p className="text-sm">{text ?? (note ? "No reason was saved for this one." : "Loading")}</p>
       {options.length > 0 && (
         <div className="flex flex-wrap items-center gap-1">
           <span className="text-xs text-muted-foreground">Not Right?</span>

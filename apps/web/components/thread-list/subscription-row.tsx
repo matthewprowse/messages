@@ -64,9 +64,9 @@ export function SubscriptionRow({ sender, statuses, query, open, checked, select
       >
         <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", pickable && (selecting ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible group-focus-within/row:invisible pointer-coarse:invisible"))}>
           {sender.company ? (
-            <CompanyAvatar logoPath={sender.company.logoPath} className="size-8" />
+            <CompanyAvatar logoPath={sender.company.logoPath} className="size-10" />
           ) : (
-            <ContactAvatar contact={sender.contact} className="size-8" />
+            <ContactAvatar contact={sender.contact} className="size-10" />
           )}
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -82,7 +82,7 @@ export function SubscriptionRow({ sender, statuses, query, open, checked, select
       </Link>
       {/* Over the avatar: shown on hover, and on every pickable row once one is checked. */}
       {pickable && (
-        <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex group-focus-within/row:flex pointer-coarse:flex")}>
+        <div className={cn("absolute top-1/2 left-3 size-10 -translate-y-1/2 items-center justify-center", selecting ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex group-focus-within/row:flex pointer-coarse:flex")}>
           <Checkbox
             checked={checked}
             aria-label={`Select ${sender.name}`}

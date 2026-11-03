@@ -63,9 +63,7 @@ export function DraftBar({ busy, hasText, editable, undoable, hasDraft, draftLab
       {(hasText || editable) && (
         // One menu for everything that works on the text in the box, so the bar stays one short row (and fits a phone).
         <DropdownMenu>
-          <Hint text="Fix, change or reshape your text">
-            <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Edit</Button></DropdownMenuTrigger>
-          </Hint>
+          <DropdownMenuTrigger asChild><Button type="button" variant="secondary" disabled={busy}>Edit</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="start">
             {editable && hasText && <DropdownMenuItem onSelect={onFix}>Fix Typos and Grammar</DropdownMenuItem>}
             {editable && <DropdownMenuItem onSelect={onAskEdit}>Edit Text</DropdownMenuItem>}

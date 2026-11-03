@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { allWear, cleanName, isShowing, labelDot, linksByThread, nameTaken, nextColor, NAME_MAX, savedViewHref, suggestedViewName, withLabel, withoutLabel, type SavedView } from "./labels";
+import { allWear, cleanName, labelDot, linksByThread, nameTaken, nextColor, NAME_MAX, withLabel, withoutLabel } from "./labels";
 
 test("a typed name loses stray spaces, is cut to the limit, and an empty one is refused", () => {
   assert.equal(cleanName("  Client   X \n"), "Client X");
@@ -44,18 +44,4 @@ test("deleting a label removes it from every thread", () => {
   const links = linksByThread([{ thread_id: "a", label_id: "x" }, { thread_id: "a", label_id: "y" }, { thread_id: "b", label_id: "x" }]);
   const left = withoutLabel(links, "x");
   assert.deepEqual([...left], [["a", ["y"]]]);
-});
-
-test("a saved view opens the Inbox with its view, filter and label, and is shown as active only when all match", () => {
-  const v: SavedView = { id: "1", name: "Chasing", view: "priority", filter: "unread", labelId: "x" };
-  assert.equal(savedViewHref(v), "/inbox?view=priority&filter=unread&label=x");
-  assert.equal(savedViewHref({ id: "2", name: "Plain", view: "all", filter: "none" }), "/inbox");
-  assert.equal(isShowing(v, "priority", "unread", "x"), true);
-  assert.equal(isShowing(v, "priority", "unread", undefined), false);
-  assert.equal(isShowing({ ...v, labelId: undefined }, "priority", "unread", undefined), true);
-});
-
-test("a suggested name joins the parts that are set", () => {
-  assert.equal(suggestedViewName("Priority", "Unread", "Client X"), "Priority, Unread, Client X");
-  assert.equal(suggestedViewName("All", undefined, "Client X"), "All, Client X");
 });

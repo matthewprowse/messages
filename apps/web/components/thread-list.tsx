@@ -15,15 +15,16 @@ import { accountNameMap, emptyFor, matchesSearch } from "@/lib/thread-list";
 import { parseQuery, plainText } from "@/lib/search/query";
 import { useIndexThreadIds } from "@/lib/search/use-search";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/primitives";
 import { useImporting } from "@/components/sync-bar";
 import { TeamInbox } from "@/components/team-inbox";
+import { LabelChips } from "@/components/labels/label-chips";
 import { ManageLabelsHost } from "@/components/labels/manage-labels-dialog";
 import { useSnoozePick } from "@/components/snooze/use-snooze-pick";
 import { DeletedList } from "@/components/thread-list/deleted-list";
-import { ListControls } from "@/components/thread-list/list-controls";
+import { FilterButton, ListControls } from "@/components/thread-list/list-controls";
 import { LoadingRows } from "@/components/thread-list/loading-rows";
 import { RowButton } from "@/components/thread-list/row-button";
 import { BulkBar, SelectionBar } from "@/components/thread-list/selection-bar";
@@ -120,33 +121,42 @@ export function ThreadList() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0">
         <PaneHeader
-          title="Inbox"
+          title="Conversations"
           action={
-            <Button variant={selectMode ? "secondary" : "ghost"} aria-pressed={selectMode} onClick={() => (selectMode ? endSelecting() : setSelectMode(true))}>
-              {selectMode ? "Done" : "Select"}
-            </Button>
+            <>
+              <FilterButton view={view} filter={filter} label={label} byPerson={byPerson} />
+              <Button variant={selectMode ? "secondary" : "ghost"} aria-pressed={selectMode} onClick={() => (selectMode ? endSelecting() : setSelectMode(true))}>
+                {selectMode ? "Done" : "Select"}
+              </Button>
+            </>
           }
         >
-          {view === "subscriptions" && selectingSubs ? (
-          <BulkBar allPicked={subs.pickable.length > 0 && subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])} onDone={endSelecting}>
-            <RowButton label="Unsubscribe" icon={MailX} onClick={() => subs.run(subs.picked)} />
-          </BulkBar>
-        ) : selectingRows && view !== "subscriptions" ? (
-          <SelectionBar
-            allPicked={order.length > 0 && picked.length === order.length}
-            ids={picked}
-            count={picked.length}
-            anyUnread={threads.some((t) => t.unread && pickedSet.has(t.id))}
-            onAll={() => setChecked(order)}
-            onClear={() => setChecked([])}
-            onDone={endSelecting}
-            onAction={(action) => run(picked, action)}
-          />
-        ) : (
-          <ListControls view={view} filter={filter} label={label} byPerson={byPerson} />
-        )}
+          {/* The views (or the selection's actions) and the search, 40px each with 4px between, level with the rail's items. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex h-10 flex-col justify-center">
+            {view === "subscriptions" && selectingSubs ? (
+              <BulkBar allPicked={subs.pickable.length > 0 && subs.picked.length === subs.pickable.length} onAll={() => subs.setChecked(subs.pickable)} onClear={() => subs.setChecked([])} onDone={endSelecting}>
+                <RowButton label="Unsubscribe" icon={MailX} onClick={() => subs.run(subs.picked)} />
+              </BulkBar>
+            ) : selectingRows && view !== "subscriptions" ? (
+              <SelectionBar
+                allPicked={order.length > 0 && picked.length === order.length}
+                ids={picked}
+                count={picked.length}
+                anyUnread={threads.some((t) => t.unread && pickedSet.has(t.id))}
+                onAll={() => setChecked(order)}
+                onClear={() => setChecked([])}
+                onDone={endSelecting}
+                onAction={(action) => run(picked, action)}
+              />
+            ) : (
+              <ListControls view={view} filter={filter} label={label} byPerson={byPerson} />
+            )}
+            </div>
+            <SearchBand value={search} onChange={setSearch} placeholder="Search Conversations" className="border-b-0 p-0" inputClassName="h-10" />
+          </div>
+          {!selectingRows && !selectingSubs && <LabelChips view={view} filter={filter} label={label} />}
         </PaneHeader>
-        <SearchBand value={search} onChange={setSearch} placeholder="Search Conversations" />
         {view === "subscriptions" && <CleanUpLink />}
       </div>
       <ScrollArea className="min-h-0 flex-1">
@@ -178,18 +188,18 @@ export function ThreadList() {
             <div className="flex flex-col gap-2">
               {subs.senders.slice(0, shown).map((s, i) => (
                 <Fragment key={s.key}>
-                  {i > 0 && <div className="pl-14"><Separator /></div>}
+                  {i > 0 && <div className="pl-16"><Separator /></div>}
                   <SubscriptionRow
-                    sender={s}
-                    statuses={s.addresses.map((a) => subs.statusByKey.get(a.key))}
-                    query={query}
-                    open={params.id === s.latest.id}
-                    checked={subsPicked.has(s.key)}
-                    selecting={selectingSubs}
-                    pickable={subsPickable.has(s.key)}
-                    onCheck={subs.check}
-                    onUnsubscribe={(key) => subs.run([key])}
-                    onConfirm={subs.confirm}
+                  sender={s}
+                  statuses={s.addresses.map((a) => subs.statusByKey.get(a.key))}
+                  query={query}
+                  open={params.id === s.latest.id}
+                  checked={subsPicked.has(s.key)}
+                  selecting={selectingSubs}
+                  pickable={subsPickable.has(s.key)}
+                  onCheck={subs.check}
+                  onUnsubscribe={(key) => subs.run([key])}
+                  onConfirm={subs.confirm}
                   />
                 </Fragment>
               ))}
@@ -200,26 +210,26 @@ export function ThreadList() {
             <div className="flex flex-col gap-2">
               {threads.slice(0, shown).map((t, i) => (
                 <Fragment key={t.id}>
-                  {i > 0 && <div className="pl-14"><Separator /></div>}
+                  {i > 0 && <div className="pl-16"><Separator /></div>}
                   <ThreadRow
-                    thread={t}
-                    today={today}
-                    contact={t.isGroup ? undefined : contactOf(t.participantIds[0])}
-                    query={query}
-                    selected={params.id === t.id}
-                    checked={pickedSet.has(t.id)}
-                    selecting={selectingRows}
-                    onCheck={check}
-                    onAction={onRowAction}
-                    onPress={prefetchMessages}
-                    swiped={rowSwipe.swiped === t.id}
-                    onSwipe={rowSwipe.onSwipe}
-                    onTouchRow={rowSwipe.onTouchRow}
-                    lastSender={t.isGroup && t.lastSenderId ? contactOf(t.lastSenderId) : undefined}
-                    accountName={t.accountId ? accountNames.get(t.accountId) : undefined}
-                    onSnooze={onSnooze}
-                    labels={labelApi.labelsOf(t.id)}
-                    pickedIds={pickedSet.has(t.id) ? picked : undefined}
+                  thread={t}
+                  today={today}
+                  contact={t.isGroup ? undefined : contactOf(t.participantIds[0])}
+                  query={query}
+                  selected={params.id === t.id}
+                  checked={pickedSet.has(t.id)}
+                  selecting={selectingRows}
+                  onCheck={check}
+                  onAction={onRowAction}
+                  onPress={prefetchMessages}
+                  swiped={rowSwipe.swiped === t.id}
+                  onSwipe={rowSwipe.onSwipe}
+                  onTouchRow={rowSwipe.onTouchRow}
+                  lastSender={t.isGroup && t.lastSenderId ? contactOf(t.lastSenderId) : undefined}
+                  accountName={t.accountId ? accountNames.get(t.accountId) : undefined}
+                  onSnooze={onSnooze}
+                  labels={labelApi.labelsOf(t.id)}
+                  pickedIds={pickedSet.has(t.id) ? picked : undefined}
                   />
                 </Fragment>
               ))}

@@ -26,7 +26,8 @@ Positioning lines to test:
 
 ## Business Model
 
-- Individual: R349 a month. Team seat: R499 a month, with a minimum of 5 seats. Prices exclude VAT
+- Individual: R349 a month. Team seat: R499 a month, with a minimum of 5 seats. Paid yearly, about 20% less: R279 and
+  R399 a month (agreed 3 November 2026). Prices exclude VAT
   (register once turnover passes R1M in 12 months).
 - Sell whole agencies, practices and brokerages, not only single seats. The owner keeps the client
   history when an agent leaves.
@@ -302,6 +303,43 @@ seats, or R75k a month, which is enough to prove the model and run the ad test p
 Start Google verification and the CASA assessment before marketing: until it passes, pilot offices count against the
 Gmail test user cap.
 
+### Marketing Site (3 November 2026)
+
+A small public site comes back now, mainly to back up the pitch to principals, take access requests and give Google and
+Meta verification a home page, Privacy Policy and Terms on our own domain. The full proposal and build spec is
+`docs/MARKETING-SITE.md`. Agreed 3 November 2026:
+
+- Linear's structure (from Mobbin), the app's look: same tokens, Geist, stock shadcn and the real app components with
+  made up demo data as the product pictures.
+- It lives in `apps/web` as the `(marketing)` route group on the main domain, with the app at `/inbox`. The domain is
+  bought soon; until then it runs on the current host.
+- Light or dark follows the device, like the app.
+- Prices are shown (R349 Individual, R499 a Team seat with 5 at least, excluding VAT).
+- Closed beta: the call to action is Request Access (approved in Admin), not open sign up.
+- Privacy Policy and Terms start from a template with placeholders for the registered company's details.
+- Version 1 is small: Home, Estate Agents, Pricing, Security, Request Access, Privacy, Terms. Get the design right first.
+- Built for review (3 November 2026): all of Version 1 plus the other three trade pages (Brokers and Advisers,
+  Attorneys, Recruiters) from one template, each with its own demo inbox. No mono label eyebrows and no arrows on
+  buttons. Mockups use made up initials avatars and company marks (`public/demo`). Phones get a full screen menu.
+  Pricing lists what each plan includes plus a full comparison table. Request Access writes to `waitlist` again.
+- Second review (3 November 2026): two main pages, Home and Request Access, with Pricing and Security kept as their own
+  pages and Privacy and Terms for the law. The trade pages are dropped and become the Industries section on Home (a
+  list on the left, each trade's pitch and inbox on the right, moving on by itself). Headings are centred. No border
+  under the header. A big Konva wordmark in the footer. Motion: the hero inbox drafts a reply and new leads land, the
+  apps run past as a marquee, sections rise in on scroll. The features are a bento of cards with small pictures, not
+  a grid of text. "When someone leaves" is folded into the Why Konva pillars, not its own section.
+- Positioning (3 November 2026): Kinso's hero is "One inbox, every conversation", so Konva does not lead with one
+  inbox. Konva is the client inbox for South African professionals who win work by replying first: sorted by client,
+  owned by the office, made for South Africa. Hero: "Never Keep a Client Waiting". Competitors are not named on the
+  site. See docs/MARKETING-SITE.md, Positioning.
+- Suppliers (Google, Supabase, Vercel) are named only in the Privacy Policy, where the law asks for them, not on the
+  marketing pages.
+- Updates (3 November 2026): a public changelog at `/updates`, in the header and footer. It shows the entries the owner
+  publishes from the Updates tab in Admin (`public.updates`), newest release first, each with its date and version beside
+  it. The server reads published rows only, with the service role, cached for five minutes; drafts never leave the
+  database and no new read policy was needed. The old owner-only `/updates` route is gone (the editor is in Admin).
+  Publishing an entry now makes it public, so write each one for clients.
+
 ### Founder Hours and Support (2 November 2026)
 
 The founder works a 9 to 5 in 2027 and plans to go full time once monthly revenue covers about six months of costs with
@@ -509,10 +547,9 @@ meeting, speech and regenerate calls, the allowance line in Usage, the abuse fla
 
 ## Admin and the Waitlist
 
-There is no marketing page. It was removed on 28 October 2026: `/` now redirects to `/inbox`, and anyone
-not signed in goes on to `/login`. The waitlist signup form and `/api/waitlist` went with it, so the
-`waitlist` table has no code that writes to it for now (the table and its migration stay, and `/admin`
-still reads it). A landing page and a signup form can come back when there is something to launch.
+The marketing page was removed on 28 October 2026 and comes back as the marketing site (3 November 2026, see Marketing
+Site): `/` is the public home page again, and its Request Access form will write to the `waitlist` table that `/admin`
+already reads. Until that form is built nothing writes to the table.
 
 `/admin` is owner only, like Analytics, and sits above Settings in the navigation. It lists requests
 by status (Pending, Approved, Rejected), filters teams and individuals, and approves or rejects with
@@ -520,8 +557,8 @@ Undo. The database lets only the owner read or change requests. Approving a team
 team (see Teams) and shows an invite link for its owner, and Teams lists each team with its seats.
 
 Admin tabs (wave 3, 17 November 2026): AI Usage (the default), AI Budget, Teams and Updates. Requests are
-folded into Teams, above the team list. The changelog moved from the main rail into Admin (`/updates` still
-works). AI Usage opens with the Gemini billing state, written to `ai_status` by the AI worker when its
+folded into Teams, above the team list. The changelog moved from the main rail into Admin (`/updates` is now the
+public changelog). AI Usage opens with the Gemini billing state, written to `ai_status` by the AI worker when its
 breaker trips or recovers, the month total with a projection, and who is flagged or paused. A team's percent
 and flag use its pooled spend over seats times the budget, as the pause does. AI Budget keeps edits across
 tabs, saves only if nobody else saved first, keeps share keys it has no row for, and asks before a share of 0%
@@ -849,7 +886,7 @@ feature `bulk_read` (count, cost, failures), and the app records `feature_used` 
 4. `pricing`, config and `describe_jobs`: model and thinking level (minimal), the new feature name, the Admin share and weekly limit.
 5. Web: ask on open and listen for the answer in `message-body.tsx`'s bulk branch, a small `bulk-read.tsx` for the readable view,
    `Message.bulkRead` in `types.ts` and `data.ts`, and the "Summarised by AI" label. Stock shadcn only (Skeleton, Badge, Button).
-6. Analytics events and the Admin share. Add the entry to the Updates page as a draft before pushing.
+6. Analytics events and the Admin share. Write and publish the entry on the Updates page before pushing.
 7. Check on 30 or more real bulk emails, read-only, in the browser on `localhost:3000`: marketing, receipts, newsletters,
    notifications, image-only. Look for invented figures, wrong link labels and anything that reads like the sender's own words.
 
@@ -2526,8 +2563,9 @@ Decisions made while building the screens, so later work follows them:
   the last 4 earlier messages of the conversation (both directions, 300 characters each, none for bulk mail), and
   `needs_reply` covers questions, requests, proposals, plans not yet settled and statements that move plans forward, leaning
   true for people you know. Messages already triaged keep their old answer until they are triaged again.
-- **Updates page (owner only for now).** `public.updates` is the changelog. Record each release as a draft before pushing; mark it
-  Published when it is ready to show. Making it public later is one extra read policy.
+- **Updates page.** `public.updates` is the changelog, edited in the Updates tab in Admin. Every push writes its own entry,
+  published, before it goes (decided 3 November 2026); a pushed version with no entry gets one written from its diff.
+  Published entries are public on the marketing site at `/updates`.
 - **What's New (Wave 7).** Any signed-in user reads published updates only (one select policy; `published_at` is set by a
   trigger when an entry is published). A What's New dialog opens once after sign-in, after setup, when the newest published
   entry went public after the one the user last saw (`whatsNewSeen` in the sign-in metadata; a new sign-up is compared with
@@ -2543,7 +2581,7 @@ professionals is a few months away, because of the approvals above.
 
 Before the private test:
 
-1. **Save the work.** Commit often (a version per release) and record each release as a draft on the owner-only Updates page.
+1. **Save the work.** Commit often (a version per release) and write and publish each release's entry on the Updates page.
 2. **Walk every screen once, signed in, at phone and desktop width,** on real accounts. Most work so far was checked only with
    fakes or at phone width.
 3. **Host it.** The web app and the workers (sync, AI, Instagram, iCloud Reminders) need an always-on machine with logs and an
@@ -3050,8 +3088,11 @@ Review "Do not add" list stands).
   reply cancels it. `follow_ups` (the AI's note that a message expects an answer) is not reused: it has no time.
 - **Labels:** `labels`, `thread_labels` and `saved_views`, all row level security on `user_id`. Label and view names are
   sealed with the user's key as field `name`. Colours are nine stock palette names. Labels are set from the thread menu, the
-  row right-click menu and the bulk bar; the Inbox shows a chip per label (`?label=`) and a "..." list menu holding Saved Views (view, filter and
-  label) and By Person. Deleting a label removes it everywhere; a saved view that used it keeps its view and filter. Not live across tabs yet.
+  row right-click menu and the bulk bar; the Inbox shows a chip per label (`?label=`). Deleting a label removes it everywhere.
+  Not live across tabs yet.
+- **Saved Views removed (3 November 2026).** The owner saw no purpose in them, so the "..." list menu went with them and
+  By Person moved into the Filter menu in the Conversations title row. The app no longer reads or writes `saved_views`; the
+  table stays (Download My Data still exports old rows and account deletion still clears it) until a migration drops it.
 - **Deleted view:** read on demand (the store does not hold trash), newest 200, with Restore (email also queues `untrash`).
   Delete Forever is not offered: the mail action path has no permanent delete and non-email chats have nothing to remove at
   a provider. The 30 day auto-empty is still not built.

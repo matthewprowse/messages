@@ -5,16 +5,15 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useIsOwner } from "@/lib/auth";
 import { NewMenu } from "@/components/new-menu";
+import { Logo } from "@/components/logo";
 import { Search, Newspaper, Calendar, Inbox, Users, Paperclip, NotebookPen, Settings, ChartColumn, ShieldCheck, Ellipsis, type LucideIcon } from "lucide-react";
-import { useApp } from "@/lib/store";
 import { useOnboardingMeta } from "@/lib/onboarding";
+import { isMarketingPath } from "@/lib/marketing-routes";
 import { useMyTeam } from "@/lib/share";
-import { attentionCount } from "@/lib/summary";
-import { useNow } from "@/components/summary/use-now";
 import { PwaBoot } from "@/components/pwa-boot";
 import { NoteCaptureShortcut } from "@/components/note-capture";
 import { SyncBar } from "@/components/sync-bar";
@@ -22,9 +21,7 @@ import { WhatsNewDialog } from "@/components/whats-new/whats-new-dialog";
 import { UsageRing } from "@/components/usage-ring";
 import { RAIL_ITEM, RAIL_LABEL, RAIL_TIP } from "@/components/rail-item";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 
 // Search (with cmdk), setup and team review load in their own chunks, so the first page does not carry them.
 const SearchCommand = dynamic(() => import("@/components/search-command").then((m) => m.SearchCommand), { ssr: false });
@@ -35,7 +32,7 @@ const TeamReview = dynamic(() => import("@/components/team-review").then((m) => 
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/summary", label: "Summary", icon: Newspaper },
   { href: "/calendar", label: "Calendar", icon: Calendar },
-  { href: "/inbox", label: "Inbox", icon: Inbox },
+  { href: "/inbox", label: "Conversations", icon: Inbox },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/attachments", label: "Attachments", icon: Paperclip },
   { href: "/notes", label: "Notes", icon: NotebookPen },
@@ -57,47 +54,25 @@ function useIsDetailRoute() {
   return DETAIL_ROUTES.some((r) => r.test(pathname));
 }
 
-/** How often the Summary dot re-checks the time windows (a conversation ages out of them, not into them). */
-const ATTENTION_REFRESH_MS = 5 * 60_000;
-
-/** True when any inbox thread is unread. Junk and Subscriptions do not count, or the dot would almost always be lit. */
-function useHasUnread() {
-  const { threads } = useApp();
-  return threads.some((t) => t.unread && t.status === "inbox" && !t.junk);
-}
-
-/** How many conversations the Summary lists as needing you. It is the page's own count (lib/summary.ts), so the dot never disagrees with the page. */
-function useAttentionCount() {
-  const { threads } = useApp();
-  const now = useNow(ATTENTION_REFRESH_MS);
-  return useMemo(() => attentionCount(threads, now), [threads, now]);
-}
-
-function UnreadDot() {
-  return <span aria-hidden className="absolute top-1 right-1 size-2 rounded-full bg-primary lg:static lg:ml-auto" />;
-}
-
-function RailButton({ href, onClick, label, icon: Icon, active, dot, dotLabel = "Unread", hint }: { href?: string; onClick?: () => void; label: string; icon: LucideIcon; active: boolean; dot?: boolean; dotLabel?: string; hint?: string }) {
+function RailButton({ href, onClick, label, icon: Icon, active, tipSide = "right" }: { href?: string; onClick?: () => void; label: string; icon: LucideIcon; active: boolean; tipSide?: "right" | "top" }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         {href ? (
-          <Button asChild variant={active ? "secondary" : "ghost"} size="icon" className={cn("relative", RAIL_ITEM)}>
-            <Link href={href} aria-label={dot ? `${label}, ${dotLabel}` : label} aria-current={active ? "page" : undefined}>
+          <Button asChild variant={active ? "secondary" : "ghost"} size="icon" className={RAIL_ITEM}>
+            <Link href={href} aria-label={label} aria-current={active ? "page" : undefined}>
               <Icon />
               <span className={RAIL_LABEL}>{label}</span>
-              {dot && <UnreadDot />}
             </Link>
           </Button>
         ) : (
           <Button variant={active ? "secondary" : "ghost"} size="icon" className={RAIL_ITEM} aria-label={label} onClick={onClick}>
             <Icon />
             <span className={RAIL_LABEL}>{label}</span>
-            {hint && <Kbd className="ml-auto hidden lg:inline-flex">{hint}</Kbd>}
           </Button>
         )}
       </TooltipTrigger>
-      <TooltipContent side="right" className={RAIL_TIP}>{label}{hint && <> <Kbd>{hint}</Kbd></>}</TooltipContent>
+      <TooltipContent side={tipSide} className={RAIL_TIP}>{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -105,27 +80,20 @@ function RailButton({ href, onClick, label, icon: Icon, active, dot, dotLabel = 
 function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => void }) {
   const isOwner = useIsOwner();
   const pathname = usePathname();
-  const hasUnread = useHasUnread();
-  const attention = useAttentionCount();
   return (
     // Scrolls on short screens so every item stays reachable. Below md the bottom bar takes over.
-    <nav aria-label="Main" className="hidden h-full shrink-0 flex-col gap-3 overflow-y-auto border-r p-3 md:flex lg:w-56">
-      <RailButton onClick={onSearch} label="Search" icon={Search} active={searchOpen} hint="⌘K" />
+    <nav aria-label="Main" className="hidden h-full shrink-0 flex-col gap-3 overflow-y-auto border-r p-3 md:flex">
+      <div className="flex size-10 shrink-0 items-center justify-center">
+        <Logo className="w-6" />
+      </div>
       <div className="flex flex-col gap-1">
+        <RailButton onClick={onSearch} label="Search" icon={Search} active={searchOpen} />
         <NewMenu />
-        {NAV.map((item) => (
-          <RailButton
-            key={item.href}
-            {...item}
-            active={pathname.startsWith(item.href)}
-            dot={item.href === "/inbox" ? hasUnread : item.href === "/summary" && attention > 0}
-            dotLabel={item.href === "/summary" ? `${attention} Need Attention` : "Unread"}
-          />
-        ))}
+        {NAV.map((item) => <RailButton key={item.href} {...item} active={pathname.startsWith(item.href)} />)}
       </div>
       <div className="mt-auto flex flex-col gap-1">
         {isOwner && <RailButton href="/analytics" label="Analytics" icon={ChartColumn} active={pathname.startsWith("/analytics")} />}
-        {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin") || pathname.startsWith("/updates")} />}
+        {isOwner && <RailButton href="/admin" label="Admin" icon={ShieldCheck} active={pathname.startsWith("/admin")} />}
         <RailButton href="/settings" label="Settings" icon={Settings} active={pathname.startsWith("/settings") && !pathname.startsWith("/settings/usage")} />
         <UsageRing />
       </div>
@@ -133,45 +101,23 @@ function Rail({ searchOpen, onSearch }: { searchOpen: boolean; onSearch: () => v
   );
 }
 
-function BottomBar({ hidden }: { hidden: boolean }) {
+/**
+ * Phones: the rail as a dock floating over the bottom of the page, the same 40px icon buttons: Search (the same palette
+ * as Cmd-K), the main places, and More for the rest.
+ */
+function BottomBar({ hidden, onSearch }: { hidden: boolean; onSearch: () => void }) {
   const pathname = usePathname();
-  const hasUnread = useHasUnread();
   // More is its own screen (app/more), so it is lit there and on the places it leads to that the bar does not have.
-  const moreActive = ["/more", ...SECONDARY.map((m) => m.href), "/analytics", "/updates", "/admin", "/settings"].some((href) => pathname.startsWith(href));
+  const moreActive = ["/more", ...SECONDARY.map((m) => m.href), "/analytics", "/admin", "/settings"].some((href) => pathname.startsWith(href));
   if (hidden) return null;
   return (
-    <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-40 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
-      <div className="flex h-14 items-stretch">
-        {PRIMARY.map(({ href, label, icon: Icon }) => {
-          const active = pathname.startsWith(href);
-          const dot = href === "/inbox" && hasUnread;
-          return (
-            <Link
-              key={href}
-              href={href}
-              aria-label={dot ? `${label}, Unread` : label}
-              aria-current={active ? "page" : undefined}
-              className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-xs", active ? "text-foreground" : "text-muted-foreground")}
-            >
-              <span className="relative">
-                <Icon className="size-5" />
-                {dot && <span aria-hidden className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary" />}
-              </span>
-              {label}
-            </Link>
-          );
-        })}
-        <Link
-          href="/more"
-          aria-label="More"
-          aria-current={pathname === "/more" ? "page" : undefined}
-          className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-xs", moreActive ? "text-foreground" : "text-muted-foreground")}
-        >
-          <Ellipsis className="size-5" />
-          More
-        </Link>
-      </div>
-    </nav>
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
+      <nav aria-label="Main" className="pointer-events-auto flex gap-1 rounded-2xl border bg-background p-2 shadow-lg">
+        <RailButton onClick={onSearch} label="Search" icon={Search} active={false} tipSide="top" />
+        {PRIMARY.map((item) => <RailButton key={item.href} {...item} active={pathname.startsWith(item.href)} tipSide="top" />)}
+        <RailButton href="/more" label="More" icon={Ellipsis} active={moreActive} tipSide="top" />
+      </nav>
+    </div>
   );
 }
 
@@ -198,6 +144,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const onLogin = pathname === "/login";
   const onInvite = pathname.startsWith("/invite/");
+  const onMarketing = isMarketingPath(pathname);
   const isDetail = useIsDetailRoute();
   const meta = useOnboardingMeta();
   const team = useMyTeam();
@@ -221,11 +168,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Everything except the sign-in page and an invite link needs a signed-in user: row-level security returns nothing otherwise.
   // An invite page asks someone to sign in itself, so the link they were sent is not lost.
   useEffect(() => {
-    if (session === null && !onLogin && !onInvite) router.replace("/login");
-  }, [session, onLogin, onInvite, router]);
+    if (session === null && !onLogin && !onInvite && !onMarketing) router.replace("/login");
+  }, [session, onLogin, onInvite, onMarketing, router]);
 
   // viewport-fit=cover runs the page under the iOS status bar, so every frame pads by the safe area and paints that
   // strip in the page colour. Without it the top of the page (the search band, a detail header) sits under the bar.
+  // The public site scrolls as a normal page, with its own header and footer (app/(marketing)/layout.tsx).
+  if (onMarketing) return <>{children}</>;
   if (onLogin || onInvite) return <main className="safe-top h-dvh w-full bg-background">{children}</main>;
   if (!session) return <div className="safe-top h-dvh w-full bg-background" />; // checking the stored session, or redirecting
 
@@ -243,20 +192,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Rail searchOpen={searchOpen} onSearch={() => { setWantSearch(true); setSearchOpen(true); }} />
       {searchReady && <SearchCommand open={searchOpen} onOpenChange={setSearchOpen} />}
       {searchReady && <ShortcutsDialog />}
-      <main id="content" tabIndex={-1} className={cn("flex h-full min-w-0 flex-1 flex-col outline-none", !isDetail && "pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0")}>
+      <main id="content" tabIndex={-1} data-dock={!isDetail || undefined} className="flex h-full min-w-0 flex-1 flex-col outline-none">
         <SyncBar />
-        {/* Phones have no rail, so the palette opens from a bar at the top of every list page (the same palette as Cmd-K). */}
-        {!isDetail && (
-          <div className="shrink-0 border-b px-3 py-2 md:hidden">
-            <Button variant="outline" className="w-full justify-start gap-2 font-normal text-muted-foreground" onClick={() => { setWantSearch(true); setSearchOpen(true); }}>
-              <Search aria-hidden />
-              Search Everything
-            </Button>
-          </div>
-        )}
         <div className="min-h-0 flex-1">{children}</div>
       </main>
-      <BottomBar hidden={isDetail} />
+      <BottomBar hidden={isDetail} onSearch={() => { setWantSearch(true); setSearchOpen(true); }} />
       {onboarding && <Suspense><SetupDialog /></Suspense>}
       {reviewPending && <TeamReview />}
       <WhatsNewDialog />

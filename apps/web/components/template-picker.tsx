@@ -8,6 +8,7 @@ import { FileText } from "lucide-react";
 import { useTemplates } from "@/lib/company-voice";
 import { useUserTemplates } from "@/lib/use-user-templates";
 import { fillVariables, type TemplateVars } from "@/lib/template-vars";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -24,9 +25,11 @@ export function TemplatePicker({ workspaceId, disabled, vars = {}, onInsert }: {
   const insert = (body: string) => onInsert(fillVariables(body, vars));
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button type="button" variant="ghost" size="icon" aria-label="Insert Template" title="Insert Template" disabled={disabled}><FileText /></Button>
-      </DropdownMenuTrigger>
+      <Tip label="Insert Template">
+        <DropdownMenuTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" aria-label="Insert Template" disabled={disabled}><FileText /></Button>
+        </DropdownMenuTrigger>
+      </Tip>
       <DropdownMenuContent align="start" className="max-h-72 w-max max-w-64 overflow-y-auto">
         {templates.length > 0 && (
           <DropdownMenuGroup>

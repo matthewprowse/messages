@@ -20,7 +20,7 @@ export function EventRow({ event, today }: { event: CalendarEvent; today: string
       data-event-row
       className="flex scroll-mt-[calc(var(--summary-header)+var(--summary-band))] items-center gap-3 rounded-lg p-3 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
     >
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
         <CalendarDays className="size-4" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">

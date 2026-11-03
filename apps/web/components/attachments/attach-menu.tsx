@@ -9,6 +9,7 @@ import { useRef } from "react";
 import { Paperclip } from "lucide-react";
 import { ICLOUD_NOTE, SOURCE_LABEL } from "@/lib/cloud-pick/config";
 import { useCloudPick, type PickRule } from "@/lib/cloud-pick/use-cloud-pick";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
@@ -32,7 +33,7 @@ export function AttachMenu({ rule, onFiles, notify, disabled, className }: { rul
   if (sources.length === 0) {
     return (
       <>
-        <Button type="button" variant="ghost" size="icon" className={className} aria-label="Attach Files" disabled={off} onClick={() => input.current?.click()}><Paperclip /></Button>
+        <Tip label="Attach Files"><Button type="button" variant="ghost" size="icon" className={className} aria-label="Attach Files" disabled={off} onClick={() => input.current?.click()}><Paperclip /></Button></Tip>
         {picker}
       </>
     );
@@ -40,9 +41,11 @@ export function AttachMenu({ rule, onFiles, notify, disabled, className }: { rul
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" className={className} aria-label="Attach Files" disabled={off}><Paperclip /></Button>
-        </DropdownMenuTrigger>
+        <Tip label="Attach Files">
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="ghost" size="icon" className={className} aria-label="Attach Files" disabled={off}><Paperclip /></Button>
+          </DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent align="start" className="w-max max-w-72">
           <DropdownMenuItem onSelect={() => input.current?.click()}>This Device</DropdownMenuItem>
           {sources.map((s) => <DropdownMenuItem key={s} onSelect={() => void pick(s)}>{SOURCE_LABEL[s]}</DropdownMenuItem>)}

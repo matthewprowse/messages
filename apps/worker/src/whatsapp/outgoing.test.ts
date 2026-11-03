@@ -22,6 +22,11 @@ test("photos, videos, audio and documents each get the right kind", () => {
   assert.ok("document" in fileMessage(file("video/quicktime")));
 });
 
+test("a converted GIF goes as a looping video with its caption", () => {
+  const gif = { filename: "Party.mp4", contentType: "video/mp4", content: Buffer.from("x"), gif: true };
+  assert.deepEqual(fileMessage(gif, "Ha"), { video: gif.content, mimetype: "video/mp4", gifPlayback: true, caption: "Ha" });
+});
+
 test("a converted voice note goes as a voice note, with its length and waveform", () => {
   const waveform = new Uint8Array(64);
   const note = { filename: "Voice Note.ogg", contentType: "audio/ogg", content: Buffer.from("x"), voice: { seconds: 7, waveform } };

@@ -32,7 +32,7 @@ export const PersonRow = memo(function PersonRow({ group, contact, query, select
       onPointerDown={() => onPress(t.id)}
       className={cn("flex items-center gap-3 rounded-lg p-3 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", selected && "bg-muted")}
     >
-      {t.isGroup ? <GroupAvatar path={t.avatarPath} className="size-8 shrink-0" /> : <ContactAvatar contact={contact} className="size-8 shrink-0" />}
+      {t.isGroup ? <GroupAvatar path={t.avatarPath} className="size-10 shrink-0" /> : <ContactAvatar contact={contact} className="size-10 shrink-0" />}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex h-5 items-center justify-between gap-3">
           <span className="flex min-w-0 items-center gap-1.5">

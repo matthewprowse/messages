@@ -50,6 +50,17 @@ export function ProviderLogo({ provider, className }: { provider: Provider | und
   return <BrandLogo brand={brand} label className={cn("size-3.5", className)} />;
 }
 
+/** The service's logo on the corner of an avatar, in a small circle of the page colour. The avatar's box must be relative. */
+export function ProviderBadge({ provider }: { provider: Provider | undefined }) {
+  const brand = provider && BY_PROVIDER[provider];
+  if (!brand) return null;
+  return (
+    <span className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-background ring-2 ring-background">
+      <BrandLogo brand={brand} label className="size-3" />
+    </span>
+  );
+}
+
 /** Google's mark, for signing in with Google and connecting Gmail and Calendar together. */
 export function GoogleLogo({ className }: { className?: string }) {
   return <BrandLogo brand="google" className={className} />;

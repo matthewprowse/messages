@@ -15,6 +15,7 @@ import { useCaptureNote } from "@/components/note-capture";
 import { Button } from "@/components/ui/button";
 import { DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** The notes linked to something, read on mount and again whenever `fresh` turns true (the list opening). Null while loading. */
 function useLinkedNotes(kind: LinkKind, id: string, fresh: boolean) {
@@ -38,9 +39,14 @@ export function NotesChip({ kind, id, title, className }: Props & { className?: 
   const count = notes?.length ?? 0;
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="secondary" className={className} aria-label={count ? `Notes, ${count}` : "Notes"}><NotebookPen />Notes{count > 0 && <span className="tabular-nums text-muted-foreground">{count}</span>}</Button>
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="icon" className={className} aria-label={count ? `Notes, ${count}` : "Notes"}><NotebookPen /></Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>Notes</TooltipContent>
+      </Tooltip>
       <PopoverContent align="end" className="flex w-72 flex-col gap-1 p-1">
         {notes === null && <p className="px-2 py-1.5 text-sm text-muted-foreground" role="status">Loading</p>}
         {notes?.length === 0 && <p className="px-2 py-1.5 text-sm text-muted-foreground">No notes yet.</p>}
@@ -50,7 +56,7 @@ export function NotesChip({ kind, id, title, className }: Props & { className?: 
             <span className="shrink-0 text-xs text-muted-foreground">{relTime(n.updatedAt)}</span>
           </Link>
         ))}
-        <Button variant="ghost" className="justify-start" onClick={() => { setOpen(false); void capture({ title, links: [{ kind, id }] }); }}><Plus />New Note</Button>
+        <Button variant="secondary" className="justify-start" onClick={() => { setOpen(false); void capture({ title, links: [{ kind, id }] }); }}><Plus />New Note</Button>
       </PopoverContent>
     </Popover>
   );

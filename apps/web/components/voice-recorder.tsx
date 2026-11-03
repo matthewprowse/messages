@@ -5,7 +5,8 @@
 // Stopping adds the recording to the reply's files, to listen to or remove before sending.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Voicemail } from "lucide-react";
+import { AudioLines, Mic } from "lucide-react";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { clock } from "@/components/media-player";
 import type { OutboxFiles } from "@/components/outbox-attachments";
@@ -117,27 +118,23 @@ export function useVoiceRecorder(files: Pick<OutboxFiles, "addVoiceNote" | "noti
 /** Speak: say what the reply should say, and the AI drafts it. On every channel. */
 export function SpeakButton({ voice, disabled }: { voice: VoiceRecorder; disabled?: boolean }) {
   return (
-    <Button type="button" variant="secondary" size="icon" aria-label="Say What To Say" title="Say What To Say" disabled={disabled || voice.recording} onClick={voice.start}>
-      <Mic />
-    </Button>
+    <Tip label="Say What To Say">
+      <Button type="button" variant="ghost" size="icon" aria-label="Say What To Say" disabled={disabled || voice.recording} onClick={voice.start}>
+        <Mic />
+      </Button>
+    </Tip>
   );
 }
 
-/** The microphone button next to the paperclip. Shown only where voice notes can be sent. */
+/** The voice note button beside Send. Shown only where voice notes can be sent. */
 export function RecordButton({ files, voice }: { files: OutboxFiles; voice: VoiceRecorder }) {
   if (files.provider !== "whatsapp") return null;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      aria-label="Record Voice Note"
-      disabled={files.disabled || files.uploading || voice.recording}
-      onClick={voice.start}
-      className="max-md:w-10 max-md:px-0"
-    >
-      {/* Icon only on phones, so the reply box's tools and Send stay on one row. */}
-      <Voicemail /><span className="max-md:hidden">Voice Note</span>
-    </Button>
+    <Tip label="Record Voice Note">
+      <Button type="button" variant="ghost" size="icon" aria-label="Record Voice Note" disabled={files.disabled || files.uploading || voice.recording} onClick={voice.start}>
+        <AudioLines />
+      </Button>
+    </Tip>
   );
 }
 

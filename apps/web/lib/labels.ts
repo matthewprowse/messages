@@ -1,8 +1,5 @@
-// User labels and saved views as plain data rules: the colour palette, tidying a typed name, which labels a thread
-// wears, and the Inbox link a saved view opens. No React, no database. The store side is app-store/use-labels.ts.
-
-import { listHref } from "./thread-list";
-import type { ListFilter, View } from "./types";
+// User labels as plain data rules: the colour palette, tidying a typed name and which labels a thread wears. No React,
+// no database. The store side is app-store/use-labels.ts.
 
 /** The stock palette names a label may use; the database check constraint lists the same ones. */
 export const LABEL_COLORS = ["gray", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink"] as const;
@@ -24,15 +21,6 @@ export interface Label {
   id: string;
   name: string;
   color: LabelColor;
-}
-
-/** A saved Inbox address: which view, which filter and which label. */
-export interface SavedView {
-  id: string;
-  name: string;
-  view: View;
-  filter: ListFilter;
-  labelId?: string;
 }
 
 /** A typed name tidied (spaces collapsed, cut to NAME_MAX), or null when nothing is left. */
@@ -86,16 +74,4 @@ export function withoutLabel(links: Map<string, string[]>, labelId: string): Map
     if (rest.length) next.set(id, rest);
   }
   return next;
-}
-
-/** The Inbox link a saved view opens. */
-export const savedViewHref = (v: SavedView) => listHref(v.view, v.filter, v.labelId);
-
-/** Whether the Inbox is showing exactly this saved view. */
-export const isShowing = (v: SavedView, view: View, filter: ListFilter, labelId: string | undefined) =>
-  v.view === view && v.filter === filter && (v.labelId ?? undefined) === labelId;
-
-/** A suggested name for saving the current Inbox view: "Priority, Unread, Client X". */
-export function suggestedViewName(viewLabel: string, filterLabel: string | undefined, labelName: string | undefined): string {
-  return [viewLabel, filterLabel, labelName].filter(Boolean).join(", ").slice(0, NAME_MAX);
 }

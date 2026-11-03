@@ -11,6 +11,7 @@ import { AppShell } from "@/components/app-shell";
 import { AnalyticsTracker } from "@/components/analytics-tracker";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { SITE_URL } from "@/lib/site";
 
 // A toast's action (Undo, Open) as a stock secondary Button at its default h-8 size, on the right of the
 // text. Sonner styles its own button with attribute selectors, so these override it with !important.
@@ -21,7 +22,10 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-geist", display: "sw
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", display: "swap", preload: false });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: { default: "Konva", template: "%s · Konva" },
+  // The app is private: only the marketing pages (app/(marketing)/layout.tsx) ask to be indexed.
+  robots: { index: false, follow: false },
   description: "One inbox for email and WhatsApp, with AI triage and drafts in your voice.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Konva" },
@@ -52,7 +56,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // The per-request nonce from middleware.ts: next-themes' inline script needs it, and reading it renders pages per request. Soft navigations skip the middleware, so it can be missing there; the layout does not re-render then.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
-    <html lang="en" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>
+    <html lang="en-ZA" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>
       <body className="font-sans">
         <ThemeProvider nonce={nonce} attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AuthProvider>

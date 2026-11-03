@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { ContactAvatar, GroupAvatar } from "@/components/primitives";
-import { ProviderLogo } from "@/components/provider-logo";
+import { ProviderBadge } from "@/components/provider-logo";
 import { WorkTag } from "@/components/work-badge";
 import { WhyTag } from "@/components/triage/why-tag";
 import { LabelItems } from "@/components/labels/label-items";
@@ -165,16 +165,16 @@ export const ThreadRow = memo(function ThreadRow({
             // While rows are checked the header has the actions, so rows show none and nothing fades.
             className={cn("flex items-center gap-3 rounded-lg p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset", !selecting && (open ? SWIPED_FADE : ROW_FADE))}
           >
-            <div className={cn("shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", selecting || open ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible pointer-fine:group-focus-within/row:invisible")}>
+            <div className={cn("relative shrink-0", lit && "[&_[data-slot=avatar-fallback]]:bg-background", selecting || open ? "invisible" : "group-hover/row:invisible group-has-focus-visible/row:invisible pointer-fine:group-focus-within/row:invisible")}>
               {/* A group's own picture, or the other person's photo. */}
-              {thread.isGroup ? <GroupAvatar path={thread.avatarPath} className="size-8" /> : <ContactAvatar contact={contact} className="size-8" />}
+              {thread.isGroup ? <GroupAvatar path={thread.avatarPath} className="size-10" /> : <ContactAvatar contact={contact} className="size-10" />}
+              <ProviderBadge provider={thread.provider} />
             </div>
             {/* 20px name line + 4px gap + 16px preview line. */}
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <div className="flex h-5 items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="min-w-0 truncate text-sm font-medium">{title}</span>
-                  <ProviderLogo provider={thread.provider} />
                   {accountName && <span className="min-w-0 shrink-[2] truncate text-xs text-muted-foreground">{accountName}</span>}
                   <WorkTag thread={thread} />
                   {/* One quiet marker for what the AI found: Urgent, or Needs Reply. */}
@@ -200,7 +200,7 @@ export const ThreadRow = memo(function ThreadRow({
             </div>
           </Link>
           {/* Over the avatar: shown on hover or when swiped open, and on every row once one is checked. */}
-          {(armed || selecting || open || checked) && <div className={cn("absolute top-1/2 left-3 size-8 -translate-y-1/2 items-center justify-center", selecting || open ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex pointer-fine:group-focus-within/row:flex")}>
+          {(armed || selecting || open || checked) && <div className={cn("absolute top-1/2 left-3 size-10 -translate-y-1/2 items-center justify-center", selecting || open ? "flex" : "hidden group-hover/row:flex group-has-focus-visible/row:flex pointer-fine:group-focus-within/row:flex")}>
             <Checkbox
               checked={checked}
               aria-label={`Select ${title}`}

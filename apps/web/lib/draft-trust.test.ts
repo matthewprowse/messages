@@ -20,8 +20,8 @@ test("nothing to check says nothing", () => {
 
 test("the audit reads as one line of counts", () => {
   const a = parseAudit({ messages: 3, facts: 2, rules: 0, replies: 0, note: false, calendar: true });
-  assert.equal(auditLine(a), "Based on: last 3 messages, 2 saved facts, your calendar");
-  assert.equal(auditLine(parseAudit({ messages: 1, facts: 1 })), "Based on: the last message, 1 saved fact");
+  assert.equal(auditLine(a), "Written from the last 3 messages, 2 saved facts and your calendar.");
+  assert.equal(auditLine(parseAudit({ messages: 1, facts: 1 })), "Written from the last message and 1 saved fact.");
   assert.equal(auditLine(parseAudit(null)), "");
   assert.equal(auditLine(parseAudit({})), "");
 });

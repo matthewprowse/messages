@@ -1,7 +1,8 @@
 "use client";
 
-// The changelog list with its filters, search, New Update and a Publish switch on each release. Shared by the Updates tab in
-// Admin and the /updates route (which stays so old links work). The owner gate is the caller's; the database refuses anyone else.
+// The changelog list with its filters, search, New Update and a Publish switch on each release, shown as the
+// Updates tab in Admin. The owner gate is the caller's; the database refuses anyone else. The public /updates page
+// shows the published ones.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Megaphone } from "lucide-react";

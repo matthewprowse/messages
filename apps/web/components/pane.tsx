@@ -12,13 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-/** The title row, with the page's one action on the right, and the controls row under it. */
+/** The 40px title row, with the page's actions (h-8 buttons) on the right, and the controls row under it. */
 export function PaneHeader({ title, action, children, className }: { title: ReactNode; action?: ReactNode; children?: ReactNode; className?: string }) {
   return (
     <div className={cn("space-y-3 border-b p-3", className)}>
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="flex h-8 min-w-0 items-center truncate text-lg font-medium">{title}</h1>
-        {action}
+      <div className="flex h-10 items-center justify-between gap-3">
+        <h1 className="min-w-0 truncate text-xl font-medium">{title}</h1>
+        {action && <div className="flex shrink-0 items-center gap-1">{action}</div>}
       </div>
       {children}
     </div>
@@ -98,7 +98,7 @@ export function PaneSelect({ value, onChange, options, label, placeholder, class
 }
 
 /** The search, in a band of its own under the header, with the magnifier. */
-export function SearchBand({ value, onChange, placeholder, inputRef, onKeyDown, maxLength, className, hint, keyShortcut }: {
+export function SearchBand({ value, onChange, placeholder, inputRef, onKeyDown, maxLength, className, inputClassName, hint, keyShortcut }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
@@ -106,6 +106,7 @@ export function SearchBand({ value, onChange, placeholder, inputRef, onKeyDown, 
   onKeyDown?: KeyboardEventHandler<HTMLInputElement>;
   maxLength?: number;
   className?: string;
+  inputClassName?: string;
   /** What a hover says, such as the shortcut that jumps here. */
   hint?: ReactNode;
   keyShortcut?: string;
@@ -114,7 +115,7 @@ export function SearchBand({ value, onChange, placeholder, inputRef, onKeyDown, 
     <Input
           ref={inputRef}
           type="search"
-          className="pl-8"
+          className={cn("pl-8", inputClassName)}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown ?? ((e) => { if (e.key === "Escape" && value) { e.stopPropagation(); onChange(""); } })}

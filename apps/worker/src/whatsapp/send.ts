@@ -18,6 +18,7 @@ import { checkLimits, type Pacer, type Rails } from "./send-rails";
 import { sendFailureReason } from "./send-reason";
 import { linkNewChat, newChatTarget, quotable, replyTarget } from "./send-target";
 import { prepareVoiceNotes } from "./voice-note";
+import { prepareGifs } from "./gif";
 
 /** The rails an account sends under: the limits, and its own pacing between messages. */
 export interface Pace {
@@ -92,7 +93,8 @@ export async function sendQueued(
       await markFailed(row.id, files.error);
       return;
     }
-    const ready = await prepareVoiceNotes(files, { account: ctx.accountId, outbox: row.id });
+    const voiced = await prepareVoiceNotes(files, { account: ctx.accountId, outbox: row.id });
+    const ready = "error" in voiced ? voiced : await prepareGifs(voiced, { account: ctx.accountId, outbox: row.id });
     if ("error" in ready) {
       await markFailed(row.id, ready.error);
       return;

@@ -8,14 +8,12 @@ import { ArrowLeft, MoreHorizontal } from "lucide-react";
 import { refreshMyTeam } from "@/lib/share";
 import { useApp } from "@/lib/store";
 import type { Contact, Thread } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ThreadAvatar } from "@/components/primitives";
-import { ProviderLogo } from "@/components/provider-logo";
 import { ShareBadge, ShareItems, useThreadShare } from "@/components/work-badge";
 import { NotesChip, NotesMenuItem } from "@/components/notes-chip";
 import { ScheduleButton } from "@/components/schedule-button";
+import { AvatarZoom } from "@/components/thread-view/avatar-zoom";
 import { ChannelTabs } from "@/components/thread-view/channel-tabs";
 import { TriageNotes } from "@/components/triage/triage-notes";
 import { LabelItems } from "@/components/labels/label-items";
@@ -54,37 +52,33 @@ export function ThreadHeader({ thread, primary, title, subtitle, address, backHr
   const [scheduling, setScheduling] = useState(false);
   return (
     <>
-      <header className="flex shrink-0 items-center gap-2 border-b bg-background p-3 md:px-4">
+      <header className="flex shrink-0 items-center gap-2 p-3 md:px-4">
         <Button variant="ghost" size="icon" className="md:hidden" asChild aria-label="Back">
           <Link href={backHref}><ArrowLeft /></Link>
         </Button>
         <div className="min-w-0 flex-1">
-          {/* The avatar and name open the person's contact page. */}
-          {(() => {
-            const who = (
-              <>
-                <ThreadAvatar thread={thread} contacts={contactById} className="size-8" />
-                <div className="min-w-0">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-sm font-medium">{title}</span>
-                    <ProviderLogo provider={thread.provider} />
-                  </div>
+          {/* The avatar opens the photo; the name opens the person's contact page. */}
+          <div className="flex h-10 w-fit max-w-full min-w-0 items-center gap-3">
+            <AvatarZoom thread={thread} contacts={contactById} title={title} />
+            {(() => {
+              const who = (
+                <>
+                  <div className="truncate text-sm font-medium">{title}</div>
                   {subtitle && <div className="truncate text-xs text-muted-foreground" title={address}>{subtitle}</div>}
-                </div>
-              </>
-            );
-            const cls = "flex w-fit max-w-full min-w-0 items-center gap-3";
-            return primary
-              ? <Link href={`/contacts/${primary.id}`} aria-label={`View ${title}`} className={cn(cls, "rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50")}>{who}</Link>
-              : <div className={cls}>{who}</div>;
-          })()}
+                </>
+              );
+              return primary
+                ? <Link href={`/contacts/${primary.id}`} aria-label={`View ${title}`} className="block min-w-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{who}</Link>
+                : <div className="min-w-0">{who}</div>;
+            })()}
+          </div>
         </div>
         <ChannelTabs thread={thread} person={primary} hrefFor={hrefFor} />
         <ShareBadge share={share} className="max-md:hidden" />
         <ScheduleButton thread={thread} className="max-md:hidden" open={scheduling} onOpenChange={setScheduling} />
         <NotesChip kind="thread" id={thread.id} title={thread.subject} className="max-md:hidden" />
         <DropdownMenu onOpenChange={(open) => open && share.shown && refreshMyTeam()}>
-          <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-max">
             {/* Phones only: what sits in the header beside this menu on wider screens. */}
             <NotesMenuItem kind="thread" id={thread.id} title={thread.subject} className="md:hidden" />

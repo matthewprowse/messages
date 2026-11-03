@@ -10,6 +10,7 @@ import { loadEvents } from "@/lib/calendar";
 import { freeSlots } from "@/lib/choices";
 import { suggestTimesText } from "@/lib/suggest-times";
 import { track } from "@/lib/analytics";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 
 const WEEK_MS = 8 * 24 * 60 * 60_000; // a day more than freeSlots looks ahead, so the last day is covered
@@ -32,5 +33,5 @@ export function SuggestTimesButton({ disabled, onInsert }: { disabled?: boolean;
       setBusy(false);
     }
   };
-  return <Button type="button" variant="ghost" size="icon" aria-label="Suggest Times" title="Suggest Times" disabled={disabled || busy} onClick={suggest}><CalendarClock /></Button>;
+  return <Tip label="Suggest Times"><Button type="button" variant="ghost" size="icon" aria-label="Suggest Times" disabled={disabled || busy} onClick={suggest}><CalendarClock /></Button></Tip>;
 }
