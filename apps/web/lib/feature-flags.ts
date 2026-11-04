@@ -8,7 +8,7 @@ export interface FlagInfo { key: string; label: string; area: string }
 export const FLAGS: FlagInfo[] = [
   { key: "pause_all_ai", label: "Pause All AI", area: "AI" },
   { key: "pause_predrafts", label: "Pause Pre-Drafts", area: "AI" },
-  { key: "pause_documents", label: "Pause Document Cards", area: "AI" },
+  { key: "pause_documents", label: "Pause Reading Documents", area: "AI" },
   { key: "pause_automations", label: "Pause Automations", area: "AI" },
   { key: "disable_connector_instagram", label: "Disable Instagram Connector", area: "Connectors" },
   { key: "disable_connector_linkedin", label: "Disable LinkedIn Connector", area: "Connectors" },

@@ -450,6 +450,9 @@ class FakeVault:
     def credential_key_for(self, user_id):
         return bytes(range(32))
 
+    def credential_keys_for(self, user_id):
+        return [bytes(range(32))]
+
 
 def real_store(db):
     store = Store(db, FakeVault(), encryption_key=KEY)
@@ -527,8 +530,14 @@ class Storing(unittest.TestCase):
         store = real_store(db)
         self.assertEqual([r["id"] for r in store.claimed_updates("acc", "u")], ["a", "b"])
         self.assertEqual(len(db.calls), 3)
-        store.vault.open = lambda user, field, value: None if value is None else f"open:{field}:{value}"
-        self.assertEqual(store.open_task_text({"user_id": "u", "title": "x", "notes": None}), (f"open:{TASK_TITLE}:x", None))
+        store.vault.open_bound = lambda user, field, value, places, row: None if value is None else f"open:{field}:{places[0]}:{row}:{value}"
+        self.assertEqual(store.open_task_text({"id": "up", "user_id": "u", "title": "x", "notes": None}), (f"open:{TASK_TITLE}:task_updates.title:up:x", None))
+
+        def refuse(user, field, value, places, row):
+            raise ValueError("sealed_elsewhere")
+
+        store.vault.open_bound = refuse
+        self.assertIsNone(store.open_task_text({"id": "up", "user_id": "u", "title": "x", "notes": None}))
 
     def test_the_password_is_dropped_and_the_session_is_sealed(self):
         db = FakeDb()

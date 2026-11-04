@@ -14,7 +14,19 @@ export const BULK_TEXT = {
 export interface ReadableBulk {
   summary: string;
   points: string[];
-  links: { label: string; url: string }[];
+  /** host is the site the link really opens, read from url here, never from what the AI wrote: the label is the model's
+   * words about an email a stranger sent, so the host is what tells a person where a click goes. */
+  links: { label: string; url: string; host: string }[];
+}
+
+/** The site a web address opens, without "www.", or null when it is not a usable http(s) address. */
+export function linkHost(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "https:" || u.protocol === "http:") && u.hostname ? u.hostname.replace(/^www\./, "") : null;
+  } catch {
+    return null;
+  }
 }
 
 /** message_ai.bulk_read, opened, as a readable version: null when it is missing or not in the expected shape. Only web addresses are kept. */
@@ -31,7 +43,7 @@ export function parseBulkRead(json: string | null | undefined): ReadableBulk | n
   const links = (Array.isArray(raw.links) ? raw.links : []).filter(
     (l): l is { label: string; url: string } => !!l && typeof l.label === "string" && l.label.trim() !== "" && typeof l.url === "string" && /^https?:\/\//i.test(l.url),
   );
-  return { summary: raw.summary, points, links: links.map((l) => ({ label: l.label, url: l.url })) };
+  return { summary: raw.summary, points, links: links.flatMap((l) => { const host = linkHost(l.url); return host ? [{ label: l.label, url: l.url, host }] : []; }) };
 }
 
 /** Whether to offer a readable version: bulk email that has not been cut down to a preview. */

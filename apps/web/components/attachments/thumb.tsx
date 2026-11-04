@@ -4,7 +4,7 @@
 // its small sealed thumbnail and, until the worker has made one, the file icon: a tile never downloads the whole file.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { mimeFor, isNotePath, isTeamFilePath, reportThumb, thumbsEnabled, useSignedUrl, useThumbUrl } from "@/lib/signed-urls";
+import { mimeFor, isBrowserSealedPath, isTeamFilePath, reportThumb, thumbsEnabled, useSignedUrl, useThumbUrl } from "@/lib/signed-urls";
 import { ATTACHMENT_BUCKET as BUCKET } from "@/lib/attachment-view";
 import type { Attachment } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,8 +16,8 @@ import { useSeen } from "./use-seen";
 export function Thumb({ attachment: a, onReady }: { attachment: Attachment; /** Called with "picture" once a picture has loaded, or "glyph" when the tile shows the file type's icon. */ onReady?: (kind: "picture" | "glyph") => void }) {
   // A sealed photo or PDF is encrypted, so Storage cannot resize it: the worker stores a small sealed copy beside it. Until that
   // exists the tile shows the file icon rather than downloading and decrypting the whole file to draw 96 pixels. Note files
-  // (sealed in the browser) and a team's copies (no thumbnail is made for them) are still opened whole.
-  const lazySealed = !!a.sealed && !isNotePath(a.path) && !isTeamFilePath(a.path) && (a.kind === "image" || a.kind === "pdf");
+  // and outgoing files (sealed in the browser) and a team's copies (no thumbnail is made for them) are still opened whole.
+  const lazySealed = !!a.sealed && !isBrowserSealedPath(a.path) && !isTeamFilePath(a.path) && (a.kind === "image" || a.kind === "pdf");
   const pictured = !!a.path && (a.kind === "image" || a.kind === "pdf") && !(lazySealed && !a.thumbPath);
   // Links are only asked for, and images only downloaded, once a tile scrolls near the screen.
   // The browser's own lazy loading is not used: it does not fire in every webview.
@@ -28,7 +28,7 @@ export function Thumb({ attachment: a, onReady }: { attachment: Attachment; /** 
   const [stage, setStage] = useState<"thumb" | "small" | "original">(hasThumb ? "thumb" : "small");
   const fellBack = useRef(false);
   // Note files and sealed attachments are encrypted, so Storage cannot resize them: without a thumbnail the picture comes from the opened file.
-  const small = a.kind === "image" && stage === "small" && thumbsEnabled() && !isNotePath(a.path) && !a.sealed;
+  const small = a.kind === "image" && stage === "small" && thumbsEnabled() && !isBrowserSealedPath(a.path) && !a.sealed;
   const sealedThumb = stage === "thumb" && hasThumb;
   const thumbUrl = useThumbUrl(a.id, sealedThumb && seen ? a.thumbPath : undefined);
   // The thumbnail could not be opened: the tile keeps the file icon.

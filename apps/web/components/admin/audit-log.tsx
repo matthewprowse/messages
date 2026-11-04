@@ -31,7 +31,7 @@ export function AuditLog({ version, onBusy }: { version: number; onBusy: (busy: 
   if (rows === null) return <LoadingCard title="Audit Log" rows={3} />;
   return (
     <Card title="Audit Log">
-      {rows.length === 0 ? <Quiet>Nothing Yet</Quiet> : (
+      {rows.length === 0 ? <Quiet>Nothing changed in Admin yet. Saving the AI budget, a flag or the daily alert, deciding a request and changing seats are recorded here.</Quiet> : (
         <Separated>
           {rows.map((r) => {
             const changes = auditChanges(r.old_value, r.new_value);

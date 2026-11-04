@@ -1,7 +1,7 @@
 "use client";
 
 // Settings page for connecting Microsoft (Outlook, Calendar, To Do, Teams): in-app sign-in, an admin-approval link when a
-// work account needs one, then the per-part status from the worker. The form and the status list are shared with Google
+// work account needs one (from /api/connect/microsoft/admin-link, never from the address), then the per-part status from the worker. The form and the status list are shared with Google
 // (connect-family.tsx).
 
 import { Suspense, useEffect, useState } from "react";
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { SettingsBody, SettingsSection } from "@/components/settings/primitives";
 import { SettingsPage } from "@/components/settings/settings-page";
 import { ConnectForm, PartsStatus, type Part } from "@/components/settings/connect-family";
+import { isAdminLink } from "@/app/api/connect/microsoft/shared";
 
 const PARTS: Part[] = [
   { provider: "outlook", label: "Outlook" },
@@ -30,6 +31,18 @@ export default function MicrosoftSetup() {
       <PartsStatus parts={PARTS} goToInbox="outlook" />
     </SettingsPage>
   );
+}
+
+/** The address an IT admin opens to approve the app, from our own server and checked again here, or null when there is none. */
+async function adminApprovalLink(teams: boolean, calendarWrite: boolean): Promise<string | null> {
+  try {
+    const query = new URLSearchParams({ ...(teams ? { teams: "1" } : {}), ...(calendarWrite ? { calendar_write: "1" } : {}) });
+    const res = await fetch(`/api/connect/microsoft/admin-link?${query}`, { cache: "no-store" });
+    const link = res.ok ? ((await res.json()) as { link?: unknown }).link : null;
+    return typeof link === "string" && isAdminLink(link, process.env.NEXT_PUBLIC_MICROSOFT_CLIENT_ID?.trim() || undefined) ? link : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Off to Microsoft's sign-in and back here, with the outcome in the address. */
@@ -55,8 +68,8 @@ function ConnectMicrosoft() {
       track("account_connect", { provider: "microsoft", step: "app", outcome: "done" });
     } else if (failed) {
       setError(microsoftErrorText(failed));
-      const admin = params.get("admin");
-      if (failed === "admin_approval" && admin?.startsWith("https://login.microsoftonline.com/")) setAdminLink(admin);
+      // Only which permissions were asked comes from the address; the link is built by the server from our own client id.
+      if (failed === "admin_approval") void adminApprovalLink(params.get("admin_teams") === "1", params.get("admin_calendar_write") === "1").then(setAdminLink);
       track("account_connect", { provider: "microsoft", step: "app", outcome: "failed", code: failed });
     } else return;
     router.replace("/settings/accounts/microsoft");

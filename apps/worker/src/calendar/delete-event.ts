@@ -5,6 +5,7 @@ import type { Tables } from "@messages/db";
 import { db, must, retryWrite } from "../db";
 import { readQueued } from "../in-chunks";
 import { errorCode, log } from "../log";
+import { openEvent } from "./sealed";
 
 export type CalendarDeleteRow = Tables<"calendar_deletes">;
 export type StoredCalendarEvent = Tables<"calendar_events">;
@@ -26,10 +27,11 @@ export async function failDelete(id: string, reason: string) {
   );
 }
 
-/** The stored event a delete is for, or null once it is gone. */
+/** The stored event a delete is for, opened (an iCloud delete needs its file's address), or null once it is gone. */
 export async function storedEventOf(row: CalendarDeleteRow): Promise<StoredCalendarEvent | null> {
   if (!row.event_id) return null;
-  return must(await db.from("calendar_events").select("*").eq("id", row.event_id).eq("account_id", row.account_id).maybeSingle(), "load event to delete");
+  const stored = must(await db.from("calendar_events").select("*").eq("id", row.event_id).eq("account_id", row.account_id).maybeSingle(), "load event to delete");
+  return stored ? await openEvent(stored.user_id, stored) : null;
 }
 
 /**

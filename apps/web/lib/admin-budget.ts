@@ -119,14 +119,17 @@ export function projectMonth(total: number, now: Date): number | null {
   return (total / day) * days;
 }
 
-export interface UsageSummaryRow { month_usd: number; flag: string | null; paused: string[] }
+export interface UsageSummaryRow { month_usd: number; setup_usd?: number; flag: string | null; paused: string[] }
 
-/** The strip at the top of AI Usage: spend, flagged accounts, people with a feature paused, and how many people per feature. */
+/**
+ * The strip at the top of AI Usage: spend, flagged accounts, people with a feature paused, and how many people per feature.
+ * The spend is the whole bill so far, setup work included, so it agrees with the AI view's month card.
+ */
 export function usageSummary(rows: UsageSummaryRow[]): { total: number; flagged: number; paused: number; byFeature: [string, number][] } {
   const byFeature = new Map<string, number>();
   for (const r of rows) for (const f of r.paused) byFeature.set(f, (byFeature.get(f) ?? 0) + 1);
   return {
-    total: rows.reduce((n, r) => n + r.month_usd, 0),
+    total: rows.reduce((n, r) => n + r.month_usd + (r.setup_usd ?? 0), 0),
     flagged: rows.filter((r) => r.flag).length,
     paused: rows.filter((r) => r.paused.length > 0).length,
     byFeature: [...byFeature.entries()].sort((a, b) => b[1] - a[1]),

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import log
-from .bulk_read_text import SCHEMA, SYSTEM, check_answer, extract_links, html_text, prompt, readable_text
+from .bulk_read_text import SCHEMA, SYSTEM, check_answer, extract_links, html_text, own_links, prompt, readable_text
 from .fields import ADDRESS, BODY, BULK_READ, HTML, SUBJECT
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import billing_paused
@@ -40,6 +40,12 @@ def has_result(message_ai: Any) -> bool:
     """Whether message_ai already holds a readable version (the embed comes back as one row or a list of one)."""
     row = message_ai[0] if isinstance(message_ai, list) and message_ai else message_ai
     return isinstance(row, dict) and bool(row.get("bulk_read"))
+
+
+def suspicious(message_ai: Any) -> Any:
+    """Triage's suspicious flag (payment_change, phishing, impersonation) from the embed, or None."""
+    row = message_ai[0] if isinstance(message_ai, list) and message_ai else message_ai
+    return row.get("suspicious") if isinstance(row, dict) else None
 
 
 class BulkRead:
@@ -78,7 +84,7 @@ class BulkRead:
         m = self.db.first(
             "messages",
             {
-                "select": "id,user_id,account_id,thread_id,subject,sender_address,is_bulk,body_text,body_html,body_shrunk_at,message_ai(message_id,bulk_read)",
+                "select": "id,user_id,account_id,thread_id,subject,sender_address,is_bulk,body_text,body_html,body_shrunk_at,message_ai(message_id,bulk_read,suspicious)",
                 "id": f"eq.{message_id}",
             },
         )
@@ -101,7 +107,8 @@ class BulkRead:
         text = m.get("body_text") or ""
         if not text.strip():  # an HTML-only email: its links and figures come from the HTML
             text = html_text(m.get("body_html"))
-        links = extract_links(text)
+        # Only the sender's own links, and none at all for mail triage thought suspicious: a button looks trusted.
+        links = own_links(extract_links(text), m.get("sender_address"), suspicious(m.get("message_ai")))
         body = readable_text(text)
         if len(body) < 20:
             self._fail(m["id"], UNREADABLE["empty"])

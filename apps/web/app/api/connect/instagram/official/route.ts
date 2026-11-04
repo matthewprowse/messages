@@ -4,7 +4,7 @@
 // With { check: true } it only says whether this server is set up for it, so the page can say so before asking.
 
 import { randomBytes } from "node:crypto";
-import { accountsReady, sealJson } from "@/lib/server/accounts";
+import { accountsReady, sealHandoff } from "@/lib/server/accounts";
 import { authUrl, instagramReady } from "@/lib/server/instagram";
 import { appOrigin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser } from "@/lib/server/request";
 import { INSTAGRAM_COOKIE, type InstagramSignIn } from "./shared";
@@ -28,12 +28,15 @@ export async function POST(request: Request) {
   const signIn: InstagramSignIn = { userId: user.id, state, expires: Date.now() + 10 * 60_000 };
   const url = authUrl({ redirectUri: `${appOrigin(request)}/api/connect/instagram/official/callback`, state });
 
+  // Sealed under the person's own key (lib/server/handoff.ts), which can be a KMS call.
+  const sealed = await sealHandoff(signIn, "instagram_connect").catch(() => null);
+  if (!sealed) return fail(500, "Could not start the sign-in. Try again.");
   const secure = appOrigin(request).startsWith("https:") ? "; Secure" : "";
   return Response.json({ url }, {
     headers: {
       ...noStore,
       // Lax, so it comes back on Instagram's top-level redirect to the callback.
-      "Set-Cookie": `${INSTAGRAM_COOKIE}=${sealJson(signIn)}; Path=/api/connect/instagram/official; Max-Age=600; HttpOnly; SameSite=Lax${secure}`,
+      "Set-Cookie": `${INSTAGRAM_COOKIE}=${sealed}; Path=/api/connect/instagram/official; Max-Age=600; HttpOnly; SameSite=Lax${secure}`,
     },
   });
 }

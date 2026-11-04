@@ -27,7 +27,19 @@ export function signInProblem(signIn: MicrosoftSignIn | null, params: URLSearchP
   return null;
 }
 
-/** Only an address on Microsoft's own sign-in host is passed back to the page as the admin approval link. */
-export function isAdminLink(value: string | null): value is string {
-  return !!value && value.startsWith("https://login.microsoftonline.com/");
+/**
+ * True only for Microsoft's admin consent address for this app: https://login.microsoftonline.com/<tenant>/v2.0/adminconsent,
+ * the fixed redirect, and when clientId is given, that client id. Anything else is never shown as the link to send an IT
+ * admin, since approving someone else's app there would hand it the whole organisation's mail.
+ */
+export function isAdminLink(value: string | null | undefined, clientId?: string): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.origin === "https://login.microsoftonline.com" && /^\/[A-Za-z0-9.-]{1,100}\/v2\.0\/adminconsent$/.test(url.pathname)
+      && !url.username && !url.password && !url.hash && url.searchParams.get("redirect_uri") === "http://localhost"
+      && !!url.searchParams.get("client_id") && (!clientId || url.searchParams.get("client_id") === clientId);
+  } catch {
+    return false;
+  }
 }

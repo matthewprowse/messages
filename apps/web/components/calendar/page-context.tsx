@@ -3,25 +3,12 @@
 // The calendar page's shared context (dialogs, selection) and the wide-screen check.
 
 
-import { createContext, useSyncExternalStore } from "react";
+import { createContext } from "react";
 import { type CalendarEvent, type EventResponse, type UpdateScope } from "@/lib/calendar";
 import type { Provider, Task } from "@/lib/types";
 
-
-export const WIDE = "(min-width: 768px)";
-
-/** True from the md breakpoint up, where the page is a split and not one scrolling column. */
-export function useWide() {
-  return useSyncExternalStore(
-    (notify) => {
-      const query = window.matchMedia(WIDE);
-      query.addEventListener("change", notify);
-      return () => query.removeEventListener("change", notify);
-    },
-    () => window.matchMedia(WIDE).matches,
-    () => true,
-  );
-}
+// The wide-screen check now lives in lib/use-wide.ts, shared with the split layouts; re-exported for the calendar's imports.
+export { WIDE, useWide } from "@/lib/use-wide";
 
 /**
  * The current time, ticking every minute. Kept apart from the page context so the tick re-renders only what draws the

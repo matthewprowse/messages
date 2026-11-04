@@ -2,7 +2,8 @@
 // connectors store to the rest of the app. Those connectors only write meetings and meeting_participants;
 // this finds, for meetings from the last LOOKBACK_DAYS:
 //   - each participant's contact, by their email address's blind index, as calendar guests are found;
-//   - each meeting's calendar event, by join link and then by time and shared guests (match.ts).
+//   - each meeting's calendar event, by join link and then by time and shared guests (match.ts). Links and guests
+//     are sealed, so the events in the hours around a meeting are read and opened here, never matched in SQL.
 // A meeting whose people were just matched is touched, so the app (subscribed to meetings over Realtime)
 // shows it in their conversations at once. Something not matched is tried again after RETRY_MS: the
 // person may become a contact, or the event may sync, later.
@@ -14,6 +15,7 @@ import { allRows, db, must } from "../db";
 import { errorCode, log } from "../log";
 import { chunks, mapLimit, push } from "../util";
 import { keysFor, open } from "../vault";
+import { openEvent } from "../calendar/sealed";
 import { eventEmails, LINK_WINDOW_MS, matchEvent, participantEmail } from "./match";
 
 const FIRST_RUN_MS = 60_000;
@@ -144,7 +146,8 @@ async function linkEvents(since: string, now: number): Promise<{ linked: number 
   await mapLimit(meetings, EVENTS_AT_ONCE, async (m) => {
     try {
       const start = Date.parse(m.started_at);
-      const events = must(
+      // Join links and guests are sealed, so the events around the meeting are opened here to compare.
+      const sealed = must(
         await db
           .from("calendar_events")
           .select("id, starts_at, ends_at, all_day, conference_url, attendees")
@@ -155,9 +158,11 @@ async function linkEvents(since: string, now: number): Promise<{ linked: number 
           .limit(500),
         "load events for a meeting",
       );
+      const events = await Promise.all(sealed.map((e) => openEvent(m.user_id, e)));
       const meta = (m.provider_meta ?? {}) as { join_url?: unknown };
+      const joinUrl = typeof meta.join_url === "string" ? await open(m.user_id, FIELD.eventLink, meta.join_url) : null;
       const id = matchEvent(
-        { startedAt: m.started_at, endedAt: m.ended_at, joinUrl: typeof meta.join_url === "string" ? meta.join_url : null, emails: emailsOf.get(m.id) ?? [] },
+        { startedAt: m.started_at, endedAt: m.ended_at, joinUrl: joinUrl || null, emails: emailsOf.get(m.id) ?? [] },
         events.map((e) => ({ id: e.id, startsAt: e.starts_at, endsAt: e.ends_at, allDay: e.all_day, conferenceUrl: e.conference_url, emails: eventEmails(e.attendees) })),
       );
       if (!id) {

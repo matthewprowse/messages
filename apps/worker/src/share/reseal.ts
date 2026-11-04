@@ -22,8 +22,11 @@ export interface Move {
   workspaceId: string;
 }
 
-// Each column with the kind of text it holds (fields.ts). Plain text is moved as well as sealed text.
-export const THREAD_TEXT = [["subject", FIELD.subject], ["last_message_preview", FIELD.preview], ["summary", FIELD.summary]] as const;
+// Each column with the kind of text it holds (fields.ts). Plain text is moved as well as sealed text. A group's name is
+// shown to the team with the chat, so it moves with it (public.thread_needs_team_seal checks it too).
+export const THREAD_TEXT = [["subject", FIELD.subject], ["group_name", FIELD.name], ["last_message_preview", FIELD.preview], ["summary", FIELD.summary]] as const;
+/** Thread columns that name the chat and always move, whichever message is the latest. */
+const NAMES_CHAT = new Set<string>(["subject", "group_name"]);
 export const MESSAGE_TEXT = [
   ["subject", FIELD.subject], ["preview", FIELD.preview], ["body_text", FIELD.body], ["body_html", FIELD.html],
   ["list_unsubscribe", FIELD.unsubscribe], ["body_marks", FIELD.marks], ["transcript", FIELD.transcript],
@@ -166,7 +169,7 @@ export function shareLabel(source: LabelSource): string {
 }
 
 /**
- * What to write for the chat's own row. Its subject names the chat and always moves; its preview and summary move
+ * What to write for the chat's own row. Its subject and group name name the chat and always move; its preview and summary move
  * only once its latest message is shared (a chat shared from today keeps an older preview under the agent's key until a
  * shared message replaces it). The label is made when going to work and cleared when going back. null when nothing changes.
  */
@@ -174,7 +177,7 @@ export async function moveThread(keys: Keys, move: Move, row: ThreadRow, label: 
   const changes = new Changes();
   const latest = move.direction === "to_personal" || latestIsShared(row);
   for (const [column, field] of THREAD_TEXT) {
-    if (column !== "subject" && !latest) continue;
+    if (!NAMES_CHAT.has(column) && !latest) continue;
     changes.note(column, row[column], await moveValue(keys, move, field, row[column]));
   }
   if (move.direction === "to_work") {

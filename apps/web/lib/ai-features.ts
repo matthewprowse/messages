@@ -7,9 +7,10 @@ export const AI_FEATURES: { key: string; label: string; note: string }[] = [
   { key: "draft", label: "Drafts", note: "Automatic and on-request drafts, regenerations and voice drafts." },
   { key: "learn", label: "Learning From Edits", note: "Reads your edits and embeds mail for search." },
   { key: "brief", label: "Daily Brief", note: "The daily brief and its spoken version." },
-  { key: "transcribe", label: "Transcripts", note: "Voice note and meeting transcripts." },
+  { key: "transcribe", label: "Meeting Transcripts", note: "Meeting transcripts and summaries." },
+  { key: "voice_notes", label: "Voice Notes", note: "Voice note transcripts. Notes from people you have never written to wait until you reply or tap Transcribe." },
   { key: "bulk_read", label: "Readable Bulk Email", note: "The short readable version of a newsletter or marketing email, made when it is opened." },
-  { key: "documents", label: "Document Cards", note: "The type, amount and due date read from a PDF or scanned document, for files you ask about and files from your contacts." },
+  { key: "documents", label: "Reading Documents", note: "Reads the type, amount and due date out of a PDF or scanned document (an invoice, a quote), for files you ask about and files from your contacts." },
   { key: "automations", label: "Automations", note: "Reading a lead's details out of an enquiry email, only for a custom automation or when a portal changes its email." },
 ];
 

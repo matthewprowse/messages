@@ -18,6 +18,7 @@ import { allRows, db, must } from "../src/db";
 import { planOpen, planSeal } from "../src/backfill/files";
 import { ATTACHMENTS_BUCKET, storedType, uploadObject } from "../src/storage";
 import { keysFor } from "../src/vault";
+import { env } from "../src/env";
 
 const args = process.argv.slice(2);
 const decrypt = args.includes("--decrypt");
@@ -65,7 +66,8 @@ for (const [path, group] of byPath) {
     if (error || !data) throw new Error("download failed");
     const stored = new Uint8Array(await data.arrayBuffer());
     const keys = await keysFor(first.user_id);
-    const plan = decrypt ? await planOpen(keys, stored) : await planSeal(keys, stored);
+    const where = `${ATTACHMENTS_BUCKET}/${path}`;
+    const plan = decrypt ? await planOpen(keys, stored, where) : await planSeal(keys, stored, where, env.sealBoundFields);
     if (plan.upload) {
       await uploadObject(ATTACHMENTS_BUCKET, path, Buffer.from(plan.upload), decrypt ? storedType(first.mime_type) : "application/octet-stream");
       sealedNow++;

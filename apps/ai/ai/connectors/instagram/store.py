@@ -17,18 +17,22 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from ... import log
 from ...analytics import Analytics, event
-from ...crypto import encrypt_bytes
-from ...fields import ADDRESS, ATTACHMENT_DATA, BODY, FILENAME
+from ...crypto import encrypt_bytes, encrypt_bytes_at
+from ...fields import ADDRESS, ATTACHMENT_DATA, BODY, FILENAME, NAME, OUTBOX_FILE_DATA
 from ...supabase import Supabase, SupabaseError
 from ...tls import CONTEXT
-from ...vault import Vault
+from ...vault import KeyUnavailable, Vault
 from .credentials import OFFICIAL, PRIVATE
-from .sealing import AccountSealer, UserSealer, ensure_user_key, open_json
+from .sealing import AccountSealer, UserSealer, ensure_user_key, open_handoff, open_legacy
 
 BUCKET = "attachments"
+# What a queued row whose text, recipient or files were not sealed for it is failed with (the worker's UNVERIFIED).
+UNVERIFIED = "Nothing was sent: this message could not be verified. Write it again."
+CODE_KEEP_S = 10 * 60  # a typed sign-in code nobody took is cleared after this (the app's write sets updated_at)
 MAX_FILE_BYTES = 50 * 1024 * 1024  # the sync worker's limit, Supabase's default upload limit
 INLINE = ("image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "audio/mp4")
 MB = 1024 * 1024
@@ -117,7 +121,7 @@ class Store:
     def __init__(self, db: Supabase, vault: Vault, *, encryption_key: str, key_wrapping_key: str, encrypt_addresses: bool):
         self.db = db
         self.vault = vault
-        self.encryption_key = encryption_key  # the old static key: reads "v1:" values and the web app's short-lived sign-in codes
+        self.encryption_key = encryption_key  # the old static key: reads "v1:" values made before per-user keys; empty once retired
         self.key_wrapping_key = key_wrapping_key
         self.encrypt_addresses = encrypt_addresses
         self.analytics = Analytics(db)
@@ -180,6 +184,12 @@ class Store:
             if not before.get("last_synced_at"):
                 started = datetime.fromisoformat(str(before.get("created_at")).replace("Z", "+00:00"))
                 self.emit(user, "first_sync_done", provider="instagram", secs=round(max(0.0, (datetime.now(timezone.utc) - started).total_seconds())))
+
+    def clear_stale_codes(self, at: datetime | None = None) -> None:
+        """Takes sign-in codes nobody collected (typed after the sign-in gave up) off instagram_sign_ins once they are
+        CODE_KEEP_S old. A code is taken within seconds while a sign-in waits, so a live one is never lost."""
+        before = ((at or datetime.now(timezone.utc)) - timedelta(seconds=CODE_KEEP_S)).isoformat()
+        self.db.update("instagram_sign_ins", {"code": "not.is.null", "updated_at": f"lt.{before}"}, {"code": None}, minimal=True)
 
     def set_detail(self, account_id: str, detail: str | None) -> None:
         self.db.update("accounts", {"id": f"eq.{account_id}"}, {"status_detail": detail}, minimal=True)
@@ -298,8 +308,9 @@ class Store:
         content_type = mime_type if mime_type in INLINE else "application/octet-stream"
         if sealing:
             # Sealed before upload, in the format of packages/crypto encryptBytes (what the sync worker does for
-            # WhatsApp files), under the attachment_data field. The stored type is generic: the real one is on the row.
-            data = encrypt_bytes(keys, ATTACHMENT_DATA, data)  # type: ignore[arg-type]
+            # WhatsApp files), under the attachment_data field, bound to its place once SEAL_BOUND_FIELDS is on. The
+            # stored type is generic: the real one is on the row.
+            data = encrypt_bytes_at(keys, ATTACHMENT_DATA, f"{BUCKET}/{path}", data) if self.vault.seal_bound else encrypt_bytes(keys, ATTACHMENT_DATA, data)  # type: ignore[arg-type]
             content_type = "application/octet-stream"
         self.db.upload(BUCKET, path, data, content_type)
         self.db.update("attachments", {"id": f"eq.{attachment_id}"}, {"storage_path": path, "sealed": sealing, "content_hash": digest, "size_bytes": size, "not_kept": None}, minimal=True)
@@ -387,6 +398,37 @@ class Store:
                 return None
             raise
 
+    def open_outbox_file(self, user_id: str, data: bytes, path: str) -> bytes | None:
+        """An uploaded file's plain bytes, opened strictly for the path it was read from: sealed by the app
+        (OUTBOX_FILE_DATA, bound to "attachments/<path>"), or as they are while encryption is off. None when it is refused.
+        A key that cannot be had right now raises, so the row is tried again."""
+        try:
+            return self.vault.open_bound_file(user_id, OUTBOX_FILE_DATA, data, f"{BUCKET}/{path}")
+        except KeyUnavailable:
+            raise
+        except Exception as err:
+            log.warn("outbox file refused", user=user_id, code=log.code_of(err))
+            return None
+
+    def _outbox_value(self, row: dict[str, Any], field: str, column: str, value: str | None, kind: str) -> str | None:
+        """One sealed column of a queued row, opened only when it was sealed for that column of that row
+        (packages/crypto/src/places.ts). None when it is refused (logged with its code); "" for no value."""
+        try:
+            return self.vault.open_bound(row["user_id"], field, value, [f"outbox.{column}"], row["id"], kind) or ""
+        except KeyUnavailable:
+            raise
+        except Exception as err:
+            log.warn("outbox row refused", outbox=row["id"], code=log.code_of(err))
+            return None
+
+    def outbox_body(self, row: dict[str, Any]) -> str | None:
+        """A queued row's body for sending, or None when it was not sealed for this row (fail the row with UNVERIFIED)."""
+        return self._outbox_value(row, BODY, "body", row.get("body"), "content")
+
+    def outbox_recipient(self, row: dict[str, Any], value: str | None) -> str | None:
+        """One of a queued row's to_addresses for sending, or None when it was not sealed for this row."""
+        return self._outbox_value(row, ADDRESS, "to_addresses", value, "address")
+
     def link_thread(self, outbox_id: str, thread_id: str) -> None:
         """Points a sent new conversation's row at its thread, so the app can open it."""
         self.db.update("outbox", {"id": f"eq.{outbox_id}", "thread_id": "is.null"}, {"thread_id": thread_id}, minimal=True)
@@ -422,6 +464,10 @@ class Store:
 
     def address(self, user_id: str, value: str | None) -> str:
         return self.vault.open(user_id, ADDRESS, value) or ""
+
+    def name(self, user_id: str, value: str | None) -> str | None:
+        """A stored name (a group's, sealed or plain) as text, or None when there is none."""
+        return self.vault.open(user_id, NAME, value) or None
 
     # -- webhook hints ----------------------------------------------------------------------------------
 
@@ -517,7 +563,10 @@ class SignInRow:
         # Cleared only if it is still the code just read, so one typed in the meantime is not lost.
         self.store.db.update("instagram_sign_ins", {"account_id": f"eq.{self.account['id']}", "code": f"eq.{sealed}"}, {"code": None}, minimal=True)
         try:
-            return str(open_json(sealed, self.store.encryption_key))
+            if sealed.startswith("v1:"):  # typed before per-user handoffs: read while the old static key is still set
+                return str(open_legacy(sealed, self.store.encryption_key))
+            # Sealed by the web app under the owner's key, bound to this row's code.
+            return str(open_handoff(self.store.vault, self.store.encryption_key, self.account["user_id"], "instagram_sign_ins", "code", self.account["id"], sealed))
         except Exception:
             return None
 
@@ -528,10 +577,33 @@ class SignInRow:
             pass
 
 
+# Where Instagram's files live: its own CDN, Facebook's (the Graph API hands out lookaside.fbsbx.com links) and
+# instagram.com itself. The URLs come out of Instagram's answers, so they are checked, not trusted.
+CDN_DOMAINS = ("cdninstagram.com", "fbcdn.net", "fbsbx.com", "instagram.com")
+
+
+def cdn_url(url: str) -> bool:
+    """Whether a file may be fetched from this address: HTTPS on port 443 to one of CDN_DOMAINS (or a subdomain), with no
+    user part. Anything else (file://, ftp://, another host) is refused before a connection is made."""
+    try:
+        u = urlsplit(str(url).strip())
+        host, port = (u.hostname or "").lower(), u.port
+    except ValueError:
+        return False
+    return u.scheme == "https" and port in (None, 443) and "@" not in u.netloc and any(host == d or host.endswith("." + d) for d in CDN_DOMAINS)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a: Any, **k: Any) -> None:
+        return None  # a redirect could leave the CDN: it surfaces as an HTTPError and the file is skipped
+
+
 def fetch(url: str, proxy: str | None, user_agent: str | None, limit: int = MAX_FILE_BYTES, timeout: float = 60) -> bytes | None:
     """A file from Instagram's CDN, as the app would fetch it and through the proxy when one is set. None
-    when it is too large to keep."""
-    handlers: list[Any] = [urllib.request.HTTPSHandler(context=CONTEXT)]  # the system's root certificates, which this Python lacks
+    when it is too large to keep. Raises ValueError for an address off the CDN (see cdn_url), HTTPError for a redirect."""
+    if not cdn_url(url):
+        raise ValueError("instagram_file_host")
+    handlers: list[Any] = [urllib.request.HTTPSHandler(context=CONTEXT), _NoRedirect()]  # the system's root certificates, which this Python lacks
     if proxy:
         handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
     opener = urllib.request.build_opener(*handlers)

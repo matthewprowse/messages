@@ -49,8 +49,8 @@ function NoteFileView({ node, selected, deleteNode }: ReactNodeViewProps) {
         {progress === undefined ? (
           <div className="flex items-center gap-1">
             <span className="text-xs text-muted-foreground">Upload Stopped</span>
-            {upload && canRetry(upload) && <Button variant="link" size="sm" onClick={() => retry(upload)}>Try Again</Button>}
-            <Button variant="link" size="sm" onClick={() => deleteNode()}>Remove</Button>
+            {upload && canRetry(upload) && <Button variant="link" onClick={() => retry(upload)}>Try Again</Button>}
+            <Button variant="link" onClick={() => deleteNode()}>Remove</Button>
           </div>
         ) : (
           <Progress value={progress * 100} aria-label={`Uploading ${name}`} />

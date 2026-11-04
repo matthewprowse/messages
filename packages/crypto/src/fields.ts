@@ -1,7 +1,8 @@
 // The kinds of text that are encrypted. A field's name is bound into its ciphertext, so a body cannot be
 // passed off as a subject. Names are by meaning, not by column: a value the database copies from one table
 // to another (a message's subject becoming its thread's, its preview becoming the thread's last preview)
-// keeps its field and still opens. apps/ai/ai/fields.py lists the same names.
+// keeps its field and still opens. apps/ai/ai/fields.py lists the same names. A bound value ("e2:", bound.ts) also names
+// its owner and the column (and row) it was sealed for, which the strict readers of action columns check.
 export const FIELD = {
   /** messages.subject, threads.subject, outbox.subject */
   subject: "subject",
@@ -29,7 +30,10 @@ export const FIELD = {
   transcript: "transcript",
   /** Addresses (stage 2): contact_identities.value, messages.sender_address and to_addresses, chat IDs */
   address: "address",
-  /** contacts.display_name, organizations.name, meeting_participants.name (meeting_participants.address uses address) */
+  /**
+   * contacts.display_name, organizations.name, threads.group_name, threads.share_label and share_match, labels and saved
+   * views, meeting_participants.name (meeting_participants.address uses address)
+   */
   name: "name",
   /** organizations.domain */
   domain: "domain",
@@ -57,16 +61,28 @@ export const FIELD = {
   meetingTitle: "meeting_title",
   /** meetings.action_items: the AI's action items from a meeting, as JSON */
   meetingActions: "meeting_actions",
-  /** attachments.filename: the name of an email, WhatsApp, Instagram or LinkedIn file */
+  /** attachments.filename: the name of an email, WhatsApp, Instagram or LinkedIn file. outbox_attachments.filename: a file you send */
   filename: "filename",
   /** The bytes of a stored attachment (email, WhatsApp, Instagram), sealed with encryptBytes before upload */
   attachmentData: "attachment_data",
+  /** The bytes of a file you attach to a message you send, sealed in the browser before upload (attachments/<user>/outbox/) */
+  outboxFileData: "outbox_file_data",
   /** The bytes of a meeting recording (Zoom), sealed with encryptBytes before upload */
   recordingData: "recording_data",
-  /** calendar_events.title */
+  /** calendar_events.title, calendar_outbox.title, calendar_updates.title */
   eventTitle: "event_title",
-  /** calendar_events.location */
+  /** calendar_events.location, calendar_outbox.location, calendar_updates.location */
   eventLocation: "event_location",
+  /** calendar_events.description, calendar_outbox.description, calendar_updates.description: an event's notes */
+  eventNotes: "event_notes",
+  /** calendar_events.attendees: the whole guest list (address, name, answer, self, organizer), as JSON */
+  eventGuests: "event_guests",
+  /** calendar_events.conference_url, and in meetings.provider_meta the join_url, Meet's meeting_code and Teams' online_meeting_id */
+  eventLink: "event_link",
+  /** calendar_events.calendar_name: which calendar an event is on, such as "Work" */
+  calendarName: "calendar_name",
+  /** calendar_events.resource_url: an iCloud event's file on the CalDAV server */
+  eventFile: "event_file",
   /** address_book_cards.name */
   cardName: "card_name",
   /** writing_examples.situation */

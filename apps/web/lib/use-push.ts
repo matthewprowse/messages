@@ -1,6 +1,6 @@
 "use client";
 
-// Turning web push on and off for this device: registers the service worker, asks permission, subscribes with the VAPID
+// Turning web push on and off for this device: makes sure the service worker is registered, asks permission, subscribes with the VAPID
 // public key and saves the subscription to push_subscriptions (row-level security keeps it to the signed-in person).
 // The decisions about what is possible live in lib/push.ts; the worker (apps/worker/src/push) does the sending.
 
@@ -8,14 +8,9 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { useAuth } from "./auth";
 import { pushAvailability, subscriptionRow, vapidKeyBytes, type PushAvailability, type PushEnv } from "./push";
+import { registerServiceWorker } from "./service-worker";
 
 const VAPID_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
-
-/** Registers the service worker once. It has no fetch handler, so it never sees (or caches) a page or API response. */
-export function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return Promise.resolve(null);
-  return navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => null);
-}
 
 function readEnv(): PushEnv {
   const nav = navigator as Navigator & { standalone?: boolean };
@@ -28,6 +23,23 @@ function readEnv(): PushEnv {
     permission: "Notification" in window ? Notification.permission : "unavailable",
     vapidKey: VAPID_KEY,
   };
+}
+
+/**
+ * Takes this device off push for the signed-in person: deletes their push_subscriptions row for it (while the session
+ * can still pass row-level security) and unsubscribes the browser, so the next person on this browser is not shown
+ * their notifications. For sign-out. Never throws; a step that fails is skipped.
+ */
+export async function dropPushSubscription(userId: string | undefined): Promise<void> {
+  try {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const sub = await (await navigator.serviceWorker.getRegistration("/"))?.pushManager.getSubscription();
+    if (!sub) return;
+    if (userId) await supabase.from("push_subscriptions").delete().eq("user_id", userId).eq("endpoint", sub.endpoint);
+    await sub.unsubscribe();
+  } catch {
+    // Signing out must not wait on push. A row left behind is pruned when the push service answers 404 or 410.
+  }
 }
 
 export interface PushControl {

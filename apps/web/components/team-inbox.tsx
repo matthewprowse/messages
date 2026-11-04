@@ -45,7 +45,7 @@ function Row({ chat, who, query, selected }: { chat: TeamChatRow; who: string; q
 function GroupHeader({ title, count, open, onToggle, children }: { title: string; count?: number; open: boolean; onToggle: () => void; children?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <Button variant="ghost" size="sm" className="-ml-2 px-2 text-xs font-medium text-muted-foreground" aria-expanded={open} onClick={onToggle}>
+      <Button variant="ghost" className="-ml-2 px-2 text-xs font-medium text-muted-foreground" aria-expanded={open} onClick={onToggle}>
         {open ? <ChevronDown /> : <ChevronRight />}
         {title}{count ? ` (${count})` : ""}
       </Button>
@@ -65,7 +65,7 @@ function Assigned({ chats, query, selectedId }: { chats: AssignedChat[]; query: 
       {open && (
         <>
           {shown.map((c) => <Row key={c.threadId} chat={c} who={c.inboxName ? `Inbox ${c.inboxName}` : c.agentLeft ? `${c.agentName} (left)` : c.coverUntil ? `${c.agentName} (covering)` : c.agentName} query={query} selected={selectedId === c.threadId} />)}
-          {chats.length > SHOWN && <Button variant="ghost" size="sm" className="self-start" onClick={() => setAll((a) => !a)}>{all ? "Show Fewer" : `Show All ${chats.length}`}</Button>}
+          {chats.length > SHOWN && <Button variant="ghost" className="self-start" onClick={() => setAll((a) => !a)}>{all ? "Show Fewer" : `Show All ${chats.length}`}</Button>}
         </>
       )}
     </div>
@@ -85,7 +85,7 @@ function Inboxes({ mine, query, selectedId }: { mine: SharedInbox[]; query: stri
       <GroupHeader title={mine.length === 1 ? `Shared Inbox` : "Shared Inboxes"} count={waiting} open={open} onToggle={() => setOpen((o) => !o)}>
         {open && mine.length > 1 && (
           <Select value={chosen?.accountId ?? ""} onValueChange={setAccount}>
-            <SelectTrigger size="sm" aria-label="Shared Inbox" className="w-40"><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label="Shared Inbox" className="w-40"><SelectValue /></SelectTrigger>
             <SelectContent>{mine.map((i) => <SelectItem key={i.accountId} value={i.accountId}>{i.name}</SelectItem>)}</SelectContent>
           </Select>
         )}
@@ -100,7 +100,7 @@ function Inboxes({ mine, query, selectedId }: { mine: SharedInbox[]; query: stri
           ) : (
             chats.map((c) => <Row key={c.threadId} chat={c} who={c.assignees.length ? c.assignees.map((a) => a.name).join(", ") : "Not assigned"} query={query} selected={selectedId === c.threadId} />)
           )}
-          {more && <Button variant="ghost" size="sm" className="self-start" onClick={() => void loadMore()}>Show More</Button>}
+          {more && <Button variant="ghost" className="self-start" onClick={() => void loadMore()}>Show More</Button>}
         </>
       )}
     </div>

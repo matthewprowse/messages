@@ -4,8 +4,10 @@
 // Review 2026-11-02 M7 asked to drop https:. It cannot be scoped to the frame: a srcdoc frame is checked against this
 // header AND its own meta, so narrowing here would block the images the user chose to load, and they come straight
 // from the sender's hosts (no image proxy). Everything else in the app loads images from 'self', data:, blob: or
-// Supabase signed URLs. Closing the gap fully means serving the email frame from its own route with its own header,
-// or proxying images; until then the wide rule stays, and nothing else may widen it (see csp.test.ts).
+// Supabase signed URLs, apart from the sign-in provider's profile photo (my-avatar.tsx). Notes refuse remote images in
+// their own schema (note-markdown.ts), so the wide rule is not what keeps them out. Per-route policies would not help:
+// client navigation keeps the first page's header. Closing the gap fully means serving the email frame from its own
+// route with its own header, or proxying images; until then the wide rule stays, and nothing else may widen it (see csp.test.ts).
 
 /** Supabase origin in https and wss form (REST, Auth, Storage, Realtime), from the public env var. */
 function supabaseOrigins(supabaseUrl: string | undefined): { http: string[]; ws: string[] } {

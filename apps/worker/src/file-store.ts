@@ -3,7 +3,7 @@
 // passes all save through here. A file is sealed ("e1b:" header, fields.ts attachmentData) when ENCRYPT_CONTENT is
 // on; the web app opens sealed and plain objects alike.
 
-import { contentHash, encryptBytes, type UserKeys } from "@messages/crypto";
+import { contentHash, type UserKeys } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import type { TablesUpdate } from "@messages/db";
 import { db, must } from "./db";
@@ -11,9 +11,10 @@ import { env } from "./env";
 import { errorCode, log } from "./log";
 import { canTilePicture, makeTilePicture } from "./photos/tile-picture";
 import { thumbPathFor } from "./photos/thumbnail";
-import { ATTACHMENTS_BUCKET, attachmentPath, storedType, uploadObject } from "./storage";
+import { ATTACHMENTS_BUCKET, attachmentPath, storedType, uploadObject, WRITE_ONCE_CACHE_S } from "./storage";
 import { isVideoLink, maySave, noteSaved, stateFor, type CapState, type NotKept } from "./storage-rules";
 import { keysFor } from "./vault";
+import { sealFileFor } from "./file-seal";
 
 export const MAX_FILE_BYTES = 50 * 1024 * 1024; // Supabase's default upload limit
 
@@ -36,6 +37,8 @@ export type Kept =
 /** What keepFile needs from the outside: keys, the storage state, the bucket and the attachments table. Replaced in tests. */
 export interface KeepDeps {
   encrypting: boolean;
+  /** Seal bound to the file's place (SEAL_BOUND_FIELDS). Unset: the legacy format. */
+  binding?: boolean;
   keys(userId: string): Promise<UserKeys | null>;
   state(userId: string): Promise<CapState>;
   saved(userId: string, bytes: number): Promise<void>;
@@ -54,14 +57,14 @@ export async function keepThumbnail(
   file: Pick<FileToKeep, "attachmentId" | "kind" | "mimeType" | "bytes">,
   keys: UserKeys,
   path: string,
-  deps: Pick<KeepDeps, "upload" | "setThumb">,
+  deps: Pick<KeepDeps, "upload" | "setThumb" | "binding">,
 ): Promise<string | null> {
   if (!deps.setThumb || !canTilePicture(file.kind, file.mimeType)) return null;
   try {
     const thumb = await makeTilePicture(file.kind, file.bytes);
     if (!thumb) return null;
-    const sealed = await encryptBytes(keys, FIELD.attachmentData, new Uint8Array(thumb));
     const thumbPath = thumbPathFor(path);
+    const sealed = await sealFileFor(keys, FIELD.attachmentData, ATTACHMENTS_BUCKET, thumbPath, new Uint8Array(thumb), !!deps.binding);
     await deps.upload(thumbPath, Buffer.from(sealed.buffer, sealed.byteOffset, sealed.byteLength), "application/octet-stream");
     await deps.setThumb(file.attachmentId, thumbPath);
     return thumbPath;
@@ -92,12 +95,15 @@ const liveDeps: KeepDeps = {
   get encrypting() {
     return env.encryptContent;
   },
+  get binding() {
+    return env.sealBoundFields;
+  },
   // With encryption on, a file is never stored unsealed: if the user's keys cannot be had this throws and the catch-up
   // tries again. With it off the keys are only used for the content hash, and a missing key service just means no hash.
   keys: (userId) => (env.encryptContent ? keysFor(userId) : keysFor(userId).catch(() => null)),
   state: stateFor,
   saved: noteSaved,
-  upload: (path, bytes, contentType) => uploadObject(ATTACHMENTS_BUCKET, path, bytes, contentType),
+  upload: (path, bytes, contentType) => uploadObject(ATTACHMENTS_BUCKET, path, bytes, contentType, WRITE_ONCE_CACHE_S),
   copy: existingCopy,
   async update(attachmentId, patch, onlyUnsaved) {
     const query = db.from("attachments").update(patch).eq("id", attachmentId);
@@ -143,7 +149,7 @@ export async function keepFile(file: FileToKeep, deps: KeepDeps = liveDeps): Pro
 
   const path = attachmentPath(file.userId, file.messageId, file.attachmentId);
   if (sealing && keys) {
-    const sealed = await encryptBytes(keys, FIELD.attachmentData, new Uint8Array(file.bytes));
+    const sealed = await sealFileFor(keys, FIELD.attachmentData, ATTACHMENTS_BUCKET, path, new Uint8Array(file.bytes), !!deps.binding);
     await deps.upload(path, Buffer.from(sealed.buffer, sealed.byteOffset, sealed.byteLength), "application/octet-stream");
   } else {
     await deps.upload(path, file.bytes, storedType(file.mimeType));

@@ -4,10 +4,11 @@
 
 import type { UserKeys } from "@messages/crypto";
 import { createHost } from "./host";
-import { hasIndexedDb, idbStorage } from "./idb-storage";
+import { hasIndexedDb, idbStorage, indexMayExist } from "./idb-storage";
 import type { Counts, Envelope, InitReply, Reply, Request } from "./protocol";
 import { parseQuery } from "./query";
 import { memoryStorage } from "./sealed-store";
+import { resetProgress } from "./status";
 import type { Doc, Kind, SearchResult } from "./types";
 
 interface Backend {
@@ -79,9 +80,14 @@ export async function wipeIndex() {
     try { await send({ t: "clear" }); } catch { /* the storage is cleared directly below */ }
   }
   closeIndex();
-  if (hasIndexedDb()) {
+  if (hasIndexedDb() && (await indexMayExist())) {
     try { await idbStorage().clear(); } catch { /* nothing stored, or storage blocked */ }
   }
+}
+
+/** wipeIndex, and the screens' progress back to closed: for sign-out and for a page that opens with no session. Never throws. */
+export async function forgetIndex() {
+  try { await wipeIndex(); } catch { /* storage blocked: nothing more can be done from here */ } finally { resetProgress(); }
 }
 
 /** Whether the index is open and can be searched (it may still be filling). */

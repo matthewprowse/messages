@@ -1,8 +1,10 @@
 """Do: what an automation makes of the fields it read. Each step is optional, runs on its own (one failing never undoes another) and
 writes down in `effects` exactly what it did, as ids, so Undo in the app can reverse precisely that.
 
-  contact  find the person by email or +27 number (a repeat enquirer joins their record) or make them; mark them a Lead with the
-           source; put the conversation on their timeline
+  contact  find the person by email and +27 number (a repeat enquirer whose identifiers are all theirs joins their record) or
+           make them; mark them a Lead with the source; put the conversation on their timeline. An identifier is never added to a
+           contact found by another one, and a starred or non-Lead contact is never marked or linked: a partial match becomes a
+           new Lead with a merge suggested for the user to confirm
   task     a task in the user's own task list through the task_updates queue ("Call Back Within 5 Minutes")
   draft    a pending draft the normal draft loop writes in the user's voice, with the lead's own address as its recipient;
            never the portal, and never sent: a draft only appears in the reply box
@@ -12,6 +14,7 @@ Nothing here sends anything. Names, addresses and message text are sealed on the
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -92,18 +95,19 @@ class Doer:
         keys = self.vault.keys_for(user)
         return address_index(keys, value) if keys else None
 
+    def owner(self, user: str, kind: str, value: str | None) -> str | None:
+        """The contact who has this email address or number, or None. Matched on the blind index; the same number written another
+        way is the same number because it is normalised to +27 form first."""
+        if not value:
+            return None
+        index = self._index(user, value)
+        match = {"value_index": f"eq.{index}"} if index else {"value": f"eq.{value}"}
+        row = self.db.first("contact_identities", {"select": "contact_id", "user_id": f"eq.{user}", "kind": f"eq.{kind}", **match})
+        return row["contact_id"] if row else None
+
     def find_contact(self, user: str, email: str | None, phone: str | None) -> str | None:
-        """The contact who has this email address or this number, or None. Matched on the blind index; the same number written
-        another way is the same number because it is normalised to +27 form first."""
-        for kind, value in (("email", email), ("phone", phone)):
-            if not value:
-                continue
-            index = self._index(user, value)
-            match = {"value_index": f"eq.{index}"} if index else {"value": f"eq.{value}"}
-            row = self.db.first("contact_identities", {"select": "contact_id", "user_id": f"eq.{user}", "kind": f"eq.{kind}", **match})
-            if row:
-                return row["contact_id"]
-        return None
+        """The contact who has this email address, else the one with this number, or None."""
+        return self.owner(user, "email", email) or self.owner(user, "phone", phone)
 
     def _identity(self, user: str, contact_id: str, kind: str, value: str) -> str | None:
         """Adds an email or number to a contact. Returns the new identity's id, or None when someone already has it."""
@@ -111,45 +115,75 @@ class Doer:
         added = self.db.insert_new("contact_identities", row, "user_id,kind,value_index" if row["value_index"] else "user_id,kind,value")
         return added[0]["id"] if added else None
 
-    def _contact(self, do: Do, user: str, message: dict[str, Any], fields: dict[str, str], out: Outcome) -> None:
-        email, phone, name = fields.get("email"), fields.get("phone"), fields.get("name") or ""
-        found = self.find_contact(user, email, phone)
-        source = phrase(do.source)
-        if found:
-            out.contact_id, out.effects["contact_created"] = found, False
-            current = self.db.first("contacts", {"select": "id,relationship,lead_source", "id": f"eq.{found}", "user_id": f"eq.{user}"}) or {}
-            patch: dict[str, Any] = {}
-            if do.lead and not self.vault.open(user, CONTACT_RELATIONSHIP, current.get("relationship")):
-                patch["relationship"] = self.vault.seal(user, CONTACT_RELATIONSHIP, LEAD)
-                out.effects["set_lead"] = True
-            if do.lead and source and not self.vault.open(user, LEAD_SOURCE, current.get("lead_source")):
-                patch["lead_source"] = self.vault.seal(user, LEAD_SOURCE, source)
-                out.effects["set_source"] = True
-            if patch:
-                self.db.update("contacts", {"id": f"eq.{found}", "user_id": f"eq.{user}"}, patch, minimal=True)
-            added = [i for i in (self._identity(user, found, k, v) for k, v in (("email", email), ("phone", phone)) if v) if i]
-            if added:
-                out.effects["identity_ids"] = added
+    def _contact(self, do: Do, user: str, message: dict[str, Any], fields: dict[str, str], out: Outcome, retry: bool = True) -> None:
+        # The email and number come from the enquiry's body, which anyone can fill in. So an identifier is never added to a contact
+        # found by another one: a client's address beside a stranger's number would make the stranger's WhatsApps that client's.
+        given = {k: v for k, v in (("email", fields.get("email")), ("phone", fields.get("phone"))) if v}
+        owners = {k: o for k, v in given.items() if (o := self.owner(user, k, v))}
+        if given and len(owners) == len(given) and len(set(owners.values())) == 1:
+            self._repeat(do, user, next(iter(owners.values())), out)  # every identifier is theirs: a repeat enquirer
         else:
-            row: dict[str, Any] = {"user_id": user, "display_name": self.vault.seal(user, NAME, name or email or phone)}
-            if do.lead:
-                row["relationship"] = self.vault.seal(user, CONTACT_RELATIONSHIP, LEAD)
-                if source:
-                    row["lead_source"] = self.vault.seal(user, LEAD_SOURCE, source)
-            created = self.db.insert("contacts", row)[0]["id"]
-            taken = [(k, v) for k, v in (("email", email), ("phone", phone)) if v and self._identity(user, created, k, v) is None]
-            if taken and len(taken) == len([v for v in (email, phone) if v]):
-                # Another run won the race for every identity: join that record and drop the empty one just made.
-                self.db.delete("contacts", {"id": f"eq.{created}", "user_id": f"eq.{user}"})
-                out.contact_id = self.find_contact(user, email, phone)
-                out.effects["contact_created"] = False
-                if not out.contact_id:
+            label = fields.get("name") or given.get("email") or given.get("phone") or ""
+            if not self._new_lead(do, user, label, {k: v for k, v in given.items() if k not in owners}, set(owners.values()), out):
+                if not retry:
                     raise RuntimeError("contact_lost")
-            else:
-                out.contact_id, out.effects["contact_created"] = created, True
-        if do.link and message.get("thread_id") and out.contact_id:
+                # Another run took every identifier between the lookup and the insert: look again, once.
+                return self._contact(do, user, message, fields, out, retry=False)
+        if do.link and message.get("thread_id") and out.contact_id and not out.effects.get("trusted"):
             linked = self.db.insert_new("thread_participants", {"thread_id": message["thread_id"], "contact_id": out.contact_id, "user_id": user}, "thread_id,contact_id")
             out.effects["linked"] = bool(linked)
+
+    def _repeat(self, do: Do, user: str, found: str, out: Outcome) -> None:
+        """Someone already a contact. A starred person, or one the user has called anything but a Lead, is not touched: an enquiry
+        that only names their address must not mark them a Lead or put an outside conversation on their timeline."""
+        out.contact_id, out.effects["contact_created"] = found, False
+        current = self.db.first("contacts", {"select": "id,relationship,lead_source,vip", "id": f"eq.{found}", "user_id": f"eq.{user}"}) or {}
+        relationship = self.vault.open(user, CONTACT_RELATIONSHIP, current.get("relationship"))
+        if current.get("vip") or (relationship and relationship != LEAD):
+            out.effects["trusted"] = True
+            return
+        source = phrase(do.source)
+        patch: dict[str, Any] = {}
+        if do.lead and not relationship:
+            patch["relationship"] = self.vault.seal(user, CONTACT_RELATIONSHIP, LEAD)
+            out.effects["set_lead"] = True
+        if do.lead and source and not self.vault.open(user, LEAD_SOURCE, current.get("lead_source")):
+            patch["lead_source"] = self.vault.seal(user, LEAD_SOURCE, source)
+            out.effects["set_source"] = True
+        if patch:
+            self.db.update("contacts", {"id": f"eq.{found}", "user_id": f"eq.{user}"}, patch, minimal=True)
+
+    def _new_lead(self, do: Do, user: str, name: str, unmatched: dict[str, str], others: set[str], out: Outcome) -> bool:
+        """A new contact holding only the identifiers nobody has, with a merge suggested against each contact that has one of the
+        others, for the user to confirm. False when every identifier it was to hold was taken meanwhile (the contact is removed)."""
+        row: dict[str, Any] = {"user_id": user, "display_name": self.vault.seal(user, NAME, name)}
+        if do.lead:
+            row["relationship"] = self.vault.seal(user, CONTACT_RELATIONSHIP, LEAD)
+            if phrase(do.source):
+                row["lead_source"] = self.vault.seal(user, LEAD_SOURCE, phrase(do.source))
+        created = self.db.insert("contacts", row)[0]["id"]
+        taken = [k for k, v in unmatched.items() if self._identity(user, created, k, v) is None]
+        if unmatched and len(taken) == len(unmatched):
+            self.db.delete("contacts", {"id": f"eq.{created}", "user_id": f"eq.{user}"})
+            return False
+        out.contact_id, out.effects["contact_created"] = created, True
+        suggested = [s for s in (self._suggest(user, created, other) for other in sorted(others)) if s]
+        if suggested:
+            out.effects["suggestion_ids"] = suggested
+        return True
+
+    def _suggest(self, user: str, a: str, b: str) -> str | None:
+        """A pending merge suggestion between two contacts, shown with the linker's own. Never fails the step: the lead stands alone."""
+        low, high = sorted((a, b))
+        try:
+            added = self.db.insert_new(
+                "contact_suggestions", {"user_id": user, "contact_a": low, "contact_b": high, "reason": "other", "evidence": {"source": "automation"}, "score": 0.5},
+                "user_id,contact_a,contact_b",
+            )
+            return added[0]["id"] if added else None
+        except Exception as err:
+            log.warn("merge suggestion not saved", code=log.code_of(err))
+            return None
 
     # Task ----------------------------------------------------------------------------------------
 
@@ -161,11 +195,14 @@ class Doer:
             raise RuntimeError("no_task_list")
         notes = "\n".join(f"{label}: {fields[k]}" for k, label in (("phone", "Phone"), ("email", "Email"), ("listing_ref", "Listing"), ("listing_url", "Link")) if fields.get(k))
         due = datetime.now(timezone.utc) + timedelta(minutes=do.task_minutes)
+        row_id = str(uuid.uuid4())  # chosen here so the title and notes are sealed for this row alone (packages/crypto/src/places.ts)
         row = self.db.insert(
             "task_updates",
             {
-                "user_id": user, "action": "create", "account_id": account["id"], "title": self.vault.seal(user, TASK_TITLE, task_title(do.task_title or "", fields.get("name") or "")),
-                "notes": self.vault.seal(user, TASK_NOTES, notes) if notes else None, "due_at": due.isoformat(), "due_all_day": False, "priority": 1, "contact_id": out.contact_id,
+                "id": row_id, "user_id": user, "action": "create", "account_id": account["id"],
+                "title": self.vault.seal(user, TASK_TITLE, task_title(do.task_title or "", fields.get("name") or ""), "task_updates.title", row_id),
+                "notes": self.vault.seal(user, TASK_NOTES, notes, "task_updates.notes", row_id) if notes else None, "due_at": due.isoformat(), "due_all_day": False, "priority": 1,
+                "contact_id": out.contact_id,
             },
         )[0]
         out.effects["task_update_id"] = row["id"]

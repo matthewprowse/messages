@@ -134,6 +134,21 @@
       "kind": "domain",
       "value": "example.co.za.",
       "key": "domain:example.co.za"
+    },
+    {
+      "kind": "group",
+      "value": "Family Chat",
+      "key": "group:Family Chat"
+    },
+    {
+      "kind": "group",
+      "value": "  Family Chat ",
+      "key": "group:Family Chat"
+    },
+    {
+      "kind": "group",
+      "value": "family chat",
+      "key": "group:family chat"
     }
   ],
   "localWrap": {

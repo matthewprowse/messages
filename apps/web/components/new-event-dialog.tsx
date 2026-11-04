@@ -8,6 +8,10 @@ import { markSubmitted } from "@/lib/analytics";
 import { toast } from "sonner";
 import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
+import { seal } from "@/lib/vault";
+import { sealAddress } from "@/lib/address-refs";
+import { queuePlace } from "@/lib/outbox-places";
+import { sealQueuedEvent, type QueueSealers } from "@/lib/calendar-seal";
 import { buildUpdate, followUpdate, formOf, GAVE_UP, type CalendarEvent, type EventPatch, type UpdateScope } from "@/lib/calendar";
 import { repeatOptionsFor, repeatSelectValue } from "@/lib/event-form";
 import { initialChoice } from "@/lib/event-calendars";
@@ -41,6 +45,11 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const CALENDARS = ["google_calendar", "icloud_calendar", "outlook_calendar"] as const;
+/** Seals a queued row's text for its own columns: `rowId` is chosen here, before the insert, so it can be bound in. */
+const sealersFor = (table: "calendar_outbox" | "calendar_updates", rowId: string): QueueSealers => ({
+  text: (field, value, column) => seal(field, value, queuePlace(table, rowId, column)),
+  address: (value, column) => sealAddress(value, queuePlace(table, rowId, column)),
+});
 
 // A column with a fixed header and footer and a scrolling middle. On a phone it fills the screen (padded clear of the
 // status bar and home indicator), so the keyboard and the guest list have room.
@@ -252,7 +261,12 @@ export function NewEventDialog({
     if (!account || locked || !built.ok) return;
     setQueueing(true);
     setRow(null);
-    const { data, error } = await supabase.from("calendar_outbox").insert({ ...built.row, calendar_id: picked?.calendarId ?? "primary" }).select("id, status, error, html_link").single();
+    // The title, notes, place and guests are sealed before they leave the browser; the page shows them from built.row.
+    const rowId = crypto.randomUUID();
+    const sealed = await sealQueuedEvent(built.row, sealersFor("calendar_outbox", rowId)).catch(() => null);
+    const { data, error } = sealed
+      ? await supabase.from("calendar_outbox").insert({ ...sealed, id: rowId, calendar_id: picked?.calendarId ?? "primary" }).select("id, status, error, html_link").single()
+      : { data: null, error: true };
     setQueueing(false);
     if (error || !data) {
       setRow({ status: "failed", error: "Could not save the event. Try again.", html_link: null });
@@ -306,7 +320,9 @@ export function NewEventDialog({
     if (!editing || !account || locked || !update?.ok || !update.row) return;
     setQueueing(true);
     setRow(null);
-    const { data, error } = await supabase.from("calendar_updates").insert({ ...update.row, scope }).select("id").single();
+    const rowId = crypto.randomUUID();
+    const sealed = await sealQueuedEvent(update.row, sealersFor("calendar_updates", rowId)).catch(() => null);
+    const { data, error } = sealed ? await supabase.from("calendar_updates").insert({ ...sealed, id: rowId, scope }).select("id").single() : { data: null, error: true };
     setQueueing(false);
     if (error || !data) {
       setRow({ status: "failed", error: "Could not save the change. Try again.", html_link: null });
@@ -420,7 +436,7 @@ export function NewEventDialog({
                 <AlertTitle>Allow Editing in Outlook Calendar</AlertTitle>
                 <AlertDescription>
                   <p>{OUTLOOK_WRITE_TEXT}</p>
-                  <Button type="button" variant="secondary" size="sm" className="mt-2" onClick={() => void allowOutlookEditing(accounts.some((a) => a.provider === "teams")).catch(() => toast.error("Microsoft could not be reached. Try again."))}>Allow Editing</Button>
+                  <Button type="button" variant="secondary" className="mt-2" onClick={() => void allowOutlookEditing(accounts.some((a) => a.provider === "teams")).catch(() => toast.error("Microsoft could not be reached. Try again."))}>Allow Editing</Button>
                 </AlertDescription>
               </Alert>
             )}

@@ -1,5 +1,6 @@
-// Sealed files, opened in the browser. Note files are sealed before upload (lib/notes.ts), and stored attachments (email,
-// WhatsApp, Instagram) are sealed by the workers (attachments.sealed), so a signed link to one would show ciphertext.
+// Sealed files, opened in the browser. Note files and outgoing files are sealed before upload (lib/notes.ts,
+// lib/outbox-files.ts), and stored attachments (email, WhatsApp, Instagram) are sealed by the workers
+// (attachments.sealed), so a signed link to one would show ciphertext.
 // They are fetched and decrypted here and handed out as blob links. A file uploaded before sealing began does not
 // start with the sealed-file header, so its signed link is used as it is.
 
@@ -14,13 +15,17 @@ import { thumbCache } from "./thumb-store";
 
 const noteMimes = new Map<string, string>();
 
-/** Opens a sealed file: with the team's key for a team copy (the current version first, then older ones), else the user's. */
+/**
+ * Opens a sealed file: with the team's key for a team copy (the current version first, then older ones), else the user's.
+ * A bound file ("e2b:") opens only at the place it was read from, so one copied to another path does not.
+ */
 async function openSealed(path: string, sealed: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
-  if (!isTeamFilePath(path)) return decryptBytes(await userKeys(), sealedField(path), sealed);
+  const where = `${BUCKET}/${path}`;
+  if (!isTeamFilePath(path)) return decryptBytes(await userKeys(), sealedField(path), sealed, where);
   let last: unknown = new Error("No team key.");
   for (const keys of await teamKeyRing()) {
     try {
-      return await decryptTeamBytes(keys, sealedField(path), sealed);
+      return await decryptTeamBytes(keys, sealedField(path), sealed, where);
     } catch (err) {
       last = err; // another version
     }

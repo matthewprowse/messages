@@ -1,20 +1,20 @@
 // Contacts as the pages need them. The worker creates a contact for every new sender and stores each
 // email address or phone number as an identity, so one person can have several of each.
 // Reads go through the signed-in browser client, so row-level security limits them to the user's own rows.
+// One contact's page is read in contact-detail.ts.
 
 import type { PostgrestError } from "@supabase/supabase-js";
 import type { Json } from "@messages/db";
 import { FIELD, type Field } from "@messages/crypto/fields";
+import { allRows } from "./all-rows";
 import { companyRef, identityRefs } from "./address-refs";
-import { openAddresses, openNestedThreads } from "./open-rows";
+import { openAddresses } from "./open-rows";
 import { supabase } from "./supabase";
-import { seal } from "./vault";
-import { formatSize } from "./format";
+import { open, seal } from "./vault";
 import { normalisePhone, PHONE_HINT } from "./new-items";
 import { isEmail } from "./send-from";
-import type { Attachment, FiledAttachment, Provider } from "./types";
+import type { FiledAttachment, Provider } from "./types";
 import { companyLogo, isCompanySender, logoAvatar } from "./people";
-import { withSealedColumns } from "./sealed-columns";
 
 export interface ContactSummary {
   id: string;
@@ -77,6 +77,8 @@ export interface ContactDetail extends ContactSummary {
   attachments: FiledAttachment[];
   /** Every address and number with its id, for Split. */
   identityRows: { id: string; kind: string; value: string }[];
+  /** Drawn from what the app already held while the full read is on its way (lib/contact-detail-cache.ts): no files, notes or address ids yet. */
+  partial?: boolean;
 }
 
 type Identity = { kind: string; value: string };
@@ -97,18 +99,8 @@ export function latest(dates: Iterable<string | null | undefined>) {
   return out;
 }
 
-const PAGE = 1000; // the most rows the API returns for one request
-
-/** Every row of a query, a page at a time. The query must have a stable order so no row is missed. */
-export async function allRows<T>(label: string, page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: PostgrestError | null }>) {
-  const data: T[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const result = await page(from, from + PAGE - 1);
-    if (result.error) throw new Error(`${label} failed (${result.error.code})`);
-    data.push(...(result.data ?? []));
-    if ((result.data?.length ?? 0) < PAGE) return data;
-  }
-}
+// Kept exported from here, where every caller already imports it.
+export { allRows };
 
 /** The stored person or company override, or undefined for anything else. */
 export function asKind(value: string | null | undefined): "person" | "company" | undefined {
@@ -154,119 +146,6 @@ export function isUuid(id: string) {
   return UUID.test(id);
 }
 
-export async function getContact(id: string): Promise<ContactDetail | null> {
-  if (!isUuid(id)) return null;
-  const { data: base, error } = await supabase
-    .from("contacts")
-    .select("id, display_name, company, role, relationship, lead_source, ai_summary, about_note, vip, hidden, avatar_path, kind_override, organizations(id, name, logo_path), contact_identities(id, kind, value)")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) throw new Error(`Load contact failed (${error.code})`);
-  if (!base) return null;
-  // Their conversations are paged, so a contact with thousands of them is not cut off or too big for one response.
-  const thread_participants = await allRows("Load contact conversations", (from, to) =>
-    supabase
-      .from("thread_participants")
-      .select("thread_id, threads(id, channel, subject, group_name, is_group, status, last_message_preview, last_message_at, accounts(provider))")
-      .eq("contact_id", id)
-      .order("thread_id")
-      .range(from, to),
-  );
-  const c = { ...base, thread_participants };
-  const [, touch] = await Promise.all([openNestedThreads([c]), lastTouch(id)]);
-  // Deleted conversations (in the provider's bin) are left out here, as in Conversations.
-  const conversations = c.thread_participants
-    .flatMap((p) => (p.threads && p.threads.status !== "trash" ? [p.threads] : []))
-    .map((t) => ({
-      id: t.id,
-      channel: t.channel as ContactConversation["channel"],
-      provider: (t.accounts?.provider ?? undefined) as Provider | undefined,
-      isGroup: t.is_group,
-      title: (t.is_group ? t.group_name : t.subject) ?? (t.channel === "email" ? "No Subject" : ({ whatsapp: "WhatsApp", instagram: "Instagram", linkedin: "LinkedIn", teams: "Teams", zoom: "Zoom", google_chat: "Google Chat" } as Record<string, string>)[t.channel] ?? "Conversation"),
-      preview: t.last_message_preview,
-      lastAt: t.last_message_at,
-    }))
-    .sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? ""));
-  const groupIds = new Set(conversations.filter((t) => t.isGroup).map((t) => t.id));
-  const ids = identities(c.contact_identities);
-  const kindOverride = asKind(c.kind_override);
-  const who = { name: c.display_name, ...ids, organizationName: c.organizations?.name ?? null, kindOverride };
-  return {
-    id: c.id,
-    name: c.display_name,
-    kindOverride,
-    company: c.company,
-    role: c.role,
-    relationship: c.relationship,
-    leadSource: c.lead_source?.trim() || null,
-    hidden: c.hidden,
-    summary: c.ai_summary,
-    aboutNote: c.about_note?.trim() || null,
-    vip: c.vip,
-    ...touch,
-    organization: c.organizations ? { id: c.organizations.id, name: c.organizations.name } : null,
-    organizationName: c.organizations?.name ?? null,
-    ...ids,
-    lastAt: conversations[0]?.lastAt ?? null,
-    avatarPath: c.avatar_path ?? companyLogo(who, logoAvatar(c.organizations?.logo_path)),
-    isCompany: isCompanySender(who),
-    conversations,
-    conversationCount: conversations.length,
-    identityRows: c.contact_identities,
-    attachments: await contactAttachments(c.id, conversations.map((t) => t.id), groupIds),
-  };
-}
-
-/** One contact's newest message from them and from you (contact_last_touch), for the status line on their page. */
-async function lastTouch(contactId: string): Promise<{ lastInboundAt: string | null; lastOutboundAt: string | null }> {
-  const { data, error } = await supabase.rpc("contact_last_touch", { p_contact: contactId });
-  if (error) throw new Error(`Load last contact failed (${error.code})`);
-  return { lastInboundAt: data?.[0]?.last_inbound_at ?? null, lastOutboundAt: data?.[0]?.last_outbound_at ?? null };
-}
-
-const ATTACHMENT_THREADS = 100;
-
-async function contactAttachments(contactId: string, threadIds: string[], groupIds: Set<string>): Promise<FiledAttachment[]> {
-  if (threadIds.length === 0) return [];
-  const columns = await withSealedColumns("id, filename, kind, size_bytes, storage_path, team_path, hidden_reason, sealed, not_kept, messages!inner(id, thread_id, sent_at, direction, sender_contact_id)");
-  // The ids go in the address of each request, so they are asked in chunks to keep it short.
-  const chunks: string[][] = [];
-  for (let i = 0; i < threadIds.length; i += ATTACHMENT_THREADS) chunks.push(threadIds.slice(i, i + ATTACHMENT_THREADS));
-  const data = (
-    await Promise.all(
-      chunks.map((ids) =>
-        allRows("Load contact attachments", (from, to) =>
-          supabase
-            .from("attachments")
-            .select(columns)
-            .eq("hidden", false)
-            .in("messages.thread_id", ids)
-            .order("id")
-            .range(from, to),
-        ),
-      ),
-    )
-  ).flat();
-  await openAddresses(data);
-  return data
-    .filter((a) => !groupIds.has(a.messages.thread_id) || a.messages.sender_contact_id === contactId)
-    .map((a) => ({
-      id: a.id,
-      name: a.filename,
-      kind: a.kind as Attachment["kind"],
-      size: formatSize(a.size_bytes),
-      path: a.team_path ?? a.storage_path ?? undefined,
-      sealed: a.sealed || undefined,
-      notKept: (a.not_kept as Attachment["notKept"]) ?? undefined,
-      hiddenReason: (a.hidden_reason as Attachment["hiddenReason"]) ?? undefined,
-      messageId: a.messages.id,
-      threadId: a.messages.thread_id,
-      sentAt: a.messages.sent_at,
-      from: a.messages.direction === "outbound" ? "me" : a.messages.sender_contact_id ?? "unknown",
-    }))
-    .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
-}
-
 export interface NewContact {
   name: string;
   /** Lowercased addresses. */
@@ -300,7 +179,8 @@ export function contactErrorText(error: Pick<PostgrestError, "code" | "message">
 export async function createContact(c: NewContact): Promise<CreateResult> {
   const { emails, refs } = await newIdentities(c.emails, c.phones);
   const { data, error } = await supabase.rpc("create_contact", {
-    p_name: c.name,
+    // Sealed here: the database stores names as given and never reads them.
+    p_name: await seal(FIELD.name, c.name.trim()),
     p_identities: refs,
     // Company, role and relationship are sealed, which create_contact cannot take; they are saved just after with update_contact.
     p_company: "",
@@ -313,7 +193,8 @@ export async function createContact(c: NewContact): Promise<CreateResult> {
     if (c.company.trim() || role || relationship) {
       const saved = await supabase.rpc("update_contact", {
         p_contact: data,
-        p_name: c.name,
+        // null keeps the name just saved (resealing it would mark it as renamed by you).
+        p_name: null,
         p_company: await sealText(FIELD.contactCompany, c.company),
         p_role: await sealText(FIELD.contactRole, role),
         p_relationship: await sealText(FIELD.contactRelationship, relationship),
@@ -327,7 +208,7 @@ export async function createContact(c: NewContact): Promise<CreateResult> {
     }
     return { ok: true, id: data };
   }
-  return failed(error, "Could not add the contact. Check your connection and try again.");
+  return await failed(error, "Could not add the contact. Check your connection and try again.");
 }
 
 /** A detail to store: sealed in the browser when it has text, left empty when it has none (the functions read "" as cleared). */
@@ -345,17 +226,29 @@ async function newIdentities(rawEmails: string[], rawPhones: string[]) {
 }
 
 /** A failed create or update. When an address or number is already someone's, says whose. */
-function failed(error: PostgrestError | null, fallback: string): CreateResult {
+async function failed(error: PostgrestError | null, fallback: string): Promise<CreateResult> {
   if (error?.code === "23505") {
-    // The function names the contact in the message and passes its id; a race with sync does not.
+    // The function passes the contact's id (a race with sync does not). Their name is sealed, so it is read and opened
+    // here to say whose it is.
     const existingId = isUuid(error.details ?? "") ? error.details : undefined;
-    return { ok: false, error: existingId ? error.message : "One of these is already on another contact.", existingId };
+    if (!existingId) return { ok: false, error: "One of these is already on another contact." };
+    const name = await existingName(existingId);
+    return { ok: false, error: name ? `One of these already belongs to ${name}.` : "One of these already belongs to another contact.", existingId };
   }
   return { ok: false, error: contactErrorText(error, fallback) };
 }
 
+/** A contact's name, opened, or null when it cannot be read. */
+async function existingName(id: string): Promise<string | null> {
+  const { data } = await supabase.from("contacts").select("display_name").eq("id", id).maybeSingle();
+  if (!data) return null;
+  return (await open(FIELD.name, data.display_name).catch(() => null))?.trim() || null;
+}
+
 export interface ContactEdit {
   name: string;
+  /** The name before editing. When the name is unchanged it is not sent, so it is neither sealed again nor marked as yours. */
+  previousName?: string;
   company: string;
   role: string;
   relationship: string;
@@ -381,9 +274,11 @@ export async function setContactKind(id: string, kind: "person" | "company" | nu
 /** Saves a person's name, details, and added or removed addresses and numbers. A name set here is kept by syncs. */
 export async function updateContact(id: string, c: ContactEdit): Promise<CreateResult> {
   const { refs } = await newIdentities(c.addEmails, c.addPhones);
+  const unchanged = c.previousName !== undefined && c.previousName.trim() === c.name.trim();
   const { error } = await supabase.rpc("update_contact", {
     p_contact: id,
-    p_name: c.name,
+    // Sealed here; null keeps the stored name (the database cannot compare sealed names).
+    p_name: unchanged ? null : await seal(FIELD.name, c.name.trim()),
     p_company: await sealText(FIELD.contactCompany, c.company),
     p_role: await sealText(FIELD.contactRole, c.role),
     p_relationship: await sealText(FIELD.contactRelationship, c.relationship),
@@ -391,7 +286,7 @@ export async function updateContact(id: string, c: ContactEdit): Promise<CreateR
     p_remove: c.remove,
   });
   if (!error) return { ok: true, id };
-  return failed(error, "Could not save. Check your connection and try again.");
+  return await failed(error, "Could not save. Check your connection and try again.");
 }
 
 /** Deletes a person and their addresses and numbers. Conversations and messages stay. Resolves to an error message, or null. */

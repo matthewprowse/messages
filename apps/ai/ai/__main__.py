@@ -96,7 +96,7 @@ def main() -> None:
         log.error("configured model has no entry in pricing.PRICES, its calls are billed at the dearest known price", model=model)
     db = Supabase(cfg.supabase_url, cfg.service_role_key)
     persist_unpriced(db, missing)  # Admin shows it as an alert
-    vault = Vault(db, cfg.key_wrapping_key, cfg.encrypt_content)  # one key cache shared by every job
+    vault = Vault(db, cfg.key_wrapping_key, cfg.encrypt_content, encrypt_addresses=cfg.encrypt_addresses)  # one key cache shared by every job
     lease = Lease(db)
     if not lease.acquire():
         log.error("another ai worker holds the lease, not starting")

@@ -1,10 +1,12 @@
 // Connects iCloud with one Apple ID sign-in: the person ticks Mail, Calendar and Reminders, and nobody has to make an
-// app-specific password by hand. For Mail or Calendar the sign-in is queued in icloud_setups (sealed), and the iCloud
+// app-specific password by hand. For Mail or Calendar the sign-in is queued in icloud_setups (sealed under the person's own
+// key and bound to the row, lib/server/handoff.ts), and the iCloud
 // connector in the AI worker signs in to the account page, asks for the code through ./step, and makes the password;
 // ./step then saves the accounts. Reminders alone needs no password made, so it starts at once. Nothing typed here is
 // logged or sent back.
 
-import { accountsReady, sealJson } from "@/lib/server/accounts";
+import { randomUUID } from "node:crypto";
+import { accountsReady, sealRowJson } from "@/lib/server/accounts";
 import { startReminders } from "@/lib/server/icloud";
 import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
 import { chosenServices, mailLogin } from "@/lib/icloud-signin";
@@ -47,9 +49,12 @@ export async function POST(request: Request) {
     if (!wantsPassword) return Response.json({ remindersAccountId: await startReminders(user.id, appleId, password) }, { headers: noStore });
     // One sign-in at a time per person: an older one still waiting is replaced.
     await admin.from("icloud_setups").delete().eq("user_id", user.id).in("status", ["queued", "signing_in", "failed"]);
+    // The id is chosen here so the sealed sign-in can be bound to its row.
+    const id = randomUUID();
+    const signIn = await sealRowJson(user.id, { table: "icloud_setups", column: "sign_in" }, id, { appleId, password, mailUser, address });
     const { data, error } = await admin
       .from("icloud_setups")
-      .insert({ user_id: user.id, services, sign_in: sealJson({ appleId, password, mailUser, address }), detail: "Signing in to your Apple Account." })
+      .insert({ id, user_id: user.id, services, sign_in: signIn, detail: "Signing in to your Apple Account." })
       .select("id")
       .single();
     if (error) throw error;

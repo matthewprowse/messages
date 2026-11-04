@@ -61,7 +61,7 @@ export function DeletedList({ term }: { term: string }) {
                 </div>
                 <span className="min-w-0 truncate text-xs">{(t.channel === "email" ? t.subject : undefined) ?? t.preview ?? ""}</span>
               </div>
-              <Button variant="secondary" size="sm" onClick={() => bring(t)}><ArchiveRestore />Restore</Button>
+              <Button variant="secondary" onClick={() => bring(t)}><ArchiveRestore />Restore</Button>
             </div>
           </div>
         );

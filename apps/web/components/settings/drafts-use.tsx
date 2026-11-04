@@ -15,7 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 import { IconAction } from "@/components/tip";
-import { openAddresses, openRules } from "@/lib/open-rows";
+import { openAddresses, openOrganizations, openRules } from "@/lib/open-rows";
 import { ruleNote } from "@/lib/rule-note";
 
 type StyleRule = Pick<Tables<"style_rules">, "id" | "rule" | "scope" | "contact_id" | "source" | "support_count" | "enabled" | "disabled_reason">;
@@ -96,11 +96,13 @@ export function DraftsUseSection() {
     Promise.all([
       supabase.from("profiles").select("voice_learned_at").maybeSingle(),
       supabase.from("contacts").select("id, display_name, style_note, ai_summary, style_updated_at").not("style_note", "is", null).order("style_updated_at", { ascending: false }).limit(100),
-      supabase.from("organizations").select("id, name, domain, summary, summary_updated_at").not("summary", "is", null).order("name").limit(500),
+      // Company names are sealed, so they are sorted here once opened.
+      supabase.from("organizations").select("id, name, domain, summary, summary_updated_at").not("summary", "is", null).order("summary_updated_at", { ascending: false }).limit(500),
       supabase.rpc("embedded_message_count"),
       supabase.from("draft_outcomes").select("edit_ratio").order("created_at", { ascending: false }).limit(50),
     ]).then(async ([p, people, orgs, indexed, outcomes]) => {
-      await Promise.all([openAddresses(orgs.data ?? []), openAddresses(people.data ?? [])]);
+      await Promise.all([openAddresses(orgs.data ?? []).then(openOrganizations), openAddresses(people.data ?? [])]);
+      orgs.data?.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
       if (cancelled) return;
       const ratios = (outcomes.data ?? []).map((o) => o.edit_ratio).filter((r): r is number => r !== null);
       setLearning({

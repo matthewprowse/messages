@@ -170,7 +170,7 @@ export async function undoRun(run: Run): Promise<string> {
   const fail = (what: string): never => { throw new Error(`${what} Nothing else was changed.`); };
 
   if (fx.draft_id) {
-    const { data, error } = await supabase.from("drafts").delete().eq("id", fx.draft_id).in("status", ["pending", "active"]).select("id");
+    const { data, error } = await supabase.from("drafts").delete().eq("id", fx.draft_id).in("status", ["pending", "active", "review"]).select("id");
     if (error) fail("Could not remove the draft.");
     done.draftRemoved = (data?.length ?? 0) > 0;
   }

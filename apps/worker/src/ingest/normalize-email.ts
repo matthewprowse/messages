@@ -1,7 +1,9 @@
 // Pure conversion of a parsed MIME message into the shape we store. No I/O, so it can be unit tested.
 
+import { createHash } from "node:crypto";
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
 import { hiddenReasonOf, type HiddenReason } from "./attachment-hidden";
+import { parseAuthResults, type EmailAuth } from "./email-auth";
 
 export interface EmailAddress {
   address: string; // lowercase
@@ -39,6 +41,18 @@ export interface NormalizedEmail {
   listUnsubscribe: string | null;
   /** True when the sender supports one-click unsubscribe (RFC 8058). */
   listUnsubscribePost: boolean;
+  /** The receiving server's SPF, DKIM and DMARC verdicts, or null when it gave none. */
+  auth: EmailAuth | null;
+  /**
+   * The domain of a Reply-To address at another domain than the From address, lowercase, else null. Only the domain:
+   * the AI worker's phishing check compares it with the sender's, and the address itself never needs to be stored.
+   */
+  replyToDomain: string | null;
+  /**
+   * A hash of what the email says (Date, From, subject, text, HTML and files), the same in every folder it is found in.
+   * Two emails with one Message-ID but different hashes are different emails. Never stored as it is: store-email.ts keys it.
+   */
+  contentHash: string;
 }
 
 function addresses(field: AddressObject | AddressObject[] | undefined): EmailAddress[] {
@@ -93,6 +107,9 @@ export function normalizeEmail(parsed: ParsedMail, fallbackId: string): Normaliz
     preview: previewOf(text) ?? subject,
     listUnsubscribe: headerValue(parsed, "list-unsubscribe"),
     listUnsubscribePost: /List-Unsubscribe=One-Click/i.test(headerValue(parsed, "list-unsubscribe-post") ?? ""),
+    auth: parseAuthResults(headerValues(parsed, "authentication-results")),
+    replyToDomain: replyToDomainOf(addresses(parsed.from)[0] ?? null, addresses(parsed.replyTo)),
+    contentHash: contentHashOf(parsed, text, subject),
     // Inline parts referenced from the HTML (logos, signature images) are not real attachments.
     attachments: parsed.attachments
       .filter((a) => !a.related)
@@ -121,10 +138,38 @@ export function plainLetters(value: string): string {
 
 /** A header's raw value, unfolded onto one line, or null when it is missing. */
 function headerValue(parsed: ParsedMail, name: string): string | null {
-  const line = parsed.headerLines?.find((h) => h.key === name)?.line;
-  if (!line) return null;
-  const value = line.slice(line.indexOf(":") + 1).replace(/\r?\n[ \t]+/g, " ").trim();
-  return value || null;
+  return headerValues(parsed, name)[0] ?? null;
+}
+
+/** Every value of a header, top first, each unfolded onto one line. Empty ones are dropped. */
+function headerValues(parsed: ParsedMail, name: string): string[] {
+  return (parsed.headerLines ?? [])
+    .filter((h) => h.key === name)
+    .map((h) => h.line.slice(h.line.indexOf(":") + 1).replace(/\r?\n[ \t]+/g, " ").trim())
+    .filter(Boolean);
+}
+
+const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/; // anything else in a Reply-To (a quoted local part, junk) is not stored
+const DOMAIN_MAX_CHARS = 253;
+
+/** See NormalizedEmail.replyToDomain. A reply goes to every Reply-To address, so the first at another domain counts. */
+export function replyToDomainOf(from: EmailAddress | null, replyTo: EmailAddress[]): string | null {
+  const domainOf = (address: string) => address.slice(address.lastIndexOf("@") + 1).trim().toLowerCase();
+  const own = from && from.address.includes("@") ? domainOf(from.address) : null;
+  for (const r of replyTo) {
+    if (!r.address.includes("@")) continue;
+    const domain = domainOf(r.address);
+    if (domain !== own && domain.length <= DOMAIN_MAX_CHARS && DOMAIN.test(domain)) return domain;
+  }
+  return null;
+}
+
+/** See NormalizedEmail.contentHash. Built from parsed parts, not raw bytes, which a server may re-wrap between folders. */
+function contentHashOf(parsed: ParsedMail, text: string | null, subject: string | null): string {
+  const files = parsed.attachments.map((a) => [a.filename ?? "", a.size, createHash("sha256").update(a.content).digest("hex")]);
+  const from = addresses(parsed.from)[0]?.address ?? null;
+  const parts = [parsed.date?.toISOString() ?? null, from, subject, text, typeof parsed.html === "string" ? parsed.html : null, files];
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
 /** One-line preview for the conversation list: the new text only, without quoted replies. */

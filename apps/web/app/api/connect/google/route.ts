@@ -3,7 +3,7 @@
 // which the callback reads. The refresh token never reaches the browser.
 
 import { randomBytes } from "node:crypto";
-import { accountsReady, sealJson } from "@/lib/server/accounts";
+import { accountsReady, sealHandoff } from "@/lib/server/accounts";
 import { authUrl, googleReady, pkce } from "@/lib/server/google";
 import { appOrigin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser } from "@/lib/server/request";
 import { GOOGLE_COOKIE, GOOGLE_RETURNS, type GoogleSignIn } from "./shared";
@@ -27,12 +27,15 @@ export async function POST(request: Request) {
   const signIn: GoogleSignIn = { userId: user.id, state, verifier, back, expires: Date.now() + 10 * 60_000 };
   const url = authUrl({ redirectUri: `${appOrigin(request)}/api/connect/google/callback`, state, challenge, hint: user.email, meet: body.meet === true });
 
+  // Sealed under the person's own key (lib/server/handoff.ts), which can be a KMS call.
+  const sealed = await sealHandoff(signIn, "google_connect").catch(() => null);
+  if (!sealed) return fail(500, "Could not start the sign-in. Try again.");
   const secure = appOrigin(request).startsWith("https:") ? "; Secure" : "";
   return Response.json({ url }, {
     headers: {
       ...noStore,
       // Lax, so it comes back on Google's top-level redirect to the callback.
-      "Set-Cookie": `${GOOGLE_COOKIE}=${sealJson(signIn)}; Path=/api/connect/google; Max-Age=600; HttpOnly; SameSite=Lax${secure}`,
+      "Set-Cookie": `${GOOGLE_COOKIE}=${sealed}; Path=/api/connect/google; Max-Age=600; HttpOnly; SameSite=Lax${secure}`,
     },
   });
 }

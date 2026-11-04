@@ -12,7 +12,7 @@ export function ReplyChannel({ options, target, onPick }: { options: Thread[]; t
     <nav aria-label="Reply On" className="flex shrink-0 items-center gap-1 border-t bg-background px-3 pt-2 md:px-4">
       <span className="mr-1 text-xs text-muted-foreground">Reply On</span>
       {options.map((t) => (
-        <Button key={t.id} type="button" size="sm" variant={t.channel === target.channel ? "secondary" : "ghost"} aria-pressed={t.channel === target.channel} className="gap-1.5 px-2" onClick={() => onPick(t)}>
+        <Button key={t.id} type="button" variant={t.channel === target.channel ? "secondary" : "ghost"} aria-pressed={t.channel === target.channel} className="gap-1.5 px-2" onClick={() => onPick(t)}>
           <ChannelMark channel={t.channel} />{CHANNEL_LABEL[t.channel] ?? "Chat"}
         </Button>
       ))}

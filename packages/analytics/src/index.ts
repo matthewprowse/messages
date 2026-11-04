@@ -16,8 +16,10 @@ export interface Traits {
   len: "short" | "medium" | "long";
   hour: "night" | "morning" | "afternoon" | "evening";
   known: boolean;
-  /** model: decided by the model. rule: your rules or corrections decided. copied: the same email triaged before. */
-  source: "model" | "rule" | "copied";
+  /** model: decided by the model. rule: your rules or corrections decided. sender: the sender's settled bulk verdict.
+   *  copied: the same email triaged before. superseded: an older message in a conversation with a newer one.
+   *  capped: past the sender's daily cap of model reads (apps/ai/ai/triage_signals.py), left neutral. */
+  source: "model" | "rule" | "sender" | "copied" | "superseded" | "capped";
 }
 
 /** The labels a person can change by hand today. Category and Needs Reply have no control in the app, so there is

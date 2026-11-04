@@ -1,10 +1,11 @@
-// Tests for import-plan.ts: which address book cards create, update or are skipped as ambiguous or your own.
+// Tests for import-plan.ts: which address book cards create, update or are skipped as ambiguous or your own, and which
+// card names are sent (only a changed one for an existing contact, since the stored name is sealed).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { toE164 } from "../contacts/signature-phones";
 import type { Card } from "./cards";
-import { importRows } from "./import-plan";
+import { cardName, importRows } from "./import-plan";
 
 const toRow = (c: Card) => ({ name: c.name, emails: c.emails, phones: c.phones.map((p) => toE164(p, "27") ?? p) });
 
@@ -40,4 +41,12 @@ test("two cards for one person update neither", () => {
   const identities = [{ contact_id: "A", kind: "phone", value: "+27812345678" }];
   const rows = importRows([card("Dev", ["0812345678"]), card("Devin", ["+27 81 234 5678"])], identities, toRow, new Set());
   assert.deepEqual(rows, []);
+});
+
+test("a card's name is sent for a new contact, and for an existing one only when it differs from the stored name", () => {
+  assert.equal(cardName("Thandi Nkosi", undefined), "Thandi Nkosi");
+  assert.equal(cardName(" Thandi Nkosi ", "Thandi Nkosi"), null);
+  assert.equal(cardName("Thandi Nkosi", "+27821234567"), "Thandi Nkosi");
+  assert.equal(cardName(null, "Thandi"), null);
+  assert.equal(cardName("  ", undefined), null);
 });

@@ -1,11 +1,11 @@
-// Tests for linkedin/files.ts: how files map to the helper's kinds, that staging is private and cleaned up,
-// and that more files get a longer send timeout.
+// Tests for linkedin/files.ts: how files map to the helper's kinds, that staging is private, named for the helper's
+// check and cleaned up, and that more files get a longer send timeout.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { helperKind, sendTimeoutMs, stageFiles } from "./files";
 
 test("photos and MP4 videos go as such, the rest as documents", () => {
@@ -30,6 +30,10 @@ test("files are staged privately, by position, and removed again", async () => {
     );
     const dir = join(staged.files[0].path, "..");
     assert.ok(dir.startsWith(base));
+    // The helper is told this folder, and the Go side takes files only from a konva-linkedin-* folder in the temp dir.
+    assert.equal(staged.dir, dir);
+    assert.equal(join(staged.dir, ".."), base);
+    assert.match(basename(staged.dir), /^konva-linkedin-/);
     assert.equal((await stat(dir)).mode & 0o777, 0o700);
     assert.equal((await stat(staged.files[0].path)).mode & 0o777, 0o600);
     assert.equal(await readFile(staged.files[1].path, "utf8"), "PDF");

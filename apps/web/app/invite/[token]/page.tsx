@@ -118,7 +118,7 @@ export default function InvitePage() {
             ) : wrongAddress ? (
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">You are signed in as {email}. This invite was sent to {preview.email}.</p>
-                <Button variant="secondary" className="w-full" onClick={async () => { remember(token); await signOut(); router.push("/login"); }}>Sign In With a Different Account</Button>
+                <Button variant="secondary" className="w-full" onClick={async () => { remember(token); await signOut({ keepInvite: true }); router.push("/login"); }}>Sign In With a Different Account</Button>
               </div>
             ) : (
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

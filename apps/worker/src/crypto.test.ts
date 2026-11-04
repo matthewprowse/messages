@@ -41,13 +41,26 @@ test("round-trips JSON credentials", () => {
 test("a sealer writes v2 under the user's key, reads v1 and v2, and ties a value to its account", async () => {
   const credKey = await deriveCredentialKey(Uint8Array.from(randomBytes(32)));
   const creds = { username: "me@icloud.com", password: "abcd-efgh" };
-  const sealer = makeSealer("acc-1", async () => credKey, key);
+  const sealer = makeSealer("acc-1", async () => [credKey], key);
   const v2 = await sealer.sealJson(creds);
   assert.ok(v2.startsWith("v2:"));
   assert.ok(!v2.includes("abcd"));
   assert.deepEqual(await sealer.openJson(v2), creds);
   assert.deepEqual(await sealer.openJson(encryptJson(creds, key)), creds); // an old row
-  await assert.rejects(makeSealer("acc-2", async () => credKey, key).openJson(v2));
-  await assert.rejects(makeSealer("acc-1", async () => await deriveCredentialKey(Uint8Array.from(randomBytes(32))), key).openJson(v2));
+  await assert.rejects(makeSealer("acc-2", async () => [credKey], key).openJson(v2));
+  await assert.rejects(makeSealer("acc-1", async () => [await deriveCredentialKey(Uint8Array.from(randomBytes(32)))], key).openJson(v2));
   await assert.rejects(sealer.open("v9:xx"), /Unknown ciphertext format/);
+});
+
+test("during a rotation a sealer opens a sign-in under the old key and seals new ones with the current", async () => {
+  const [current, previous] = await Promise.all([1, 2].map((n) => deriveCredentialKey(Uint8Array.from({ length: 32 }, () => n))));
+  const old = await makeSealer("acc-1", async () => [previous], "").seal("s");
+  const sealer = makeSealer("acc-1", async () => [current, previous], "");
+  assert.equal(await sealer.open(old), "s");
+  assert.equal(await makeSealer("acc-1", async () => [current], "").open(await sealer.seal("t")), "t");
+});
+
+test("a v1 sign-in fails with legacy_key_missing once ENCRYPTION_KEY is retired", async () => {
+  const sealer = makeSealer("acc-1", async () => [await deriveCredentialKey(Uint8Array.from(randomBytes(32)))], "");
+  await assert.rejects(sealer.open(encrypt("x", key)), (err: { code?: string }) => err.code === "legacy_key_missing");
 });

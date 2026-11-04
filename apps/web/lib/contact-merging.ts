@@ -5,12 +5,12 @@ import type { Json } from "@messages/db";
 import { FIELD } from "@messages/crypto/fields";
 import { chatIndexFor, companyRef } from "./address-refs";
 import { addressIndex } from "@messages/crypto/addresses";
-import { open, userKeys } from "./vault";
+import { open, seal, userKeys } from "./vault";
 import { openAddresses } from "./open-rows";
 import { supabase } from "./supabase";
 import { CONTACT_COLUMNS, mapContact } from "./data";
 import { allRows, type ContactSummary } from "./contacts";
-import { followMerges, type MergeSide } from "./merging";
+import { followMerges, isPlaceholderName, type MergeSide } from "./merging";
 import type { Contact } from "./types";
 
 export interface MergeSuggestion {
@@ -68,12 +68,16 @@ export async function listAutomaticMerges(contactId: string, identities: { email
   if (error) throw new Error(`Load merges failed (${error.code})`);
   if (data.length === 0) return [];
   const providers = data.some((m) => m.reason === "address_book") ? await addressBookProviders(identities) : [];
-  return data.map((m) => ({
-    id: m.id,
-    mergedName: String((m.merged_snapshot as { display_name?: unknown } | null)?.display_name ?? "").trim() || "Someone",
-    reason: m.reason,
-    createdAt: m.created_at,
-    providers,
+  // The snapshot holds the merged contact's row as it was, its name sealed (or readable, from before names were).
+  return Promise.all(data.map(async (m) => {
+    const name = (m.merged_snapshot as { display_name?: unknown } | null)?.display_name;
+    return {
+      id: m.id,
+      mergedName: (typeof name === "string" ? await open(FIELD.name, name) : "")?.trim() || "Someone",
+      reason: m.reason,
+      createdAt: m.created_at,
+      providers,
+    };
   }));
 }
 
@@ -129,15 +133,19 @@ export async function splitContactRpc(contactId: string, identityIds: string[], 
   return supabase.rpc("split_contact", {
     p_contact: contactId,
     p_identity_ids: identityIds,
-    p_name: name,
+    // Sealed; an empty name lets the database name them by an address or number.
+    p_name: name.trim() ? await seal(FIELD.name, name.trim()) : "",
     p_organization: (await companyRef(moved.find((m) => m.kind === "email")?.value)) as unknown as Json,
     p_chat_indexes: chats,
   });
 }
 
-/** Gives the kept contact the name chosen in the merge dialog, when the merge picked the other one. */
+/**
+ * Gives the kept contact the name chosen in the merge dialog, when the merge picked the other one. Sealed, with the
+ * kind of name it is (display_name_rank), which the database decides by later since it cannot read the name.
+ */
 export async function keepName(contactId: string, name: string): Promise<void> {
-  const { error } = await supabase.from("contacts").update({ display_name: name }).eq("id", contactId).neq("display_name", name);
+  const { error } = await supabase.from("contacts").update({ display_name: await seal(FIELD.name, name.trim()), display_name_rank: isPlaceholderName(name) ? 0 : 2 }).eq("id", contactId);
   if (error) throw new Error(`Keep name failed (${error.code})`);
 }
 
@@ -145,7 +153,7 @@ export async function keepName(contactId: string, name: string): Promise<void> {
 export async function loadContactGraph(): Promise<{ contacts: Contact[]; participants: Map<string, string[]> }> {
   const [parts, contacts, identities] = await Promise.all([
     allRows("Load contacts", (from, to) => supabase.from("thread_participants").select("thread_id, contact_id").order("thread_id").order("contact_id").range(from, to)),
-    allRows("Load contacts", (from, to) => supabase.from("contacts").select(CONTACT_COLUMNS).order("id").range(from, to)),
+    allRows("Load contacts", (from, to) => supabase.from("contacts").select(CONTACT_COLUMNS).order("id").range(from, to)).then(openAddresses),
     allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("id, contact_id, kind, value").order("id").range(from, to)).then(openAddresses),
   ]);
   const participants = new Map<string, string[]>();

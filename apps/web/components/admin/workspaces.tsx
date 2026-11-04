@@ -94,7 +94,7 @@ function TeamRow({ team, onChanged, onInvite }: { team: Team; onChanged: () => v
         <>
           {!team.owner_email && team.invited_email && <IconAction label="New Invite Link" icon={Link2} disabled={busy} onClick={() => void reissue()} />}
           <Input aria-label={`Seats for ${team.name}`} inputMode="numeric" className="h-8 w-16 text-right" value={seats} onChange={(e) => setSeats(e.target.value)} />
-          <Button size="sm" variant="secondary" disabled={busy || !valid || next === team.seats} onClick={() => void save()}>Save</Button>
+          <Button variant="secondary" disabled={busy || !valid || next === team.seats} onClick={() => void save()}>Save</Button>
         </>
       }
     />

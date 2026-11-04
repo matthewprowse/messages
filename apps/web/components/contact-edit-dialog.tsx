@@ -57,6 +57,7 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
     setFailure(null);
     const result = await updateContact(contact.id, {
       name: fields.values.name.trim(),
+      previousName: contact.name,
       company: fields.values.company,
       role: fields.values.role,
       relationship: fields.values.relationship,
@@ -103,7 +104,7 @@ function EditContactForm({ contact, onDone }: { contact: ContactDetail; onDone: 
                       {text}
                     </span>
                     {gone ? (
-                      <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => setRemoved(removed.filter((id) => !g.ids.includes(id)))}>Undo</Button>
+                      <Button type="button" variant="ghost" disabled={saving} onClick={() => setRemoved(removed.filter((id) => !g.ids.includes(id)))}>Undo</Button>
                     ) : (
                       <Button type="button" variant="ghost" size="icon" aria-label={`Remove ${text}`} disabled={saving} onClick={() => setRemoved([...removed, ...g.ids])}><X /></Button>
                     )}

@@ -16,6 +16,9 @@ export const maxDuration = 60;
 
 // Each try signs in to someone's mail server, maybe several of them, so few: 5 every 10 minutes.
 const overLimit = limiter(5, 10 * 60_000, { name: "connect-imap", perAddress: 20 });
+// And a cap per day, per person and per address, so the route cannot be used as a relay to try passwords against mail
+// servers at scale: a person connects a handful of mailboxes, with a few typos, not 20 a day.
+const overDailyLimit = limiter(20, 24 * 60 * 60_000, { name: "connect-imap-day", perAddress: 50 });
 
 export async function POST(request: Request) {
   if (!accountsReady()) return fail(503, "Connecting email is not set up on this server yet.");
@@ -35,6 +38,8 @@ export async function POST(request: Request) {
   if (typed && "error" in typed) return fail(400, typed.error);
   const wait = await overLimit(user.id, request);
   if (wait > 0) return fail(429, "Too many tries. Wait a few minutes and try again.", { "Retry-After": String(wait) });
+  const waitDay = await overDailyLimit(user.id, request);
+  if (waitDay > 0) return fail(429, "Too many tries today. Try again tomorrow, or contact support.", { "Retry-After": String(waitDay) });
 
   let candidates: Candidates;
   if (typed) {

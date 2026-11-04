@@ -3,9 +3,11 @@
 // the deciding is in ./inbox-rows.ts.
 
 import type { ImapFlow } from "imapflow";
+import type { Json } from "@messages/db";
 import { allRows, db, must } from "../db";
 import { log } from "../log";
 import type { FolderPaths } from "../ingest/imap-place";
+import { keepIngestMeta } from "../ingest/ingest-meta";
 import { chunks, mapLimit } from "../util";
 import { currentRows, goneRows } from "./inbox-rows";
 import { uidSet } from "../connectors/uid-set";
@@ -49,11 +51,17 @@ export async function reconcileInboxFully(ctx: ReconcileCtx, client: ImapFlow) {
   if (gone.length === 0) return;
 
   const found = await locate(ctx, client, gone);
-  const unknown = gone.filter((r) => !found.has(r.id)).map((r) => r.id);
-  for (const ids of chunks(unknown, 200)) {
+  // provider_meta is rebuilt for where the mail went, keeping what ingest read from its headers (ingest-meta.ts). Rows
+  // with nothing to keep are written together; the rest one by one, as each keeps its own.
+  const metaOf = new Map(gone.map((r) => [r.id, r.provider_meta]));
+  const unknown = gone.filter((r) => !found.has(r.id));
+  const plain = new Set(unknown.filter((r) => Object.keys(keepIngestMeta(r.provider_meta, {})).length === 0).map((r) => r.id));
+  for (const ids of chunks([...plain], 200)) {
     must(await db.from("messages").update({ provider_meta: { left: "INBOX" } }).in("id", ids), "mark messages gone");
   }
-  await mapLimit([...found], WRITE_AT_ONCE, async ([id, meta]) => {
+  const kept = unknown.filter((r) => !plain.has(r.id)).map((r): [string, Json] => [r.id, keepIngestMeta(r.provider_meta, { left: "INBOX" })]);
+  const placed = [...found].map(([id, meta]): [string, Json] => [id, keepIngestMeta(metaOf.get(id), meta)]);
+  await mapLimit([...kept, ...placed], WRITE_AT_ONCE, async ([id, meta]) => {
     must(await db.from("messages").update({ provider_meta: meta }).eq("id", id), "save found message");
   });
 

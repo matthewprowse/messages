@@ -17,7 +17,7 @@ function Choices({ unsure, onPick }: { unsure?: boolean; onPick: (choice: Choice
   return (
     <SettingsRows>
       <SettingsRow title="Business or Creator" description="Sign in on Instagram and approve Konva. There is nothing to type here.">
-        <Button size="sm" onClick={() => onPick("professional")}>Choose</Button>
+        <Button onClick={() => onPick("professional")}>Choose</Button>
       </SettingsRow>
       <SettingsRow title="Personal" description="Sign in with your Instagram username and password.">
         <Button variant="secondary" onClick={() => onPick("personal")}>Choose</Button>
@@ -32,7 +32,7 @@ function Choices({ unsure, onPick }: { unsure?: boolean; onPick: (choice: Choice
 }
 
 function ChangeType({ onChange }: { onChange: () => void }) {
-  return <Button variant="ghost" size="sm" className="-ml-2.5 mb-4" onClick={onChange}>Change Account Type</Button>;
+  return <Button variant="ghost" className="-ml-2.5 mb-4" onClick={onChange}>Change Account Type</Button>;
 }
 
 export function InstagramSetup() {

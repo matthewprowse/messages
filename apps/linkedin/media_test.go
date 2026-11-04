@@ -117,6 +117,51 @@ func TestCheckAttachments(t *testing.T) {
 	}
 }
 
+func TestStagingRoot(t *testing.T) {
+	tmp := t.TempDir()
+	dir, err := os.MkdirTemp(tmp, "konva-linkedin-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	realDir, _ := filepath.EvalSymlinks(dir)
+	if got, bad := stagingRoot(dir, tmp); bad != nil || got != realDir {
+		t.Errorf("the worker's private staging folder is the root: %q %+v", got, bad)
+	}
+	other, _ := os.MkdirTemp(tmp, "other-")
+	open, _ := os.MkdirTemp(tmp, "konva-linkedin-")
+	if err := os.Chmod(open, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested, _ := os.MkdirTemp(dir, "konva-linkedin-")
+	elsewhere := t.TempDir()
+	link := filepath.Join(tmp, "konva-linkedin-link")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, d := range map[string]string{
+		"no folder":                "",
+		"the temp folder itself":   tmp,
+		"another folder":           other,
+		"a folder others can read": open,
+		"a folder deeper down":     nested,
+		"a link out of the temp":   link,
+		"relative":                 filepath.Base(dir),
+		"a path going up":          dir + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(dir),
+		"missing":                  filepath.Join(tmp, "konva-linkedin-missing"),
+	} {
+		if _, bad := stagingRoot(d, tmp); bad == nil || bad.Kind != KindBadRequest {
+			t.Errorf("%s must be a bad request: %+v", name, bad)
+		}
+	}
+	// A file staged for one send cannot be sent by naming another send's folder as the root.
+	ok := writeFile(t, dir, "0", "pdf")
+	second, _ := os.MkdirTemp(tmp, "konva-linkedin-")
+	root, _ := stagingRoot(second, tmp)
+	if _, bad := checkAttachments([]attachmentArg{{Path: ok, Name: "x", Kind: "file"}}, root); bad == nil {
+		t.Error("a file from another staging folder is a bad request")
+	}
+}
+
 func TestSendFiles(t *testing.T) {
 	root := t.TempDir()
 	files := []attachment{

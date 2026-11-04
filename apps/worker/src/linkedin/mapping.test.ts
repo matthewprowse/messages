@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Field } from "@messages/crypto/fields";
 import type { LinkedInConversation, LinkedInMessage, LinkedInPerson } from "./helper";
-import { DELETED_TEXT, attachmentRows, ingestPayload, isGroup, messageText, personName, seenByOther, skipConversation, stubConversation, unreadUrns, type Sealer } from "./mapping";
+import { DELETED_TEXT, attachmentRows, ingestPayload, isGroup, messageText, personName, personNameRank, seenByOther, skipConversation, stubConversation, unreadUrns, type Sealer } from "./mapping";
 
 // Hand-written data in the shape the helper reports. Names are made up.
 
@@ -30,12 +30,16 @@ const sealer: Sealer = {
   address: async (value) => (value === null ? null : `addr:${value}`),
   addressIndex: async (value) => `idx:${value}`,
   chatIndex: async (value) => `chat:${value}`,
+  groupIndex: async (value) => `group:${value}`,
 };
 
 test("names: first and last for a member, the name for a page, a placeholder for neither", () => {
   assert.equal(personName(sam), "Sam Example");
   assert.equal(personName(company), "Example Co");
   assert.equal(personName({ id: "x", urn: "urn:li:fsd_profile:x", kind: "member" }), "LinkedIn Member");
+  // The stand-in is ranked below a real name, so the database replaces it when the name arrives (it cannot read either).
+  assert.equal(personNameRank(sam), 2);
+  assert.equal(personNameRank({ id: "x", urn: "urn:li:fsd_profile:x", kind: "member" }), 0);
 });
 
 test("spam and conversations you have left are not stored", () => {
@@ -63,7 +67,7 @@ test("an inbound message becomes ingest_linkedin's payload, sealed and indexed",
   assert.equal(payload.resurface, true);
   assert.equal(payload.is_read, false);
   assert.equal(payload.sent_at, new Date(2000).toISOString());
-  assert.deepEqual(payload.sender, { urn: "addr:urn:li:fsd_profile:ACoAASAM", urn_index: "idx:urn:li:fsd_profile:ACoAASAM", display_name: "Sam Example" });
+  assert.deepEqual(payload.sender, { urn: "addr:urn:li:fsd_profile:ACoAASAM", urn_index: "idx:urn:li:fsd_profile:ACoAASAM", display_name: "sealed[name]:Sam Example", name_rank: 2 });
   assert.equal(payload.sender_address, "addr:urn:li:fsd_profile:ACoAASAM");
   assert.equal(payload.sender_index, "idx:urn:li:fsd_profile:ACoAASAM");
   assert.deepEqual(payload.participants, [payload.sender], "everyone but you");
@@ -89,7 +93,8 @@ test("a group names who said it in the preview and keeps its title", async () =>
   const payload = await ingestPayload(message(), conv, me.id, sealer, { live: true, unread: false });
   assert.ok(payload);
   assert.equal(payload.is_group, true);
-  assert.equal(payload.group_name, "Deal Team");
+  assert.equal(payload.group_name, "sealed[name]:Deal Team");
+  assert.equal(payload.group_name_index, "group:Deal Team");
   assert.equal(payload.preview, "sealed[preview]:Sam Example: Is Thursday still good?");
   assert.equal(payload.participants.length, 2);
 });

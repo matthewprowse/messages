@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BAD_RECIPIENTS, FROM_NOT_ALLOWED, chooseFrom, cleanRecipients, fromCandidates, isEmailAddress, outgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";
+import { BAD_RECIPIENTS, FROM_NOT_ALLOWED, chooseFrom, cleanRecipients, fromCandidates, isEmailAddress, outgoingRecipients, replyToChosen, replyToParticipants, sendableAliases } from "./from-address";
 
 const account = { accountAddress: "matthew@prowse.co.za", sendAddresses: ["matthew@prowse.co.za", "hello@prowse.co.za", "m@icloud.com"] };
 
@@ -16,6 +16,14 @@ test("a chosen From is used when the account can send from it", () => {
 
 test("a chosen From the account cannot send from fails", () => {
   assert.deepEqual(chooseFrom({ ...account, requested: "boss@company.com", inboundTo: [] }), { error: FROM_NOT_ALLOWED });
+});
+
+test("only providers that check send addresses themselves may send from a listed alias", () => {
+  for (const provider of ["gmail", "outlook", "icloud"]) assert.deepEqual(sendableAliases(provider, account.sendAddresses), account.sendAddresses, provider);
+  const imap = { accountAddress: account.accountAddress, sendAddresses: sendableAliases("imap", account.sendAddresses) };
+  assert.deepEqual(chooseFrom({ ...imap, requested: "hello@prowse.co.za", inboundTo: [] }), { error: FROM_NOT_ALLOWED });
+  assert.deepEqual(chooseFrom({ ...imap, requested: null, inboundTo: ["hello@prowse.co.za"] }), { address: "matthew@prowse.co.za" });
+  assert.deepEqual(chooseFrom({ ...imap, requested: "Matthew@Prowse.co.za", inboundTo: [] }), { address: "matthew@prowse.co.za" });
 });
 
 test("a reply defaults to the address the email was sent to", () => {

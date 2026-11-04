@@ -76,7 +76,8 @@ class Decision(unittest.TestCase):
     def test_decision_comes_after_the_tone(self):
         p = draft_prompt(me="Matt", about="", rules=[], examples=[], recent=[], them="Sam", relationship="", style_note="",
                          conversation=[("Sam", "Free Thursday at 3?")], tone="shorter", instruction="Mention parking", decision="I am free on Thursday at 15:00.")
-        self.assertLess(p.index("Tone:"), p.index("What they decided to say: I am free on Thursday at 15:00."))
+        self.assertLess(p.index("Tone:"), p.index("What they decided to say"))
+        self.assertRegex(p, r"What they decided to say[^\n]*\n<<<UNTRUSTED-[0-9a-f]+\nI am free on Thursday at 15:00.\nUNTRUSTED-[0-9a-f]+>>>")
         self.assertLess(p.index("What they decided to say"), p.index("Their instruction for this reply: Mention parking"))
         self.assertNotIn("What they decided", draft_prompt(me="", about="", rules=[], examples=[], recent=[], them="", relationship="", style_note="",
                                                            conversation=[], tone="default", instruction=None))

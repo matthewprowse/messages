@@ -182,3 +182,52 @@ def pending_query(since: str, skip: list[str] | None = None) -> dict[str, str]:
         "order": "sent_at.desc",
         "limit": str(BATCH),
     }
+
+
+# Per-sender cap -----------------------------------------------------------------------------------
+# Anyone can write to you, so one outside sender must not be able to spend your AI allowance by sending hundreds of
+# messages. Past SENDER_DAILY_CAP model reads for one sender in a UTC day, their messages get capped_outcome instead.
+SENDER_DAILY_CAP = 40  # model reads per sender per user per UTC day; a real correspondent stays far below it
+
+
+def sender_key(m: dict[str, Any]) -> tuple[str, str]:
+    """Who a message is from, per user: the blind index when there is one, else the opened address, else the conversation
+    (a WhatsApp chat is one sender)."""
+    return (m["user_id"], m.get("sender_index") or (m.get("sender_address") or "").lower() or f"thread:{m.get('thread_id')}")
+
+
+def capped_outcome(m: dict[str, Any]) -> dict[str, Any]:
+    """The verdict for a message over its sender's daily cap: left visible and unjudged (normal, not junk), as nothing
+    was asked. It still passes through apply_signals, so your rules, stars and corrections apply."""
+    return {"priority": "normal", "category": "fyi", "junk": False, "needs_reply": False, "summary": (m.get("subject") or "")[:200]}
+
+
+class SenderCaps:
+    """Counts model reads per sender per UTC day, in memory: a restart starts the day's count again, which only ever
+    lets a sender through sooner. Not thread safe on its own; triage calls it from its one loop thread."""
+
+    def __init__(self, cap: int = SENDER_DAILY_CAP):
+        self.cap = cap
+        self._day = ""
+        self._counts: dict[tuple[str, str], int] = {}
+
+    def split(self, ask: list[dict[str, Any]], ctx: dict[str, UserContext], now: datetime | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """(the messages the model may read, the ones over their sender's cap), counting the first. A starred contact or a
+        sender on your Always list is never capped. ask is newest first, so the newest of a flood are the ones read."""
+        day = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+        if day != self._day:
+            self._day, self._counts = day, {}
+        keep: list[dict[str, Any]] = []
+        over: list[dict[str, Any]] = []
+        for m in ask:
+            c = ctx.get(m["user_id"]) or UserContext()
+            if m.get("sender_contact_id") in c.vip_contacts or matches(m.get("sender_address") or "", c.always):
+                keep.append(m)
+                continue
+            key = sender_key(m)
+            if self._counts.get(key, 0) >= self.cap:
+                over.append(m)
+            else:
+                self._counts[key] = self._counts.get(key, 0) + 1
+                keep.append(m)
+        return keep, over

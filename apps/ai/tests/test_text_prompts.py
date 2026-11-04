@@ -244,7 +244,7 @@ class LearnRules(unittest.TestCase):
         existing = [{"id": "r1", "rule": "Keeps replies short", "scope": "global", "contact_id": None, "support_count": 2}]
         db = self.learn(existing, [{"rule": "Keep replies short.", "scope": "global"}])
         self.assertEqual(db.inserts, [])
-        self.assertEqual(db.updates, [({"id": "eq.r1"}, {"support_count": 3})])
+        self.assertEqual(db.updates, [({"id": "eq.r1", "user_id": "eq.u"}, {"support_count": 3})])
 
     def test_a_new_rule_is_inserted_and_its_dash_tidied(self):
         db = self.learn([], [{"rule": "Sign off with Cheers \u2014 never Regards", "scope": "global"}])

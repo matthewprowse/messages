@@ -76,8 +76,10 @@ CI (`.github/workflows/ci.yml`) runs the same checks.
 - **Never kill processes by pattern.** No `pkill -f` or `killall`. Kill by exact PID only.
 - **Use the dev server on `localhost:3000`.** Do not start another one on a different port.
 - **The Supabase project for this app is `bbfahndgnmdlehicmphe`.** The Marketing project is separate: never touch it.
-- **Privacy is architecture.** Message text, names and addresses are encrypted per user (`packages/crypto`). Analytics
-  are content free: counts and screens, never text. Never log message content or addresses.
+- **Privacy is architecture.** Message text and addresses are encrypted per user (`packages/crypto`). Names are being
+  moved over: contact, company and group names, calendar guests and outgoing attachments are not sealed yet, so seal
+  anything new you add and never assume a name column is encrypted. Analytics are content free: counts and screens,
+  never text. Never log message content, names or addresses.
 - **Connect accounts in the web page only.** No companion Mac apps, extensions or terminal-only flows for users.
 - **Keys and `.env` files are never committed.** `.env.example` documents each variable.
 

@@ -7,10 +7,10 @@
 import { flagOn } from "@messages/crypto/flags";
 import { addressIndex, chatIndex, domainIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
-import { encryptField } from "@messages/crypto";
+import type { Place } from "@messages/crypto";
 import { companyDomain, companyNameForDomain } from "@messages/email-text/company";
 import { supabase } from "./supabase";
-import { open, userKeys } from "./vault";
+import { open, seal, sealWith, userKeys } from "./vault";
 
 const encryptAddresses = flagOn(process.env.NEXT_PUBLIC_ENCRYPT_ADDRESSES);
 
@@ -20,9 +20,9 @@ export interface IdentityRef {
   idx: string;
 }
 
-/** An address or number as stored: encrypted when addresses are, as it is otherwise. */
-export async function sealAddress(value: string): Promise<string> {
-  return encryptAddresses ? encryptField(await userKeys(), FIELD.address, value) : value;
+/** An address or number as stored at `where`: encrypted when addresses are, as it is otherwise. */
+export async function sealAddress(value: string, where?: Place): Promise<string> {
+  return encryptAddresses ? sealWith(await userKeys(), FIELD.address, value, where) : value;
 }
 
 /** Each address or number with its index, ready for create_contact. */
@@ -30,7 +30,7 @@ export async function identityRefs(items: { kind: string; value: string }[]): Pr
   const keys = await userKeys();
   return Promise.all(items.map(async (i) => ({
     kind: i.kind,
-    value: encryptAddresses ? await encryptField(keys, FIELD.address, i.value) : i.value,
+    value: encryptAddresses ? await sealWith(keys, FIELD.address, i.value, { place: "contact_identities.value" }) : i.value,
     idx: await addressIndex(keys, i.value),
   })));
 }
@@ -68,7 +68,7 @@ async function ownAddresses(): Promise<string[]> {
   return read;
 }
 
-/** The company an email address belongs to, as organization_for_index takes it, or null. */
+/** The company an email address belongs to, as organization_for_index takes it (domain and name sealed), or null. */
 export async function companyRef(email: string | undefined): Promise<{ index: string; domain: string; name: string } | null> {
   if (!email) return null;
   const domain = companyDomain(email, await ownAddresses());
@@ -76,8 +76,9 @@ export async function companyRef(email: string | undefined): Promise<{ index: st
   const keys = await userKeys();
   return {
     index: await domainIndex(keys, domain),
-    domain: encryptAddresses ? await encryptField(keys, FIELD.domain, domain) : domain,
-    name: companyNameForDomain(domain),
+    domain: encryptAddresses ? await sealWith(keys, FIELD.domain, domain, { place: "organizations.domain" }) : domain,
+    // Sealed like every company name: the database stores it as given and never reads it.
+    name: await seal(FIELD.name, companyNameForDomain(domain), { place: "organizations.name" }),
   };
 }
 

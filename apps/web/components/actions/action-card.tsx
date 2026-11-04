@@ -108,15 +108,15 @@ function Card({ action, thread, msgs, vars, files, text, onText, onDone }: CardP
       )}
       {args.kind === "book_meeting" && slots.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-label="Meeting Time">
-          {slots.map((s, i) => <Button key={s.toISOString()} type="button" size="sm" variant={i === pick ? "secondary" : "outline"} role="radio" aria-checked={i === pick} onClick={() => setPick(i)}>{slotButton(s)}</Button>)}
+          {slots.map((s, i) => <Button key={s.toISOString()} type="button" variant={i === pick ? "secondary" : "outline"} role="radio" aria-checked={i === pick} onClick={() => setPick(i)}>{slotButton(s)}</Button>)}
         </div>
       )}
       {args.kind === "attach_file" && <p className="mt-2 truncate">{args.name}</p>}
       {args.kind === "use_template" && <p className="mt-2 truncate">{args.title}</p>}
       {blocked && <p className="mt-2 text-muted-foreground">{blocked}</p>}
       <div className="mt-3 flex gap-2">
-        <Button type="button" size="sm" disabled={busy || !!blocked || (args.kind === "book_meeting" && !events) || (args.kind !== "attach_file" && args.kind !== "use_template" && !args.title.trim())} onClick={() => void approve()}>Approve</Button>
-        <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => onDone("dismissed")}>Dismiss</Button>
+        <Button type="button" disabled={busy || !!blocked || (args.kind === "book_meeting" && !events) || (args.kind !== "attach_file" && args.kind !== "use_template" && !args.title.trim())} onClick={() => void approve()}>Approve</Button>
+        <Button type="button" variant="ghost" disabled={busy} onClick={() => onDone("dismissed")}>Dismiss</Button>
       </div>
       {args.kind === "book_meeting" && (
         <NewEventDialog

@@ -61,6 +61,19 @@ export function idbStorage(): ByteStorage {
   };
 }
 
+/**
+ * Whether the index database may exist, so a wipe on a signed-out page does not create an empty one just to clear it.
+ * True when the browser cannot list its databases.
+ */
+export async function indexMayExist(): Promise<boolean> {
+  try {
+    const list = await indexedDB.databases?.();
+    return !list || list.some((d) => d.name === DB_NAME);
+  } catch {
+    return true;
+  }
+}
+
 /** Whether IndexedDB can be used here (not in some private windows and old browsers). */
 export function hasIndexedDb(): boolean {
   try {

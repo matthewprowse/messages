@@ -31,7 +31,7 @@ from .hints import has_news, human_agent_on, safety_wait, webhooks_on
 from .graph import Graph, GraphError
 from .mapping import Person, Thread, payload, sent_item
 from .official_mapping import FALLBACK_FIELDS, FIELDS, thread as map_thread, time_us
-from .store import OFFICIAL_SCOPE, Store, fetch
+from .store import OFFICIAL_SCOPE, UNVERIFIED, Store, fetch
 from .sync import MAY_HAVE_SENT, TEXT_ONLY, Settings
 from .window import CLOSED, TAGGED, reply_mode
 
@@ -345,7 +345,11 @@ class OfficialSync:
         if (row.get("attachment_count") or 0) > 0:
             self.store.fail(row["id"], TEXT_ONLY)
             return
-        text = self.store.body(row["user_id"], row.get("body")).strip()
+        body = self.store.outbox_body(row)
+        if body is None:
+            self.store.fail(row["id"], UNVERIFIED)
+            return
+        text = body.strip()
         if not text:
             self.store.fail(row["id"], "There is nothing to send.")
             return

@@ -49,7 +49,8 @@ export async function moveAttachmentFile(keys: Keys, files: ShareFiles | undefin
       if (row.sealed && row.storage_path && !row.team_path) {
         const sealed = await files.read(row.storage_path);
         if (sealed) {
-          const plain = await decryptBytes(await keys.user(move.userId), FIELD.attachmentData, sealed);
+          // The agent's file may be bound to its own place (packages/crypto/src/bound.ts): opened there.
+          const plain = await decryptBytes(await keys.user(move.userId), FIELD.attachmentData, sealed, `attachments/${row.storage_path}`);
           const team = await files.team(move.workspaceId);
           const path = teamFilePath(move.workspaceId, row.id);
           await files.write(path, await encryptTeamBytes(team.keys, FIELD.attachmentData, plain));
@@ -66,12 +67,12 @@ export async function moveAttachmentFile(keys: Keys, files: ShareFiles | undefin
   return changes.write(row.id);
 }
 
-/** Opens a team copy with the current key, else the older versions. null when none opens it. */
-export async function openTeamFile(keys: TeamKeys[], sealed: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer> | null> {
+/** Opens a team copy kept at `path` with the current key, else the older versions. null when none opens it. */
+export async function openTeamFile(keys: TeamKeys[], sealed: Uint8Array<ArrayBuffer>, path?: string): Promise<Uint8Array<ArrayBuffer> | null> {
   if (!isSealedBytes(sealed)) return null;
   for (const k of keys) {
     try {
-      return await decryptTeamBytes(k, FIELD.attachmentData, sealed);
+      return await decryptTeamBytes(k, FIELD.attachmentData, sealed, path ? `attachments/${path}` : undefined);
     } catch {
       // another version
     }

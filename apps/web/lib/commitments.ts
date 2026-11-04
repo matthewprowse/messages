@@ -67,3 +67,22 @@ export function dueText(c: Pick<Commitment, "dueOn">, now: Date): string {
   const d = new Date(+c.dueOn.slice(0, 4), +c.dueOn.slice(5, 7) - 1, +c.dueOn.slice(8, 10));
   return `Due ${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}`;
 }
+
+/**
+ * The open promises after one changed (a Realtime row): a done one leaves, an open one replaces its old copy where it
+ * stood or, when new or moved to another day, goes in by due day as loadCommitments orders them (soonest, no day last).
+ */
+export function applyCommitment(all: Commitment[], changed: Commitment): Commitment[] {
+  const at = all.findIndex((c) => c.id === changed.id);
+  if (changed.status !== "open") return at < 0 ? all : all.filter((c) => c.id !== changed.id);
+  if (at >= 0 && all[at].dueOn === changed.dueOn) return all.map((c, i) => (i === at ? changed : c));
+  const rest = at >= 0 ? all.filter((c) => c.id !== changed.id) : all;
+  const later = (c: Commitment) => changed.dueOn !== null && (c.dueOn === null || c.dueOn > changed.dueOn);
+  const i = rest.findIndex(later);
+  return i < 0 ? [...rest, changed] : [...rest.slice(0, i), changed, ...rest.slice(i)];
+}
+
+/** The open promises without one (its row was deleted). */
+export function removeCommitment(all: Commitment[], id: string): Commitment[] {
+  return all.some((c) => c.id === id) ? all.filter((c) => c.id !== id) : all;
+}

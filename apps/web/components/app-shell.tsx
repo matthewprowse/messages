@@ -15,6 +15,7 @@ import { useOnboardingMeta } from "@/lib/onboarding";
 import { isMarketingPath } from "@/lib/marketing-routes";
 import { useMyTeam } from "@/lib/share";
 import { PwaBoot } from "@/components/pwa-boot";
+import { IdlePrefetch } from "@/components/idle-prefetch";
 import { NoteCaptureShortcut } from "@/components/note-capture";
 import { SyncBar } from "@/components/sync-bar";
 import { WhatsNewDialog } from "@/components/whats-new/whats-new-dialog";
@@ -187,6 +188,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         Skip to Content
       </a>
       <PwaBoot />
+      <IdlePrefetch />
       <NoteCaptureShortcut />
       <Rail searchOpen={searchOpen} onSearch={() => { setWantSearch(true); setSearchOpen(true); }} />
       {searchReady && <SearchCommand open={searchOpen} onOpenChange={setSearchOpen} />}

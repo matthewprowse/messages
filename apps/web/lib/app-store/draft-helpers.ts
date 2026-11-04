@@ -4,8 +4,7 @@
 
 import type { Profile, Thread } from "../types";
 import { supabase } from "../supabase";
-import { userKeys } from "../vault";
-import { encryptBytes } from "@messages/crypto";
+import { sealBytesWith, userKeys } from "../vault";
 import { FIELD } from "@messages/crypto/fields";
 
 /** How long the composer waits for an AI draft before giving up. */
@@ -19,7 +18,7 @@ export async function uploadRecording(userId: string, audio: Blob): Promise<stri
   const ext = audio.type.startsWith("audio/ogg") ? "ogg" : audio.type.startsWith("audio/mp4") ? "m4a" : "webm";
   const path = `${userId}/drafts/${crypto.randomUUID()}.${ext}`;
   try {
-    const sealed = await encryptBytes(await userKeys(), FIELD.voiceInstruction, new Uint8Array(await audio.arrayBuffer()));
+    const sealed = await sealBytesWith(await userKeys(), FIELD.voiceInstruction, new Uint8Array(await audio.arrayBuffer()), `attachments/${path}`);
     const { error } = await supabase.storage.from("attachments").upload(path, new Blob([sealed], { type: "application/octet-stream" }), { contentType: "application/octet-stream" });
     return error ? undefined : path;
   } catch {

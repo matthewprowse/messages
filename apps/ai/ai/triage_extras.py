@@ -3,10 +3,16 @@ of the user's Auto labels. Also the rule that decides whether the label may be p
 Pure: no network, no database.
 
 The model only ever returns a code from a closed list and the number of an Auto label, never text that is trusted:
-a label is found by its number in the list we sent."""
+a label is found by its number in the list we sent.
+
+The model's suspicious flag can be talked down by the email it reads, so header_suspicion adds checks made in code that
+it cannot change (a display name carrying another address or domain, a Reply-To elsewhere, failed SPF, DKIM or DMARC),
+and the flag stored is the stronger of the two. twin_key says when two rows are the same email for copying a verdict."""
 
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +34,72 @@ def read_suspicious(item: dict[str, Any]) -> str | None:
     """payment_change, phishing or impersonation, or None. Anything else the model says counts as not suspicious."""
     value = item.get("suspicious")
     return value if value in SUSPICIOUS_KINDS[1:] else None
+
+
+# Second-level labels under a country code, so "mail.acme.co.za" is the brand "acme", as "acme.com" is.
+_SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu", "ltd", "plc", "nom", "web"}
+_EMAIL_IN = re.compile(r"[\w.+-]+@([\w-]+(?:\.[\w-]+)+)")
+# A domain shown in a display name ("PayPal.com Support"). Only common endings count, so "St.John" or "J.Smith" is a name.
+_TLDS = "com|net|org|info|biz|io|co|ai|app|dev|me|online|site|xyz|shop|store|email|support|live|africa|za|uk|us|eu|de|fr|nl|au|ca|in|ng|ke"
+_DOMAIN_IN = re.compile(rf"\b((?:[a-z0-9-]+\.)+(?:{_TLDS}))\b", re.I)
+_PASS = "pass"
+
+
+def brand_of(domain: str) -> str:
+    """The name a domain is registered under, without its suffix: "acme" for acme.com, mail.acme.co.za and acme.co.uk."""
+    labels = [p for p in domain.lower().strip(".").split(".") if p]
+    if len(labels) < 2:
+        return labels[0] if labels else ""
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL:
+        return labels[-3]
+    return labels[-2]
+
+
+def _domain(address: str | None) -> str:
+    return (address or "").rsplit("@", 1)[-1].strip().strip(">").lower() if "@" in (address or "") else ""
+
+
+def auth_failed(auth: Any) -> bool:
+    """True when the receiving server's checks say the From was not sent by its domain: DMARC failed, or neither SPF nor
+    DKIM passed. Absent (older rows, chats, providers that do not say) is not a failure."""
+    if not isinstance(auth, dict) or not auth:
+        return False
+    verdict = lambda key: str(auth.get(key) or "none").strip().lower()
+    return verdict("dmarc") == "fail" or (verdict("spf") != _PASS and verdict("dkim") != _PASS)
+
+
+def header_suspicion(name: str | None, sender: str | None, auth: Any = None, reply_to_domain: str | None = None) -> str | None:
+    """impersonation when the headers say the sender is not who the mail claims, else None. Checked in code, so nothing
+    in the email can argue it away: a display name that carries an email address or a domain of another brand than the
+    sender's ("PayPal Support <x@evil.biz>", "billing@acme.com <x@gmail.com>"), a Reply-To at another brand, or failed
+    authentication. sender is the From address; name its display name; auth is provider_meta.auth; reply_to_domain is
+    provider_meta.reply_to_domain (the worker keeps only the domain, and only when it is not the From address's)."""
+    domain = _domain(sender)
+    if not domain:
+        return None
+    mine = brand_of(domain)
+    shown = name or ""
+    for found in _EMAIL_IN.findall(shown) + [m for m in _DOMAIN_IN.findall(shown) if "@" not in m]:
+        if brand_of(found) != mine:
+            return "impersonation"
+    other = (reply_to_domain or "").strip().strip(".").lower() if isinstance(reply_to_domain, str) else ""
+    if other and brand_of(other) != mine:  # mail.acme.com replying for acme.com is the same brand
+        return "impersonation"
+    return "impersonation" if auth_failed(auth) else None
+
+
+def stronger_suspicion(model: str | None, rules: str | None) -> str | None:
+    """The flag to store: the model's own kind when it gave one (it says more), otherwise what the header checks found.
+    The model can add a warning but never take one away."""
+    return model if model in SUSPICIOUS_KINDS[1:] else rules if rules in SUSPICIOUS_KINDS[1:] else None
+
+
+def twin_key(m: dict[str, Any]) -> tuple[str, str, str, str]:
+    """When two incoming rows are one email (the same mail in two of the user's accounts): the same Message-ID, the
+    same sender and the same subject. A Message-ID alone is chosen by the sender, so a forged one could borrow a verdict."""
+    sender = m.get("sender_index") or (m.get("sender_address") or "").strip().lower()
+    subject = hashlib.sha256(" ".join(str(m.get("subject") or "").split()).lower().encode()).hexdigest()[:16]
+    return (m["user_id"], m.get("provider_message_id") or m["id"], sender, subject)
 
 
 def read_label(item: dict[str, Any], count: int) -> int | None:

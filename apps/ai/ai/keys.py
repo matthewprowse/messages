@@ -8,7 +8,12 @@ user_keys holds each user's data key encrypted by a wrapper; wrapped_by names wh
               is needed. Unwrapped keys are cached in memory for about 10 minutes and never written or logged.
 A workspace's key (team_keys, one row per version) is wrapped the same way with "team_keys:<workspace id>". The AI
 worker only reads keys: the sync worker creates them when a user's first message arrives, or a workspace's key is
-first used. The Instagram connector may make a user's key (wrap_new), with kms:v1 when KMS_KEY_NAME is set."""
+first used. The Instagram connector may make a user's key (wrap_new), with kms:v1 when KMS_KEY_NAME is set.
+
+During a rotation of a user's key (apps/worker/src/rekey) their user_keys row also names the next or previous key (both
+open, neither seals) and the index key their blind indexes are made with ("user_index_keys:<user id>"):
+unwrap_user_ring reads them all. local:v1 is being retired: without KEY_WRAPPING_KEY a row it made raises
+LegacyKeyMissing, whose name is the code the logs show."""
 
 from __future__ import annotations
 
@@ -29,6 +34,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .tls import CONTEXT
 
 KEY_CACHE_S = 10 * 60
+
+
+class LegacyKeyMissing(ValueError):
+    """A key wrapped by local:v1 while KEY_WRAPPING_KEY is not set: run `pnpm --filter worker rewrap-keys` (or set it back)."""
 
 
 def _aad(scope: str, owner_id: str) -> bytes:
@@ -184,6 +193,8 @@ def set_kms(kms: Kms | None) -> None:
 def _unwrap_row(row: dict, master_key_b64: str, owner_id: str, scope: str, kms: Kms | None) -> bytes:
     by = row.get("wrapped_by")
     if by == "local:v1":
+        if not master_key_b64:
+            raise LegacyKeyMissing("A local:v1 key needs KEY_WRAPPING_KEY, which is not set.")
         return unwrap_local(master_key_b64, row["wrapped_key"], owner_id, scope)
     if by == "kms:v1":
         client = kms or kms_from_env()
@@ -196,6 +207,22 @@ def _unwrap_row(row: dict, master_key_b64: str, owner_id: str, scope: str, kms: 
 def unwrap(row: dict, master_key_b64: str, user_id: str, kms: Kms | None = None) -> bytes:
     """A user's data key from their user_keys row. Raises for a wrapper this worker is not set up for."""
     return _unwrap_row(row, master_key_b64, user_id, "user", kms)
+
+
+def unwrap_user_ring(row: dict, master_key_b64: str, user_id: str, kms: Kms | None = None) -> tuple[bytes, list[bytes], bytes | None]:
+    """A user's keyring from their whole user_keys row, as (current, older, index key or None), like userKeyringFor in
+    packages/crypto/src/wrap.ts. Every key the row names must unwrap, or this raises: a value under a key this worker
+    cannot open would otherwise read as empty."""
+    current = unwrap(row, master_key_b64, user_id, kms)
+    older = [
+        _unwrap_row({"wrapped_key": row[f"{slot}_wrapped_key"], "wrapped_by": row.get(f"{slot}_wrapped_by")}, master_key_b64, user_id, "user", kms)
+        for slot in ("next", "previous")
+        if row.get(f"{slot}_wrapped_key") and row.get(f"{slot}_wrapped_by")
+    ]
+    index_key = None
+    if row.get("index_wrapped_key") and row.get("index_wrapped_by"):
+        index_key = _unwrap_row({"wrapped_key": row["index_wrapped_key"], "wrapped_by": row["index_wrapped_by"]}, master_key_b64, user_id, "user_index", kms)
+    return current, older, index_key
 
 
 def unwrap_team(row: dict, master_key_b64: str, workspace_id: str, kms: Kms | None = None) -> bytes:
@@ -237,4 +264,6 @@ def wrap_new(master_key_b64: str, data_key: bytes, owner_id: str, scope: str = "
     client = kms or kms_from_env()
     if client is not None:
         return client.wrap(data_key, owner_id, scope), client.id
+    if not master_key_b64:
+        raise ValueError("Set KMS_KEY_NAME (or, until it is retired, KEY_WRAPPING_KEY) to make keys.")
     return wrap_local(master_key_b64, data_key, owner_id, scope), "local:v1"

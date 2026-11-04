@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CalendarEvent } from "@/lib/calendar";
-import { byTime, dayTitle, isDimmed, rangeLabel, timeRange } from "./dates";
+import { byTime, dayTitle, isDimmed, longDate, rangeLabel, timeRange } from "./dates";
 
 const event = (over: Partial<CalendarEvent>): CalendarEvent => ({ id: "e", title: "Meeting", startsAt: "", endsAt: null, allDay: false, location: null, attendees: [], ...over });
 const at = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m);
@@ -15,14 +15,20 @@ test("today, tomorrow and yesterday have names, other days a full date with the 
   assert.equal(dayTitle("2026-11-04", today), "Today");
   assert.equal(dayTitle("2026-11-05", today), "Tomorrow");
   assert.equal(dayTitle("2026-11-03", today), "Yesterday");
-  assert.equal(dayTitle("2026-11-20", today), "Friday 20 November");
-  assert.match(dayTitle("2027-01-05", today), /2027/);
+  assert.equal(dayTitle("2026-11-20", today), "Friday, 20 November");
+  assert.equal(dayTitle("2027-01-05", today), "Tuesday, 5 January 2027");
 });
 
-test("a range reads 2 to 8 Nov, and spells the months when they differ", () => {
-  assert.equal(rangeLabel(at(2, 0), at(9, 0), today), "2 to 8 Nov");
-  assert.equal(rangeLabel(new Date(2026, 9, 28), new Date(2026, 10, 4), today), "28 Oct to 3 Nov");
-  assert.equal(rangeLabel(at(4, 0), at(5, 0), today), "4 Nov");
+test("a long date has a comma after the weekday and the year only when asked or not this year", () => {
+  assert.equal(longDate(at(10, 9)), "Tuesday, 10 November");
+  assert.equal(longDate(at(10, 9), today, true), "Tuesday, 10 November 2026");
+  assert.equal(longDate(new Date(2027, 0, 5), today), "Tuesday, 5 January 2027");
+});
+
+test("a range reads 2 to 8 November, and names both months when they differ", () => {
+  assert.equal(rangeLabel(at(2, 0), at(9, 0), today), "2 to 8 November");
+  assert.equal(rangeLabel(new Date(2026, 9, 28), new Date(2026, 10, 4), today), "28 October to 3 November");
+  assert.equal(rangeLabel(at(4, 0), at(5, 0), today), "4 November");
 });
 
 test("a timed event reads from start to end, with the end day when it runs past midnight", () => {

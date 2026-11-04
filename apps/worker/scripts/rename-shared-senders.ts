@@ -12,14 +12,18 @@
 
 import { viaCompany } from "@messages/email-text/company";
 import { allRows, db, must } from "../src/db";
-import { openAddressRows } from "../src/vault";
+import { FIELD } from "@messages/crypto/fields";
+import { open, openAddressRows, sealName } from "../src/vault";
 
 const dryRun = process.argv.includes("--dry-run");
 
 const squash = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-const orgs = await openAddressRows(
-  await allRows((from, to) => db.from("organizations").select("id, user_id, name, domain").order("id").range(from, to), "load companies"),
+// Names are sealed (contacts' are opened with the addresses): opened here, and sealed again when written.
+const orgs = await Promise.all(
+  (await openAddressRows(
+    await allRows((from, to) => db.from("organizations").select("id, user_id, name, domain").order("id").range(from, to), "load companies"),
+  )).map(async (o) => ({ ...o, name: (await open(o.user_id, FIELD.name, o.name)) ?? "" })),
 );
 const orgById = new Map(orgs.map((o) => [o.id, o]));
 const contacts = await openAddressRows(
@@ -39,7 +43,7 @@ for (const c of contacts) {
   if (!squash(via).startsWith(squash(org.name))) continue;
   if (c.contact_identities.some((i) => i.kind !== "email")) continue;
   perCompany.set(org.name, (perCompany.get(org.name) ?? 0) + 1);
-  if (!dryRun) must(await db.from("contacts").update({ display_name: org.name }).eq("id", c.id), "rename shared sender");
+  if (!dryRun) must(await db.from("contacts").update({ display_name: await sealName(c.user_id, org.name), display_name_rank: 0 }).eq("id", c.id), "rename shared sender");
   renamed++;
 }
 for (const [name, count] of [...perCompany].sort()) console.log(`${name}: ${count}`);

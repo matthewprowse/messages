@@ -2,7 +2,7 @@
 // Instagram connector writes which code it is waiting for to public.instagram_sign_ins; this tells the app
 // (with no code in the body) and hands the code back, encrypted, for the connector to take within seconds.
 
-import { accountsReady, sealJson } from "@/lib/server/accounts";
+import { accountsReady, sealRowJson } from "@/lib/server/accounts";
 import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
 
 export const runtime = "nodejs";
@@ -40,10 +40,17 @@ export async function POST(request: Request) {
 
   const code = body.code.replace(/[\s-]/g, "");
   if (!CODE.test(code)) return fail(400, "Enter the code from Instagram, six or eight digits.");
+  // Sealed under the person's own key and bound to this row's code (lib/server/handoff.ts); the connector opens it.
+  let sealed: string;
+  try {
+    sealed = await sealRowJson(user.id, { table: "instagram_sign_ins", column: "code" }, row.account_id, code);
+  } catch {
+    return fail(500, "That could not be saved. Try again.");
+  }
   // Only if the step is still the one the person saw, so a code never lands on a newer prompt.
   const { data: saved, error: saveError } = await admin
     .from("instagram_sign_ins")
-    .update({ code: sealJson(code) })
+    .update({ code: sealed })
     .eq("account_id", row.account_id)
     .eq("user_id", user.id)
     .eq("step", row.step)

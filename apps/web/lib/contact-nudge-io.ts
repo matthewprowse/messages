@@ -6,15 +6,18 @@ import { followTaskUpdate } from "./app-store/task-follow";
 import { supabase } from "./supabase";
 import { taskWriteFields, type TaskForm } from "./tasks";
 import { seal } from "./vault";
+import { queuePlace } from "./outbox-places";
 
 /** Makes the reminder. Resolves to an error sentence for the person, or null once the worker has made the task. */
 export async function queueNudge(form: TaskForm, contactId: string, provider: string | undefined): Promise<string | null> {
   const write = taskWriteFields(form, provider);
-  const [title, notes] = await Promise.all([seal(FIELD.taskTitle, write.title), seal(FIELD.taskNotes, write.notes)]).catch(() => [null, null] as const);
+  // The id is chosen here so the title and notes are sealed for this row alone (outbox-places.ts).
+  const id = crypto.randomUUID();
+  const [title, notes] = await Promise.all([seal(FIELD.taskTitle, write.title, queuePlace("task_updates", id, "title")), seal(FIELD.taskNotes, write.notes, queuePlace("task_updates", id, "notes"))]).catch(() => [null, null] as const);
   if (!title) return "Could not set the reminder. Check your connection and try again.";
   const { data, error } = await supabase
     .from("task_updates")
-    .insert({ action: "create", account_id: form.accountId, title, notes, due_at: write.due_at, due_all_day: write.due_all_day, priority: write.priority, contact_id: contactId })
+    .insert({ id, action: "create", account_id: form.accountId, title, notes, due_at: write.due_at, due_all_day: write.due_all_day, priority: write.priority, contact_id: contactId })
     .select("id")
     .single();
   if (error || !data) return "Could not set the reminder. Check your connection and try again.";

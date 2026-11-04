@@ -1,7 +1,7 @@
 """One iCloud sign-in for Mail, Calendar and Reminders: the job behind Connect iCloud in the app.
 
-The app queues a row in public.icloud_setups with the Apple ID and password (sealed under the static key, as
-sign-in codes are) and what the person ticked. When Mail or Calendar is ticked, this signs in to the account
+The app queues a row in public.icloud_setups with the Apple ID and password (sealed "v2:" under the person's own key,
+bound to this table, column and row: sealing.seal_handoff) and what the person ticked. When Mail or Calendar is ticked, this signs in to the account
 page (account_site), asks for the code in the app exactly as Reminders does (signin.sign_in, with the step
 written to the setup row), makes an app-specific password labelled "Konva", and hands it back sealed with the
 sign-in's trust token. The app then checks the password with iCloud Mail and Calendar and saves them as it saves
@@ -11,8 +11,15 @@ Mail and Calendar.
 
   status queued → signing_in → ready (the app takes it) or failed (error is the plain reason)
 
-Rows are the app's to delete once used; an old one left behind is deleted here after an hour. Only IDs and
-failure codes are logged."""
+Rows are the app's to delete once used. The Apple ID password is kept only while it is needed: dropped from the row as
+soon as the password is made unless Reminders still needs it, and from any row after WIPE_S; a ready row the app never
+took ends after WIPE_S with its made password, a finished one is deleted after FINISHED_S, and any row after KEEP_S.
+Only IDs and failure codes are logged.
+
+A row queued by the web app before per-user handoffs holds "v1:" values under the old static ENCRYPTION_KEY. Those are
+still read while it is set, and what this writes back to such a row is "v1:" too, so a web app from before the release
+can still read it: deploy this worker first, then the web app. Rows live under KEEP_S, so an hour after both are out no
+"v1:" handoff is left and ENCRYPTION_KEY can go."""
 
 from __future__ import annotations
 
@@ -23,7 +30,8 @@ from typing import Any, Callable
 
 from ... import log
 from ...supabase import Supabase, SupabaseError, missing_relation
-from ..instagram.sealing import open_json, seal_json
+from ...vault import Vault
+from ..instagram.sealing import open_handoff, open_legacy, seal_handoff, seal_json
 from .account_site import AppPasswordFailed, AccountSite, make_account_api, trust_token
 from .session import SessionDir
 from .signin import SignInFailed, SignInStopped, sign_in
@@ -32,6 +40,9 @@ TABLE = "icloud_setups"
 POLL_S = 3.0
 STALE_S = 30 * 60.0  # a sign-in claimed this long ago and never finished has stopped (the worker restarted)
 KEEP_S = 60 * 60.0  # any row older than this is deleted
+WIPE_S = 10 * 60.0  # no row keeps an Apple ID password, a typed code or a made password longer than this
+FINISHED_S = 5 * 60.0  # a done or failed row is deleted this long after it ended
+SWEEP_S = 60.0  # so WIPE_S is kept to within a minute
 FRESH_S = 60.0  # a queued sign-in older than this is never started: the person has stopped waiting for its code
 
 ASK = {
@@ -51,10 +62,12 @@ def now_iso(at: datetime | None = None) -> str:
 class SetupCodes:
     """signin.Codes over the setup row itself: the step shows in the app, which writes the answer back."""
 
-    def __init__(self, db: Supabase, setup_id: str, key: str):
+    def __init__(self, db: Supabase, setup_id: str, key: str, vault: Vault | None = None, user_id: str | None = None):
         self.db = db
         self.id = setup_id
         self.key = key
+        self.vault = vault
+        self.user_id = user_id
 
     def _patch(self, patch: dict[str, Any]) -> None:
         self.db.update(TABLE, {"id": f"eq.{self.id}"}, {**patch, "updated_at": now_iso()}, minimal=True)
@@ -72,7 +85,9 @@ class SetupCodes:
         # Cleared only if it is still what was just read, so one typed in the meantime is not lost.
         self.db.update(TABLE, {"id": f"eq.{self.id}", "code": f"eq.{sealed}"}, {"code": None}, minimal=True)
         try:
-            return str(open_json(sealed, self.key))
+            if self.vault is None or self.user_id is None:
+                return str(open_legacy(sealed, self.key))
+            return str(open_handoff(self.vault, self.key, self.user_id, TABLE, "code", self.id, sealed))
         except Exception:
             return None
 
@@ -86,9 +101,10 @@ class SetupCodes:
 class Setups:
     """The setup rows: claiming one, and settling it."""
 
-    def __init__(self, db: Supabase, key: str):
+    def __init__(self, db: Supabase, key: str, vault: Vault | None = None):
         self.db = db
-        self.key = key
+        self.key = key  # the old static key, for rows queued before per-user handoffs; empty once retired
+        self.vault = vault  # the owners' keys for "v2:" handoffs
 
     def claim(self, at: datetime | None = None) -> dict[str, Any] | None:
         """The oldest queued setup, now this worker's, or None. One that stopped mid-sign-in is not taken again:
@@ -102,15 +118,29 @@ class Setups:
         return row if claimed else None
 
     def sign_in_of(self, row: dict[str, Any]) -> dict[str, Any]:
-        return dict(open_json(row["sign_in"], self.key))
+        sealed = str(row.get("sign_in") or "")
+        if sealed.startswith("v1:") or self.vault is None:
+            return dict(open_legacy(sealed, self.key))
+        return dict(open_handoff(self.vault, self.key, row["user_id"], TABLE, "sign_in", row["id"], sealed))
 
-    def ready(self, setup_id: str, app_password: str, token: str | None) -> None:
-        self.db.update(
-            TABLE,
-            {"id": f"eq.{setup_id}", "status": "eq.signing_in"},
-            {"status": "ready", "result": seal_json({"appPassword": app_password, "trustToken": token}, self.key), "step": None, "method": None, "code": None, "detail": "Connecting Mail and Calendar.", "updated_at": now_iso()},
-            minimal=True,
-        )
+    def codes_for(self, row: dict[str, Any]) -> SetupCodes:
+        """The code exchange of a claimed row."""
+        return SetupCodes(self.db, row["id"], self.key, self.vault, row.get("user_id"))
+
+    def _seal(self, row: dict[str, Any], column: str, value: Any) -> str:
+        # The format of the sign-in it answers: a row the web app sealed "v1:" (from before per-user handoffs) is read by
+        # that same older web app, which only reads "v1:".
+        if str(row.get("sign_in") or "").startswith("v1:") or self.vault is None:
+            return seal_json(value, self.key)
+        return seal_handoff(self.vault, row["user_id"], TABLE, column, row["id"], value)
+
+    def ready(self, row: dict[str, Any], app_password: str, token: str | None, creds: dict[str, Any] | None = None) -> None:
+        """Hands the made password to the app. The Apple ID password goes from the row now unless Reminders was ticked,
+        which the app still starts with it; the app reads only the addresses for Mail and Calendar."""
+        patch: dict[str, Any] = {"status": "ready", "result": self._seal(row, "result", {"appPassword": app_password, "trustToken": token}), "step": None, "method": None, "code": None, "detail": "Connecting Mail and Calendar.", "updated_at": now_iso()}
+        if creds is not None and "reminders" not in (row.get("services") or []):
+            patch["sign_in"] = self._seal(row, "sign_in", {**creds, "password": ""})
+        self.db.update(TABLE, {"id": f"eq.{row['id']}", "status": "eq.signing_in"}, patch, minimal=True)
 
     def failed(self, setup_id: str, detail: str) -> None:
         """Failed, with the reason to show. The sign-in is cleared: nothing typed is kept after a failure."""
@@ -122,12 +152,23 @@ class Setups:
         )
 
     def sweep(self, at: datetime | None = None) -> None:
-        """Ends sign-ins that stopped with the worker, and deletes rows the app never came back for."""
+        """Ends sign-ins that stopped with the worker, takes passwords and codes off rows older than WIPE_S, and
+        deletes finished rows and rows the app never came back for."""
         at = at or datetime.now(timezone.utc)
         stale = now_iso(at - timedelta(seconds=STALE_S))
         rows = self.db.select(TABLE, {"select": "id", "status": "eq.signing_in", "claimed_at": f"lt.{stale}"})
         for row in rows:
             self.failed(row["id"], "The sign-in stopped before it finished. Connect again.")
+        wipe = now_iso(at - timedelta(seconds=WIPE_S))
+        self.db.update(
+            TABLE, {"status": "eq.ready", "updated_at": f"lt.{wipe}"},
+            {"status": "failed", "error": "The sign-in waited too long to finish. Connect again.", "sign_in": "", "result": None, "code": None, "detail": None, "updated_at": now_iso(at)},
+            minimal=True,
+        )
+        # A sign-in still running read the password when it was claimed; its code is left alone, as one typed a moment ago is taken within seconds.
+        self.db.update(TABLE, {"created_at": f"lt.{wipe}", "sign_in": "neq."}, {"sign_in": ""}, minimal=True)
+        self.db.update(TABLE, {"created_at": f"lt.{wipe}", "status": "neq.signing_in", "code": "not.is.null"}, {"code": None}, minimal=True)
+        self.db.delete(TABLE, {"status": "in.(done,failed)", "updated_at": f"lt.{now_iso(at - timedelta(seconds=FINISHED_S))}"})
         self.db.delete(TABLE, {"created_at": f"lt.{now_iso(at - timedelta(seconds=KEEP_S))}"})
 
 
@@ -171,7 +212,7 @@ def run_setup(setups: Setups, row: dict[str, Any], stop: threading.Event, *, mak
     except Exception:
         setups.failed(row["id"], "The sign-in could not be read. Connect again.")
         return "failed"
-    codes = SetupCodes(setups.db, row["id"], setups.key)
+    codes = setups.codes_for(row)
     with SessionDir(apple_id) as folder:
         try:
             api = (make_api or make_account_api)(apple_id, password, folder.path)
@@ -181,7 +222,7 @@ def run_setup(setups: Setups, row: dict[str, Any], stop: threading.Event, *, mak
                 raise AppPasswordFailed("untrusted")
             codes.waiting("Making an app-specific password for Konva.")
             made = account.make(password)
-            setups.ready(row["id"], made, trust_token(api))
+            setups.ready(row, made, trust_token(api), creds)
             log.info("icloud setup ready", setup=row["id"])
             return "ready"
         except SignInStopped:
@@ -208,7 +249,7 @@ class SetupRunner:
 
     def tick(self) -> None:
         self.threads = [t for t in self.threads if t.is_alive()]
-        if time.monotonic() - self.last_sweep > 300:
+        if time.monotonic() - self.last_sweep > SWEEP_S:
             self.last_sweep = time.monotonic()
             self.setups.sweep()
         while (row := self.setups.claim()) is not None:

@@ -25,6 +25,14 @@ export async function loadCommitments(): Promise<Commitment[]> {
   return rows.map(mapCommitment);
 }
 
+/** A row as Realtime delivers it, opened. Null when the row lacks a column the app needs (then the caller reloads). */
+export async function openCommitment(raw: Partial<Row>): Promise<Commitment | null> {
+  if (!raw.id || typeof raw.text !== "string" || !raw.status || !raw.owner) return null;
+  const row = { ...raw } as Row;
+  await openRows([row], [["text", FIELD.taskTitle]] as const);
+  return mapCommitment(row);
+}
+
 /** Marks a promise done. Rejects on failure so the caller can put it back. */
 export async function saveDone(id: string): Promise<void> {
   const { error } = await supabase.from("commitments").update({ status: "done", done_at: new Date().toISOString() }).eq("id", id);

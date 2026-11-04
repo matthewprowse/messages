@@ -75,8 +75,34 @@ func closeAttachments(files []attachment) {
 	}
 }
 
+// stagingPrefix starts the name of every folder the worker stages a send's files in (linkedin/files.ts).
+const stagingPrefix = "konva-linkedin-"
+
+// stagingRoot is the folder a send's files must come from: the one the worker named, when it is a private
+// (mode 0700) folder called konva-linkedin-* directly inside tmp, symbolic links followed. Anything else is a bad
+// request, so a send can never read other files under the temp folder (another send's, or the iCloud session's).
+func stagingRoot(dir, tmp string) (string, *Error) {
+	bad := &Error{Kind: KindBadRequest}
+	if dir == "" || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || !strings.HasPrefix(filepath.Base(dir), stagingPrefix) {
+		return "", bad
+	}
+	realTmp, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		return "", bad
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil || filepath.Dir(real) != realTmp || !strings.HasPrefix(filepath.Base(real), stagingPrefix) {
+		return "", bad
+	}
+	info, err := os.Lstat(real)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return "", bad
+	}
+	return real, nil
+}
+
 // checkAttachments validates every file before anything is uploaded, so a bad one sends nothing. A path must
-// be absolute, and once symbolic links are followed, a regular file under root (the temp folder).
+// be absolute, and once symbolic links are followed, a regular file under root (the send's staging folder).
 func checkAttachments(args []attachmentArg, root string) ([]attachment, *Error) {
 	bad := &Error{Kind: KindBadRequest}
 	if len(args) == 0 || len(args) > maxAttachments {

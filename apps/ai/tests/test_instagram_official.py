@@ -141,6 +141,9 @@ class Credentials(unittest.TestCase):
             def credential_key_for(self, user_id):
                 return bytes(range(32))
 
+            def credential_keys_for(self, user_id):
+                return [bytes(range(32))]
+
         store = Store.__new__(Store)
         store.db, store.encryption_key = Db(), base64.b64encode(b"k" * 32).decode()
         store.creds = AccountSealer(store.db, Vault(), store.encryption_key)
@@ -431,7 +434,7 @@ class Polling(unittest.TestCase):
         self.assertTrue(all(p["is_read"] for p in store.ingested))
         self.assertEqual(store.newest, us(2))
         self.assertEqual(set(store.scopes), {OFFICIAL_SCOPE})
-        self.assertEqual(store.ingested[0]["participants"][0]["display_name"], "Ana Mokoena")
+        self.assertEqual(store.ingested[0]["participants"][0]["display_name"], "[name]Ana Mokoena")
         self.assertEqual(store.ingested[0]["direction"], "inbound")
         self.assertEqual(store.ingested[1]["direction"], "outbound")
 
@@ -495,7 +498,7 @@ class Polling(unittest.TestCase):
         graph = FakeGraph([self.page(conversation())], {"conv1": edge(message(1))}, profiles={ANA: GraphError(400, 10, None, "permission")})
         sync = official(store)
         sync.poll(graph)
-        self.assertEqual(store.ingested[0]["participants"][0]["handle"], "ana.m")
+        self.assertEqual(store.ingested[0]["participants"][0]["handle"], "[name]ana.m")
         self.assertIsNone(store.ingested[0]["participants"][0]["display_name"])
         self.assertEqual(sync.names[ANA], Person(ANA, "ana.m", None))
 

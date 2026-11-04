@@ -68,12 +68,12 @@ function Suggestion({ s, decision, onDecide, onUndo }: { s: ContactSuggestion; d
         {decision ? (
           <>
             <span className="mr-auto text-xs text-muted-foreground">{outcome}</span>
-            <Button variant="ghost" size="sm" onClick={onUndo}>Undo</Button>
+            <Button variant="ghost" onClick={onUndo}>Undo</Button>
           </>
         ) : (
           <>
             <Button variant="secondary" onClick={() => onDecide("declined")}>{merge ? "Keep Separate" : "Keep Together"}</Button>
-            <Button size="sm" onClick={() => onDecide("accepted")}>{merge ? "Merge" : "Split"}</Button>
+            <Button onClick={() => onDecide("accepted")}>{merge ? "Merge" : "Split"}</Button>
           </>
         )}
       </div>

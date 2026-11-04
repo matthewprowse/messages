@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import type { Contact, Message } from "./types";
 import { defaultFrom, parseAddresses, replyAllRecipients, replyRecipients, sendAddressesOf } from "./send-from";
 
-const account = { detail: "Me@Example.com", sendAddresses: ["me@example.com", "hello@shop.co", " Sales@Shop.co "] };
+const account = { provider: "icloud" as const, detail: "Me@Example.com", sendAddresses: ["me@example.com", "hello@shop.co", " Sales@Shop.co "] };
 
 function msg(p: Partial<Message>): Message {
   return { id: Math.random().toString(), threadId: "t", from: "c1", sentAt: "2026-10-22T10:00:00Z", body: "", ...p };
@@ -16,6 +16,13 @@ const jane: Contact = { id: "c1", name: "Jane", initials: "J", hue: 0, emails: [
 
 test("sendAddressesOf puts the account address first, lowercased and deduped", () => {
   assert.deepEqual(sendAddressesOf(account), ["me@example.com", "hello@shop.co", "sales@shop.co"]);
+});
+
+test("a generic IMAP account sends only from its own address, whatever aliases were saved for it", () => {
+  const imap = { ...account, provider: "imap" as const };
+  assert.deepEqual(sendAddressesOf(imap), ["me@example.com"]);
+  assert.equal(defaultFrom(imap, [msg({ toAddresses: ["hello@shop.co"] })], "sales@shop.co"), "me@example.com");
+  assert.deepEqual(sendAddressesOf({ ...account, provider: "gmail" }), ["me@example.com", "hello@shop.co", "sales@shop.co"]);
 });
 
 test("defaultFrom uses the address the latest inbound email was sent to", () => {

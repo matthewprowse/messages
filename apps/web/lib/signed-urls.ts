@@ -6,6 +6,6 @@
 
 export { mimeFor } from "./file-types";
 export { thumbsEnabled, reportThumb, signedUrl, downloadUrl, clearSignedUrls } from "./signed-urls/links";
-export { isNotePath, sealedField, isTeamFilePath } from "./signed-urls/sealed-paths";
+export { isNotePath, isBrowserSealedPath, sealedField, isTeamFilePath } from "./signed-urls/sealed-paths";
 export { rememberNoteMime, acquireNoteFile, openThumb, cachedThumb, type OpenedNoteFile } from "./signed-urls/sealed-files";
 export { useThumbUrl, useSignedUrl } from "./signed-urls/hooks";

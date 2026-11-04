@@ -2,7 +2,9 @@
 // sign-ins do not have: without it this source is skipped until you run pnpm connect:google again.
 
 import type { GoogleClient } from "../google/client";
+import { readCapped } from "../whatsapp/media-guard";
 import type { Card } from "./cards";
+import { isGooglePhotoUrl, PHOTO_MAX_BYTES } from "./photo-hosts";
 
 interface Person {
   names?: { displayName?: string; metadata?: { primary?: boolean } }[];
@@ -37,9 +39,16 @@ export async function googleCards(client: GoogleClient): Promise<Card[]> {
   return cards;
 }
 
-/** Google serves contact photos from its image hosts without a sign-in. Other hosts are not contacted. */
+/**
+ * Google serves contact photos from its image hosts without a sign-in. Other hosts are not contacted, a redirect
+ * off them is not read, and a photo over PHOTO_MAX_BYTES is null (the download stops there).
+ */
 export async function fetchGooglePhoto(url: string): Promise<Buffer | null> {
-  if (!/^https:\/\/[\w.-]+\.(googleusercontent|ggpht)\.com\//i.test(url)) return null;
+  if (!isGooglePhotoUrl(url)) return null;
   const response = await fetch(url, { signal: AbortSignal.timeout(60_000) }).catch(() => null);
-  return response?.ok ? Buffer.from(await response.arrayBuffer()) : null;
+  if (!response?.ok || !response.body || !isGooglePhotoUrl(response.url) || Number(response.headers.get("content-length") ?? 0) > PHOTO_MAX_BYTES) {
+    await response?.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  return readCapped(response.body, PHOTO_MAX_BYTES).catch(() => null);
 }

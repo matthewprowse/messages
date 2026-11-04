@@ -6,7 +6,7 @@ import type { WAMessage, WAMessageKey } from "baileys";
 import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, chatIndex } from "@messages/crypto/addresses";
 import type { Json } from "@messages/db";
-import { keysFor, seal, sealAddress } from "../vault";
+import { groupNameJson, keysFor, seal, sealAddress } from "../vault";
 import { mediaRef } from "./media";
 import { mediaContent } from "./media-content";
 import type { describe } from "./normalize";
@@ -76,26 +76,27 @@ export async function buildPayload(ctx: AccountCtx, p: PayloadInput) {
   const senderAddress = sender ? (sender.phone ?? sender.lid) : null;
   const payload = {
     provider_message_id: p.id,
-    chat_jid: await sealAddress(ctx.userId, p.chatJid),
+    chat_jid: await sealAddress(ctx.userId, p.chatJid, { place: "threads.provider_thread_id" }),
     chat_alt_jid: await sealAddress(ctx.userId, p.chatAlt),
     chat_index: await chatIndex(keys, p.chatJid),
     chat_alt_index: p.chatAlt ? await chatIndex(keys, p.chatAlt) : null,
     is_group: group,
-    group_name: group ? (groupSubject ?? chat?.name ?? null) : null,
+    // Sealed, with the index ingest_whatsapp tells a renamed group by.
+    ...(await groupNameJson(ctx.userId, group ? (groupSubject ?? chat?.name ?? null) : null)),
     status: chat?.archived && !p.live ? "archived" : "inbox",
     resurface: p.live && !fromMe,
     sent_at: p.sentAt.toISOString(),
     direction: fromMe ? "outbound" : "inbound",
     is_read: !p.unread,
     sender: sender ? await personJson(keys, sender, ctx.userId) : null,
-    sender_address: await sealAddress(ctx.userId, senderAddress),
+    sender_address: await sealAddress(ctx.userId, senderAddress, { place: "messages.sender_address" }),
     sender_index: senderAddress ? await addressIndex(keys, senderAddress) : null,
     participants: await Promise.all(p.participants.map((x) => personJson(keys, x, ctx.userId))),
-    preview: await seal(ctx.userId, FIELD.preview, oneLine(preview)),
-    body_text: await seal(ctx.userId, FIELD.body, p.body || null),
+    preview: await seal(ctx.userId, FIELD.preview, oneLine(preview), { place: "messages.preview" }),
+    body_text: await seal(ctx.userId, FIELD.body, p.body || null, { place: "messages.body_text" }),
     provider_meta: meta as Json,
     attachments: d.media
-      ? [{ filename: (await seal(ctx.userId, FIELD.filename, d.media.filename))!, mime_type: d.media.mimeType, kind: d.media.kind, size_bytes: d.media.sizeBytes }]
+      ? [{ filename: (await seal(ctx.userId, FIELD.filename, d.media.filename, { place: "attachments.filename" }))!, mime_type: d.media.mimeType, kind: d.media.kind, size_bytes: d.media.sizeBytes }]
       : [],
   } satisfies Record<string, Json>;
   return { payload, meta };

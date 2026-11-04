@@ -4,7 +4,7 @@
 import type { Tables } from "@messages/db";
 import type { Account, AccountStatus, Draft, Profile, Provider, Unsubscribe } from "../types";
 import type { ChoiceKind } from "../choices";
-import { parseAudit, parseReport } from "../draft-trust";
+import { parseAudit, parseReport, REVIEW_STATUS } from "../draft-trust";
 import type { AccountRow, DraftRow, ProfileRow, UnsubscribeRow } from "./columns";
 
 export const EMPTY_PROFILE: Profile = {
@@ -92,6 +92,7 @@ export function mapDraft(row: DraftRow): Draft {
     audit: parseAudit(row.audit),
     feedback: row.feedback === "up" || row.feedback === "down" ? row.feedback : undefined,
     replyTo: row.reply_to || undefined,
+    review: row.status === REVIEW_STATUS || undefined,
     generatedAt: row.updated_at,
   };
 }
@@ -102,7 +103,8 @@ export function mapUnsubscribe(row: UnsubscribeRow): Unsubscribe {
     accountId: row.account_id,
     sender: row.sender_address,
     status: row.status as Unsubscribe["status"],
-    manualUrl: row.manual_url ?? undefined,
+    // The page comes from the sender's List-Unsubscribe header and is opened in a new tab: https only, never a javascript: or data: URL.
+    manualUrl: row.manual_url && /^https:\/\//i.test(row.manual_url) ? row.manual_url : undefined,
     error: row.error ?? undefined,
   };
 }

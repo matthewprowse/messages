@@ -25,9 +25,12 @@ export interface ProofUser { email?: string | null; factors?: { id: string; fact
 /** True when the proof checks out for this user. A method the user cannot use (no authenticator app, no email) is false, never an error. */
 export async function verifyProof(call: AuthCall, user: ProofUser, accessToken: string, proof: Proof): Promise<boolean> {
   try {
-    // A person with an authenticator app must use it: a password or a mailbox alone is what two-factor sign-in guards against.
-    const factor = (user.factors ?? []).find((f) => f.factor_type === "totp" && f.status === "verified");
-    if (factor && proof.method !== "totp") return false;
+    // A person with any second factor (authenticator app, phone, passkey) must use it: a password or a mailbox alone is what
+    // two-factor sign-in guards against. Only an authenticator code can be checked in one call here, so someone whose only
+    // factors are a phone or a passkey cannot re-authenticate this way yet: refused, never let through on a password.
+    const verified = (user.factors ?? []).filter((f) => f.status === "verified");
+    const factor = verified.find((f) => f.factor_type === "totp");
+    if (verified.length > 0 && proof.method !== "totp") return false;
     if (proof.method === "password") {
       if (!user.email) return false;
       return (await call("token?grant_type=password", { email: user.email, password: proof.password })).ok;

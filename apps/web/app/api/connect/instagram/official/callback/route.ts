@@ -2,7 +2,7 @@
 // stored encrypted with the account as credentials of kind "official" (the Instagram connector in apps/ai reads
 // them and renews the token before it ends). Then back to Settings, with ?connected=instagram or ?connect_error=<reason>.
 
-import { ensureProfile, openJson, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
+import { ensureProfile, openHandoff, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
 import { BASIC_SCOPE, InstagramError, MESSAGES_SCOPE, exchangeCode, instagramAccount, longLivedToken } from "@/lib/server/instagram";
 import { admin, appOrigin } from "@/lib/server/request";
 import { INSTAGRAM_COOKIE, INSTAGRAM_OFFICIAL_LABEL, INSTAGRAM_RETURN, type InstagramSignIn } from "../shared";
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const origin = appOrigin(request);
   const params = new URL(request.url).searchParams;
-  const signIn = readSignIn(request);
+  const signIn = await readSignIn(request);
   const done = (query: string) =>
     new Response(null, {
       status: 303,
@@ -42,11 +42,11 @@ export async function GET(request: Request) {
   }
 }
 
-function readSignIn(request: Request): InstagramSignIn | null {
+async function readSignIn(request: Request): Promise<InstagramSignIn | null> {
   const raw = request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${INSTAGRAM_COOKIE}=`))?.slice(INSTAGRAM_COOKIE.length + 1);
   if (!raw) return null;
   try {
-    return openJson<InstagramSignIn>(raw);
+    return await openHandoff<InstagramSignIn>(raw, "instagram_connect");
   } catch {
     return null;
   }

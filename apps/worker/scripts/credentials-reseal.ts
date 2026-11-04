@@ -1,7 +1,8 @@
 // One-off (docs/PLAN.md, Security and Cost Review, item 6): moves every connector sign-in and session from the old
 // static ENCRYPTION_KEY ("v1:") to the owner's own key ("v2:", derived from their data key, the account as additional
 // data; src/crypto.ts). Covers account_credentials (ciphertext and refreshed) and the WhatsApp session in
-// whatsapp_auth_keys. Short-lived sign-in handoffs (instagram_sign_ins.code, the OAuth cookies) are not stored long and stay on the old key.
+// whatsapp_auth_keys. Short-lived handoffs (sign-in codes, iCloud setups, the OAuth cookies) are sealed under the user's own
+// key since the per-user handoff release; a "v1:" one from before lives minutes and is not moved here. keys:readiness counts all.
 //
 //   pnpm credentials:reseal             Dry run, the default. Opens every v1 value, seals it v2, opens that again and
 //                                       checks it is the same text, and writes nothing.
@@ -11,8 +12,8 @@
 // only if the row still holds the v1 text that was read, so it can be stopped, run again, and run beside the workers.
 // Be aware: writing account_credentials.ciphertext moves updated_at (a trigger), which restarts that account's
 // connector once within seconds, as a new sign-in does. Run it at a quiet time. Resealing `refreshed` and the
-// WhatsApp rows does not restart anything. Once a dry run reports 0 left, ENCRYPTION_KEY can be removed from the
-// worker, the AI worker and the web app, after the 10 minute OAuth cookies and sign-in codes in flight have passed.
+// WhatsApp rows does not restart anything. Once a dry run reports 0 left and `pnpm keys:readiness` agrees, ENCRYPTION_KEY
+// can be removed from the worker, the AI worker and the web app.
 
 import { allRows, db, must } from "../src/db";
 import { credentialSealer } from "../src/vault";

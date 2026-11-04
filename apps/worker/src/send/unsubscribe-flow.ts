@@ -6,6 +6,7 @@ import { allRows, db, must } from "../db";
 import { errorCode, log } from "../log";
 import { chunks } from "../util";
 import { bodyUnsubscribeLink, oneClickUnsubscribe, parseListUnsubscribe } from "./unsubscribe";
+import { mayUnsubscribe, pickUnsubscribeSource, UNSUBSCRIBE_SOURCES } from "./unsubscribe-source";
 import { FIELD } from "@messages/crypto/fields";
 import { addressIndex } from "@messages/crypto/addresses";
 import { keysFor, open } from "../vault";
@@ -40,21 +41,33 @@ export async function carryOutUnsubscribe(
     }
   };
 
-  // Their mail is found by the sender's index: the database matches on that, not the address.
-  const senderIndex = row.sender_index ?? (await addressIndex(await keysFor(row.user_id), (await open(row.user_id, FIELD.address, row.sender_address)) ?? ""));
+  let senderIndex: string;
   let outcome: Partial<Tables<"unsubscribes">>;
   try {
-    const latest = must(
-      await db
-        .from("messages")
-        .select("list_unsubscribe, list_unsubscribe_post")
-        .eq("account_id", accountId)
-        .eq("sender_index", senderIndex)
-        .not("list_unsubscribe", "is", null)
-        .order("sent_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      "load unsubscribe header",
+    // The worker uses the service role, so it checks for itself that the request is for this account and from the
+    // person who owns it, rather than trusting the insert policy alone.
+    const account = must(await db.from("accounts").select("user_id").eq("id", accountId).maybeSingle(), "load unsubscribe account");
+    if (!mayUnsubscribe(row, accountId, account?.user_id ?? null)) {
+      log.warn("unsubscribe for another account refused", { account: accountId });
+      must(await finish({ status: "failed", error: "This sender belongs to another account." }), "refuse unsubscribe");
+      return;
+    }
+    // Their mail is found by the sender's index: the database matches on that, not the address.
+    senderIndex = row.sender_index ?? (await addressIndex(await keysFor(row.user_id), (await open(row.user_id, FIELD.address, row.sender_address)) ?? ""));
+    // The From line can be forged, so of their latest emails, the newest one their own domain vouched for (DMARC or
+    // DKIM pass) is trusted first.
+    const latest = pickUnsubscribeSource(
+      must(
+        await db
+          .from("messages")
+          .select("list_unsubscribe, list_unsubscribe_post, auth:provider_meta->auth")
+          .eq("account_id", accountId)
+          .eq("sender_index", senderIndex)
+          .not("list_unsubscribe", "is", null)
+          .order("sent_at", { ascending: false })
+          .limit(UNSUBSCRIBE_SOURCES),
+        "load unsubscribe header",
+      ),
     );
     const options = parseListUnsubscribe(await open(row.user_id, FIELD.unsubscribe, latest?.list_unsubscribe));
 

@@ -1,5 +1,5 @@
-// Stores a normalized email through public.ingest_email (one) or ingest_email_batch (many). Subject, body, addresses and
-// company names are sealed and blind-indexed with the user's keys here, so plaintext never reaches the database.
+// Stores a normalized email through public.ingest_email (one) or ingest_email_batch (many). Subject, body, addresses,
+// people's and company names are sealed and blind-indexed with the user's keys here, so plaintext never reaches the database.
 // Also applies read or unread changes made elsewhere to the stored message.
 
 import type { Json } from "@messages/db";
@@ -8,7 +8,11 @@ import { BatchRpc, isFailure, type RowFailure, type RpcResponse } from "./batch-
 import { nameFromAddress, type NormalizedEmail } from "./normalize-email";
 import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, chatIndex, domainIndex } from "@messages/crypto/addresses";
-import { keysFor, seal, sealAddress, sealDomain } from "../vault";
+import { blindIndex } from "@messages/crypto";
+import { keysFor, seal, sealAddress, sealDomain, sealName } from "../vault";
+import { emailNameRank } from "../contacts/name-rank";
+import { isOwnMail } from "./email-auth";
+import { ingestMeta } from "./ingest-meta";
 import { bodySource, emphasisRuns, isBulkMail } from "@messages/email-text";
 import { companyDomain, companyNameFor, senderName } from "@messages/email-text/company";
 import { ownIdentitiesCached } from "../contacts/own";
@@ -28,13 +32,16 @@ export interface EmailContext {
 }
 
 export interface StoredEmail {
-  result: "inserted" | "updated";
+  result: "inserted" | "updated" | "duplicate";
   messageId: string | null;
   threadId: string | null;
 }
 
-/** What public.ingest_email returns for one message. */
-type IngestResult = { result: "inserted" | "updated"; message_id?: string; thread_id?: string };
+/**
+ * What public.ingest_email returns for one message. "duplicate": another email already has this Message-ID and this one
+ * says something different, so the stored one was left as it is (20261124110000_ingest_email_duplicates.sql).
+ */
+type IngestResult = { result: "inserted" | "updated" | "duplicate"; message_id?: string; thread_id?: string };
 
 const stored = (r: IngestResult): StoredEmail => ({ result: r.result, messageId: r.message_id ?? null, threadId: r.thread_id ?? null });
 
@@ -83,7 +90,8 @@ export function marksJson(html: string | null): string | null {
  * on), so the two things the database used to work out from that text are worked out here first.
  */
 async function emailPayload(account: AccountRow, mail: NormalizedEmail, ctx: EmailContext): Promise<Json> {
-  const outbound = ctx.role === "sent" || (mail.from !== null && ctx.selfAddresses.has(mail.from.address));
+  // Your own address in From is not proof in the inbox: it can be forged (email-auth.ts).
+  const outbound = isOwnMail(ctx.role, mail.from?.address ?? null, ctx.selfAddresses, mail.auth);
   const user = account.user_id;
 
   // Everyone involved except you, sender first so incoming mail is linked to who sent it.
@@ -97,12 +105,15 @@ async function emailPayload(account: AccountRow, mail: NormalizedEmail, ctx: Ema
     [...new Map(people.map((p) => [p.address, p])).values()].map(async (p) => {
       const domain = companyDomain(p.address, own);
       const company = domain ? companyNameFor(domain, p.name) : null;
+      // An automated sender with no real name (noreply@, "No Reply") is named for its company.
+      const name = senderName(p.address, p.name, company, nameFromAddress);
       return {
-        address: await sealAddress(user, p.address),
+        address: await sealAddress(user, p.address, { place: "contact_identities.value" }),
         index: await addressIndex(keys, p.address),
-        // An automated sender with no real name (noreply@, "No Reply") is named for its company.
-        display_name: senderName(p.address, p.name, company, nameFromAddress),
-        company: domain ? { index: await domainIndex(keys, domain), domain: await sealDomain(user, domain), name: company } : null,
+        // Sealed, with the kind of name it is: the database decides by that, since it cannot read the name.
+        display_name: await sealName(user, name, { place: "contacts.display_name" }),
+        name_rank: emailNameRank(p.address, p.name, name),
+        company: domain ? { index: await domainIndex(keys, domain), domain: await sealDomain(user, domain), name: await sealName(user, company, { place: "organizations.name" }) } : null,
       };
     }),
   );
@@ -113,31 +124,35 @@ async function emailPayload(account: AccountRow, mail: NormalizedEmail, ctx: Ema
     thread_root: mail.threadRoot,
     in_reply_to: mail.inReplyTo,
     references: mail.references,
-    subject: await seal(user, FIELD.subject, mail.subject),
+    subject: await seal(user, FIELD.subject, mail.subject, { place: "messages.subject" }),
     sent_at: mail.sentAt.toISOString(),
     direction: outbound ? "outbound" : "inbound",
     is_read: outbound || ctx.seen,
     thread_root_index: await chatIndex(keys, mail.threadRoot),
-    sender_address: await sealAddress(user, mail.from?.address ?? null),
+    sender_address: await sealAddress(user, mail.from?.address ?? null, { place: "messages.sender_address" }),
     sender_index: mail.from ? await addressIndex(keys, mail.from.address) : null,
     // Who it was sent to, so a reply can default to going from that address.
-    to_addresses: await Promise.all(toAddresses.map((a) => sealAddress(user, a))),
+    to_addresses: await Promise.all(toAddresses.map((a) => sealAddress(user, a, { place: "messages.to_addresses" }))),
     to_indexes: await Promise.all(toAddresses.map((a) => addressIndex(keys, a))),
-    preview: await seal(user, FIELD.preview, mail.preview),
+    preview: await seal(user, FIELD.preview, mail.preview, { place: "messages.preview" }),
     // The HTML is not stored: View Original fetches it from the provider. When the text part is missing
     // or junk, readable text taken from the HTML is stored in its place.
-    body_text: await seal(user, FIELD.body, mail.html ? bodySource(mail.text, mail.html) : mail.text),
+    body_text: await seal(user, FIELD.body, mail.html ? bodySource(mail.text, mail.html) : mail.text, { place: "messages.body_text" }),
     body_html: null,
     has_original: mail.html !== null,
     is_bulk: isBulkMail(mail.html),
     // The bold and italic runs of the HTML, so the bubble can still draw them once the HTML is gone.
-    body_marks: await seal(user, FIELD.marks, marksJson(mail.html)),
-    provider_meta: ctx.meta,
+    body_marks: await seal(user, FIELD.marks, marksJson(mail.html), { place: "messages.body_marks" }),
+    // For the AI worker's phishing checks: the receiving server's SPF, DKIM and DMARC verdicts (code words only), and
+    // the domain of a Reply-To at another domain (never the address). See ingestMeta.
+    provider_meta: { ...ctx.meta, ...ingestMeta(mail) },
+    // Keyed, so the database can compare two emails' content without learning anything about it.
+    content_index: await blindIndex(keys, `content:${mail.contentHash}`),
     role: ctx.role,
     participants,
-    attachments: await Promise.all(mail.attachments.map(async (a) => ({ filename: (await seal(user, FIELD.filename, a.filename))!, mime_type: a.mimeType, kind: a.kind, size_bytes: a.sizeBytes }))),
+    attachments: await Promise.all(mail.attachments.map(async (a) => ({ filename: (await seal(user, FIELD.filename, a.filename, { place: "attachments.filename" }))!, mime_type: a.mimeType, kind: a.kind, size_bytes: a.sizeBytes }))),
     // The sender's unsubscribe instructions, stored with a new message in the same call.
-    list_unsubscribe: await seal(user, FIELD.unsubscribe, mail.listUnsubscribe),
+    list_unsubscribe: await seal(user, FIELD.unsubscribe, mail.listUnsubscribe, { place: "messages.list_unsubscribe" }),
     list_unsubscribe_post: mail.listUnsubscribePost,
     // An incoming email that offers a way out marks its conversation a subscription.
     offers_unsubscribe: !outbound && /unsubscribe/i.test(`${mail.html ?? ""} ${mail.text ?? ""}`),

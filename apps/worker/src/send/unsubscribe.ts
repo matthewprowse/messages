@@ -4,6 +4,7 @@
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { isPublicAddress, publicAddress } from "@messages/mail-servers/net";
+import { isEmailAddress } from "./from-address";
 
 export interface UnsubscribeOptions {
   https: string | null;
@@ -30,6 +31,21 @@ export function decodeEncodedWords(value: string): string {
     });
 }
 
+/** The subject and body of every unsubscribe email, whatever the sender's header asks for. */
+export const UNSUBSCRIBE_SUBJECT = "Unsubscribe";
+export const UNSUBSCRIBE_BODY = "Unsubscribe";
+
+/** The one address of a mailto link, or null when it is not exactly one plausible address. Its case is kept: some lists put a token in it. */
+function mailtoAddress(raw: string): string | null {
+  let to: string;
+  try {
+    to = decodeURIComponent(raw).trim();
+  } catch {
+    return null; // a broken %-escape
+  }
+  return isEmailAddress(to) ? to : null;
+}
+
 /** Reads "<https://...>, <mailto:...>" into the options a sender offers. */
 export function parseListUnsubscribe(header: string | null): UnsubscribeOptions {
   const out: UnsubscribeOptions = { https: null, mailto: null };
@@ -44,33 +60,77 @@ export function parseListUnsubscribe(header: string | null): UnsubscribeOptions 
         // not a usable URL
       }
     } else if (!out.mailto && /^mailto:/i.test(value)) {
-      const [address, query = ""] = value.slice(7).split("?");
-      const params = new URLSearchParams(query);
-      const to = decodeURIComponent(address).trim();
-      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
-        out.mailto = { to, subject: params.get("subject") || "unsubscribe", body: params.get("body") || "unsubscribe" };
-      }
+      // The header is not authenticated, so only the address is taken from it: exactly one, and the
+      // subject and body are always ours. A sender-chosen subject or body would let a forged header
+      // write whatever it likes from your address.
+      const to = mailtoAddress(value.slice(7).split("?")[0]);
+      if (to) out.mailto = { to, subject: UNSUBSCRIBE_SUBJECT, body: UNSUBSCRIBE_BODY };
     }
   }
   return out;
 }
 
+// The body is the sender's text, decrypted, and this runs on the worker's one thread: only its start and end are
+// read (where footers are), and the scan is linear however the text is shaped.
+const BODY_SCAN_CHARS = 50_000; // from each end
+const URL_MAX_CHARS = 2_048;
+const UNSUBSCRIBE = /unsubscribe/gi;
+const URL_START = /https:\/\/|www\./i;
+const NOT_URL = /[\s<>"\]]/;
+const WORD = "unsubscribe".length;
+const NEAR_CHARS = 40; // how far after the word "unsubscribe" its link may start, on the same line
+
 /**
  * For senders with no List-Unsubscribe header: the unsubscribe link from the email's text, if it has
- * one. It is only ever shown to you to open yourself, never followed by the worker.
+ * one. It is only ever shown to you to open yourself, never followed by the worker. The first of: a link
+ * with "unsubscribe" in it, or a link starting up to 40 characters after the word on the same line.
  */
 export function bodyUnsubscribeLink(text: string | null): string | null {
   if (!text) return null;
-  const pattern = /unsubscribe[^\n]{0,40}?((?:https:\/\/|www\.)[^\s<>"\]]+)|((?:https:\/\/|www\.)[^\s<>"\]]*unsubscribe[^\s<>"\]]*)/i;
-  const match = text.match(pattern);
-  const raw = match?.[1] ?? match?.[2];
-  if (!raw) return null;
+  if (text.length > BODY_SCAN_CHARS * 2) text = `${text.slice(0, BODY_SCAN_CHARS)}\n${text.slice(-BODY_SCAN_CHARS)}`;
+  const raw = findUnsubscribeUrl(text);
+  if (!raw || raw.length > URL_MAX_CHARS) return null;
   try {
-    const url = new URL(raw.startsWith("www.") ? `https://${raw}` : raw);
+    const url = new URL(/^www\./i.test(raw) ? `https://${raw}` : raw);
     return url.protocol === "https:" ? url.toString() : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Walks the occurrences of "unsubscribe" once, left to right. Each run of link characters is measured once,
+ * however many occurrences it holds, so the work is linear in the text's length.
+ */
+function findUnsubscribeUrl(text: string): string | null {
+  let tokenStart = -1;
+  let tokenEnd = -1;
+  let urlInToken = -1; // where the token's first https:// or www. starts, or -1
+  for (const match of text.matchAll(UNSUBSCRIBE)) {
+    const at = match.index;
+    if (at >= tokenEnd) {
+      tokenStart = at;
+      while (tokenStart > 0 && !NOT_URL.test(text[tokenStart - 1])) tokenStart--;
+      tokenEnd = runEnd(text, at);
+      const found = text.slice(tokenStart, tokenEnd).search(URL_START);
+      urlInToken = found < 0 ? -1 : tokenStart + found;
+    }
+    // A link with the word in it, starting before the word.
+    if (urlInToken >= 0 && urlInToken < at) return text.slice(urlInToken, tokenEnd);
+    // A link shortly after the word, on the same line.
+    const after = at + WORD;
+    const window = text.slice(after, after + NEAR_CHARS + "https://".length).split("\n")[0];
+    const near = window.search(URL_START);
+    if (near >= 0 && near <= NEAR_CHARS) return text.slice(after + near, runEnd(text, after + near));
+  }
+  return null;
+}
+
+/** Where the run of link characters starting at `from` ends. */
+function runEnd(text: string, from: number): number {
+  let end = from;
+  while (end < text.length && !NOT_URL.test(text[end])) end++;
+  return end;
 }
 
 /** True for loopback, private, link-local, NAT64, 6to4 and other addresses that are not on the public internet. */

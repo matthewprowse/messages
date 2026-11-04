@@ -15,10 +15,12 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ai.connectors.instagram import backoff, mapping, outgoing, signin, sync as sync_module
 from ai.connectors.instagram.sealing import open_json, seal_json, wrap_local
+from ai.connectors.instagram.store import UNVERIFIED
 from ai.connectors.instagram.sync import (
     BAD_USERNAME, DAILY_LIMIT, LOOKUP_FAILED, MAY_HAVE_SENT, NO_SUCH_USER, OWN_USERNAME, PARTIAL, TEXT_ONLY, AccountSync, Settings, first_message_cap, username_of,
 )
-from ai.fields import BODY, PREVIEW, QUOTE
+from ai.crypto import decrypt_bytes, derive_user_keys, encrypt_bytes, is_sealed_bytes
+from ai.fields import ATTACHMENT_DATA, BODY, OUTBOX_FILE_DATA, PREVIEW, QUOTE
 from ai.keys import unwrap_local
 
 ME = "100"
@@ -120,6 +122,9 @@ class FakeSealer:
 
     def chat_index(self, value):
         return f"c:{value}"
+
+    def group_index(self, value):
+        return f"g:{value}"
 
 
 class Items(unittest.TestCase):
@@ -255,7 +260,7 @@ class Payloads(unittest.TestCase):
         self.assertEqual((p["direction"], p["is_read"], p["resurface"], p["status"]), ("inbound", False, True, "inbox"))
         self.assertEqual(p["sender_address"], "A(200)")
         self.assertEqual(p["sender_index"], "i:200")
-        self.assertEqual(p["sender"], {"pk": "A(200)", "pk_index": "i:200", "username": "A(ana.m)", "username_index": "i:ana.m", "display_name": "Ana Mokoena", "handle": "ana.m"})
+        self.assertEqual(p["sender"], {"pk": "A(200)", "pk_index": "i:200", "username": "A(ana.m)", "username_index": "i:ana.m", "display_name": "[name]Ana Mokoena", "handle": "[name]ana.m"})
         self.assertEqual(p["participants"], [p["sender"]])
         self.assertEqual(p["preview"], f"[{PREVIEW}]Photo")
         self.assertIsNone(p["body_text"])
@@ -277,7 +282,8 @@ class Payloads(unittest.TestCase):
         p = mapping.payload(self.s, t, t.items[0], ME, live=True, unread=True)
         self.assertEqual(p["preview"], f"[{PREVIEW}]ben_k: I can do 10am")
         self.assertEqual(p["participants"], [])  # people join a group thread as they speak, as in WhatsApp
-        self.assertEqual(p["group_name"], "Ana Mokoena, ben_k")
+        self.assertEqual(p["group_name"], "[name]Ana Mokoena, ben_k")
+        self.assertEqual(p["group_name_index"], "g:Ana Mokoena, ben_k")
         self.assertEqual(p["provider_meta"]["participant"], "A(300)")
 
     def test_quote_and_reactions_are_sealed(self):
@@ -519,6 +525,15 @@ class FakeStore:
     def download_outbox_file(self, path):
         return self.blobs.get(path)
 
+    def open_outbox_file(self, user_id, data, path=None):
+        # As Store.open_outbox_file does through the vault: sealed bytes opened with the user's key, plain ones as they are.
+        if not is_sealed_bytes(data):
+            return data
+        try:
+            return decrypt_bytes(FILE_KEYS, OUTBOX_FILE_DATA, data)
+        except Exception:
+            return None
+
     def contact_to_photograph(self, user_id, sealer, pk):
         return self.contacts.get(pk)
 
@@ -543,8 +558,19 @@ class FakeStore:
     def body(self, user_id, value):
         return value or ""
 
+    def outbox_body(self, row):
+        # As Store.outbox_body: None for a body the vault refuses (here, one marked as copied in from elsewhere).
+        value = row.get("body")
+        return None if isinstance(value, str) and value.startswith("copied:") else value or ""
+
+    def outbox_recipient(self, row, value):
+        return None if isinstance(value, str) and value.startswith("copied:") else value or ""
+
     def address(self, user_id, value):
         return value or ""
+
+    def name(self, user_id, value):
+        return value or None
 
     def sealer(self, user_id):
         return FakeSealer()
@@ -653,6 +679,14 @@ class Sending(unittest.TestCase):
         self.assertEqual(store.claimed, [])
         self.assertEqual(client.sent, [])
 
+    def test_a_reply_whose_body_was_not_sealed_for_it_is_failed_unsent(self):
+        row = outbox_row()
+        row["body"] = "copied:Confidential"
+        store, client = FakeStore([row]), SendClient(result=Item_("x"))
+        account_sync(store).send_outbox(client)
+        self.assertEqual(store.failed, [("o1", UNVERIFIED)])
+        self.assertEqual(client.sent, [])
+
     def test_a_failed_send_is_never_retried(self):
         store, client = FakeStore([outbox_row()]), SendClient(error=FeedbackRequired())
         with self.assertRaises(FeedbackRequired):
@@ -675,6 +709,8 @@ class Sending(unittest.TestCase):
 
 
 UID = "0b8f0c1e-1111-4222-8333-444455556666"
+FILE_KEYS = derive_user_keys(bytes(range(32)))
+SEALED_PATH = f"{UID}/outbox/9f1c2a3b-0000-4000-8000-000000000003/file"
 PATH_ONE = f"{UID}/outbox/9f1c2a3b-0000-4000-8000-000000000001/photo.jpg"
 PATH_TWO = f"{UID}/outbox/9f1c2a3b-0000-4000-8000-000000000002/clip.mp4"
 JPEG = b"\xff\xd8\xff\xe0" + b"jpeg" * 8
@@ -747,6 +783,20 @@ class Attachments(unittest.TestCase):
         self.assertEqual(store.ingested[0]["provider_message_id"], "text1")  # the text is stored at once; the poll finds the files
         self.assertTrue(all(mode == 0o600 for _, mode in client.paths))
         self.assertFalse(any(os.path.exists(p) for p, _ in client.paths))  # temp files are gone
+
+    def test_a_sealed_upload_is_opened_before_it_is_sniffed_and_sent(self):
+        store = with_files([file_row(SEALED_PATH, "image/jpeg")], {SEALED_PATH: encrypt_bytes(FILE_KEYS, OUTBOX_FILE_DATA, JPEG)}, body="")
+        client = FileClient()
+        self.run_row(store, client)
+        self.assertEqual([c[:2] for c in client.calls], [("photo", (".jpg", JPEG))])
+        self.assertEqual(store.failed, [])
+
+    def test_a_sealed_upload_that_will_not_open_fails_the_row_before_anything_goes(self):
+        for sealed in [encrypt_bytes(FILE_KEYS, ATTACHMENT_DATA, JPEG), encrypt_bytes(derive_user_keys(bytes(32)), OUTBOX_FILE_DATA, JPEG)]:
+            store, client = with_files([file_row(SEALED_PATH, "image/jpeg")], {SEALED_PATH: sealed}), FileClient()
+            self.run_row(store, client)
+            self.assertEqual(store.failed, [("o1", outgoing.UNREADABLE)])
+            self.assertEqual(client.calls, [])
 
     def test_a_photo_alone_goes_by_its_bytes_not_its_name(self):
         store = with_files([file_row(PATH_ONE, "image/png")], {PATH_ONE: PNG}, body="")
@@ -1012,7 +1062,7 @@ class NewChats(unittest.TestCase):
         self.assertEqual(store.settled, [("n1", "item5")])
         self.assertEqual(store.ingested[0]["chat_jid"], "A(3402)")
         self.assertEqual(store.ingested[0]["direction"], "outbound")
-        self.assertEqual(store.ingested[0]["participants"][0]["handle"], "ana.m")
+        self.assertEqual(store.ingested[0]["participants"][0]["handle"], "[name]ana.m")
         self.assertEqual(store.linked, [("n1", "thread-uuid")])
 
     def test_the_thread_comes_from_the_raw_answer_when_the_model_failed(self):
@@ -1041,6 +1091,14 @@ class NewChats(unittest.TestCase):
         store, sync = self.send(new_chat_row("someone"), client)
         sync.send_outbox(client)
         self.assertEqual(store.failed, [("n1", OWN_USERNAME)])
+
+    def test_a_body_or_username_not_sealed_for_the_row_sends_nothing(self):
+        for row in (new_chat_row(body="copied:Bank details"), new_chat_row("copied:attacker")):
+            client = NewChatClient(user=User(200), result=Sent("x", 1))
+            store, sync = self.send(row, client)
+            sync.send_outbox(client)
+            self.assertEqual(store.failed, [("n1", UNVERIFIED)])
+            self.assertEqual((client.looked_up, client.sent), ([], []))
 
     def test_rows_for_other_accounts_are_left_alone(self):
         client = NewChatClient(user=User(200), result=Sent("x", 1))
@@ -1223,6 +1281,39 @@ class Polling(unittest.TestCase):
         store.newest = T0 + 9_000_000
         account_sync(store).poll(PollClient([self.inbox([raw_thread([item("text", 0)])])]))
         self.assertEqual(store.ingested, [])
+
+
+class FileFetch(unittest.TestCase):
+    def test_only_https_to_instagram_and_facebook_cdns_on_443_is_fetched(self):
+        from ai.connectors.instagram.store import cdn_url
+
+        for ok in ("https://scontent-jnb1-1.cdninstagram.com/v/t51/x.jpg?sig=1", "https://scontent.xx.fbcdn.net/v/a.mp4", "https://lookaside.fbsbx.com/ig_messaging_cdn/?asset_id=1", "https://www.instagram.com/a.jpg"):
+            self.assertTrue(cdn_url(ok), ok)
+        for bad in ("file:///etc/passwd", "ftp://scontent.cdninstagram.com/a", "http://scontent.cdninstagram.com/a", "https://evil.example/fbcdn.net", "https://notfbcdn.net/a",
+                    "https://scontent.cdninstagram.com:8443/a", "https://user@scontent.cdninstagram.com/a", "https://169.254.169.254/latest", "not a url"):
+            self.assertFalse(cdn_url(bad), bad)
+
+    def test_a_refused_address_opens_nothing_and_redirects_are_not_followed(self):
+        from ai.connectors.instagram import store
+
+        with unittest.mock.patch.object(store.urllib.request, "build_opener") as build:
+            with self.assertRaises(ValueError):
+                store.fetch("file:///etc/passwd", None, None)
+            build.assert_not_called()
+            build.return_value.open.return_value.__enter__.return_value.read.return_value = b"x" * 11
+            self.assertIsNone(store.fetch("https://scontent.cdninstagram.com/a.jpg", None, None, limit=10), "over the cap is dropped")
+            self.assertTrue(any(isinstance(h, store._NoRedirect) for h in build.call_args[0]))
+
+
+class StaleCodes(unittest.TestCase):
+    def test_a_sign_in_code_nobody_took_is_cleared_after_ten_minutes(self):
+        from ai.connectors.instagram import store as store_module
+
+        db = unittest.mock.Mock()
+        st = store_module.Store.__new__(store_module.Store)
+        st.db = db
+        st.clear_stale_codes(datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))
+        db.update.assert_called_once_with("instagram_sign_ins", {"code": "not.is.null", "updated_at": "lt.2026-11-03T11:50:00+00:00"}, {"code": None}, minimal=True)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ from .credentials import proxy_for
 from . import outgoing
 from .mapping import Person, Thread, inbox, is_unread, payload, sent_item, thread as map_thread
 from .signin import SignInFailed, SignInStopped, sign_in
-from .store import AVATAR_MAX_BYTES, DEFAULT_AVATAR, SignInRow, Store, fetch
+from .store import AVATAR_MAX_BYTES, DEFAULT_AVATAR, UNVERIFIED, SignInRow, Store, fetch
 
 LOOP_S = 5.0  # the outbox and actions are checked this often; they are database reads until there is work
 FIRST_PAGES = 2  # the first sync reads the 40 most recent threads
@@ -404,7 +404,11 @@ class AccountSync:
         if waited:
             self.store.fail(row["id"], waited)
             return
-        text = self.store.body(row["user_id"], row.get("body")).strip()
+        body = self.store.outbox_body(row)
+        if body is None:
+            self.store.fail(row["id"], UNVERIFIED)
+            return
+        text = body.strip()
         thread_id = self.store.address(row["user_id"], thread_row.get("provider_thread_id"))
         if files:
             if not thread_id.isdigit():
@@ -433,7 +437,7 @@ class AccountSync:
         if self.store.settle(row["id"], item_id):
             log.info("instagram reply sent", account=self.id, outbox=row["id"])
         item = sent_item(item_id, self.viewer, text)
-        t = Thread(id=thread_id, title=thread_row.get("group_name"), is_group=bool(thread_row.get("is_group")), people=[])
+        t = Thread(id=thread_id, title=self.store.name(self.user_id, thread_row.get("group_name")), is_group=bool(thread_row.get("is_group")), people=[])
         try:
             self.store.ingest(self.id, [payload(self.store.sealer(self.user_id), t, item, self.viewer, live=True, unread=False)])
         except Exception as err:
@@ -482,7 +486,7 @@ class AccountSync:
 
     def store_sent_text(self, row: dict[str, Any], thread_row: dict[str, Any], thread_id: str, item_id: str, text: str) -> None:
         item = sent_item(item_id, self.viewer, text)
-        t = Thread(id=thread_id, title=thread_row.get("group_name"), is_group=bool(thread_row.get("is_group")), people=[])
+        t = Thread(id=thread_id, title=self.store.name(self.user_id, thread_row.get("group_name")), is_group=bool(thread_row.get("is_group")), people=[])
         try:
             self.store.ingest(self.id, [payload(self.store.sealer(self.user_id), t, item, self.viewer, live=True, unread=False)])
         except Exception as err:
@@ -499,12 +503,17 @@ class AccountSync:
         if (row.get("attachment_count") or 0) > 0:
             self.store.fail(row["id"], TEXT_ONLY)
             return
-        text = self.store.body(row["user_id"], row.get("body")).strip()
+        body = self.store.outbox_body(row)
+        addresses = row.get("to_addresses") or []
+        recipient = self.store.outbox_recipient(row, addresses[0]) if len(addresses) == 1 else ""
+        if body is None or recipient is None:
+            self.store.fail(row["id"], UNVERIFIED)
+            return
+        text = body.strip()
         if not text:
             self.store.fail(row["id"], "There is nothing to send.")
             return
-        addresses = row.get("to_addresses") or []
-        username = username_of(self.store.address(row["user_id"], addresses[0])) if len(addresses) == 1 else ""
+        username = username_of(recipient)
         if not USERNAME.match(username):
             self.store.fail(row["id"], BAD_USERNAME)
             return

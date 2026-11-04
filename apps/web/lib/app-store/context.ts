@@ -34,8 +34,12 @@ export interface Ctx extends Omit<State, "byThread"> {
   removePending: (outboxId: string) => void;
   /** Queues a failed send again with its text, From address and Reply All recipients. Resolves false when it may have gone out already or could not be queued. */
   retryPending: (outboxId: string) => Promise<boolean>;
-  /** Starts loading a conversation about to be opened. Does nothing once it is loaded or loading. */
-  prefetchMessages: (threadId: string) => void;
+  /**
+   * Starts loading a conversation about to be opened; resolves when it is in (never rejects). Does nothing once it is
+   * loaded, and skips a guess that would push out a conversation you opened. With `opened` the conversation is on
+   * screen: loaded or not, it becomes the open one that is never dropped.
+   */
+  prefetchMessages: (threadId: string, opened?: boolean) => Promise<void>;
   listThreads: (view: View, filter: ListFilter) => Thread[];
   notify: (text: string, undo?: () => void) => void;
   markRead: (id: string, read: boolean, opened?: boolean) => void;

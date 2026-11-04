@@ -7,11 +7,30 @@ import { allRows, db } from "../db";
 import { log } from "../log";
 import { saveContactPhoto, saveGroupPhoto } from "../photos/store";
 import { openAddresses } from "../vault";
+import { isWhatsAppPhotoUrl, readCapped } from "./media-guard";
 import { photoJobsDue } from "./photo-jobs";
 import type { AccountCtx } from "./person";
 
 const PHOTO_STALE_MS = 7 * 24 * 60 * 60_000;
 const PHOTO_PAUSE_MS = 2_000; // one lookup at a time, like WhatsApp Web loading pictures as you scroll
+const PHOTO_MAX_BYTES = 2 * 1024 * 1024; // the most photos/store.ts keeps; a preview is a few KB
+const PHOTO_FETCH_MS = 30_000;
+
+/**
+ * The picture behind a link WhatsApp gave, read with a byte cap. Null when there is none (an error status), and
+ * undefined when it is not fetched or read at all: a link off whatsapp.net, a redirect away from it, or too large,
+ * so the picture already saved is left as it is.
+ */
+async function fetchPhoto(url: string): Promise<Buffer | null | undefined> {
+  if (!isWhatsAppPhotoUrl(url)) return undefined;
+  const res = await fetch(url, { signal: AbortSignal.timeout(PHOTO_FETCH_MS) }).catch(() => null);
+  if (!res?.ok) return null;
+  if (!isWhatsAppPhotoUrl(res.url) || !res.body || Number(res.headers.get("content-length") ?? 0) > PHOTO_MAX_BYTES) {
+    await res.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
+  return (await readCapped(res.body, PHOTO_MAX_BYTES).catch(() => null)) ?? undefined;
+}
 
 /**
  * Profile pictures for people and groups in your chats, looked up one at a time with a pause between,
@@ -43,12 +62,8 @@ export async function syncPhotos(ctx: AccountCtx, sock: WASocket, linkIsCurrent:
     if (!linkIsCurrent()) break;
     // No picture, or hidden by the person's privacy settings, comes back as an error or nothing.
     const url = await sock.profilePictureUrl(job.jid, "preview").catch(() => undefined);
-    let bytes: Buffer | null = null;
-    if (url) {
-      const res = await fetch(url).catch(() => null);
-      if (res?.ok) bytes = Buffer.from(await res.arrayBuffer());
-    }
-    if (await job.save(bytes)) saved++;
+    const bytes = url ? await fetchPhoto(url) : null;
+    if (bytes !== undefined && (await job.save(bytes))) saved++;
     await sleep(PHOTO_PAUSE_MS);
   }
   if (jobs.length) log.info("whatsapp photos checked", { account: ctx.accountId, checked: jobs.length, saved });

@@ -27,7 +27,7 @@ export function ContactsShell({
   const isDetail = /^\/contacts\/(companies\/[^/]+|(?!companies$)[^/]+)/.test(pathname);
   return (
     <div className="flex h-full min-h-0">
-      <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-80 lg:w-1/3", isDetail ? "hidden" : "flex")}>
+      <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-80 md:border-r lg:w-1/3", isDetail ? "hidden" : "flex")}>
         <Suspense fallback={null}>
           <ContactList contacts={contacts} companies={companies} />
         </Suspense>

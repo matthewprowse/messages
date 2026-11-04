@@ -45,10 +45,13 @@ export function threadsIn(threads: Thread[], ids: string | string[]): Thread[] {
   return threads.filter((t) => wanted.has(t.id));
 }
 
-/** The state as the screens read it: messages are offered per conversation instead. */
+/**
+ * The state as the screens read it: messages are offered per conversation instead. A list shown from the device copy
+ * is not loading to them, so it shows instead of a skeleton; fromCopy says it is not yet checked.
+ */
 export function listState({ byThread, ...rest }: State): Omit<State, "byThread"> {
   void byThread;
-  return rest;
+  return rest.fromCopy ? { ...rest, loading: false } : rest;
 }
 
 /** Only email conversations have a mail server to tell. */

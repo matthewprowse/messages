@@ -8,6 +8,14 @@ import { TableKit } from "@tiptap/extension-table";
 import { Image } from "@tiptap/extension-image";
 import { FILE_LINE, fileLine } from "./note-text";
 
+// A note's own files are "attachment:<id>" references, opened through a signed link by the file block. Any other
+// image source (a sender's https URL in a meeting summary, a pasted <img>) would load from that server every time the
+// note opens and tell it so, so an image node may only hold an attachment reference.
+const ATTACHMENT_SRC = /^attachment:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Whether an image source may sit in a note: only the note's own attachments, never a remote URL. */
+export const isNoteImageSrc = (src: unknown): src is string => typeof src === "string" && ATTACHMENT_SRC.test(src.trim());
+
 /**
  * A file in a note: a block of its own, written as "![name](attachment:<id>)" for an image or
  * "[name](attachment:<id>)" for anything else. While a file uploads its block has no id yet, only an
@@ -55,6 +63,32 @@ export const NoteFileBase = Node.create({
   renderMarkdown: (node) => (node.attrs?.id ? fileLine(node.attrs.id, node.attrs.name ?? "", !!node.attrs.image) : ""),
 });
 
+/**
+ * The stock image node, kept only for "![name](attachment:<id>)" written inline. Another source never becomes an image:
+ * markdown keeps its alt text, pasted HTML drops it, typing "![x](url)" stays text, and a src that reaches the node
+ * some other way is not drawn.
+ */
+export const NoteImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      src: { default: null, parseHTML: (el: HTMLElement) => (isNoteImageSrc(el.getAttribute("src")) ? el.getAttribute("src") : null), renderHTML: (attrs: { src?: unknown }) => (isNoteImageSrc(attrs.src) ? { src: attrs.src } : {}) },
+    };
+  },
+  parseHTML() {
+    return [{ tag: "img[src]", getAttrs: (el) => (isNoteImageSrc(el.getAttribute("src")) ? null : false) }];
+  },
+  addInputRules() {
+    return [];
+  },
+  parseMarkdown: (token, helpers) => {
+    if (isNoteImageSrc(token.href)) return helpers.createNode("image", { src: token.href.trim(), title: token.title ?? null, alt: token.text ?? null });
+    const alt = String(token.text ?? "").trim();
+    return alt ? helpers.createTextNode(alt) : [];
+  },
+  renderMarkdown: (node) => (isNoteImageSrc(node.attrs?.src) ? `![${String(node.attrs?.alt ?? "").replace(/[[\]\n\r]/g, " ")}](${node.attrs.src})` : ""),
+});
+
 /** Everything a note can hold, apart from the file block, which the caller passes in. The editor swaps in
  * a checklist item drawn with the app's own Checkbox. */
 export function noteContentExtensions({ taskItem = TaskItem.configure({ nested: true }) }: { taskItem?: AnyExtension } = {}) {
@@ -67,6 +101,6 @@ export function noteContentExtensions({ taskItem = TaskItem.configure({ nested: 
     TaskList,
     taskItem,
     TableKit.configure({ table: { resizable: false } }),
-    Image,
+    NoteImage,
   ];
 }

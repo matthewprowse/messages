@@ -58,7 +58,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const backHref = withQuery(basePath);
   const {
     threadById, contactById, contacts, messagesFor, messagesLoaded, messagesFailed, listThreads, loadMessages, loadOlderMessages, loading, markRead,
-    send, generateDraft, discardDraft, requestAutoDraft, drafting, hydrated, setReplyTo, react, hasOlder, removePending, retryPending,
+    prefetchMessages, send, generateDraft, discardDraft, requestAutoDraft, drafting, hydrated, fromCopy, setReplyTo, react, hasOlder, removePending, retryPending,
   } = useApp();
   const thread = threadById(threadId);
   const { session } = useAuth();
@@ -98,30 +98,33 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
   const { meetings: theirMeetings } = useMeetings(meetingScope);
   const meetings = useMemo(() => meetingsAmong(theirMeetings, msgs[0]?.sentAt, msgs.length < MESSAGE_PAGE), [theirMeetings, msgs]);
 
-  // Opening a conversation: from where, and whether it had a summary to read first.
+  // Opening a conversation: from where, and whether it had a summary to read first. Waits while the list is the device
+  // copy, so a pre-draft is never asked for on what the server may have changed since.
   const openedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!thread || openedRef.current === threadId) return;
+    if (!thread || fromCopy || openedRef.current === threadId) return;
     openedRef.current = threadId;
     track("thread_opened", { via: takeVia(basePath === "/summary" ? "summary" : "list"), channel: thread.channel, had_summary: thread.summary.length > 0, unread: thread.unread });
     void requestAutoDraft(threadId); // a pre-draft, when it qualifies and has none: ready while you read
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, threadExists]);
+  }, [threadId, threadExists, fromCopy]);
 
-  // Messages load when a conversation is opened, and then stay live.
+  // Messages load when a conversation is opened, and then stay live. One already loaded (a prefetch on press or hover)
+  // is only marked as the open one, so later prefetches never drop it.
   useEffect(() => {
-    if (threadExists && !messagesLoaded(threadId)) loadMessages(threadId);
+    if (threadExists) void prefetchMessages(threadId, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, threadExists]);
 
   // Marked read once per arrival (opening it, or a new message landing while it is open) after two seconds in a tab you
   // can see. Not whenever the unread flag flips: "Mark as Unread" on the open conversation has to stick (lib/thread-read.ts).
+  // Never from the device copy: marking read sends read receipts, so it waits for the server's word on the conversation.
   const markedRef = useRef<string | null>(null);
   const unreadRef = useRef(false);
   unreadRef.current = !!thread?.unread;
   const arrival = thread ? readKey(threadId, thread.lastMessageAt) : null;
   useEffect(() => {
-    if (!hydrated || !arrival || !shouldAutoRead(unreadRef.current, arrival, markedRef.current)) return;
+    if (!hydrated || fromCopy || !arrival || !shouldAutoRead(unreadRef.current, arrival, markedRef.current)) return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(t);
@@ -138,7 +141,7 @@ export function ThreadView({ threadId, basePath = "/inbox" }: { threadId: string
       document.removeEventListener("visibilitychange", arm);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, hydrated, arrival]);
+  }, [threadId, hydrated, fromCopy, arrival]);
 
   // Archive or Delete from the menu: the next conversation opens beside the list (else the list), replacing this address.
   const onLeave = useCallback(() => {

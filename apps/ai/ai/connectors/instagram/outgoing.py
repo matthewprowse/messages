@@ -1,10 +1,11 @@
 """The files of an outbox row, read from the app's uploads and checked before anything is sent.
 
-Mirrors apps/worker/src/send/outbox-attachments.ts and attachment-rules.ts: the app uploads each file to the
-private "attachments" bucket at "<user id>/outbox/<uuid>/<filename>", inserts the outbox row with
-attachment_count, then adds one outbox_attachments row per file. The connector waits for those rows, accepts
-only paths under the row's own user, and caps what it downloads. What goes to Instagram is decided by the
-bytes, not by the name or type the app recorded."""
+Mirrors apps/worker/src/send/outbox-attachments.ts and attachment-rules.ts: the app seals each file with the
+user's key and uploads it to the private "attachments" bucket at "<user id>/outbox/<uuid>/file", inserts the outbox
+row with attachment_count, then adds one outbox_attachments row per file. The connector waits for those rows, accepts
+only paths under the row's own user, caps what it downloads and opens each file (one uploaded plain under its own
+name, before sealing began, is read as it is). What goes to Instagram is decided by the bytes, not by the name or
+type the app recorded."""
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from typing import Any
 
 MAX_FILES = 10  # on every provider (MAX_ATTACHMENTS in attachment-rules.ts)
 MAX_FILE_BYTES = 50 * 1024 * 1024
+SEALED_OVERHEAD_BYTES = 36  # the sealed-file header and tag (SEALED_OVERHEAD_BYTES in packages/crypto)
 WAIT_S = 60.0
 POLL_S = 1.0
 
@@ -48,8 +50,9 @@ class OutFile:
 
 
 def own_outbox_path(user_id: str, path: str) -> bool:
-    """True when a stored file is exactly "<user id>/outbox/<uuid>/<safe name>", the format the app writes. The
-    service role downloads these paths, so a "%", a "..", or an extra folder must never get through."""
+    """True when a stored file is exactly "<user id>/outbox/<uuid>/<safe name>": "file" for a sealed upload, or the
+    file's own name for one queued before sealing began. The service role downloads these paths, so a "%", a "..",
+    or an extra folder must never get through."""
     if not USER_ID.match(user_id or ""):
         return False
     return re.match(f"^{user_id}/outbox/{UUID}/{NAME}$", path or "") is not None
@@ -110,6 +113,13 @@ def load_files(store: Any, row: dict[str, Any], folder: str) -> list[OutFile]:
     files: list[OutFile] = []
     for n, r in enumerate(rows):
         data = store.download_outbox_file(r["storage_path"])
+        if not data:
+            raise Rejected(MISSING)
+        if len(data) > MAX_FILE_BYTES + SEALED_OVERHEAD_BYTES:
+            raise Rejected(TOO_LARGE)
+        data = store.open_outbox_file(str(row.get("user_id")), data, str(r["storage_path"]))
+        if data is None:
+            raise Rejected(UNREADABLE)
         if not data:
             raise Rejected(MISSING)
         if len(data) > MAX_FILE_BYTES:

@@ -28,10 +28,11 @@ export function ProfileSection() {
   );
 }
 
-// The form copies the saved name when it mounts, so the section remounts it once the profile has loaded.
+// The form copies the saved name when it mounts, so the section remounts it once the profile has loaded from the server
+// (not from the device copy, which a save would otherwise write back over a newer name).
 function NameRow() {
-  const { loading } = useApp();
-  return <NameForm key={loading ? "loading" : "loaded"} />;
+  const { loading, fromCopy } = useApp();
+  return <NameForm key={loading || fromCopy ? "loading" : "loaded"} />;
 }
 
 function NameForm() {

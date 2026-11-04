@@ -56,7 +56,7 @@ export function NoteView({ noteId }: { noteId: string }) {
   // A note's text is downloaded when the note is opened, ahead of the rest of the list.
   useEffect(() => { if (unloaded) void ensureBody(noteId); }, [unloaded, noteId, ensureBody]);
   if (!note || note.unloaded) {
-    if (note?.failed) return <EmptyState icon={NotebookPen} title="Could Not Open Note" action={<Button variant="link" size="sm" onClick={() => void ensureBody(noteId)}>Try Again</Button>} />;
+    if (note?.failed) return <EmptyState icon={NotebookPen} title="Could Not Open Note" action={<Button variant="link" onClick={() => void ensureBody(noteId)}>Try Again</Button>} />;
     if (loading || note) return <NoteSkeleton />;
     return <EmptyState icon={NotebookPen} title="Note Not Found" action={<Button variant="secondary" asChild><Link href="/notes">Back to Notes</Link></Button>} />;
   }

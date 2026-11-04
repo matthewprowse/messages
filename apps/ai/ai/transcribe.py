@@ -3,7 +3,13 @@ was said is stored encrypted in messages.transcript, for View Transcript in the 
 the conversation's summary and the daily brief), and for drafting replies.
 
 Newest first, a few at a time. A voice note that cannot be done is tried again after a pause, and given
-up on ('failed') after a few tries. Only counts are logged, never what was said."""
+up on ('failed') after a few tries. Only counts are logged, never what was said.
+
+Anyone can send a voice note, so outside senders cannot spend the user's allowance: a note in a conversation the user
+has never written in is not transcribed ('deferred') until they write there or ask for it in the app ('requested', set
+by public.request_transcription: asked for, so not deferred again), at most
+PER_SENDER_DAY notes a day are done per conversation (the rest wait for the next UTC day), and the cost is billed to
+its own feature (voice_notes), so it never eats the meetings share ("transcribe")."""
 
 from __future__ import annotations
 
@@ -29,6 +35,10 @@ MAX_TRIES = 3
 RETRY_S = 300
 DEFAULT_MAX_SECONDS = 300  # a voice note longer than this is not transcribed (VOICE_NOTE_MAX_SECONDS)
 BYTES_PER_SECOND = 16_000  # 128 kbit/s, above voice notes' usual bitrate: a file this size per second cannot be shorter than it looks
+FEATURE = "voice_notes"  # its own share of the allowance (20261124120000_voice_note_limits.sql), apart from meetings
+PER_SENDER_DAY = 20  # notes transcribed per conversation per UTC day; the rest wait for the next day
+REVISIT_S = 600  # how often deferred notes are looked at again, in case the user has since written in their conversation
+REVISIT_ROWS = 200
 
 
 def max_seconds() -> int:
@@ -84,17 +94,19 @@ SCHEMA: dict[str, Any] = {
 }
 
 
+REQUESTED = "requested"  # transcript_status of a deferred note the user asked for (20261124150000_request_transcription.sql)
 FETCH = 20  # audio rows read per pass: the name is sealed, so voice notes are told from other audio here, not in SQL
 
 
 def pending_query(skip: list[str], skip_files: list[str] | None = None) -> dict[str, str]:
-    """Saved audio whose message has no transcript yet, newest first. Which of it is a voice note is decided
-    after the name is opened (attachments.filename is sealed); skip_files leaves out audio already seen not to be."""
+    """Saved audio whose message has no transcript yet (never looked at, or asked for in the app), newest first. Which of
+    it is a voice note is decided after the name is opened (attachments.filename is sealed); skip_files leaves out audio
+    already seen not to be."""
     params = {
         "select": "id,filename,storage_path,mime_type,size_bytes,messages!inner(id,user_id,account_id,thread_id,sent_at,transcript_status)",
         "kind": "eq.audio",
         "storage_path": "not.is.null",
-        "messages.transcript_status": "is.null",
+        "messages.or": f"(transcript_status.is.null,transcript_status.eq.{REQUESTED})",
         "order": "created_at.desc",
         "limit": str(FETCH),
     }
@@ -127,15 +139,21 @@ class Transcribe:
         self.vault = vault or Vault(db)
         self._other_audio: set[str] = set()  # attachment ids of audio that is not a voice note
         self._tries: dict[str, tuple[int, float]] = {}  # message id -> (failed tries, monotonic time to try again)
+        self._held: dict[str, float] = {}  # message id -> monotonic time its conversation's daily cap lifts
+        self._known: set[str] = set()  # conversations the user has written in (it never stops being true)
+        self._revisited = time.monotonic()  # the first revisit waits REVISIT_S: nothing can have been deferred before start
 
     def waiting(self) -> list[str]:
         """Messages taking a break after failing."""
         now = time.monotonic()
-        return [mid for mid, (_, at) in self._tries.items() if at > now]
+        for mid in [mid for mid, at in self._held.items() if at <= now]:
+            del self._held[mid]
+        return [mid for mid, (_, at) in self._tries.items() if at > now] + list(self._held)[-500:]
 
     claims = None  # a claims.Claims, set by the entry point: the second-worker guard
 
     def run_once(self) -> int:
+        self._revisit()
         rows = self.db.select("attachments", pending_query(self.waiting(), sorted(self._other_audio)[-500:]))
         done = 0
         taken = 0
@@ -151,7 +169,8 @@ class Transcribe:
                 continue
             taken += 1
             try:
-                done += self._one(a, m)
+                if self._allowed(m):
+                    done += self._one(a, m)
             except Exception as err:  # any one note (a cut-off download, a bad key, a malformed answer) must not stop the rest or go untried
                 self._failed(m, err)
             finally:
@@ -160,6 +179,47 @@ class Transcribe:
         if done:
             log.info("voice notes transcribed", count=done)
         return done
+
+    def _written_in(self, thread_id: Any) -> bool:
+        """Whether the user has ever sent a message in this conversation: then its sender is someone they talk to."""
+        if not thread_id:
+            return False
+        if thread_id not in self._known and self.db.first("messages", {"select": "id", "thread_id": f"eq.{thread_id}", "direction": "eq.outbound"}):
+            self._known.add(thread_id)
+        return thread_id in self._known
+
+    def _allowed(self, m: dict[str, Any]) -> bool:
+        """Whether this note may be transcribed now. A stranger's is deferred (saved, so it leaves the queue) unless the user
+        asked for it; one over its conversation's daily cap waits, unsaved, until the next UTC day, asked for or not."""
+        if m.get("transcript_status") != REQUESTED and not self._written_in(m.get("thread_id")):
+            self._save(m["id"], None, "deferred")
+            return False
+        day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        done_today = self.db.count(
+            "messages", {"select": "id", "thread_id": f"eq.{m['thread_id']}", "transcript_status": "in.(done,silent)", "sent_at": f"gte.{day.isoformat()}"}
+        )
+        if done_today >= PER_SENDER_DAY:
+            self._held[m["id"]] = time.monotonic() + ((day + timedelta(days=1)) - datetime.now(timezone.utc)).total_seconds()
+            log.info("voice note waiting on the daily cap", message=m["id"])
+            return False
+        return True
+
+    def _revisit(self) -> None:
+        """Deferred notes in conversations the user has since written in go back in the queue. Never raises."""
+        if time.monotonic() - self._revisited < REVISIT_S:
+            return
+        self._revisited = time.monotonic()
+        try:
+            since = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
+            rows = self.db.select(
+                "messages", {"select": "id,thread_id", "transcript_status": "eq.deferred", "sent_at": f"gte.{since}", "order": "sent_at.desc", "limit": str(REVISIT_ROWS)}
+            )
+            back = [r["id"] for r in rows if self._written_in(r.get("thread_id"))]
+            if back:
+                self.db.update("messages", {"id": "in.(" + ",".join(back) + ")", "transcript_status": "eq.deferred"}, {"transcript_status": None}, minimal=True)
+                log.info("deferred voice notes queued", count=len(back))
+        except Exception as err:
+            log.warn("deferred voice notes not revisited", code=log.code_of(err))
 
     def is_voice_note(self, user_id: str, filename: Any) -> bool:
         return str(self.vault.open(user_id, FILENAME, filename) or "").startswith("Voice Note.")
@@ -174,7 +234,7 @@ class Transcribe:
             raise GeminiError(None, "billing_paused")
         audio = self.db.download(BUCKET, a["storage_path"])
         # Sealed by the sync worker ("e1b:" header), opened here in memory; a plain legacy file passes through.
-        opened = self.vault.open_bytes(m["user_id"], ATTACHMENT_DATA, audio)
+        opened = self.vault.open_bytes(m["user_id"], ATTACHMENT_DATA, audio, f"{BUCKET}/{a['storage_path']}")
         if opened is None:
             raise OSError("voice note could not be opened")
         audio = opened
@@ -187,7 +247,7 @@ class Transcribe:
             SYSTEM,
             "Transcribe this voice note.",
             SCHEMA,
-            UsageContext(m["user_id"], "transcribe", m.get("account_id"), m.get("thread_id")),
+            UsageContext(m["user_id"], FEATURE, m.get("account_id"), m.get("thread_id")),
             temperature=0.0,
             thinking="minimal",  # mechanical; falls back to low in gemini.py on a model that has no minimal
             attempts=2,  # a slow day must not bill a big audio file four times

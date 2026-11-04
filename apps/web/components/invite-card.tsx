@@ -98,7 +98,7 @@ function InviteCardBody({ file }: { file: Attachment }) {
       ) : canAnswer ? (
         <div className="flex flex-wrap items-center gap-2">
           {CHOICES.map((c) => (
-            <Button key={c.response} size="sm" variant={current === c.response ? "secondary" : "outline"} aria-pressed={current === c.response} disabled={!!saving} onClick={() => void answer(c.response)}>
+            <Button key={c.response} variant={current === c.response ? "secondary" : "outline"} aria-pressed={current === c.response} disabled={!!saving} onClick={() => void answer(c.response)}>
               {saving === c.response ? "Saving" : c.label}
             </Button>
           ))}
@@ -108,7 +108,7 @@ function InviteCardBody({ file }: { file: Attachment }) {
       ) : (
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">This invitation is not in your calendar yet.</p>
-          <Button size="sm" variant="ghost" onClick={() => setCheck((n) => n + 1)}>Check Again</Button>
+          <Button variant="ghost" onClick={() => setCheck((n) => n + 1)}>Check Again</Button>
         </div>
       )}
     </div>

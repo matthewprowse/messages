@@ -10,6 +10,7 @@ import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
 import { seal } from "@/lib/vault";
 import { sealAddress } from "@/lib/address-refs";
+import { outboxPlace } from "@/lib/outbox-places";
 import { INSTAGRAM_HINT, INSTAGRAM_OFFICIAL_NOTICE, instagramAccounts, instagramUsername, isOfficialAccount } from "@/lib/new-instagram";
 import { useComposeSend } from "@/components/compose-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -25,10 +26,12 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
  * The sign-in connector sends it and sets thread_id. Resolves to the new row's id, or null when it could not be queued.
  */
 export async function queueInstagramChat(accountId: string, username: string, body: string): Promise<string | null> {
-  const sealed = await seal(FIELD.body, body).catch(() => null);
-  const sealedTo = await sealAddress(username).catch(() => null);
+  // The id is chosen here so the body and username are sealed for this row alone (outbox-places.ts).
+  const id = crypto.randomUUID();
+  const sealed = await seal(FIELD.body, body, outboxPlace(id, "body")).catch(() => null);
+  const sealedTo = await sealAddress(username, outboxPlace(id, "to_addresses")).catch(() => null);
   const { data, error } = sealed === null || sealedTo === null ? { data: null, error: true } : await supabase.from("outbox")
-    .insert({ account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0 })
+    .insert({ id, account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0 })
     .select("id").single();
   if (error || !data) {
     toast("Could not send. Your message is still in the box.");

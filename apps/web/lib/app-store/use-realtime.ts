@@ -1,24 +1,23 @@
 // The Realtime subscriptions behind the app store: the sync worker and the AI worker write to Supabase, and every change
 // arrives here within a second or so and is applied to the store.
 
-
-
 import { useEffect } from "react";
 import { toast } from "sonner";
 import type { Tables } from "@messages/db";
 import type { Contact, Message, Thread } from "../types";
 import { supabase } from "../supabase";
-import {loadChanges, loadEverything, loadMessage, loadMessageAttachments, loadMessagesAfter, loadTasks, loadThread, loadThreadMessages, mapDraft, mapAccount,
+import {loadChanges, loadEverything, loadMessage, loadMessageAttachments, loadMessagesAfter, loadThread, loadThreadMessages, mapDraft, mapAccount,
   mapMessage, mapThread, mapUnsubscribe, type MessageRow, 
 } from "../data";
-import { changesSince, resyncPlan } from "./resync-plan";
+import { changesSince, createCatchUpClock, type Gap } from "./resync-plan";
 import { catchUpSet } from "./recent-threads";
 import { runPooled } from "./run-pooled";
+import { subscribeTasks } from "./task-channel";
 import { createUpdateFilter } from "./update-filter";
-import { openAddresses, openDrafts, openMessages, openTasks, openThreads } from "../open-rows";
-import { mapTask } from "../tasks";
+import { openAddresses, openDrafts, openMessages, openThreads } from "../open-rows";
 import { track } from "../analytics";
 import { waitReasonOf } from "../outbox-load";
+import { REVIEW_STATUS } from "../draft-trust";
 import { ComposeDraft, ComposeStatus, PendingSend, composeStatusOf } from "./compose";
 import { DraftPhase } from "./context";
 import type { Action, State } from "./reducer";
@@ -71,22 +70,20 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       }
     }
 
-    // When the connection was last known to be up, ticked while it is. A computer that slept stops the ticks, so
-    // the first late tick means it woke: whatever happened meanwhile is caught up then, as the socket may not notice.
-    let aliveAt = Date.now();
-    let lastTick = aliveAt;
-    const alive = setInterval(() => {
-      const now = Date.now();
-      if (now - lastTick > 120_000 && !dropped) {
-        const down = now - aliveAt;
-        const since = changesSince(aliveAt);
-        aliveAt = now;
-        setTimeout(() => { if (!stopped) void resync(down, since); }, 3000);
-      } else if (!dropped && now - lastTick <= 120_000) {
-        aliveAt = now;
-      }
-      lastTick = now;
-    }, 10_000);
+    // When the store was last known current, and the gaps since (resync-plan.ts). The alive tick, the socket rejoining
+    // and the page coming back all ask it, and only the first to find a gap catches it up.
+    const clock = createCatchUpClock(Date.now());
+    const alive = setInterval(() => { const gap = clock.tick(Date.now()); if (gap) void resync(gap); }, 10_000);
+    // A phone freezes a page in the background, so no tick runs until well after it is back: coming back is the moment to
+    // catch up. pageshow covers a page restored from the back/forward cache, online a network that has just returned.
+    function resumed() {
+      if (document.visibilityState !== "visible") return;
+      const gap = clock.resumed(Date.now());
+      if (gap) void resync(gap);
+    }
+    document.addEventListener("visibilitychange", resumed);
+    window.addEventListener("pageshow", resumed);
+    window.addEventListener("online", resumed);
 
     /**
      * Messages newer than the newest one held in the recently used conversations, or the latest page when that cannot be
@@ -111,15 +108,17 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       return sentIn;
     }
 
-    // After a dropped connection, catch up on what changed while it was down: nothing after a blip, only what
-    // changed after a short drop, everything after a long one or when the short way fails.
-    async function resync(downMs: number, since: string) {
-      const plan = resyncPlan(downMs);
-      if (plan === "skip") return;
-      await catchUp(plan, since);
+    // Catches up on a gap the clock found: only what changed after a short one, everything after a long one or when the
+    // short way fails. A catch-up that fails hands the gap back, so the next tick, rejoin or return tries it again.
+    async function resync(gap: Gap) {
+      if (stopped) return;
+      if (!(await catchUp(gap.plan, gap.since)) && !stopped) clock.failed(gap, Date.now());
     }
-    /** Brings the store up to date with the database. The rows are applied on top of the state as it is when they land, not as it was when they were asked for. */
-    async function catchUp(plan: "delta" | "full", since: string) {
+    /**
+     * Brings the store up to date with the database, and says whether it could. The rows are applied on top of the state
+     * as it is when they land, not as it was when they were asked for.
+     */
+    async function catchUp(plan: "delta" | "full", since: string): Promise<boolean> {
       let sentIn: Set<string>;
       try {
         // What the state was when the fetch began, so edits made while it runs are told apart from what the fetch brings.
@@ -128,7 +127,7 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         if (plan === "delta") {
           try {
             const data = await loadChanges(since, base.threads);
-            if (stopped) return;
+            if (stopped) return true;
             rawDispatch({ type: "merged", base, data });
             delta = true;
           } catch {
@@ -137,12 +136,12 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         }
         if (!delta) {
           const data = await loadEverything();
-          if (stopped) return;
+          if (stopped) return true;
           rawDispatch({ type: "merged", base, data });
         }
         sentIn = await catchUpMessages();
       } catch {
-        return;
+        return false;
       }
       const outboxIds = [...pendingRef.current.map((p) => p.id), ...Object.keys(composedRef.current)];
       const { data } = outboxIds.length ? await supabase.from("outbox").select("id, status, thread_id, error, send_after, wait_reason").in("id", outboxIds) : { data: [] };
@@ -151,6 +150,7 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
       setPending((p) => p
         .map((x) => { const r = rows.get(x.id); return r ? { ...x, status: r.status as PendingSend["status"], error: r.error ?? undefined, sendAfter: r.send_after ?? x.sendAfter, waitReason: waitReasonOf(r.wait_reason) } : x; })
         .filter((x) => !(x.status === "sent" && sentIn.has(x.threadId))));
+      return true;
     }
 
     // Changes arrive in bursts (a sync writes many rows at once). They are collected for a moment and applied
@@ -196,7 +196,6 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
     const sentArrived = new Map<string, number>();
     const updates = createUpdateFilter();
 
-    let dropped = false;
     // Rows changed between the initial load's queries and the first SUBSCRIBED were announced to no one: once, a light
     // catch-up reaches back to when this effect started. It waits for the load, as the load's rows would otherwise meet a half empty list.
     let subscribedBefore = false;
@@ -269,7 +268,7 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
             return;
           }
           // Only the columns a patch reads are opened.
-          const [row] = await openMessages([{ id: changed.id, thread_id: changed.thread_id, provider_meta: changed.provider_meta, body_text: changed.body_text, transcript: changed.transcript }]);
+          const [row] = await openMessages([{ id: changed.id, thread_id: changed.thread_id, provider_meta: changed.provider_meta, body_text: changed.body_text, transcript: changed.transcript, transcript_status: changed.transcript_status }]);
           rawDispatch({ type: "patchMessage", threadId: changed.thread_id, id: changed.id, row });
         });
       })
@@ -305,7 +304,15 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         };
         (waited ? (key: string, rank: number, run: () => Promise<void>) => void run().catch(failWaiting) : queued)(`draft:${changed.id}`, 3, async () => {
           const [row] = await openDrafts([changed]);
-          if (row.status === "active") {
+          // A held pre-draft is offered beside the live draft, never as it: no "shown", nothing in the box.
+          if (row.status !== REVIEW_STATUS && threadMapRef.current.get(threadId)?.reviewDraft?.id === row.id) rawDispatch({ type: "setReviewDraft", id: threadId });
+          if (row.status === REVIEW_STATUS) {
+            rawDispatch({ type: "setReviewDraft", id: threadId, draft: mapDraft(row) });
+            if (draftWaitRef.current[threadId] === row.id) {
+              delete draftWaitRef.current[threadId];
+              setDrafting((d) => ({ ...d, [threadId]: undefined }));
+            }
+          } else if (row.status === "active") {
             const t = threadMapRef.current.get(threadId);
             if (t && t.draft?.id !== row.id) {
               track("draft_shown", { tone: row.tone, channel: t.channel, ms: Math.max(0, Date.parse(row.updated_at) - Date.parse(row.created_at)), auto: row.auto });
@@ -362,58 +369,23 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         if (status === "SUBSCRIBED") {
           if (!subscribedBefore) gapCatchUp();
           subscribedBefore = true;
-          if (dropped) void resync(Date.now() - aliveAt, changesSince(aliveAt));
-          dropped = false;
-          aliveAt = Date.now();
+          const gap = clock.subscribed(Date.now());
+          if (gap) void resync(gap);
         } else {
-          dropped = true; // CHANNEL_ERROR, TIMED_OUT or CLOSED; the client rejoins by itself
+          clock.dropped(); // CHANNEL_ERROR, TIMED_OUT or CLOSED; the client rejoins by itself
         }
       });
 
-    let taskDropped = false, taskJoined = false, taskErrors = 0;
-    /** The tasks again, applied on top of the ones held (a task made here and not yet stored stays). */
-    async function refreshTasks() {
-      const base = stateRef.current.tasks;
-      try {
-        const tasks = await loadTasks();
-        if (!stopped) rawDispatch({ type: "tasksLoaded", base, tasks });
-      } catch {
-        // the next reconnect tries again
-      }
-    }
-    // Tasks the worker stores or changes, on their own channel, so the inbox keeps working if this table is not published for Realtime. A resync reloads them too.
-    const taskChannel = supabase
-      .channel(`tasks-${userId}`)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "tasks" }, (payload) => {
-        const id = (payload.old as { id?: string } | null)?.id;
-        if (id && stateRef.current.tasks.some((t) => t.id === id)) rawDispatch({ type: "removeTask", id });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "tasks", filter: mine }, (payload) => {
-        if (payload.eventType === "DELETE") return;
-        const changed = payload.new as Tables<"tasks">;
-        queued(`task:${changed.id}`, 3, async () => {
-          const [row] = await openTasks([{ ...changed }]);
-          rawDispatch({ type: "upsertTask", task: mapTask(row) });
-        });
-      })
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          // Tasks changed while the channel was down (or before it first joined) were never announced: read them again.
-          if (taskDropped) void refreshTasks();
-          taskDropped = false;
-          taskJoined = true;
-          taskErrors = 0;
-        } else {
-          taskDropped = true; // the client rejoins by itself
-          // A table that is not published for Realtime never joins: after a few tries it is given up on. One that joined before keeps rejoining.
-          if (status === "CHANNEL_ERROR" && !taskJoined && ++taskErrors >= 3) void supabase.removeChannel(taskChannel);
-        }
-      });
+    // Tasks on their own channel (task-channel.ts), so the inbox keeps working if that table is not published for Realtime.
+    const taskChannel = subscribeTasks({ userId, stateRef, rawDispatch, queued, stopped: () => stopped });
 
     return () => {
       stopped = true;
       clearTimeout(timer);
       clearInterval(alive);
+      document.removeEventListener("visibilitychange", resumed);
+      window.removeEventListener("pageshow", resumed);
+      window.removeEventListener("online", resumed);
       supabase.removeChannel(channel);
       supabase.removeChannel(taskChannel);
     };

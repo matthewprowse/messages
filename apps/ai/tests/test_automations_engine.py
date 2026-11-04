@@ -1,6 +1,7 @@
 """Tests for the automations engine (ai.automations.engine, do and previews) with a fake database and fake Gemini: a Property24
 enquiry makes a contact marked a Lead with its source, a task, a pending draft addressed to the lead and an urgent thread; a repeat
-enquirer joins their record; a message is never run twice; Gemini is asked only when the parser fails and the email can be acted on;
+enquirer joins their record only when every identifier is theirs, a partial match becomes a new Lead with a merge suggested, and a
+starred or non-Lead contact is never marked or linked; a message is never run twice; Gemini is asked only when the parser fails and the email can be acted on;
 old, non-email and pre-enable mail is left alone; the 30 day preview counts people; nothing is ever sent."""
 
 import json
@@ -31,7 +32,11 @@ CUSTOM_SPEC = {
 
 
 class FakeVault:
-    def seal(self, user, field, value):
+    places: list = []  # (place, row) of every value sealed bound to one
+
+    def seal(self, user, field, value, place="", row=None):
+        if place:
+            self.places.append((place, row))
         return None if value is None else f"s:{field}:{value}"
 
     def open(self, user, field, value):
@@ -148,6 +153,7 @@ class LiveRun(unittest.TestCase):
         task = db.of("task_updates")[0]
         self.assertEqual((task["action"], task["account_id"], task["priority"]), ("create", "todo1", 1))
         self.assertEqual(task["title"], "s:task_title:Call Back Within 5 Minutes: Sipho Dlamini")
+        self.assertIn(("task_updates.title", task["id"]), FakeVault.places, "the title is sealed for this row alone")
         self.assertIn("+27821234567", task["notes"])
         draft = db.of("drafts")[0]
         self.assertEqual(draft["status"], "pending")
@@ -165,20 +171,105 @@ class LiveRun(unittest.TestCase):
         for table, _ in db.inserts:
             self.assertNotIn(table, ("outbox", "calendar_outbox"), "an automation never sends anything")
 
-    def test_a_repeat_enquirer_joins_their_record_and_keeps_their_relationship(self):
+    def test_a_repeat_enquirer_whose_address_and_number_are_both_theirs_joins_their_record(self):
         db = FakeDb(
             [auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None},
-            identities={("email", "sipho.dlamini@gmail.com"): {"contact_id": "c9"}},
-            contacts={"c9": {"id": "c9", "relationship": "s:contact_relationship:Client", "lead_source": None}},
+            identities={("email", "sipho.dlamini@gmail.com"): {"contact_id": "c9"}, ("phone", "+27821234567"): {"contact_id": "c9"}},
+            contacts={"c9": {"id": "c9", "relationship": "s:contact_relationship:Lead", "lead_source": None}},
         )
         build(db).after_triage([message()])
         self.assertEqual(db.of("contacts"), [])
         self.assertEqual(db.run_patch()["contact_id"], "c9")
         self.assertFalse(db.run_patch()["effects"]["contact_created"])
         patch = next(p for t, f, p in db.updates if t == "contacts")
-        self.assertNotIn("relationship", patch, "a client stays a client")
+        self.assertNotIn("relationship", patch, "already a Lead")
         self.assertEqual(patch["lead_source"], "s:lead_source:Property24 Enquiry")
-        self.assertEqual([r["kind"] for r in db.of("contact_identities")], ["phone"], "their new number is added to the record")
+        self.assertEqual(db.of("contact_identities"), [], "nothing new to add")
+        self.assertEqual(db.of("thread_participants")[0]["contact_id"], "c9")
+
+    def test_an_enquiry_naming_a_clients_address_beside_a_new_number_never_touches_the_client(self):
+        db = FakeDb(
+            [auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None},
+            identities={("email", "sipho.dlamini@gmail.com"): {"contact_id": "c9"}},
+            contacts={"c9": {"id": "c9", "relationship": None, "lead_source": None}},
+        )
+        build(db).after_triage([message()])
+        self.assertEqual([p for t, f, p in db.updates if t == "contacts"], [], "the matched contact is not marked")
+        lead = db.of("contacts")[0]
+        self.assertEqual(lead["relationship"], "s:contact_relationship:Lead")
+        added = db.of("contact_identities")
+        self.assertEqual([(r["kind"], r["value"]) for r in added], [("phone", "s:address:+27821234567")], "only the unmatched number, on the new lead")
+        self.assertNotEqual(added[0]["contact_id"], "c9")
+        run = db.run_patch()
+        self.assertNotEqual(run["contact_id"], "c9")
+        self.assertTrue(run["effects"]["contact_created"])
+        self.assertEqual(db.of("thread_participants")[0]["contact_id"], run["contact_id"], "the enquiry is on the new lead's timeline")
+        suggestion = db.of("contact_suggestions")[0]
+        self.assertEqual({suggestion["contact_a"], suggestion["contact_b"]}, {"c9", run["contact_id"]})
+        self.assertLess(suggestion["contact_a"], suggestion["contact_b"])
+        self.assertEqual((suggestion["reason"], suggestion["evidence"]), ("other", {"source": "automation"}))
+        self.assertEqual(len(run["effects"]["suggestion_ids"]), 1, "kept so Undo can find it")
+
+    def test_an_address_and_number_of_two_different_people_make_a_new_lead_suggested_against_both(self):
+        db = FakeDb(
+            [auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None},
+            identities={("email", "sipho.dlamini@gmail.com"): {"contact_id": "c9"}, ("phone", "+27821234567"): {"contact_id": "c8"}},
+        )
+        build(db).after_triage([message()])
+        self.assertEqual(db.of("contact_identities"), [])
+        self.assertEqual(len(db.of("contacts")), 1)
+        pairs = [{s["contact_a"], s["contact_b"]} for s in db.of("contact_suggestions")]
+        new = db.run_patch()["contact_id"]
+        self.assertEqual(pairs, [{"c8", new}, {"c9", new}])
+        self.assertEqual([p for t, f, p in db.updates if t == "contacts"], [])
+
+    def test_a_starred_or_non_lead_contact_is_never_marked_or_linked_even_when_everything_matches(self):
+        for current in ({"id": "c9", "relationship": None, "lead_source": None, "vip": True}, {"id": "c9", "relationship": "s:contact_relationship:Client", "lead_source": None}):
+            db = FakeDb(
+                [auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None},
+                identities={("email", "sipho.dlamini@gmail.com"): {"contact_id": "c9"}, ("phone", "+27821234567"): {"contact_id": "c9"}},
+                contacts={"c9": current},
+            )
+            build(db).after_triage([message()])
+            self.assertEqual([p for t, f, p in db.updates if t == "contacts"], [])
+            self.assertEqual(db.of("thread_participants"), [])
+            self.assertEqual(db.of("contacts"), [])
+            self.assertEqual(db.of("contact_identities"), [])
+            run = db.run_patch()
+            self.assertEqual((run["contact_id"], run["effects"]["trusted"]), ("c9", True))
+
+    def test_a_lead_raced_for_every_identifier_looks_again_and_never_adds_to_the_winner(self):
+        class RacedDb(FakeDb):
+            def first(self, table, params):
+                if table == "contact_identities" and not self.raced:
+                    return None  # the first lookup misses; another run inserts both before this one
+                return super().first(table, params)
+
+            def insert_new(self, table, row, on_conflict):
+                if table == "contact_identities":
+                    self.raced = True
+                return super().insert_new(table, row, on_conflict)
+
+        db = RacedDb(
+            [auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None},
+            identities={("email", "sipho.dlamini@gmail.com"): {"contact_id": "c9"}, ("phone", "+27821234567"): {"contact_id": "c9"}},
+            contacts={"c9": {"id": "c9", "relationship": "s:contact_relationship:Lead", "lead_source": None}},
+        )
+        db.raced = False
+        build(db).after_triage([message()])
+        self.assertEqual(len(db.deletes), 1, "the empty contact just made is removed")
+        self.assertEqual(db.run_patch()["contact_id"], "c9")
+        self.assertEqual(db.of("contact_identities"), [])
+
+    def test_a_user_with_no_key_yet_is_skipped_before_anything_is_claimed(self):
+        class KeylessVault(FakeVault):
+            encrypt = True
+
+        db = FakeDb([auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None})
+        a = Automations(db, FakeGemini(), "model", KeylessVault())
+        a.doer.vault = a.vault
+        self.assertEqual(a.after_triage([message()]), 0)
+        self.assertEqual(db.inserts, [], "no run is claimed that could never be recorded")
 
     def test_a_message_is_never_run_twice(self):
         db = FakeDb([auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None}, existing_runs=[("a1", MESSAGE)])

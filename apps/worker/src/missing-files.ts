@@ -2,7 +2,7 @@
 // attachment_fetch_state so a restart does not reset them. Wraps MissingFiles from ingest/attachment-files.ts.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { decryptBytes, encryptBytes, isSealedBytes, type UserKeys } from "@messages/crypto";
+import { isSealedBytes, type UserKeys } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import { db, must } from "./db";
 import { MissingFiles } from "./ingest/attachment-files";
@@ -10,8 +10,10 @@ import { errorCode, log } from "./log";
 import { fileRetryDelay } from "./polling";
 import { makeTilePicture } from "./photos/tile-picture";
 import { thumbPathFor } from "./photos/thumbnail";
-import { ATTACHMENTS_BUCKET, storageError, storageStatus, uploadObject } from "./storage";
+import { ATTACHMENTS_BUCKET, storageError, storageStatus, uploadObject, WRITE_ONCE_CACHE_S } from "./storage";
 import { keysFor } from "./vault";
+import { openFileFor, sealFileFor } from "./file-seal";
+import { env } from "./env";
 
 // attachment_fetch_state is not in the generated types until they are regenerated after its migration.
 const state = (db as unknown as SupabaseClient).from.bind(db as unknown as SupabaseClient, "attachment_fetch_state");
@@ -88,6 +90,8 @@ export interface ThumbDeps {
   download(path: string): Promise<Uint8Array<ArrayBuffer> | null>;
   upload(path: string, bytes: Buffer): Promise<void>;
   setThumb(id: string, thumbPath: string): Promise<void>;
+  /** Seal bound to the thumbnail's place (SEAL_BOUND_FIELDS). Unset: the legacy format. */
+  binding?: boolean;
 }
 
 // thumb_path is not in the generated types until they are regenerated after its migration.
@@ -95,6 +99,9 @@ type Loose = SupabaseClient;
 const loose = () => db as unknown as Loose;
 
 const liveThumbDeps: ThumbDeps = {
+  get binding() {
+    return env.sealBoundFields;
+  },
   async list(limit) {
     const { data, error } = await loose()
       .from("attachments")
@@ -126,7 +133,7 @@ const liveThumbDeps: ThumbDeps = {
     if (!data) return null;
     return new Uint8Array(await data.arrayBuffer());
   },
-  upload: (path, bytes) => uploadObject(ATTACHMENTS_BUCKET, path, bytes, "application/octet-stream"),
+  upload: (path, bytes) => uploadObject(ATTACHMENTS_BUCKET, path, bytes, "application/octet-stream", WRITE_ONCE_CACHE_S),
   async setThumb(id, thumbPath) {
     const { error } = await loose().from("attachments").update({ thumb_path: thumbPath }).eq("id", id);
     if (error) throw Object.assign(new Error("save thumbnail path failed"), { code: "THUMB_ROW" });
@@ -144,14 +151,14 @@ export async function backfillThumbnails(limit: number, deps: ThumbDeps = liveTh
   for (const job of jobs) {
     try {
       const stored = await deps.download(job.storage_path);
-      const plain = stored && isSealedBytes(stored) ? await decryptBytes(await deps.keys(job.user_id), FIELD.attachmentData, stored).catch(() => null) : null;
+      const plain = stored && isSealedBytes(stored) ? await openFileFor(await deps.keys(job.user_id), FIELD.attachmentData, ATTACHMENTS_BUCKET, job.storage_path, stored).catch(() => null) : null;
       const thumb = plain ? await makeTilePicture(job.kind, Buffer.from(plain.buffer, plain.byteOffset, plain.byteLength)) : null;
       if (!thumb) {
         await deps.setThumb(job.id, NO_THUMB);
         continue;
       }
-      const sealed = await encryptBytes(await deps.keys(job.user_id), FIELD.attachmentData, new Uint8Array(thumb));
       const thumbPath = thumbPathFor(job.storage_path);
+      const sealed = await sealFileFor(await deps.keys(job.user_id), FIELD.attachmentData, ATTACHMENTS_BUCKET, thumbPath, new Uint8Array(thumb), !!deps.binding);
       await deps.upload(thumbPath, Buffer.from(sealed.buffer, sealed.byteOffset, sealed.byteLength));
       await deps.setThumb(job.id, thumbPath);
       made++;

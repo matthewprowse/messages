@@ -2,7 +2,11 @@
 are worth offering, the prompt and schema for the model, and the checks that decide whether its answer is used.
 
 The model never writes a link or a figure the email did not contain. Links are chosen by number from the list built
-here, and a point or summary is dropped when a number in it is not in the email. Output is plain text only."""
+here, and a point or summary is dropped when a number in it is not in the email. Output is plain text only.
+
+A link becomes a button only when it goes to the sender's own site (the same registrable domain as the From address),
+so a lookalike email cannot turn its phishing link into a clean "View the Sale". Mail triage flagged suspicious gets
+no links at all. Each stored link carries its host, so the app can show where it goes."""
 
 from __future__ import annotations
 
@@ -80,6 +84,37 @@ def extract_links(text: str) -> list[dict[str, str]]:
         if len(out) >= MAX_OFFERED:
             break
     return out[:MAX_OFFERED]
+
+
+# Second-level labels under a country code that are sold like top-level ones (shop.co.za is one site, co.za is not).
+SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu", "ltd", "plc", "nom", "web"}
+
+
+def site_of(host: str | None) -> str:
+    """The registrable domain of a host, near enough without the public suffix list: the last two labels, or three
+    when the last two are a country's second level (mail.shop.co.za is shop.co.za). Empty for nothing usable."""
+    labels = [l for l in (host or "").lower().strip(".").split(".") if l]
+    if len(labels) < 2:
+        return ""
+    keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in SECOND_LEVEL else 2
+    return ".".join(labels[-keep:])
+
+
+def sender_site(sender: str | None) -> str:
+    """The registrable domain of a From address ("Shop <news@mail.shop.co.za>" is shop.co.za), or empty."""
+    address = (sender or "").strip()
+    if "<" in address:
+        address = address.split("<", 1)[1].split(">", 1)[0]
+    return site_of(address.rsplit("@", 1)[-1]) if "@" in address else ""
+
+
+def own_links(links: list[dict[str, str]], sender: str | None, suspicious: Any = None) -> list[dict[str, str]]:
+    """The links that may be offered: none for mail flagged suspicious or with no readable sender, else only those on
+    the sender's own registrable domain. A tracking or mailing service's redirect domain is dropped with the rest."""
+    site = sender_site(sender)
+    if suspicious or not site:
+        return []
+    return [l for l in links if site_of(l.get("host")) == site]
 
 
 def readable_text(text: str | None, html_body: str | None = None, limit: int = BODY_CHARS) -> str:
@@ -184,5 +219,5 @@ def check_answer(text: str, links: list[dict[str, str]], answer: Any) -> dict[st
         n, label = item["id"], plain(item.get("label"), LABEL_CHARS)
         if 1 <= n <= len(links) and n not in used and label:
             used.add(n)
-            chosen.append({"label": label, "url": links[n - 1]["url"]})
+            chosen.append({"label": label, "url": links[n - 1]["url"], "host": links[n - 1].get("host") or (urlsplit(links[n - 1]["url"]).hostname or "").lower()})
     return {"summary": summary, "points": points[:MAX_POINTS], "links": chosen[:MAX_LINKS]}

@@ -14,8 +14,8 @@ from typing import Any
 
 from . import log
 from .contact_facts import CHANNELS, Facts, MeetingFact, ThreadFact, ago_text, clip, load_facts, utcnow
-from .crypto import address_index
-from .fields import ADDRESS, SUMMARY
+from .crypto import address_index, is_ciphertext
+from .fields import ADDRESS, EVENT_GUESTS, SUMMARY
 from .supabase import Supabase, in_list
 from .vault import Vault
 
@@ -90,6 +90,20 @@ def prep_due(events: list[dict[str, Any]], preps: dict[str, str], now: datetime)
     return sorted(due, key=lambda e: e["starts_at"])
 
 
+def open_guests(vault: Any, user_id: str, attendees: Any) -> list[Any]:
+    """An event's guest list as stored: a JSON list, or the list sealed whole under EVENT_GUESTS as one string (the sync
+    worker's calendar/event-text.ts). A list that will not open reads as no guests."""
+    if isinstance(attendees, list):
+        return attendees
+    if not is_ciphertext(attendees):
+        return []
+    try:
+        opened = json.loads(vault.open(user_id, EVENT_GUESTS, attendees) or "[]")
+    except ValueError:
+        return []
+    return opened if isinstance(opened, list) else []
+
+
 def guest_emails(attendees: Any) -> list[str]:
     """Lowercase addresses of the guests that are not you, in order, without repeats."""
     seen: dict[str, None] = {}
@@ -120,6 +134,8 @@ class Prep:
         )
         if not events:
             return 0
+        for e in events:  # opened before anything looks at who is invited; never logged
+            e["attendees"] = open_guests(self.vault, e["user_id"], e.get("attendees"))
         preps = {r["event_id"]: r["starts_at"] for r in self.db.select("event_preps", {"select": "event_id,starts_at", "event_id": in_list([e["id"] for e in events])})}
         done = 0
         for event in prep_due(events, preps, now)[:EVENTS_PER_RUN]:

@@ -1,18 +1,22 @@
-// Loads what the Calendar page shows: the events for the days on screen (reloaded when `version` goes up, when the
-// worker stores or creates an event, or when the tab comes back), and the details of the event that is open (guests,
-// notes, link), including opening one from a ?event= link. The page decides which days; this fetches them and keeps
-// the opened events current.
+// Loads what the Calendar page shows: the events for the days on screen (reloaded when `version` goes up or when the
+// tab comes back), and the details of the event that is open (guests, notes, link), including opening one from a
+// ?event= link. The page decides which days; this fetches them and keeps the opened events current. Days already seen
+// this session show at once from memory (lib/events-cache.ts) and load again underneath once a minute old. An event the
+// worker stores or changes is fetched on its own and patched in; only a big burst reloads the days.
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { dayKey, loadEventDetail, loadEvents, type CalendarEvent } from "@/lib/calendar";
+import { dayKey, loadEventDetail, loadEvents, loadEventsByIds, type CalendarEvent } from "@/lib/calendar";
+import { eventsCache, eventsKey, patchRange } from "@/lib/events-cache";
 import { supabase } from "@/lib/supabase";
 import { addDays, fromKey } from "@/lib/dates";
 import type { View } from "@/components/calendar/dates";
 import type { PendingChanges } from "@/components/calendar/use-pending-changes";
 
-const STALE_MS = 60_000; // events older than this are loaded again when the tab is shown
+const STALE_MS = 60_000; // events older than this are loaded again when the tab is shown or the days are shown again
+const PATCH_DELAY_MS = 1000; // a sync stores events in bursts; one fetch covers the burst
+const PATCH_MAX = 20; // more changed events than this at once reload the days instead of fetching each
 
 export function useCalendarData({ userId, view, setAnchor, sized, startKey, length, rangeKey, version, mounted, reload, pending }: {
   userId: string | undefined;
@@ -32,8 +36,12 @@ export function useCalendarData({ userId, view, setAnchor, sized, startKey, leng
   const pathname = usePathname();
   const eventParam = useSearchParams().get("event");
   const { queued, created, deleted, updated, setQueued, setHidden, setEdits } = pending;
+  const cacheKey = userId ? eventsKey(userId, startKey, length, false) : null;
   // undefined while loading, null if it failed.
-  const [loaded, setLoaded] = useState<{ key: string; events: CalendarEvent[] | null } | undefined>(undefined);
+  const [loaded, setLoaded] = useState<{ key: string; events: CalendarEvent[] | null } | undefined>(() => {
+    const held = cacheKey ? eventsCache.get(cacheKey) : undefined;
+    return held ? { key: rangeKey, events: held } : undefined;
+  });
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [details, setDetails] = useState<Map<string, CalendarEvent>>(() => new Map());
   const [detailsFailed, setDetailsFailed] = useState<Set<string>>(() => new Set());
@@ -42,6 +50,16 @@ export function useCalendarData({ userId, view, setAnchor, sized, startKey, leng
   const requested = useRef(new Set<string>());
   const loadedVersion = useRef(0);
   const loadedAt = useRef(0);
+  // The days on screen, for a Realtime patch that lands after they changed.
+  const range = useRef({ cacheKey, rangeKey, startKey, length });
+  range.current = { cacheKey, rangeKey, startKey, length };
+
+  // What the worker confirmed is dropped from the changes laid over the events, once the events include it.
+  const settle = () => {
+    if (created.current.size) setQueued((list) => list.filter((e) => !created.current.has(e.id)));
+    if (deleted.current.size) setHidden((list) => list.filter((h) => !deleted.current.has(h.token)));
+    if (updated.current.size) setEdits((list) => list.filter((e) => !updated.current.has(e.token)));
+  };
 
   // ?event=<id> opens that event on its day, such as from the Summary.
   const handledEvent = useRef<string | null>(null);
@@ -72,18 +90,20 @@ export function useCalendarData({ userId, view, setAnchor, sized, startKey, leng
   }, [eventParam, userId, pathname, router, view]);
 
   useEffect(() => {
-    if (!userId || !sized) return;
+    if (!cacheKey || !sized) return;
     let cancelled = false;
     const from = fromKey(startKey);
-    loadEvents(from, addDays(from, length), { details: false })
+    const held = eventsCache.get(cacheKey);
+    if (held) setLoaded({ key: rangeKey, events: held });
+    // A reload asked for (version) always reads; days shown again read only when their copy is old.
+    const force = loadedVersion.current !== version;
+    eventsCache.load(cacheKey, () => loadEvents(from, addDays(from, length), { details: false }), force ? 0 : STALE_MS)
       .then((events) => {
         if (cancelled) return;
         setLoaded({ key: rangeKey, events });
         setRefreshFailed(false);
-        loadedAt.current = Date.now();
-        if (created.current.size) setQueued((list) => list.filter((e) => !created.current.has(e.id)));
-        if (deleted.current.size) setHidden((list) => list.filter((h) => !deleted.current.has(h.token)));
-        if (updated.current.size) setEdits((list) => list.filter((e) => !updated.current.has(e.token)));
+        loadedAt.current = Date.now() - Math.min(eventsCache.age(cacheKey), STALE_MS + 1);
+        settle();
         // Opened events are fetched again after a reload, as they may have changed. What is held stays on screen until
         // the new copy arrives, so an open event does not fall back to its skeleton.
         if (loadedVersion.current !== version) {
@@ -101,15 +121,52 @@ export function useCalendarData({ userId, view, setAnchor, sized, startKey, leng
     return () => {
       cancelled = true;
     };
-  }, [rangeKey, startKey, length, userId, version, sized]);
+  }, [rangeKey, startKey, length, cacheKey, version, sized]);
 
-  // The sync worker stores events in calendar_events (a new invite, a moved meeting, a cancellation) and marks a queued
-  // event created after it has stored it. Both reload the days; a burst of changes loads once (see useReload).
+  // The sync worker stores events in calendar_events (a new invite, a moved meeting, a cancellation): the changed
+  // rows are fetched by id after a short wait and patched into the days shown, and the other kept ranges (other weeks,
+  // the Summary's today) are marked old so they read again when next shown. A big burst (a first sync) reloads instead.
+  // A queued event marked created reloads the days, which settles it.
   useEffect(() => {
     if (!userId) return;
+    const changed = new Set<string>();
+    const gone = new Set<string>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const flush = () => {
+      const ids = [...changed];
+      const removed = [...gone];
+      changed.clear();
+      gone.clear();
+      const at = range.current;
+      for (const k of eventsCache.keys()) if (k !== at.cacheKey) eventsCache.invalidate(k);
+      if (!at.cacheKey || ids.length + removed.length > PATCH_MAX) { reload(); return; }
+      loadEventsByIds(ids)
+        .then((fetched) => {
+          if (!mounted.current || !at.cacheKey) return;
+          const back = new Set(fetched.map((e) => e.id));
+          const start = fromKey(at.startKey);
+          // An id asked for and not returned was deleted (or moved to someone else's calendar).
+          const drop = [...removed, ...ids.filter((id) => !back.has(id))];
+          eventsCache.patch(at.cacheKey, (list) => patchRange(list, fetched, drop, start, addDays(start, at.length)));
+          const next = eventsCache.get(at.cacheKey);
+          if (next && range.current.cacheKey === at.cacheKey) setLoaded({ key: at.rangeKey, events: next });
+          // Opened events among them are fetched again for their guests and notes. Changes laid over the events are
+          // settled only by a full load (confirmations call reload): a patch covers only the rows Realtime named.
+          for (const id of [...ids, ...removed]) requested.current.delete(id);
+        })
+        .catch(() => reload());
+    };
+    const onEvent = (payload: { eventType: string; new: unknown; old: unknown }) => {
+      const id = ((payload.eventType === "DELETE" ? payload.old : payload.new) as { id?: string } | null)?.id;
+      if (!id) { reload(); return; }
+      if (payload.eventType === "DELETE") gone.add(id);
+      else changed.add(id);
+      clearTimeout(timer);
+      timer = setTimeout(flush, PATCH_DELAY_MS);
+    };
     const channel = supabase
       .channel(`calendar-page-${userId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "calendar_events", filter: `user_id=eq.${userId}` }, () => reload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "calendar_events", filter: `user_id=eq.${userId}` }, onEvent)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "calendar_outbox", filter: `user_id=eq.${userId}` }, (payload) => {
         const row = payload.new as { id?: string; status?: string };
         if (row.status !== "created") return;
@@ -117,7 +174,7 @@ export function useCalendarData({ userId, view, setAnchor, sized, startKey, leng
         reload();
       })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { clearTimeout(timer); supabase.removeChannel(channel); };
   }, [userId, reload]);
 
   // Coming back to the tab loads the days again when they are more than a minute old, as Realtime may have missed a

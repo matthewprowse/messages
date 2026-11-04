@@ -2,7 +2,9 @@
 
 // Layout for /contacts: loads contacts (with their star, relationship and last message each way), companies and merge suggestions for the signed-in user. A merge, hide, change of
 // kind or delete is patched into the lists as the store announces it (contactChanges), and the lists are read again only
-// after a full contact reload or Retry. Companies load when the Companies tab or a company is first opened.
+// after a full contact reload or Retry. Companies load when the Companies tab or a company is first opened. The lists
+// are kept in memory between visits (lib/contacts-list-cache.ts): a return shows them at once, applies the changes the
+// store announced meanwhile, and reads again underneath only when they are old.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
@@ -14,6 +16,8 @@ import { listContactsFromStore } from "@/lib/data";
 import { listCompanies, type CompanySummary } from "@/lib/organizations";
 import { listSuggestions, type MergeSuggestion } from "@/lib/contact-merging";
 import { mergeCompanies, mergeSuggestions, mergeSummaries, patchSummary, removeSummary } from "@/lib/contact-list-patch";
+import { changesSeen, contactsSnapshot, isListFresh, saveContactsSnapshot, type ContactList } from "@/lib/contacts-list-cache";
+import { patchCachedContact } from "@/lib/contact-detail-cache";
 import { CompaniesContext, ContactsShell } from "@/components/contacts-shell";
 import { ContactsDataContext } from "@/components/contacts-data";
 
@@ -25,17 +29,36 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
   const { contactsReady, contactsRefreshed, contactChanges, contacts: stored } = useApp();
   const storedRef = useRef(stored);
   storedRef.current = stored;
-  const [contacts, setContacts] = useState<ContactSummary[] | null | undefined>(undefined); // undefined while loading, null if it failed
+  // The lists as this person last saw them, this session.
+  const [kept] = useState(() => contactsSnapshot(userId));
+  const [contacts, setContacts] = useState<ContactSummary[] | null | undefined>(kept?.contacts); // undefined while loading, null if it failed
   const contactsRef = useRef(contacts);
   contactsRef.current = contacts;
-  const [companies, setCompanies] = useState<CompanySummary[] | null | undefined>(undefined);
-  const [suggestions, setSuggestions] = useState<MergeSuggestion[] | null | undefined>(undefined);
+  const [companies, setCompanies] = useState<CompanySummary[] | null | undefined>(kept?.companies);
+  const [suggestions, setSuggestions] = useState<MergeSuggestion[] | null | undefined>(kept?.suggestions);
   // How many pending suggestions the first page did not include.
-  const [suggestionsMore, setSuggestionsMore] = useState(0);
+  const [suggestionsMore, setSuggestionsMore] = useState(kept?.suggestionsMore ?? 0);
   // Companies cost a query of their own, so they load once the Companies tab (or a search that could match one) asks.
-  const [wantCompanies, setWantCompanies] = useState(false);
+  const [wantCompanies, setWantCompanies] = useState(kept?.companies !== undefined);
   // Bumped by Retry after a list failed to load.
   const [attempt, setAttempt] = useState(0);
+  // A list's read is skipped while nothing has moved since mounting (no full reload, no change of store readiness, no
+  // Retry) and the kept copy is young and in step with the store. Compared with the values at mount, rather than
+  // counting runs, so React's development double run of effects skips both times.
+  const store = useRef({ refreshed: contactsRefreshed, changes: contactChanges.length });
+  store.current = { refreshed: contactsRefreshed, changes: contactChanges.length };
+  const [atMount] = useState({ refreshed: contactsRefreshed, ready: contactsReady });
+  const skipRead = (list: ContactList) =>
+    attempt === 0 && contactsRefreshed === atMount.refreshed && contactsReady === atMount.ready && isListFresh(contactsSnapshot(userId), list, store.current, Date.now());
+  const readAt = (list: ContactList) => {
+    if (userId) saveContactsSnapshot(userId, { at: { [list]: Date.now() }, refreshed: store.current.refreshed });
+  };
+
+  // Whatever is on screen is what a return shows. A list that failed is not kept, so a return reads it again.
+  useEffect(() => {
+    if (!userId) return;
+    saveContactsSnapshot(userId, { contacts: contacts ?? undefined, companies: companies ?? undefined, suggestions: suggestions ?? undefined, suggestionsMore });
+  }, [userId, contacts, companies, suggestions, suggestionsMore]);
 
   // Only what failed shows loading again; what is on screen stays while the rest reloads.
   useEffect(() => {
@@ -50,6 +73,7 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
   useEffect(() => {
     if (!userId) return;
     if (!contactsReady && contactsRef.current) return;
+    if (skipRead("contacts")) return;
     let cancelled = false;
     // Missing someone means the store is behind, so everything is read as before.
     const read = contactsReady ? listContactsFromStore(storedRef.current).then((rows) => rows ?? listContacts()) : listContacts();
@@ -59,7 +83,11 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
       return null;
     });
     Promise.all([read, relations])
-      .then(([rows, found]) => !cancelled && setContacts(found ? applyRelations(rows, found) : rows))
+      .then(([rows, found]) => {
+        if (cancelled) return;
+        setContacts(found ? applyRelations(rows, found) : rows);
+        readAt("contacts");
+      })
       .catch((err) => {
         console.error(err instanceof Error ? err.message : "Load contacts failed");
         if (!cancelled) setContacts(null);
@@ -70,13 +98,14 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
   }, [userId, contactsReady, contactsRefreshed, attempt]);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || skipRead("suggestions")) return;
     let cancelled = false;
     listSuggestions()
       .then(({ rows, total }) => {
         if (cancelled) return;
         setSuggestions(rows);
         setSuggestionsMore(Math.max(0, total - rows.length));
+        readAt("suggestions");
       })
       .catch((err) => {
         console.error(err instanceof Error ? err.message : "Load suggestions failed");
@@ -88,10 +117,14 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
   }, [userId, contactsRefreshed, attempt]);
 
   useEffect(() => {
-    if (!userId || !wantCompanies) return;
+    if (!userId || !wantCompanies || skipRead("companies")) return;
     let cancelled = false;
     listCompanies()
-      .then((rows) => !cancelled && setCompanies(rows))
+      .then((rows) => {
+        if (cancelled) return;
+        setCompanies(rows);
+        readAt("companies");
+      })
       .catch((err) => {
         console.error(err instanceof Error ? err.message : "Load companies failed");
         if (!cancelled) setCompanies(null);
@@ -101,11 +134,13 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
     };
   }, [userId, wantCompanies, contactsRefreshed, attempt]);
 
-  // Merges, hides, changes of kind and deletes announced by the store since this layout last looked, applied in order.
-  const seen = useRef(contactChanges.length);
+  // Merges, hides, changes of kind and deletes announced by the store since the lists were last current (this visit or
+  // the one before), applied in order.
+  const seen = useRef(changesSeen(kept, contactChanges.length));
   useEffect(() => {
     const fresh = contactChanges.slice(seen.current);
     seen.current = contactChanges.length;
+    if (userId) saveContactsSnapshot(userId, { seen: contactChanges.length });
     for (const change of fresh) {
       if (change.kind === "merge") {
         const gone = contactsRef.current?.find((c) => c.id === change.mergeId);
@@ -122,7 +157,7 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
         setContacts((list) => list && removeSummary(list, change.id));
       }
     }
-  }, [contactChanges]);
+  }, [contactChanges, userId]);
 
   // A rename on the company page shows in the list straight away.
   const renamed = useCallback((id: string, name: string) => {
@@ -137,7 +172,11 @@ export default function ContactsLayout({ children }: { children: React.ReactNode
     setSuggestions((list) => (list && !list.some((x) => x.id === s.id) ? [...list, s].sort((a, b) => b.score - a.score) : list));
   }, []);
   const needCompanies = useCallback(() => setWantCompanies(true), []);
-  const patchContact = useCallback((id: string, patch: Partial<ContactSummary>) => setContacts((list) => list && patchSummary(list, id, patch)), []);
+  // The open contact's kept page takes the change too, so going back to it shows it.
+  const patchContact = useCallback((id: string, patch: Partial<ContactSummary>) => {
+    setContacts((list) => list && patchSummary(list, id, patch));
+    if (userId) patchCachedContact(userId, id, patch);
+  }, [userId]);
 
   // A suggestion for someone no longer listed (merged or split elsewhere) is left out.
   const reload = useCallback(() => setAttempt((n) => n + 1), []);

@@ -1,0 +1,16 @@
+{
+  "previousKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "currentKeyHex": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0",
+  "indexKeyHex": "910e827fe8fbfc06ce97a50cf27abb856ed4093751e6828729968e4b33eb892b",
+  "field": "body",
+  "plaintext": "Moved to the new key, read with the old one meanwhile.",
+  "sealedUnderPrevious": "e1:Hh8gISIjJCUmJygpUd3iVOmU1Xj74o665NpiikoD1fx34ySshaOkEYhpBCH/NxsKpEpR1CLOeAtAsP5fsqDT8zHIU48OSxk/79KT1derDusSUA==",
+  "sealedUnderCurrent": "e1:PD0+P0BBQkNERUZHm086Z4OpiOcs4jfT7P6Cc47FgJXI7gcddUL1YueovxeZMg5qrtNOQXmzoGZiJSG25l44B8QOA+XTo2hDcVuqwmCFUhSfWA==",
+  "address": "sam@example.com",
+  "addressToken": "cPmrIpqcFHsAKDrtudmfb5oXMFCy4FbRVRWlGLOYXn8",
+  "indexWrap": {
+    "masterKeyBase64": "//79/Pv6+fj39vX08/Lx8O/u7ezr6uno5+bl5OPi4eA=",
+    "userId": "caabe3e9-0000-4000-8000-000000000001",
+    "wrapped": "WltcXV5fYGFiY2Rl4M+vpqy2q6ZOVabzraLpEsfCDQljy9XW4HkdTE64XXfPrGbqutKVwsjRWLrYzmeI"
+  }
+}

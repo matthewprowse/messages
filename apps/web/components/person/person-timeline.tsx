@@ -85,7 +85,7 @@ export const PersonTimeline = memo(function PersonTimeline({ blocks, ...handlers
               <ChannelMarks channels={[...new Set(b.entries.map((e) => e.thread.channel))]} />
               <span className="shrink-0 text-xs text-muted-foreground">Same Matter</span>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => onUnlink(b.threadIds)}>Unlink</Button>
+            <Button variant="ghost" onClick={() => onUnlink(b.threadIds)}>Unlink</Button>
           </header>
           <Run entries={b.entries} handlers={rest} />
         </section>

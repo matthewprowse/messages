@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 
+import { longDate } from "./dates";
 import { Detail } from "./event-details";
 import { Now, Page } from "./page-context";
 
@@ -24,7 +25,7 @@ export const PRIORITIES: Record<number, string> = { 1: "High", 2: "Medium", 3: "
 /** "Due Friday, 30 October 2026", with the time for a timed task. */
 export function taskDue(task: Task) {
   if (!task.dueAt) return "No Due Date";
-  const day = (task.dueAllDay ? new Date(`${task.dueAt.slice(0, 10)}T12:00:00`) : new Date(task.dueAt)).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const day = longDate(task.dueAllDay ? new Date(`${task.dueAt.slice(0, 10)}T12:00:00`) : new Date(task.dueAt), undefined, true);
   return task.dueAllDay ? `Due ${day}` : `Due ${day}, ${timeOf(task.dueAt)}`;
 }
 

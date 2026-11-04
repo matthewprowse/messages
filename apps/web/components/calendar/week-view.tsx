@@ -9,7 +9,7 @@ import { dayKey, fromKey, pad } from "@/lib/dates";
 import { type DayTask } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
-import { HOUR, LABELS, MAX_COLUMNS, MAX_COLUMNS_WIDE, chipRange } from "./dates";
+import { HOUR, LABELS, MAX_COLUMNS, MAX_COLUMNS_WIDE, chipRange, longDate } from "./dates";
 import { TaskSlot, hourLabel, isSlot, layoutDay, taskSlot } from "./day-layout";
 import { EventChip } from "./event-details";
 import { MoreEvents } from "./more-events";
@@ -115,7 +115,7 @@ export function WeekView({
                 type="button"
                 onClick={() => onSelectDay(key)}
                 aria-pressed={isSelected}
-                aria-label={d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+                aria-label={longDate(d)}
                 className={cn(
                   "flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 py-2 text-sm outline-none transition-colors hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset md:min-h-0",
                   isSelected && "bg-muted hover:bg-muted",

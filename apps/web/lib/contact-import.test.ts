@@ -53,6 +53,15 @@ test("a name that looks like a formula is exported safely and imported as writte
   assert.equal(row.name, "=HYPERLINK(1)");
 });
 
+test("a cell that opens with a tab or a carriage return comes back without the apostrophe export put in front", () => {
+  assert.equal(safeCell("\tTabbed"), "'\tTabbed");
+  assert.equal(safeCell("\rReturned"), "'\rReturned");
+  const [row] = parseCsv(toCsv([{ ...contact, company: "\tTabbed", role: "\rReturned" }]));
+  assert.equal(row.company, "\tTabbed");
+  assert.equal(row.role, "\rReturned");
+  assert.equal(parseCsv("Name,Company\nSipho,'Plain")[0].company, "'Plain");
+});
+
 test("a semicolon file and a Google style header with label columns", () => {
   assert.equal(parseCsvRows("a;b;c\n1;2;3").length, 2);
   const csv = ["First Name,Last Name,E-mail 1 - Label,E-mail 1 - Value,Phone 1 - Value,Organization 1 - Name,Organization 1 - Title,Notes", "Lerato,Mokoena,Work,Lerato@Firm.co.za,0821112222,Firm,Partner,Met at the expo"].join("\n");

@@ -93,7 +93,7 @@ export function NoteList() {
           {!loading && shown.length === 0 && (searching ? <NoteLoadingRows /> : (
             <div className="py-24">
               {error && notes.length === 0 ? (
-                <EmptyState icon={NotebookPen} title="Could Not Load Notes" action={<Button variant="link" size="sm" onClick={reload}>Try Again</Button>} />
+                <EmptyState icon={NotebookPen} title="Could Not Load Notes" action={<Button variant="link" onClick={reload}>Try Again</Button>} />
               ) : term ? (
                 <EmptyState icon={NotebookPen} title="No Matches" />
               ) : view === "archived" ? (

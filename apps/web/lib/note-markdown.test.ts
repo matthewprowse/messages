@@ -5,10 +5,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getSchema, type JSONContent } from "@tiptap/react";
 import { MarkdownManager } from "@tiptap/markdown";
-import { NoteFileBase, noteContentExtensions } from "./note-markdown";
+import { NoteFileBase, isNoteImageSrc, noteContentExtensions } from "./note-markdown";
 
 const extensions = [...noteContentExtensions(), NoteFileBase];
-getSchema(extensions);
+const schema = getSchema(extensions);
 const md = new MarkdownManager({ extensions });
 const A = "0a1b2c3d-1111-4222-8333-944445555666";
 const B = "9f8e7d6c-aaaa-4bbb-8ccc-ddddeeeeffff";
@@ -84,4 +84,33 @@ test("HTML is kept as text, never as markup", () => {
 test("a file still uploading is left out", () => {
   const doc = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Hi" }] }, { type: "noteFile", attrs: { id: null, name: "a.png", image: true, upload: "k" } }] };
   assert.equal(md.serialize(doc).trim(), "Hi");
+});
+
+test("a remote image in markdown keeps its alt text and never becomes an image", () => {
+  const doc = md.parse("Before ![Tracker](https://evil.example/p.gif) after\n\n![](http://evil.example/x.png)\n");
+  assert.ok(!types(doc).has("image"));
+  const out = md.serialize(doc);
+  assert.match(out, /Before Tracker after/);
+  assert.doesNotMatch(out, /evil\.example|!\[/);
+});
+
+test("an image source other than an attachment is never kept, whatever the scheme", () => {
+  for (const src of ["https://x.example/a.png", "//x.example/a.png", "data:image/png;base64,AAAA", "javascript:alert(1)", "attachment:../x", `attachment:${A}x`]) {
+    assert.equal(isNoteImageSrc(src), false, src);
+  }
+  assert.equal(isNoteImageSrc(`attachment:${A}`), true);
+});
+
+test("an inline attachment image keeps its reference through a save", () => {
+  const out = md.serialize(md.parse(`See ![Plan](attachment:${A}) here`));
+  assert.match(out, new RegExp(`attachment:${A}`));
+});
+
+test("a pasted <img> is dropped unless it points at an attachment, and a stray src is never drawn", () => {
+  const rule = schema.nodes.image.spec.parseDOM![0];
+  const img = (src: string) => ({ getAttribute: (n: string) => (n === "src" ? src : null) }) as unknown as HTMLElement;
+  assert.equal(rule.getAttrs!(img("https://evil.example/p.gif")), false);
+  assert.notEqual(rule.getAttrs!(img(`attachment:${A}`)), false);
+  const dom = schema.nodes.image.spec.toDOM!(schema.nodes.image.create({ src: "https://evil.example/p.gif" })) as [string, Record<string, unknown>];
+  assert.equal(dom[1].src, undefined);
 });

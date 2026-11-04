@@ -1,17 +1,19 @@
 // Delete My Account (docs/PLAN.md, "Deleting an account"). POST asks for it: the person must type DELETE and prove who they
 // are again (password, authenticator code or emailed code), and a request is then written with a 7 day grace period for the
-// sync worker to carry out. DELETE cancels a request that has not started. Nothing is deleted here: the worker does it, after
-// the grace period, with the service role. A team owner with other members must hand the team over first.
+// sync worker to carry out. DELETE cancels a request that has not started, with the same proof in its body: a stolen session
+// must not be able to undo a deletion the owner asked for. Nothing is deleted here: the worker does it, after the grace
+// period, with the service role. A team owner with other members must hand the team over first.
 
+import type { User } from "@supabase/supabase-js";
 import { runAfterFor, isDeleteWord } from "@/lib/account-deletion";
 import { authCall } from "@/lib/server/auth-call";
 import { parseProof, verifyProof } from "@/lib/server/reauth";
-import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser } from "@/lib/server/request";
+import { admin, bearerToken, fail, foreignOrigin, limiter, noStore, readJson, signedInUser } from "@/lib/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// 5 tries in 15 minutes, so the route cannot be used to guess a password or a code.
+// 5 tries in 15 minutes, asking and cancelling together, so the route cannot be used to guess a password or a code.
 const overLimit = limiter(5, 15 * 60_000, { name: "account-delete", perAddress: 20 });
 
 export async function POST(request: Request) {
@@ -24,10 +26,8 @@ export async function POST(request: Request) {
 
   const body = await readJson(request);
   if (!body || typeof body.confirm !== "string" || !isDeleteWord(body.confirm)) return fail(400, "Type DELETE to confirm.");
-  const proof = parseProof(body.proof);
-  if (!proof) return fail(400, "Confirm it is you first.");
-  const token = request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1] ?? "";
-  if (!(await verifyProof(authCall, user, token, proof))) return fail(403, "That did not match. Check it and try again.");
+  const refused = await unproven(request, user, body.proof);
+  if (refused) return refused;
 
   // A team with other members would be left with no owner: hand it over first.
   const owned = await admin.from("workspaces").select("id").eq("owner_id", user.id);
@@ -50,13 +50,25 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  if (!admin) return fail(503, "This is not set up on the server.");
+  if (!admin || !authCall) return fail(503, "This is not set up on the server.");
   if (foreignOrigin(request)) return fail(403, "Not allowed from this site.");
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
+  const wait = await overLimit(user.id, request);
+  if (wait > 0) return fail(429, "Too many tries. Try again shortly.", { "Retry-After": String(wait) });
+  const refused = await unproven(request, user, (await readJson(request))?.proof);
+  if (refused) return refused;
   // Only a request the worker has not started: once it is running the data is already going.
   const gone = await admin.from("account_deletions").delete().eq("user_id", user.id).neq("status", "running").select("user_id");
   if (gone.error) return fail(500, "Could not cancel. Try again.");
   if (gone.data.length === 0) return fail(409, "There is nothing to cancel, or it has already started.");
   return Response.json({ cancelled: true }, { headers: noStore });
+}
+
+/** A refusal when the proof in the body is missing or does not check out for this user, or null when it does. */
+async function unproven(request: Request, user: User, value: unknown): Promise<Response | null> {
+  const proof = parseProof(value);
+  if (!proof) return fail(400, "Confirm it is you first.");
+  if (!authCall || !(await verifyProof(authCall, user, bearerToken(request), proof))) return fail(403, "That did not match. Check it and try again.");
+  return null;
 }

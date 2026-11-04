@@ -52,6 +52,8 @@ test("hostile HTML finishes quickly and still gives sensible output", () => {
   assert.ok(doc.srcdoc.includes("<p>Hi</p>") && !/<script/i.test(doc.srcdoc));
   timed(() => originalDoc("<img ".repeat(200000) + ">", false));
   timed(() => originalDoc("url(//".repeat(200000), false));
+  timed(() => originalDoc(' href="'.repeat(200000) + " onclick='".repeat(200000) + ' style="'.repeat(200000), false));
+  timed(() => originalDoc("<style>".repeat(200000) + "\\72".repeat(200000), false));
 });
 
 test("HTML over the size limit has no emphasis, and deep nesting never throws", () => {

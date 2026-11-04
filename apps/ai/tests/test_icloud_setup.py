@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from ai.connectors.icloud_reminders import account_site, setup
 from ai.connectors.icloud_reminders.account_site import ACCOUNT_API, PASSWORDS_PATH, RECHECK_PATH, TOKEN_PATH, AccountSite, AppPasswordFailed, find_app_password
-from ai.connectors.instagram.sealing import open_json, seal_json
+from ai.connectors.instagram.sealing import open_handoff, open_json, seal_handoff, seal_json
 
 KEY = "A" * 43 + "="
 AT = datetime(2026, 11, 2, 10, 0, 30, tzinfo=timezone.utc)  # 30 seconds after queued() was made
@@ -130,6 +130,10 @@ class FakeDb:
             have = row.get(col)
             if op == "eq" and str(have) != value:
                 return False
+            if op == "neq" and str(have if have is not None else "") == value:
+                return False
+            if cond == "not.is.null" and have is None:
+                return False
             if op == "in" and str(have) not in value.strip("()").split(","):
                 return False
             if op == "lt" and not (have is not None and str(have) < value):
@@ -233,6 +237,14 @@ class Running(unittest.TestCase):
         self.assertEqual(open_json(saved["result"], KEY), {"appPassword": "abcd-efgh-ijkl-mnop", "trustToken": "trust"})
         self.assertEqual(seen, ["pw"])
         self.assertIsNone(saved["step"])
+        self.assertEqual(open_json(saved["sign_in"], KEY), {"appleId": "me@icloud.com", "password": ""}, "the Apple ID password goes once the app password is made")
+
+    def test_the_password_stays_for_the_app_only_when_reminders_still_needs_it(self):
+        db = FakeDb([queued(services=["mail", "reminders"])])
+        setups = setup.Setups(db, KEY)
+        setups.claim(AT)
+        setups.ready(db.rows["s1"], "abcd-efgh-ijkl-mnop", "trust", {"appleId": "me@icloud.com", "password": "pw"})
+        self.assertEqual(open_json(db.rows["s1"]["sign_in"], KEY)["password"], "pw")
 
     def test_the_code_step_reads_well(self):
         db = FakeDb([queued()])
@@ -280,6 +292,93 @@ class Running(unittest.TestCase):
         self.assertNotIn("old", db.rows)
         self.assertEqual(db.rows["stalled"]["status"], "failed")
         self.assertEqual(db.rows["fresh"]["status"], "queued")
+
+    def test_sweep_takes_passwords_and_codes_off_rows_older_than_ten_minutes_whatever_their_state(self):
+        at = datetime(2026, 11, 2, 10, 0, tzinfo=timezone.utc)
+        db = FakeDb([
+            queued("waiting", status="ready", result="sealed", created_at="2026-11-02T09:45:00+00:00", updated_at="2026-11-02T09:48:00+00:00"),
+            queued("running", status="signing_in", claimed_at="2026-11-02T09:45:00+00:00", created_at="2026-11-02T09:45:00+00:00", code="typed"),
+            queued("left", status="queued", created_at="2026-11-02T09:45:00+00:00", code="typed"),
+            queued("ended", status="done", created_at="2026-11-02T09:52:00+00:00", updated_at="2026-11-02T09:53:00+00:00"),
+            queued("recent", status="ready", result="sealed", created_at="2026-11-02T09:58:00+00:00", updated_at="2026-11-02T09:58:00+00:00"),
+        ])
+        setup.Setups(db, KEY).sweep(at)
+        self.assertEqual((db.rows["waiting"]["status"], db.rows["waiting"]["sign_in"], db.rows["waiting"]["result"]), ("failed", "", None), "a ready row the app never took ends")
+        self.assertEqual(db.rows["running"]["sign_in"], "")
+        self.assertEqual(db.rows["running"]["code"], "typed", "a running sign-in's code is taken within seconds: left alone")
+        self.assertEqual((db.rows["left"]["sign_in"], db.rows["left"]["code"]), ("", None))
+        self.assertNotIn("ended", db.rows, "a finished row goes after five minutes")
+        self.assertNotEqual(db.rows["recent"]["sign_in"], "")
+        self.assertEqual(db.rows["recent"]["result"], "sealed")
+
+
+class OwnKeyVault:
+    """The person's credential keys, as the Vault hands them out: the current one first."""
+
+    def __init__(self, *keys):
+        self.keys = list(keys) or [bytes(range(32))]
+
+    def credential_key_for(self, user_id):
+        return self.keys[0]
+
+    def credential_keys_for(self, user_id):
+        return list(self.keys)
+
+
+class UnderTheirOwnKey(unittest.TestCase):
+    def test_a_sign_in_sealed_under_the_persons_key_is_answered_under_it(self):
+        vault = OwnKeyVault()
+        row = queued()
+        row["sign_in"] = seal_handoff(vault, "u", "icloud_setups", "sign_in", "s1", {"appleId": "me@icloud.com", "password": "pw"})
+        db = FakeDb([row])
+        setups = setup.Setups(db, "", vault)
+        claimed = setups.claim(AT)
+        api = FakeApi()
+        api.site.make = lambda password: "abcd-efgh-ijkl-mnop"
+
+        def typing():
+            for _ in range(200):
+                live = db.rows["s1"]
+                if live.get("step") and not live.get("code"):
+                    live["code"] = seal_handoff(vault, "u", "icloud_setups", "code", "s1", "123456")
+                    return
+                threading.Event().wait(0.005)
+
+        thread = threading.Thread(target=typing, daemon=True)
+        thread.start()
+        ended = setup.run_setup(setups, claimed, threading.Event(), make_api=lambda *a: api, wait_s=2, poll_s=0.01)
+        thread.join()
+        self.assertEqual(ended, "ready")
+        saved = db.rows["s1"]
+        self.assertTrue(saved["result"].startswith("v2:"))
+        self.assertEqual(open_handoff(vault, "", "u", "icloud_setups", "result", "s1", saved["result"]), {"appPassword": "abcd-efgh-ijkl-mnop", "trustToken": "trust"})
+        self.assertEqual(open_handoff(vault, "", "u", "icloud_setups", "sign_in", "s1", saved["sign_in"])["password"], "")
+        with self.assertRaises(Exception):
+            open_handoff(vault, "", "u", "icloud_setups", "sign_in", "s1", saved["result"])  # bound to its column
+        with self.assertRaises(Exception):
+            open_handoff(vault, "", "u", "icloud_setups", "result", "s2", saved["result"])  # and to its row
+
+    def test_a_row_queued_before_the_release_is_answered_in_the_old_format(self):
+        db = FakeDb([queued(services=["mail", "reminders"])])
+        setups = setup.Setups(db, KEY, OwnKeyVault())
+        row = setups.claim(AT)
+        self.assertEqual(setups.sign_in_of(row)["password"], "pw")
+        setups.ready(db.rows["s1"], "abcd-efgh-ijkl-mnop", None, setups.sign_in_of(row))
+        self.assertEqual(open_json(db.rows["s1"]["result"], KEY)["appPassword"], "abcd-efgh-ijkl-mnop")
+
+    def test_an_old_format_sign_in_is_unreadable_once_the_static_key_is_gone(self):
+        db = FakeDb([queued()])
+        setups = setup.Setups(db, "", OwnKeyVault())
+        row = setups.claim(AT)
+        self.assertEqual(setup.run_setup(setups, row, threading.Event(), make_api=lambda *a: FakeApi()), "failed")
+        self.assertEqual(db.rows["s1"]["sign_in"], "")
+
+    def test_a_handoff_opens_with_an_older_key_during_a_rotation(self):
+        old, new = bytes(range(32)), bytes(range(1, 33))
+        sealed = seal_handoff(OwnKeyVault(old), "u", "instagram_sign_ins", "code", "acc", "123456")
+        self.assertEqual(open_handoff(OwnKeyVault(new, old), "", "u", "instagram_sign_ins", "code", "acc", sealed), "123456")
+        with self.assertRaises(Exception):
+            open_handoff(OwnKeyVault(new), "", "u", "instagram_sign_ins", "code", "acc", sealed)
 
 
 class Explaining(unittest.TestCase):

@@ -13,6 +13,7 @@ import { supabase } from "./supabase";
 import { useAuth } from "./auth";
 import { open, seal, teamKeys } from "./vault";
 import { sealAddress } from "./address-refs";
+import { outboxPlace } from "./outbox-places";
 import { loadThreadMessages } from "./data";
 import { useMyTeam } from "./share";
 import { pollWhileVisible } from "./visible-poll";
@@ -397,18 +398,22 @@ export function useReplyingPresence(threadId: string, enabled: boolean, myName: 
 
 /** Queues a reply in a shared inbox's chat. The worker sends it from the shared account. Resolves to the outbox row, or a reason. */
 export async function sendInboxReply(threadId: string, body: string): Promise<{ id: string } | { problem: string }> {
-  const { data, error } = await supabase.from("outbox").insert({ thread_id: threadId, body: await seal(FIELD.body, body) }).select("id").single();
+  // The id is chosen here so the body is sealed for this row alone (outbox-places.ts).
+  const id = crypto.randomUUID();
+  const { data, error } = await supabase.from("outbox").insert({ id, thread_id: threadId, body: await seal(FIELD.body, body, outboxPlace(id, "body")) }).select("id").single();
   return error || !data ? { problem: problem(error) } : { id: data.id };
 }
 
 /** Queues a new conversation from the person's own account, to the same client, linked to the shared chat it answers. */
 export async function sendOwnReply(input: { threadId: string; accountId: string; channel: "email" | "whatsapp"; to: string; subject: string; body: string }): Promise<{ id: string } | { problem: string }> {
+  const id = crypto.randomUUID();
   const row = {
+    id,
     account_id: input.accountId,
-    to_addresses: [await sealAddress(input.to)],
-    body: await seal(FIELD.body, input.body),
+    to_addresses: [await sealAddress(input.to, outboxPlace(id, "to_addresses"))],
+    body: await seal(FIELD.body, input.body, outboxPlace(id, "body")),
     for_thread_id: input.threadId,
-    ...(input.channel === "email" ? { subject: await seal(FIELD.subject, input.subject || null) } : {}),
+    ...(input.channel === "email" ? { subject: await seal(FIELD.subject, input.subject || null, outboxPlace(id, "subject")) } : {}),
   };
   const { data, error } = await supabase.from("outbox").insert(row).select("id").single();
   return error || !data ? { problem: problem(error) } : { id: data.id };

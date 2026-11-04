@@ -2,13 +2,14 @@
 
 // The Notes chip other pages mount: a button with the number of notes linked to a contact, conversation or event,
 // opening a list of them and a New Note that is linked to it already. Works on any screen (it does not need the
-// Notes page's provider); the list is read when the chip appears and again each time it opens. NotesMenuItem is the
+// Notes page's provider); the list is read when the chip is shown (from memory when read in the last two minutes, see
+// lib/note-links.ts) and again each time it opens. A chip hidden by CSS (phones) reads nothing. NotesMenuItem is the
 // same list as a submenu, for headers that fold the chip into their More menu on phones.
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { NotebookPen, Plus } from "lucide-react";
-import { loadLinkedNotes, type LinkedNote } from "@/lib/note-links";
+import { cachedLinkedNotes, loadLinkedNotesCached, type LinkedNote } from "@/lib/note-links";
 import type { LinkKind } from "@/lib/note-link-map";
 import { relTime } from "@/lib/format";
 import { useCaptureNote } from "@/components/note-capture";
@@ -17,17 +18,39 @@ import { DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuS
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-/** The notes linked to something, read on mount and again whenever `fresh` turns true (the list opening). Null while loading. */
-function useLinkedNotes(kind: LinkKind, id: string, fresh: boolean) {
-  const [notes, setNotes] = useState<LinkedNote[] | null>(null);
-  const load = useCallback(() => {
+/**
+ * The notes linked to something, kept from the last read and read again once `enabled` when old, and always whenever
+ * `fresh` turns true (the list opening). Null while loading with nothing kept.
+ */
+function useLinkedNotes(kind: LinkKind, id: string, fresh: boolean, enabled = true) {
+  const [notes, setNotes] = useState<LinkedNote[] | null>(() => cachedLinkedNotes({ kind, id }) ?? null);
+  useEffect(() => {
+    setNotes(cachedLinkedNotes({ kind, id }) ?? null);
+    if (!enabled && !fresh) return;
     let cancelled = false;
-    loadLinkedNotes({ kind, id }).then((list) => { if (!cancelled) setNotes(list); }).catch(() => { if (!cancelled) setNotes((n) => n ?? []); });
+    loadLinkedNotesCached({ kind, id }, fresh ? 0 : undefined)
+      .then((list) => { if (!cancelled) setNotes(list); })
+      .catch(() => { if (!cancelled) setNotes((n) => n ?? []); });
     return () => { cancelled = true; };
-  }, [kind, id]);
-  useEffect(() => { setNotes(null); return load(); }, [load]);
-  useEffect(() => (fresh ? load() : undefined), [fresh, load]);
+  }, [kind, id, fresh, enabled]);
   return notes;
+}
+
+/** Whether an element takes up space: false while CSS hides it (display: none at a breakpoint). */
+function useShown<T extends Element>() {
+  const ref = useRef<T>(null);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setShown(el.getClientRects().length > 0);
+    check();
+    // Fires when the element is hidden or shown again as the window crosses a breakpoint.
+    const watcher = new ResizeObserver(check);
+    watcher.observe(el);
+    return () => watcher.disconnect();
+  }, []);
+  return [ref, shown] as const;
 }
 
 interface Props { kind: LinkKind; id: string; /** The title a new note from here starts with, such as a conversation's subject. */ title?: string }
@@ -35,14 +58,15 @@ interface Props { kind: LinkKind; id: string; /** The title a new note from here
 export function NotesChip({ kind, id, title, className }: Props & { className?: string }) {
   const capture = useCaptureNote();
   const [open, setOpen] = useState(false);
-  const notes = useLinkedNotes(kind, id, open);
+  const [trigger, shown] = useShown<HTMLButtonElement>();
+  const notes = useLinkedNotes(kind, id, open, shown);
   const count = notes?.length ?? 0;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon" className={className} aria-label={count ? `Notes, ${count}` : "Notes"}><NotebookPen /></Button>
+            <Button ref={trigger} variant="ghost" size="icon" className={className} aria-label={count ? `Notes, ${count}` : "Notes"}><NotebookPen /></Button>
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent>Notes</TooltipContent>
@@ -65,7 +89,7 @@ export function NotesChip({ kind, id, title, className }: Props & { className?: 
 /** The same list as a submenu, for a More menu on phones where the chip does not fit. Read when the submenu mounts (the menu opening). */
 function NotesSubContent({ kind, id, title }: Props) {
   const capture = useCaptureNote();
-  const notes = useLinkedNotes(kind, id, false);
+  const notes = useLinkedNotes(kind, id, true);
   return (
     <DropdownMenuSubContent className="w-64">
       {notes === null && <DropdownMenuItem disabled>Loading</DropdownMenuItem>}

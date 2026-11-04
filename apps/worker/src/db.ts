@@ -46,6 +46,7 @@ export function failureCode(reason: string): string {
   if (r.includes("attach")) return "attachment";
   if (r.includes("needs attention") || r.includes("reconnect")) return "account_needs_attention";
   if (r.includes("recorded")) return "not_recorded";
+  if (r.includes("could not be verified")) return "unverified";
   return "send_failed";
 }
 

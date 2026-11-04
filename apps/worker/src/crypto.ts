@@ -54,19 +54,23 @@ export interface CredentialSealer {
   openJson<T>(payload: string): Promise<T>;
 }
 
-/** `credKey` is asked for on every call, so a key that has aged out of the cache is fetched again, never held here. */
-export function makeSealer(accountId: string, credKey: () => Promise<Uint8Array<ArrayBuffer>>, legacyKey: string): CredentialSealer {
+/**
+ * `credKeys` (the current key first, then older ones during a rotation of the user's key) is asked for on every call, so
+ * a key that has aged out of the cache is fetched again, never held here. `legacyKey` may be empty once ENCRYPTION_KEY is
+ * retired: a "v1:" value then fails with the code legacy_key_missing.
+ */
+export function makeSealer(accountId: string, credKeys: () => Promise<Uint8Array<ArrayBuffer>[]>, legacyKey: string): CredentialSealer {
   const sealer: CredentialSealer = {
     async seal(plain) {
-      return sealCredential(await credKey(), accountId, plain);
+      return sealCredential((await credKeys())[0], accountId, plain);
     },
     async open(payload) {
-      if (payload.startsWith(CREDENTIAL_PREFIX)) return openCredential(await credKey(), accountId, payload);
+      if (payload.startsWith(CREDENTIAL_PREFIX)) return openCredential(await credKeys(), accountId, payload);
       if (payload.startsWith("v1:")) {
-        if (!legacyKey) throw new Error("A v1 credential needs ENCRYPTION_KEY, which is not set.");
+        if (!legacyKey) throw Object.assign(new Error("A v1 credential needs ENCRYPTION_KEY, which is not set."), { code: "legacy_key_missing" });
         return decrypt(payload, legacyKey);
       }
-      throw new Error("Unknown ciphertext format.");
+      throw Object.assign(new Error("Unknown ciphertext format."), { code: "unknown_format" });
     },
     sealJson: (value) => sealer.seal(JSON.stringify(value)),
     async openJson<T>(payload: string) {

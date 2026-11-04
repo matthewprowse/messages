@@ -2,9 +2,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BULK_TEXT, canRead, loadBulkRead, parseBulkRead, type BulkApi, type ReadableBulk } from "./bulk-read";
+import { BULK_TEXT, canRead, linkHost, loadBulkRead, parseBulkRead, type BulkApi, type ReadableBulk } from "./bulk-read";
 
-const READ: ReadableBulk = { summary: "A winter sale starts Friday.", points: ["Up to 40% off"], links: [{ label: "View the Sale", url: "https://shop.example.com/sale" }] };
+const READ: ReadableBulk = { summary: "A winter sale starts Friday.", points: ["Up to 40% off"], links: [{ label: "View the Sale", url: "https://shop.example.com/sale", host: "shop.example.com" }] };
 
 test("parseBulkRead reads the summary, points and web links", () => {
   assert.deepEqual(parseBulkRead(JSON.stringify(READ)), READ);
@@ -12,7 +12,14 @@ test("parseBulkRead reads the summary, points and web links", () => {
 
 test("parseBulkRead drops links that are not web addresses and unusable items", () => {
   const got = parseBulkRead(JSON.stringify({ summary: "S", points: ["a", 3, ""], links: [{ label: "x", url: "javascript:alert(1)" }, { label: "y", url: "https://ok.example.com" }, { label: "", url: "https://no.example.com" }] }));
-  assert.deepEqual(got, { summary: "S", points: ["a"], links: [{ label: "y", url: "https://ok.example.com" }] });
+  assert.deepEqual(got, { summary: "S", points: ["a"], links: [{ label: "y", url: "https://ok.example.com", host: "ok.example.com" }] });
+});
+
+test("a link's host is read from its address, never from what the AI wrote beside it", () => {
+  const got = parseBulkRead(JSON.stringify({ summary: "S", links: [{ label: "Your Bank", url: "https://www.evil.example/login", host: "bank.example" }, { label: "Bad", url: "https://" }] }));
+  assert.deepEqual(got?.links, [{ label: "Your Bank", url: "https://www.evil.example/login", host: "evil.example" }]);
+  assert.equal(linkHost("https://user:pw@bank.example.evil.example/x"), "bank.example.evil.example");
+  assert.equal(linkHost("javascript:alert(1)"), null);
 });
 
 test("parseBulkRead gives null for nothing, no summary or unreadable data", () => {

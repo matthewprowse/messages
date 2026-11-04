@@ -1,7 +1,8 @@
 // Saves a Request Access form from the marketing site into the waitlist, which Admin reads. Anyone may call it, so it
 // is limited per address and a filled honeypot field is answered like a success without saving anything. Asking twice
-// with one email keeps the first request and its status, and answers the same way, so the form never reveals who is
-// already on the list.
+// with one email answers the same way, so the form never reveals who is already on the list. A decided request keeps its
+// status and details; a pending one takes a later team request's company and size, so someone who put another person's
+// email down first cannot lock out that person's real team request (the email is not verified, so the latest one wins).
 
 import { checkRequest } from "@/lib/waitlist";
 import { admin, clientAddress, fail, foreignOrigin, limiter, noStore } from "@/lib/server/request";
@@ -35,5 +36,10 @@ export async function POST(request: Request) {
     .from("waitlist")
     .upsert({ kind, email, company: company ?? null, team_size: teamSize ?? null }, { onConflict: "email", ignoreDuplicates: true });
   if (error) return fail(500, "Could not save your request. Try again.");
+  // An individual request never replaces a pending team one: it carries less, so it would only throw details away.
+  if (kind === "team") {
+    const updated = await admin.from("waitlist").update({ kind, company: company ?? null, team_size: teamSize ?? null }).eq("email", email).eq("status", "pending");
+    if (updated.error) return fail(500, "Could not save your request. Try again.");
+  }
   return Response.json({ ok: true }, { headers: noStore });
 }

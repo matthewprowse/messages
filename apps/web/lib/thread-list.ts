@@ -141,13 +141,13 @@ export function stepTarget(order: string[], currentId: string | null, step: 1 | 
 }
 
 /** Counts for the empty pane and the view buttons: unread conversations, and those the AI marked as needing you. */
-export function inboxCounts(threads: Pick<Thread, "unread" | "priority" | "needsReply" | "lastFromMe" | "junk" | "status" | "lastMessageAt">[]) {
+export function inboxCounts(threads: Pick<Thread, "unread" | "priority" | "needsReply" | "lastFromMe" | "junk" | "status" | "lastMessageAt">[], now: number = Date.now()) {
   let unread = 0;
   let attention = 0;
   for (const t of threads) {
     if (t.junk || t.status !== "inbox") continue;
     if (t.unread) unread++;
-    if (rowMarker(t)) attention++;
+    if (rowMarker(t, now)) attention++;
   }
   return { unread, attention };
 }

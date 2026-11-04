@@ -11,6 +11,7 @@ import type { Json } from "@messages/db";
 import { FIELD, type Field } from "@messages/crypto/fields";
 import { errorCode, log } from "../log";
 import { ZoomApiError, type ZoomApi } from "./client";
+import { givenNameRank, STAND_IN } from "../contacts/name-rank";
 
 const PAGE_SIZE = 50;
 /** Each poll reads a little further back than the last one, so a message stamped just before it is not missed. */
@@ -84,6 +85,8 @@ export interface ChatSealer {
   sealAddress(value: string | null): Promise<string | null>;
   addressIndex(value: string): Promise<string>;
   chatIndex(value: string): Promise<string>;
+  /** A group's name index (threads.group_name_index). */
+  groupIndex(value: string): Promise<string>;
 }
 
 /** What public.ingest_zoom_chat returns for one message. */
@@ -128,11 +131,14 @@ export async function chatPayload(message: ZoomChatMessage, chat: ChatRef, ctx: 
   const senderEmail = message.sender?.trim().toLowerCase() || null;
   const fromMe = !!senderEmail && senderEmail === ctx.selfEmail.trim().toLowerCase();
   const senderName = message.sender_display_name?.trim() || (!chat.isGroup ? chat.name : null) || senderEmail;
+  // Names are sealed, with the kind each is (a name Zoom gave, or the address standing in for one).
   const person = async (email: string, name: string | null) => ({
     address: await sealer.sealAddress(email),
     index: await sealer.addressIndex(email),
-    display_name: name,
+    display_name: await sealer.seal(FIELD.name, name),
+    name_rank: name && name !== email ? givenNameRank(name) : STAND_IN,
   });
+  const groupName = chat.isGroup ? chat.name?.trim() || null : null;
   const sender = !fromMe && senderEmail ? await person(senderEmail, senderName) : null;
   const participants = !chat.isGroup && chat.peerEmail ? [await person(chat.peerEmail, chat.name)] : [];
   const preview = chat.isGroup && !fromMe && senderName ? `${senderName}: ${body}` : body;
@@ -142,7 +148,8 @@ export async function chatPayload(message: ZoomChatMessage, chat: ChatRef, ctx: 
     chat_id: await sealer.sealAddress(chat.id),
     chat_index: await sealer.chatIndex(chat.id),
     is_group: chat.isGroup,
-    group_name: chat.isGroup ? chat.name : null,
+    group_name: await sealer.seal(FIELD.name, groupName),
+    group_name_index: groupName ? await sealer.groupIndex(groupName) : null,
     resurface: unread,
     sent_at: sentAt(message).toISOString(),
     direction: fromMe ? "outbound" : "inbound",

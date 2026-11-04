@@ -10,7 +10,7 @@ export function CleanUpLink() {
   return (
     <div className="flex shrink-0 items-center justify-between gap-3 border-b px-3 py-2">
       <span className="text-xs text-muted-foreground">Senders you never open</span>
-      <Button asChild size="sm" variant="secondary"><Link href="/inbox/clean-up"><Sparkles />Clean Up</Link></Button>
+      <Button asChild variant="secondary"><Link href="/inbox/clean-up"><Sparkles />Clean Up</Link></Button>
     </div>
   );
 }

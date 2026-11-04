@@ -1,9 +1,10 @@
-// Tests for photos/pdf-thumbnail.ts: a one-page PDF becomes a small JPEG, and anything that is not a readable PDF gives null.
+// Tests for photos/pdf-thumbnail.ts: a one-page PDF becomes a small JPEG (drawn in a worker thread), anything that is
+// not a readable PDF gives null, and a render that runs out of time is killed and gives null.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import sharp from "sharp";
-import { makePdfThumbnail, PDF_THUMB_MAX_BYTES } from "./pdf-thumbnail";
+import { looksLikePdf, makePdfThumbnail, PDF_THUMB_MAX_BYTES, renderFirstPage } from "./pdf-thumbnail";
 import { THUMB_SIZE } from "./thumbnail";
 
 /** A minimal one-page PDF with a filled rectangle, written by hand so the test needs no PDF library. */
@@ -37,4 +38,15 @@ test("bytes that are not a PDF, empty bytes and an oversized file give null", as
   assert.equal(await makePdfThumbnail(Buffer.from("this is not a pdf")), null);
   assert.equal(await makePdfThumbnail(new Uint8Array(0)), null);
   assert.equal(await makePdfThumbnail(new Uint8Array(PDF_THUMB_MAX_BYTES + 1)), null);
+});
+
+test("only bytes with a PDF header in their first kilobyte count as a PDF", () => {
+  assert.equal(looksLikePdf(tinyPdf(10, 10)), true);
+  assert.equal(looksLikePdf(Buffer.concat([Buffer.alloc(100, 32), tinyPdf(10, 10)])), true);
+  assert.equal(looksLikePdf(Buffer.concat([Buffer.alloc(2000, 32), tinyPdf(10, 10)])), false);
+  assert.equal(looksLikePdf(Buffer.from("<html>%PDF</html>")), false);
+});
+
+test("a render that runs past its time is killed and gives null", async () => {
+  assert.equal(await renderFirstPage(tinyPdf(300, 400), 1), null);
 });

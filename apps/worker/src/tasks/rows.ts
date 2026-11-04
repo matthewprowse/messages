@@ -102,12 +102,28 @@ export interface TaskWrite {
   priority: 1 | 2 | 3 | null;
 }
 
-/** Opens one sealed value for a user, as the worker's vault.open does. */
-export type Opener = (userId: string, field: Field, value: string | null | undefined) => Promise<string | null>;
+/**
+ * Opens one sealed value of a queued row for a user, as the worker's vault.openBound does: only when it was sealed for
+ * `column` of that row, and throwing (never "") when it was not.
+ */
+export type Opener = (userId: string, field: Field, value: string | null | undefined, column: string) => Promise<string | null>;
 
-/** The state a create or update row asks for, its sealed title and notes opened. The title is trimmed; notes that are empty are null. */
+/** What a create or update whose title or notes were not sealed for it is failed with. */
+export const TASK_UNVERIFIED = "This change could not be verified, so it was not made. Make it again.";
+
+/**
+ * The state a create or update row asks for, its sealed title and notes opened. The title is trimmed; notes that are
+ * empty are null. Throws TaskUpdateError(TASK_UNVERIFIED) when either was not sealed for this row, a key outage as it is.
+ */
 export async function taskWriteOf(row: TaskUpdateRow, open: Opener): Promise<TaskWrite> {
-  const [title, notes] = await Promise.all([open(row.user_id, FIELD.taskTitle, row.title), open(row.user_id, FIELD.taskNotes, row.notes)]);
+  let title: string | null;
+  let notes: string | null;
+  try {
+    [title, notes] = await Promise.all([open(row.user_id, FIELD.taskTitle, row.title, "title"), open(row.user_id, FIELD.taskNotes, row.notes, "notes")]);
+  } catch (err) {
+    if (REFUSALS.has((err as { code?: string }).code ?? "") || (err as { name?: string }).name === "OperationError") throw new TaskUpdateError(TASK_UNVERIFIED);
+    throw err;
+  }
   const priority = row.priority === 1 || row.priority === 2 || row.priority === 3 ? row.priority : null;
   const ms = row.due_at ? Date.parse(row.due_at) : NaN;
   // An all-day task is its date at midnight UTC, whatever time was sent with it.
@@ -144,6 +160,9 @@ export function taskAccountProblem(account: { provider: string; status: string }
 }
 
 /** A failure whose message is fit to show in the app, as the reason a tick did not go through. */
+/** The codes of a value that will never open here (packages/crypto openExpected), as opposed to a passing outage. */
+const REFUSALS = new Set(["plaintext_refused", "legacy_value", "team_value_refused", "sealed_elsewhere", "no_owner", "unreadable"]);
+
 export class TaskUpdateError extends Error {
   constructor(reason: string) {
     super(reason);

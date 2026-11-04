@@ -6,6 +6,7 @@
 
 import { openThreads } from "../open-rows";
 import { supabase } from "../supabase";
+import { warmKeys } from "../vault";
 import type { Account, Contact, Profile, Rule, Task, Thread, Unsubscribe, WritingExample } from "../types";
 import { whenPhoneFormatReady } from "../format";
 import { mergeThreads } from "../merge-threads";
@@ -39,6 +40,8 @@ const CHANGE_LIMIT = 200;
 
 /** Everything the list screens need, in parallel. Messages load per conversation when it is opened. */
 export async function loadEverything(): Promise<Loaded> {
+  // The keys are needed to open what the queries return: asking now runs that round trip beside them, not after.
+  warmKeys();
   const me = await myId();
   // Independent of the queries, so it loads beside them instead of after.
   const phoneReady = whenPhoneFormatReady();
@@ -52,9 +55,9 @@ export async function loadEverything(): Promise<Loaded> {
   ]);
   if (threads.error) throw threads.error;
   await Promise.all([openThreads(threads.data ?? []), phoneReady]);
-  const { draftOf, waiting, ...rest } = small;
+  const { draftOf, reviewOf, waiting, ...rest } = small;
   return {
-    threads: (threads.data ?? []).map((t) => ({ ...threadWithIds(t), draft: draftOf.get(t.id), waiting: waiting.has(t.id) })),
+    threads: (threads.data ?? []).map((t) => ({ ...threadWithIds(t), draft: draftOf.get(t.id), reviewDraft: reviewOf.get(t.id), waiting: waiting.has(t.id) })),
     contacts: contacts ?? [],
     contactsLoaded: !!contacts,
     ...rest,
@@ -68,6 +71,7 @@ export async function loadEverything(): Promise<Loaded> {
  * than a page changed.
  */
 export async function loadChanges(since: string, current: Thread[]): Promise<Loaded> {
+  warmKeys(); // held already, unless a sign-in change or a failed fetch dropped them
   const me = await myId();
   const [changed, small] = await Promise.all([
     // Trash is included, so a conversation moved to the bin leaves the list.
@@ -82,9 +86,9 @@ export async function loadChanges(since: string, current: Thread[]): Promise<Loa
   const rows = changed.data ?? [];
   const threads = rows.map((t) => threadWithPeople(t, contacts));
   const gone = new Set(rows.filter((t) => t.status === "trash").map((t) => t.id));
-  const { draftOf, waiting, ...rest } = small;
+  const { draftOf, reviewOf, waiting, ...rest } = small;
   return {
-    threads: mergeThreads(current, threads, gone).map((t) => ({ ...t, draft: draftOf.get(t.id), waiting: waiting.has(t.id) })),
+    threads: mergeThreads(current, threads, gone).map((t) => ({ ...t, draft: draftOf.get(t.id), reviewDraft: reviewOf.get(t.id), waiting: waiting.has(t.id) })),
     contacts: [...contacts.values()],
     contactsLoaded: false,
     ...rest,

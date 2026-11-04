@@ -8,7 +8,8 @@ The model is only asked when its answer is used. A conversation takes the triage
 incoming message, so an older one in a conversation that has a newer one is recorded without a model
 call; so is mail from a sender you unsubscribed from or in a conversation you marked Junk, a bulk
 sender the model has labelled the same junk way every time lately (sender_outcome), and an
-email already triaged in another of your accounts (the same Message-ID) is copied. The rest go to
+email already triaged in another of your accounts (the same Message-ID, sender and subject) is copied. Past
+SENDER_DAILY_CAP model reads for one sender in a day, their messages get a neutral verdict instead. The rest go to
 the fast model GROUP at a time, per account, with minimal thinking: the instructions and what is
 known about you are sent once for the group, first, so they are the same at the start of every call.
 
@@ -18,7 +19,8 @@ the model can tell an open question from one already answered (bulk mail gets no
 The same call offers guided drafting's one-tap choices, only for a message that asks about a time or for a
 decision ("Are you free Thursday at 3?"); old messages are not asked again later, since an unanswered one
 rarely gets answered. It also returns a flag for likely phishing
-or payment fraud (shown as a warning, never acted on) and the number of at most one of your Auto labels, which is
+or payment fraud (shown as a warning, never acted on), which header checks made in code can raise but the model can
+never lower (triage_extras.header_suspicion), and the number of at most one of your Auto labels, which is
 put on the conversation unless you took it off before. Junk gets no summary: its subject stands in."""
 
 from __future__ import annotations
@@ -30,12 +32,12 @@ from typing import Any, Callable
 
 from . import log
 from .analytics import Analytics, event, prompt_id, traits as message_traits
-from .fields import ADDRESS, BODY, CHOICES, CONTACT_RELATIONSHIP, FILENAME, HTML, SUBJECT, SUMMARY, TRANSCRIPT, UNSUBSCRIBE
+from .fields import ADDRESS, BODY, CHOICES, CONTACT_RELATIONSHIP, FILENAME, HTML, NAME, SUBJECT, SUMMARY, TRANSCRIPT, UNSUBSCRIBE
 from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, billing_paused, not_in
 from .supabase import Supabase, in_list
-from .triage_extras import label_to_add, with_subject_summary
+from .triage_extras import label_to_add, stronger_suspicion, twin_key, with_subject_summary
 from .text import clean
 from .triage_batch import BatchTriageMixin
 from .triage_context import ContextMixin
@@ -66,13 +68,16 @@ from .triage_signals import (  # noqa: F401  re-exported: other modules and test
     NO_CHOICES,
     OPTION_KINDS,
     PRIORITIES,
+    SENDER_DAILY_CAP,
     SENDER_KEEP,
     SENDER_RECHECK_DAYS,
     SUBJECT_CHARS,
     VOICE_RECHECK_S,
     VOICE_WAIT_S,
+    SenderCaps,
     UserContext,
     apply_signals,
+    capped_outcome,
     groups,
     known_outcome,
     latest_incoming,
@@ -97,6 +102,7 @@ class Triage(BatchTriageMixin, ContextMixin):
         self._voice_wait: dict[str, float] = {}  # voice notes waiting for their transcript -> monotonic time to look again
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="triage")
         self._users: dict[str, tuple[float, UserContext]] = {}  # user_id -> (read at, context)
+        self._sender_caps = SenderCaps()  # one outside sender cannot spend your AI allowance by flooding you
 
     def _without_untranscribed(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Holds back a voice note until it is transcribed, so triage, the summary and the daily brief know
@@ -145,7 +151,7 @@ class Triage(BatchTriageMixin, ContextMixin):
 
         # Decide what needs the model: (result, model) for the rest.
         results: dict[str, tuple[dict[str, Any], str | None]] = {}
-        sources: dict[str, str] = {}  # what decided each label: model, rule (your signals), copied or superseded
+        sources: dict[str, str] = {}  # what decided each label: model, rule (your signals), sender, copied, superseded or capped
         ask: list[dict[str, Any]] = []
         for m in rows:
             ctx = contexts[m["user_id"]]
@@ -165,11 +171,12 @@ class Triage(BatchTriageMixin, ContextMixin):
                 results[m["id"]] = (settled_senders[m["id"]], None)
                 sources[m["id"]] = "sender"
                 ask.remove(m)
-        twins = self._twins(ask, contexts)
-        firsts: dict[tuple[str, str], dict[str, Any]] = {}  # the same email twice in this batch is asked about once
+        found = self._all({"twins": lambda: self._twins(ask, contexts), "headers": lambda: self._header_checks(ask)})
+        twins, suspects = found["twins"], found["headers"]
+        firsts: dict[tuple[str, str, str, str], dict[str, Any]] = {}  # the same email twice in this batch is asked about once
         copies: list[dict[str, Any]] = []
         for m in list(ask):
-            key = (m["user_id"], m.get("provider_message_id") or m["id"])
+            key = twin_key(m)
             if key in twins:
                 results[m["id"]] = twins[key]
                 sources[m["id"]] = "copied"
@@ -182,13 +189,21 @@ class Triage(BatchTriageMixin, ContextMixin):
                 firsts[key] = m
 
         ask = self._claim_rows(ask)  # a second AI worker never pays for the same messages
+        # Counted after the twins and the claim, so only messages this process would really pay for use up a sender's
+        # day, and after the header checks, so a capped flood still gets its phishing warning.
+        ask, over = self._sender_caps.split(ask, contexts)
+        for m in over:
+            results[m["id"]] = (capped_outcome(m), None)
+            sources[m["id"]] = "capped"
+        if over:
+            log.info("triage senders capped", messages=len(over))
         asked = len(ask)
         if ask:
             for answers in self._pool.map(lambda chunk: self._ask(contexts[chunk[0]["user_id"]], chunk), self._prepare(ask, contexts)):
                 results.update(answers)
             results.update(self._batch_flush())  # old setup mail deferred by _ask goes as one half price batch
         for m in copies:
-            first = firsts[(m["user_id"], m.get("provider_message_id") or m["id"])]
+            first = firsts[twin_key(m)]
             if first["id"] in results:
                 results[m["id"]] = results[first["id"]]
         for m in ask:
@@ -216,6 +231,9 @@ class Triage(BatchTriageMixin, ContextMixin):
                 )
                 for m in done
             }
+            for m in done:  # the headers can add a warning the model did not give; nothing the model says removes one
+                if m["id"] in suspects:
+                    final[m["id"]] = {**final[m["id"]], "suspicious": stronger_suspicion(final[m["id"]].get("suspicious"), suspects[m["id"]])}
             self.db.upsert(
                 "message_ai",
                 [
@@ -282,7 +300,7 @@ class Triage(BatchTriageMixin, ContextMixin):
             if said:  # a voice note is read as what was said in it
                 body = {"body_text": f"Voice note: {said}\n\n{body.get('body_text') or ''}".strip(), "body_html": None}
             m["_email"] = {
-                "name": contact.get("display_name") or "",
+                "name": self.vault.open(m["user_id"], NAME, contact.get("display_name")) or "",  # sealed or plain
                 "sender": (m.get("sender_address") or "").lower(),
                 "relationship": self.vault.open(m["user_id"], CONTACT_RELATIONSHIP, contact.get("relationship")) or "",
                 "known": m.get("sender_contact_id") in found["known"],

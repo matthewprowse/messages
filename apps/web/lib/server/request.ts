@@ -3,6 +3,7 @@
 
 import { createClient, type User } from "@supabase/supabase-js";
 import type { Database } from "@messages/db";
+import { keyAccess, tokenAal } from "./key-policy";
 
 const url = process.env.SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -11,43 +12,98 @@ export const admin = url && serviceKey ? createClient<Database>(url, serviceKey,
 
 export const noStore = { "Cache-Control": "no-store" };
 
-/** True when the request names an Origin that is not this app. Requests with no Origin pass. */
-export function foreignOrigin(request: Request): boolean {
+type Env = Record<string, string | undefined>;
+
+/** True in a production build (Vercel production, or any NODE_ENV=production build, previews included), where request headers must never decide this app's own address. */
+export function isProduction(env: Env = process.env): boolean {
+  return env.VERCEL_ENV === "production" || env.NODE_ENV === "production";
+}
+
+/**
+ * True when the request names an Origin that is not this app. Requests with no Origin pass. In a preview either of the
+ * deployment's own addresses is ours. Fails closed: when this app's own origin is unknown (production without APP_URL),
+ * any Origin is foreign.
+ */
+export function foreignOrigin(request: Request, env: Env = process.env): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return false;
   try {
-    return new URL(origin).host !== appHost(request);
+    const host = new URL(origin).host;
+    return !previewHosts(env).includes(host) && host !== appHost(request, env);
   } catch {
     return true;
   }
 }
 
-/** This app's host as the browser sees it, behind a proxy too. */
-export function appHost(request: Request): string {
-  return request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? new URL(request.url).host;
+/** This app's host, e.g. app.example.com. Throws where appOrigin does. */
+export function appHost(request: Request, env: Env = process.env): string {
+  return new URL(appOrigin(request, env)).host;
 }
 
-/** This app's origin as the browser sees it, e.g. https://app.example.com. */
-export function appOrigin(request: Request): string {
-  const fixed = process.env.APP_URL?.trim().replace(/\/+$/, "");
+/**
+ * The hosts a Vercel preview deployment answers on: its own deployment address and its branch address, both set by Vercel
+ * (a client cannot choose them). Empty outside a preview.
+ */
+function previewHosts(env: Env): string[] {
+  if (env.VERCEL_ENV !== "preview") return [];
+  return [env.VERCEL_BRANCH_URL, env.VERCEL_URL].map((h) => h?.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "") ?? "").filter((h) => /^[a-z0-9.-]+(:\d+)?$/.test(h));
+}
+
+/**
+ * This app's origin, e.g. https://app.example.com. It decides OAuth redirect addresses, where callbacks send the
+ * browser, whether cookies are Secure and which Origin is ours, so it never comes from Host or X-Forwarded-Host alone,
+ * which a proxy in front may pass through from the client:
+ * - A Vercel preview runs on its own *.vercel.app addresses, so APP_URL (the production domain) would refuse every
+ *   browser request there. It uses the address the request came in on when that is one of the preview's own (deployment
+ *   or branch), else the branch address. Throws when Vercel set neither.
+ * - Production otherwise (VERCEL_ENV production, or any NODE_ENV=production build) requires APP_URL and throws without it.
+ * - Locally (pnpm dev) APP_URL when set, else the request's own headers.
+ */
+export function appOrigin(request: Request, env: Env = process.env): string {
+  const preview = previewHosts(env);
+  if (preview.length > 0) {
+    const asked = (request.headers.get("host") ?? "").trim().toLowerCase();
+    return `https://${preview.includes(asked) ? asked : preview[0]}`;
+  }
+  if (env.VERCEL_ENV === "preview") throw new Error("VERCEL_URL is missing in this preview deployment.");
+  const fixed = env.APP_URL?.trim().replace(/\/+$/, "");
   if (fixed && /^https?:\/\/[^/]+$/.test(fixed)) return fixed;
+  if (isProduction(env)) throw new Error("APP_URL must be set to this app's origin in production.");
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? new URL(request.url).host;
   const proto = request.headers.get("x-forwarded-proto") ?? new URL(request.url).protocol.replace(":", "");
-  return `${proto}://${appHost(request)}`;
+  return `${proto}://${host}`;
 }
 
-/** The signed-in user, proven by the Supabase access token in the Authorization header, or null. */
+/** The bearer token in the Authorization header, or "" when there is none. */
+export function bearerToken(request: Request): string {
+  return request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1] ?? "";
+}
+
+/**
+ * The signed-in user, proven by the Supabase access token in the Authorization header, or null. A user with a verified
+ * second factor of any kind (authenticator app, phone, passkey) counts only with an aal2 session, one that passed the
+ * code check: otherwise a stolen password or magic link alone could connect accounts, change sign-ins or cancel a
+ * deletion. Every route that acts for a user goes through here, so none can forget the check.
+ */
 export async function signedInUser(request: Request): Promise<User | null> {
   if (!admin) return null;
-  const token = request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  const token = bearerToken(request);
   if (!token) return null;
   const { data, error } = await admin.auth.getUser(token);
-  return error ? null : data.user;
+  if (error) return null;
+  return keyAccess(data.user.factors, tokenAal(token)).ok ? data.user : null;
 }
 
-/** The caller's address. On Vercel the platform sets x-vercel-forwarded-for (and overwrites x-forwarded-for), so a client cannot choose it; elsewhere the last x-forwarded-for entry is the one the nearest proxy added. */
-export function clientAddress(request: Request): string {
+/**
+ * The caller's address, for rate limits. Production runs on Vercel, which sets x-vercel-forwarded-for itself (a client
+ * cannot choose it), so there nothing else is trusted: without it the answer is "unknown" and per-address limits are
+ * skipped rather than keyed on a header the client wrote. Locally, or self-hosted behind one known proxy, x-real-ip or
+ * the last x-forwarded-for entry (the one the nearest proxy added) is used.
+ */
+export function clientAddress(request: Request, env: Env = process.env): string {
   const vercel = request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim();
   if (vercel) return vercel;
+  if (isProduction(env)) return "unknown";
   const real = request.headers.get("x-real-ip")?.trim();
   if (real) return real;
   const chain = request.headers.get("x-forwarded-for")?.split(",");
@@ -110,13 +166,37 @@ export function limiter(limit: number, windowMs: number, options: LimiterOptions
   };
 }
 
-const MAX_BODY = 16 * 1024;
+const MAX_BODY = 16 * 1024; // bytes
+
+/**
+ * The body as text, or null when it is over maxBytes. A Content-Length over the cap is refused before anything is read,
+ * and a body without one is read only up to the cap, so a client cannot make the server hold more than that in memory.
+ */
+export async function readCapped(request: Request, maxBytes: number): Promise<string | null> {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > maxBytes) return null;
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 /** The JSON object in a request body, or null when it is missing, too big (over 16 KB), not JSON or not an object. */
 export async function readJson(request: Request): Promise<Record<string, unknown> | null> {
   try {
-    const text = await request.text();
-    if (text.length > MAX_BODY) return null;
+    const text = await readCapped(request, MAX_BODY);
+    if (text === null) return null;
     const value: unknown = JSON.parse(text);
     return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
   } catch {

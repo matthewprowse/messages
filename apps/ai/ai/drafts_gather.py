@@ -5,7 +5,11 @@ and embeddings are set up there).
 Each read is a round trip (about 0.25s from a laptop, measured), and a draft used to make a dozen one after another.
 Now the reads that need nothing from draft_context (the person's key, their vectors, settings, calendar, the files
 and templates a next step may offer, the budget) start with it (_early), and the ones that need
-the conversation (similar replies, the company voice, rules, the note on this person) start together once it is in."""
+the conversation (similar replies, the company voice, rules, the note on this person) start together once it is in.
+
+Other conversations (similar replies, more of your sent mail) are left out when the latest message is flagged suspicious
+or comes from someone you have never written to, and the other side's newest text is kept apart from the evidence the
+fact guard trusts (drafts_facts.check), so a stranger's email cannot vouch for an account number it asks a reply to repeat."""
 
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from .drafts_context import (
     RECENT_VOICE,
     SIMILAR_LIMIT,
     describe,
+    others_voice_ok,
     pick_facts,
     pick_more_voice,
     pick_similar,
@@ -55,12 +60,26 @@ from .predraft_cap import user_cap_reached
 
 
 def evidence_of(you: dict[str, Any], conversation: list[str], d: dict[str, Any], subject: str | None, calendar: list[str]) -> list[str]:
-    """Everything a draft may rightly state, as plain texts for the fact check: the conversation, what you asked
-    for and decided, the saved facts and your note about this person, and the calendar."""
-    out = list(conversation) + [subject or "", d.get("instruction") or "", d.get("decision") or "", you.get("about_note") or "", you.get("them") or "", you.get("me") or ""]
+    """Everything a draft may rightly state, as plain texts for the fact check: the conversation up to your last
+    message, what you asked for, the saved facts and your note about this person, and the calendar. The other side's
+    newest text, the decision worded from it and the name they gave themselves are untrusted_of, not this."""
+    out = list(conversation) + [subject or "", d.get("instruction") or "", you.get("about_note") or "", you.get("me") or ""]
     for title, body in you.get("facts") or []:
         out += [title, body]
     return [t for t in out + calendar if t]
+
+
+def answered_upto(messages: list[dict[str, Any]]) -> int:
+    """How many of messages (oldest first) come before the other side's unanswered run: up to and with your last one."""
+    return next((i + 1 for i in range(len(messages) - 1, -1, -1) if messages[i].get("direction") == "outbound"), 0)
+
+
+def untrusted_of(conversation: list[str], upto: int, d: dict[str, Any], subject: str | None, them: str = "") -> list[str]:
+    """The other side's text the draft answers: their messages after your last one, the one-tap decision triage worded
+    from them, their display name, and the subject while you have not written in the conversation. It backs a day or a
+    time in the draft, never an amount, account, phone number or address (drafts_facts.check)."""
+    out = list(conversation[upto:]) + [d.get("decision") or "", them] + ([subject or ""] if not upto else [])
+    return [t for t in out if t]
 
 
 def audit_of(you: dict[str, Any], messages: int, calendar: bool) -> dict[str, Any]:
@@ -125,6 +144,7 @@ class GatherMixin:
                 out["index"] = self._start(vectors, user)
             if not edit:
                 out["calendar"] = self._start(self._calendar, user)
+                out["suspicious"] = self._start(self._suspicious, user, thread)
                 out["offer"] = self._start(actions.gather, self.db, self.vault, user, thread)
         return out
 
@@ -232,10 +252,11 @@ class GatherMixin:
         rules = self._start(self._channel_rules, user, channel, first["rules"])
         about = self._start(self._about_note, user, contact)
         latest_in = next((m for m in reversed(messages) if m["direction"] == "inbound"), None)
-        similar = self._similar(user, thread, latest_in)
+        voice_ok = others_voice_ok(messages, first.get("to_them") or [], bool(got(early.get("suspicious"), False)))
+        similar = self._similar(user, thread, latest_in) if voice_ok else []
         names = {cid: self.vault.open(user, NAME, name) for cid, name in (first.get("senders") or {}).items()}
         if contact:
-            names.setdefault(contact.get("id"), contact.get("display_name"))
+            names.setdefault(contact.get("id"), self.vault.open(user, NAME, contact.get("display_name")))
 
         conversation = []
         for i, m in enumerate(messages):
@@ -246,10 +267,14 @@ class GatherMixin:
 
         company = got(company)
         you = self._you(user, first, similar, channel, composer=got(early.get("composer")), rules=got(rules), about=got(about))
+        if not voice_ok:
+            you["more_voice"] = []
         calendar = got(early.get("calendar"), []) if edit is None else []
+        texts, upto = [text for _, text in conversation], answered_upto(messages)
         return {
             "thread": thread,
-            "evidence": evidence_of(you, [text for _, text in conversation], d, thread.get("subject"), calendar),
+            "evidence": evidence_of(you, texts[:upto], d, thread.get("subject") if upto else None, calendar),
+            "untrusted": untrusted_of(texts, upto, d, thread.get("subject"), you.get("them") or ""),
             "audit": audit_of(you, len(conversation), bool(calendar)),
             "prompt": build_prompt(
                 **you,
@@ -311,6 +336,16 @@ class GatherMixin:
         except Exception as err:
             log.warn("about note not read", code=log.code_of(err))
             return ""
+
+    def _suspicious(self, user: str, thread: str) -> bool:
+        """Whether triage flagged the conversation's latest incoming message (threads.suspicious). Never fails the draft:
+        unread, it counts as not flagged and only the unknown-sender test applies."""
+        try:
+            row = self.db.first("threads", {"select": "suspicious", "id": f"eq.{thread}", "user_id": f"eq.{user}"}) or {}
+            return bool(row.get("suspicious")) if isinstance(row, dict) else False
+        except Exception as err:
+            log.warn("suspicious flag not read", code=log.code_of(err))
+            return False
 
     def _calendar(self, user: str) -> list[str]:
         """The next CALENDAR_DAYS of events as plain day and time lines, for the fact check only (titles are never
@@ -402,6 +437,7 @@ class GatherMixin:
         return {
             "thread": {"id": None, "account_id": account["id"]},
             "evidence": evidence_of(you, [], d, None, []),
+            "untrusted": untrusted_of([], 0, d, None, you.get("them") or ""),
             "audit": audit_of(you, 0, False),
             "prompt": build_prompt(
                 **you,

@@ -31,7 +31,7 @@ import { isPrimaryShard } from "./shard";
 import { failInterruptedWork, requeueWorkingActions } from "./recovery";
 import { Lease } from "./lease";
 import { startPushSender } from "./push/sender";
-import { startOutboxCleanup } from "./send/outbox-attachments";
+import { startOutboxCleanup } from "./send/outbox-cleanup";
 import { startStorageMaintenance } from "./runtime/maintenance";
 import { startAccountJobs } from "./account/jobs";
 import { watchQueues } from "./runtime/queues";

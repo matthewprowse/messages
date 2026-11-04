@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { simpleParser } from "mailparser";
-import { nameFromAddress, normalizeEmail, previewOf } from "./normalize-email";
+import { nameFromAddress, normalizeEmail, previewOf, replyToDomainOf } from "./normalize-email";
 
 const original = [
   "Message-ID: <root-1@hartleylaw.co.uk>",
@@ -135,4 +135,38 @@ test("unsubscribe headers are kept, unfolded", async () => {
   const mail = normalizeEmail(await simpleParser(raw), "x");
   assert.equal(mail.listUnsubscribe, "<https://shop.example/u?id=1>, <mailto:unsub@shop.example?subject=unsubscribe>");
   assert.equal(mail.listUnsubscribePost, true);
+});
+
+test("the receiving server's verdicts are read from its topmost Authentication-Results header", async () => {
+  const raw = [
+    "Authentication-Results: mx.google.com;",
+    "       dkim=pass header.i=@hartleylaw.co.uk;",
+    "       spf=pass (google.com: domain of x designates 1.2.3.4) smtp.mailfrom=x@hartleylaw.co.uk;",
+    "       dmarc=pass (p=REJECT) header.from=hartleylaw.co.uk",
+    "Authentication-Results: forged.example; dmarc=fail",
+    original,
+  ].join("\r\n");
+  assert.deepEqual(normalizeEmail(await simpleParser(raw), "x").auth, { spf: "pass", dkim: "pass", dmarc: "pass" });
+  assert.equal(normalizeEmail(await simpleParser(original), "x").auth, null);
+});
+
+test("the content hash is the same for the same email in another folder, and differs when the email does", async () => {
+  const a = normalizeEmail(await simpleParser(original), "x");
+  const moved = normalizeEmail(await simpleParser(["X-Folder: Archive", original].join("\r\n")), "y");
+  const other = normalizeEmail(await simpleParser(original.replace("revised terms", "new bank details")), "x");
+  assert.equal(a.providerMessageId, other.providerMessageId);
+  assert.equal(a.contentHash, moved.contentHash);
+  assert.notEqual(a.contentHash, other.contentHash);
+  assert.match(a.contentHash, /^[0-9a-f]{64}$/);
+});
+
+test("only the domain of a Reply-To at another domain is kept, never the address", async () => {
+  const withReplyTo = (value: string) => ["Reply-To: " + value, original].join("\r\n");
+  assert.equal(normalizeEmail(await simpleParser(withReplyTo("Accounts <Pay@Other-Bank.example>")), "x").replyToDomain, "other-bank.example");
+  assert.equal(normalizeEmail(await simpleParser(withReplyTo("james+replies@hartleylaw.co.uk")), "x").replyToDomain, null);
+  assert.equal(normalizeEmail(await simpleParser(original), "x").replyToDomain, null);
+  const from = { address: "a@acme.com", name: null };
+  assert.equal(replyToDomainOf(from, [{ address: "b@acme.com", name: null }, { address: "c@evil.biz", name: null }]), "evil.biz");
+  assert.equal(replyToDomainOf(null, [{ address: "c@evil.biz", name: null }]), "evil.biz");
+  assert.equal(replyToDomainOf(from, [{ address: "no-at-sign", name: null }, { address: "x@bad domain", name: null }]), null);
 });

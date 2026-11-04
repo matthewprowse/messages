@@ -6,6 +6,7 @@ import { isLidUser, isPnUser, jidNormalizedUser, type WASocket } from "baileys";
 import { BoundedMap } from "./bounded-map";
 import { e164 } from "./normalize";
 import type { Person } from "./person";
+import { whatsappName } from "../contacts/name-rank";
 
 export const MAX_NAMES = 20_000;
 export const MAX_LIDS = 20_000;
@@ -41,11 +42,16 @@ export class People {
     }
     const phone = e164(pn);
     if (pushName) for (const j of [pn, lid]) if (j && !this.pushNames.has(j)) this.pushNames.set(j, pushName);
+    const saved = [pn, lid].find((j) => j && this.savedNames.has(j));
+    const pushed = [pn, lid].find((j) => j && this.pushNames.has(j));
+    // The kind of name goes with it: the database stores the name sealed and decides which one wins by its rank.
+    const best = whatsappName(saved ? this.savedNames.get(saved) : null, (pushed ? this.pushNames.get(pushed) : null) ?? pushName, phone ?? lid ?? jid);
     return {
       phone,
       lid,
       jid: pn ?? lid ?? jidNormalizedUser(jid),
-      display_name: this.nameOf(pn, lid) ?? pushName ?? phone ?? lid ?? jid,
+      display_name: best.name,
+      name_rank: best.rank,
       push_name: pushName ?? (pn && this.pushNames.get(pn)) ?? (lid && this.pushNames.get(lid)) ?? null,
     };
   }

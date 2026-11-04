@@ -25,9 +25,9 @@ export async function requestDeletion(proof: Proof, confirm: string): Promise<{ 
   return r.ok ? { runAfter: String(r.json.runAfter) } : { error: r.error };
 }
 
-/** Cancels a request that has not started. Resolves to an error sentence, or null. */
-export async function cancelDeletion(): Promise<string | null> {
-  const r = await call("delete", "DELETE");
+/** Cancels a request that has not started, with the same proof as asking. Resolves to an error sentence, or null. */
+export async function cancelDeletion(proof: Proof): Promise<string | null> {
+  const r = await call("delete", "DELETE", { proof });
   return r.ok ? null : r.error;
 }
 

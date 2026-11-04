@@ -17,9 +17,12 @@ const TASK_TEXT: TextColumn[] = [["title", FIELD.taskTitle], ["notes", FIELD.tas
 const ADDRESS_KEYS = new Set(["sender_address", "from_address", "provider_thread_id", "address", "target", "chat", "participant"]);
 const ADDRESS_LISTS = new Set(["to_addresses", "send_addresses", "emails", "phones"]);
 // Other text found by its column name wherever it sits in a row, such as a message's attachments or a contact nested
-// in a conversation: a file's name and a contact's company, role, relationship, style note and AI summary.
+// in a conversation: a file's name, a contact's name, company, role, relationship, style note and AI summary, and a
+// group chat's name.
 const CONTENT_KEYS: Record<string, Field> = {
   filename: FIELD.filename,
+  display_name: FIELD.name,
+  group_name: FIELD.name,
   company: FIELD.contactCompany,
   role: FIELD.contactRole,
   relationship: FIELD.contactRelationship,
@@ -29,43 +32,75 @@ const CONTENT_KEYS: Record<string, Field> = {
   ai_summary: FIELD.contactSummary,
 };
 
+// "name" is opened only inside a company nested in a row (contacts(organizations(name))): other tables' name columns
+// hold other kinds of text. A company row read on its own is opened by openOrganizations.
+const NAMED_PARENTS = new Set(["organizations"]);
+
 /** Opens every encrypted address in these rows and anything nested in them, in place. */
 export async function openAddresses<T>(rows: T): Promise<T> {
   const work: Promise<void>[] = [];
-  const walk = (node: unknown) => {
-    if (Array.isArray(node)) { node.forEach(walk); return; }
+  const walk = (node: unknown, parent: string | null) => {
+    if (Array.isArray(node)) { node.forEach((n) => walk(n, parent)); return; }
     if (!node || typeof node !== "object") return;
     const row = node as Record<string, unknown>;
     for (const [key, value] of Object.entries(row)) {
       if (isCiphertext(value)) {
-        const field = key === "domain" ? FIELD.domain : ADDRESS_KEYS.has(key) || (key === "value" && "kind" in row) ? FIELD.address : CONTENT_KEYS[key] ?? null;
+        const field = key === "domain" ? FIELD.domain : ADDRESS_KEYS.has(key) || (key === "value" && "kind" in row) ? FIELD.address
+          : key === "name" && parent && NAMED_PARENTS.has(parent) ? FIELD.name : CONTENT_KEYS[key] ?? null;
         if (field) work.push(open(field, value).then((v) => { row[key] = v ?? ""; }));
       } else if (ADDRESS_LISTS.has(key) && Array.isArray(value)) {
         value.forEach((v, i) => { if (isCiphertext(v)) work.push(open(FIELD.address, v).then((o) => { value[i] = o ?? ""; })); });
       } else if (value && typeof value === "object") {
-        walk(value);
+        walk(value, key);
       }
     }
   };
-  walk(rows);
+  walk(rows, null);
   await Promise.all(work);
   return rows;
 }
 
-const EVENT_TEXT: TextColumn[] = [["title", FIELD.eventTitle], ["location", FIELD.eventLocation]];
+const EVENT_TEXT: TextColumn[] = [
+  ["title", FIELD.eventTitle],
+  ["location", FIELD.eventLocation],
+  ["description", FIELD.eventNotes],
+  ["calendar_name", FIELD.calendarName],
+  ["conference_url", FIELD.eventLink],
+];
 const EXAMPLE_TEXT: TextColumn[] = [["situation", FIELD.writingSituation], ["body", FIELD.writingBody]];
 const RULE_TEXT: TextColumn[] = [["rule", FIELD.styleRule], ["relationship", FIELD.styleRelationship]];
 
-/** Calendar events: the title and location. */
-export const openEvents = <T extends object>(rows: T[]) => openRows(rows, EVENT_TEXT);
+/**
+ * Calendar events: the title, location, notes, calendar name and join link, and the guest list, which is sealed whole as
+ * one JSON string (a list that will not open reads as no guests). Only the columns a query selected are opened.
+ */
+export async function openEvents<T extends object>(rows: T[]): Promise<T[]> {
+  await openRows(rows, EVENT_TEXT);
+  await Promise.all(rows.map(async (r) => {
+    const row = r as { attendees?: unknown };
+    if (isCiphertext(row.attendees)) row.attendees = guestList(await open(FIELD.eventGuests, row.attendees));
+  }));
+  return rows;
+}
+
+/** An opened guest list: the JSON array, or [] for anything else. */
+export function guestList(text: string | null): unknown[] {
+  if (!text) return [];
+  try {
+    const list: unknown = JSON.parse(text);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
 /** Writing examples: the situation and the text. */
 export const openExamples = <T extends object>(rows: T[]) => openRows(rows, EXAMPLE_TEXT);
 /** Style rules: the rule and the relationship it is for. */
 export const openRules = <T extends object>(rows: T[]) => openRows(rows, RULE_TEXT);
 
 export const openTasks = <T extends object>(rows: T[]) => openRows(rows, TASK_TEXT);
-/** Companies: the AI's summary of what they send you (the domain is opened with the addresses). */
-export const openOrganizations = <T extends object>(rows: T[]) => openRows(rows, [["summary", FIELD.orgSummary]]);
+/** Companies: their name and the AI's summary of what they send you (the domain is opened with the addresses). */
+export const openOrganizations = <T extends object>(rows: T[]) => openRows(rows, [["name", FIELD.name], ["summary", FIELD.orgSummary]]);
 export const openThreads = async <T extends object>(rows: T[]) => openAddresses(await openRows(rows, THREAD_TEXT));
 export const openDrafts = <T extends object>(rows: T[]) => openRows(rows, DRAFT_TEXT);
 

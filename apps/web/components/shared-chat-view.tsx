@@ -30,6 +30,7 @@ import { EmptyState } from "@/components/primitives";
 import { isNearBottom } from "@/components/near-bottom";
 import { MessageBody } from "@/components/message-body";
 import { TemplatePicker } from "@/components/template-picker";
+import { AssignmentNotices } from "@/components/assignment-notices";
 
 const CHANNEL: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", linkedin: "LinkedIn", instagram: "Instagram", teams: "Teams", zoom: "Zoom", google_chat: "Google Chat" };
 const EMAIL_PROVIDERS = ["icloud", "gmail", "outlook", "imap"];
@@ -411,9 +412,10 @@ export function SharedChatView({ threadId }: { threadId: string }) {
             ? <Button variant="secondary" disabled={busy} onClick={() => void assign(null)}>Unassign</Button>
             : <Button variant="secondary" disabled={busy} onClick={() => me && void assign(me)}>Assign to Me</Button>
         )}
-        <Button variant="secondary" size="sm" onClick={() => setNotesOpen(true)}><NotebookPen /> Notes</Button>
+        <Button variant="secondary" onClick={() => setNotesOpen(true)}><NotebookPen /> Notes</Button>
       </header>
       <div className="shrink-0 border-b bg-muted/50 px-3 py-2 text-sm md:px-4">{ACCESS_LINE[info.access]}{info.access === "cover" && info.coverEnds ? ` Cover ends ${fullStamp(info.coverEnds)}.` : ""}</div>
+      <AssignmentNotices threadId={threadId} />
 
       <ScrollArea ref={scrollRef} className="min-h-0 flex-1">
         <div className="p-3 md:px-4">

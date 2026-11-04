@@ -18,7 +18,7 @@ from typing import Any
 
 from . import log
 from .crypto import address_index, is_ciphertext
-from .fields import ADDRESS, BODY, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, DOMAIN, HTML, ORG_SUMMARY, SUBJECT
+from .fields import ADDRESS, BODY, CONTACT_STYLE_NOTE, CONTACT_SUMMARY, DOMAIN, HTML, NAME, ORG_SUMMARY, SUBJECT
 from .gemini import DEFAULT_LIMITS, Gemini, GeminiError, UsageContext
 from .supabase import Supabase, in_list
 from .text import UNTRUSTED, clean, fenced, new_fence
@@ -398,7 +398,7 @@ class People:
             if threads
             else []
         )
-        name = contact.get("display_name") or "Them"
+        name = self.vault.open(user_id, NAME, contact.get("display_name")) or "Them"  # sealed or plain
         emails = sorted((self.vault.open_row(user_id, m, ENCRYPTED) for m in theirs + mine), key=lambda m: _ts(m["sent_at"]))
         texts = [
             ("You" if m["direction"] == "outbound" else name, m.get("subject") or "", clean(m.get("body_text"), m.get("body_html"), limit=EMAIL_CHARS))
@@ -460,6 +460,7 @@ class People:
         orgs = self.db.select("organizations", {"select": "id,name,domain,summary,summary_updated_at", "user_id": f"eq.{user_id}", "limit": "1000"})
         for o in orgs:
             o["domain"] = self.vault.open(user_id, DOMAIN, o.get("domain")) or ""
+            o["name"] = self.vault.open(user_id, NAME, o.get("name")) or ""
         self._seal_old_summaries(user_id, orgs)
         if not orgs:
             return 0

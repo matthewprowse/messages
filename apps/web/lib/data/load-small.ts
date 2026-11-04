@@ -9,6 +9,7 @@ import { mapTask, TASK_COLUMNS } from "../tasks";
 import { openProfileRow } from "./profile-seal";
 import { ACCOUNT_COLUMNS, DRAFT_COLUMNS, PROFILE_COLUMNS, UNSUBSCRIBE_COLUMNS } from "./columns";
 import { mapAccount, mapDraft, mapProfile, mapUnsubscribe } from "./map-small";
+import { REVIEW_STATUS } from "../draft-trust";
 
 /** How far back completed tasks are shown in Calendar. Open ones are loaded however old, as they are overdue. */
 const TASK_DAYS = 60;
@@ -36,7 +37,7 @@ export async function loadSmall() {
     allRows("Load rules", (from, to) => supabase.from("priority_rules").select("id, kind, target").order("created_at", { ascending: false }).order("id").range(from, to)),
     allRows("Load examples", (from, to) => supabase.from("writing_examples").select("id, situation, body").order("created_at", { ascending: false }).order("id").range(from, to)),
     // A new message's draft (no conversation) lives in its dialog only.
-    allRows("Load drafts", (from, to) => supabase.from("drafts").select(DRAFT_COLUMNS).eq("status", "active").not("thread_id", "is", null).order("id").range(from, to)),
+    allRows("Load drafts", (from, to) => supabase.from("drafts").select(DRAFT_COLUMNS).in("status", ["active", REVIEW_STATUS]).not("thread_id", "is", null).order("id").range(from, to)),
     allRows("Load unsubscribes", (from, to) => supabase.from("unsubscribes").select(UNSUBSCRIBE_COLUMNS).order("id").range(from, to)),
     // Not required: without it (the table not there yet) the Waiting filter is just empty.
     allRows("Load follow-ups", (from, to) => supabase.from("follow_ups").select("thread_id").eq("expects_reply", true).order("thread_id").range(from, to)).catch(() => []),
@@ -51,10 +52,13 @@ export async function loadSmall() {
     openExamples(examples),
     openProfileRow(profile.data),
   ]);
-  const draftOf = new Map(drafts.map((d) => [d.thread_id, mapDraft(d)]));
+  const draftOf = new Map(drafts.filter((d) => d.status !== REVIEW_STATUS).map((d) => [d.thread_id, mapDraft(d)]));
+  // A held pre-draft sits beside the live one; the newest per conversation, should there be more than one.
+  const reviewOf = new Map(drafts.filter((d) => d.status === REVIEW_STATUS).sort((a, b) => a.updated_at.localeCompare(b.updated_at)).map((d) => [d.thread_id, mapDraft(d)]));
   const waiting = new Set(followUps.map((f) => f.thread_id));
   return {
     draftOf,
+    reviewOf,
     waiting,
     accounts: (accounts.data ?? []).map(mapAccount),
     rules: rules.map((r) => ({ id: r.id, kind: r.kind as Rule["kind"], target: r.target })),

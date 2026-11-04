@@ -2,11 +2,13 @@
 // script and the audio are encrypted. The audio comes in parts (public.brief_parts), each a WAV file in
 // base64, so playing can start as soon as the first short part is ready. A part is a sealed file in the
 // private "brief-audio" bucket (audio_path), or, for parts stored before that, the sealed base64 itself
-// in the audio column.
+// in the audio column. Today's brief row and the request log are kept in memory (lib/memory-cache.ts) so the Listen
+// button and Your Day share one read and a return to the Summary reads nothing.
 import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
 import { open } from "./vault";
 import { limitReached, REQUESTS_PER_DAY, requestsLeft, nextRequestAt } from "./brief-pace";
+import { createMemoryCache } from "./memory-cache";
 
 const AUDIO_BUCKET = "brief-audio";
 
@@ -41,10 +43,9 @@ export function localDate(now: Date = new Date()): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-/** Today's brief, or null when there is none yet. Filtered by user as well as date, so it never rests on row security alone. */
-export async function loadBrief(day: string, userId: string): Promise<DailyBrief | null> {
-  const { data, error } = await supabase.from("briefs").select("id, status, parts, voice, updated_at").eq("for_date", day).eq("user_id", userId).maybeSingle();
-  if (error || !data) return null;
+type BriefRow = { id: string; status: string; parts: number | null; voice: string | null; updated_at: string };
+
+function mapBrief(data: BriefRow): DailyBrief {
   return {
     id: data.id,
     status: data.status as DailyBrief["status"],
@@ -52,6 +53,55 @@ export async function loadBrief(day: string, userId: string): Promise<DailyBrief
     voice: data.voice ?? undefined,
     updatedAt: data.updated_at,
   };
+}
+
+/** A day's brief with its script opened: what the Listen button and Your Day both read. */
+export interface BriefDay {
+  brief: DailyBrief | null;
+  /** The text of the brief, or null when there is none yet. */
+  script: string | null;
+}
+
+/** How long a kept brief is shown without reading it again. Realtime marks it old sooner (staleBriefDay). */
+export const BRIEF_FRESH_MS = 10 * 60_000;
+// The opened script lives here, so memory only; emptied on sign out.
+const briefDays = createMemoryCache<BriefDay>({ max: 4 });
+const briefKey = (day: string, userId: string) => `${userId}|${day}`;
+
+/** The day's brief as last read, or undefined when it has not been read this session. */
+export function cachedBriefDay(day: string, userId: string): BriefDay | undefined {
+  return briefDays.get(briefKey(day, userId));
+}
+
+/** The day's brief and script, from memory when read in the last maxAgeMs, else read once for every caller. Rejects when the read fails. */
+export function loadBriefDay(day: string, userId: string, maxAgeMs = BRIEF_FRESH_MS): Promise<BriefDay> {
+  return briefDays.load(briefKey(day, userId), async () => {
+    const { data, error } = await supabase.from("briefs").select("id, status, parts, voice, updated_at, script").eq("for_date", day).eq("user_id", userId).maybeSingle();
+    if (error) throw new Error(`Load brief failed (${error.code})`);
+    if (!data) return { brief: null, script: null };
+    const script = data.script ? await open(FIELD.brief, data.script) : null;
+    return { brief: mapBrief(data), script: script?.trim() || null };
+  }, maxAgeMs);
+}
+
+/** Marks the day's kept brief as old, so the next read fetches it; for Realtime saying the row changed. */
+export function staleBriefDay(day: string, userId: string) {
+  briefDays.invalidate(briefKey(day, userId));
+}
+
+/** Today's brief, read now (no cache), or null when there is none yet. Filtered by user as well as date, so it never rests on row security alone. */
+export async function loadBrief(day: string, userId: string): Promise<DailyBrief | null> {
+  const { data, error } = await supabase.from("briefs").select("id, status, parts, voice, updated_at").eq("for_date", day).eq("user_id", userId).maybeSingle();
+  if (error) return null;
+  const brief = data ? mapBrief(data) : null;
+  // The kept copy follows; a rewritten brief has a new script, so it is read again next time.
+  const key = briefKey(day, userId);
+  const held = briefDays.get(key);
+  if (held) {
+    if (held.brief?.updatedAt !== brief?.updatedAt) briefDays.invalidate(key);
+    briefDays.patch(key, (d) => ({ ...d, brief }));
+  }
+  return brief;
 }
 
 /** How a request for a brief went. A refused one carries when the next is allowed (ISO), when the database said. */
@@ -82,9 +132,18 @@ async function loadRequests(userId: string): Promise<string[] | null> {
   return error || !data ? null : data.map((r) => r.requested_at);
 }
 
+// The request log, not the sums, is kept: what is left is worked out at each read, as requests age out of the 24 hours.
+const requestLogs = createMemoryCache<string[]>({ max: 2 });
+/** How long the request log is trusted. A request made here reads it again at once (maxAgeMs 0). */
+export const ALLOWANCE_FRESH_MS = 5 * 60_000;
+
 /** What is left of the daily allowance of asking for a brief, and when the next request is allowed once none is. Null when unknown. */
-export async function loadAllowance(userId: string): Promise<{ left: number; of: number; nextAt: number | null } | null> {
-  const log = await loadRequests(userId);
+export async function loadAllowance(userId: string, maxAgeMs = 0): Promise<{ left: number; of: number; nextAt: number | null } | null> {
+  const log = await requestLogs.load(userId, async () => {
+    const found = await loadRequests(userId);
+    if (!found) throw new Error("Load brief requests failed");
+    return found;
+  }, maxAgeMs).catch(() => null);
   if (!log) return null;
   const now = Date.now();
   return { left: requestsLeft(log, now), of: REQUESTS_PER_DAY, nextAt: nextRequestAt(log, now) };
@@ -150,10 +209,16 @@ export async function saveBriefSettings(userId: string, patch: Partial<BriefSett
   return !error;
 }
 
-/** Keeps profiles.timezone in step with this device, so the brief is written at the right local time. */
+// The person and zone last synced: a device's zone rarely changes within a session, so it is checked once, not per visit.
+let zoneSynced: string | null = null;
+
+/** Keeps profiles.timezone in step with this device, so the brief is written at the right local time. Once per session and zone. */
 export async function syncTimezone(userId: string): Promise<void> {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  if (!zone) return;
-  const { data } = await supabase.from("profiles").select("timezone").eq("user_id", userId).maybeSingle();
+  if (!zone || zoneSynced === `${userId}|${zone}`) return;
+  zoneSynced = `${userId}|${zone}`;
+  const { data, error } = await supabase.from("profiles").select("timezone").eq("user_id", userId).maybeSingle();
+  // A failed read tries again on the next visit.
+  if (error) { zoneSynced = null; return; }
   if (data && data.timezone !== zone) await supabase.from("profiles").update({ timezone: zone }).eq("user_id", userId);
 }

@@ -12,22 +12,21 @@
 // emoji reactions are sent too (linkedin/reactions.ts).
 
 import type { Tables } from "@messages/db";
-import { addressIndex, chatIndex } from "@messages/crypto/addresses";
-import { FIELD } from "@messages/crypto/fields";
+import { addressIndex, chatIndex, groupNameIndex } from "@messages/crypto/addresses";
 import { Backoff, SerialQueue, Sleeper } from "../backoff";
 import { db, getSyncState, loadCredentials, must, retryWrite, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { finishAction, NotReady } from "../send/actions";
-import { claimReady, linkThread, markFailed, settleSent, type OutboxRow } from "../send/outbox";
+import { claimReady, linkThread, markFailed, outboxBody, settleSent, type OutboxRow } from "../send/outbox";
 import { loadAttachmentFiles } from "../send/outbox-attachments";
 import { saveContactPhoto } from "../photos/store";
-import { credentialSealer, keysFor, open, openAddresses, seal, sealAddress } from "../vault";
-import { Helper, HelperError, helperBuilt, spawnTransport, type BrowserHeaders, type Commands, type HelperEvent, type LinkedInConversation, type LinkedInMessage, type LinkedInPerson, type SignInResult, type Transport } from "../linkedin/helper";
+import { credentialSealer, keysFor, openAddresses, seal, sealAddress } from "../vault";
+import { Helper, HelperError, helperBuilt, spawnTransport, vettedProxy, type BrowserHeaders, type Commands, type HelperEvent, type LinkedInConversation, type LinkedInMessage, type LinkedInPerson, type SignInResult, type Transport } from "../linkedin/helper";
 import { NO_FILES, sendTimeoutMs, stageFiles, type StagedFiles } from "../linkedin/files";
 import { RecentTries, fetchPictureBytes, photoDue, withPictures } from "../linkedin/avatars";
 import { catchUpTargets, mayAdvanceToken } from "../linkedin/catch-up";
 import { ingestPayload, others, seenByOther, skipConversation, stubConversation, unreadUrns, type Sealer } from "../linkedin/mapping";
-import { CODE_TIMED_OUT, NO_COOKIES, NOT_BUILT, PushBack, RECONNECTING, SIGNED_OUT, SIGN_IN_EXPIRED, START_NO_PERSON, checkpointDetail, endsSession, outcomeOf, recipientOf, sendFailure, signInFailure, startFailure, surelyNotSent, type Outcome } from "../linkedin/policy";
+import { CODE_TIMED_OUT, NO_COOKIES, NOT_BUILT, PushBack, RECONNECTING, SIGNED_OUT, SIGN_IN_EXPIRED, SIGN_IN_PROXY, START_NO_PERSON, checkpointDetail, endsSession, outcomeOf, recipientOf, sendFailure, signInFailure, startFailure, surelyNotSent, type Outcome } from "../linkedin/policy";
 import { waitForReply, type Reply, type SignInStep } from "../linkedin/relay";
 import { readRelay, writeRelay } from "../linkedin/relay-db";
 import { sendReaction } from "../linkedin/react-action";
@@ -183,12 +182,16 @@ export class LinkedInConnector {
    */
   private async signIn(creds: LinkedInCredentials): Promise<Outcome> {
     if (!(Date.now() - (creds.requestedAt ?? 0) < SIGN_IN_TTL_MS)) return this.endSignIn(creds, SIGN_IN_EXPIRED);
+    // The helper's sign-in takes its proxy as an argument rather than from its environment, so it must get the same
+    // vetted value (public address, pinned) as the rest of the helper's traffic: the raw one could name a private host.
+    const proxy = creds.proxy?.trim() ? await vettedProxy(creds.proxy) : undefined;
+    if (proxy === null) return this.endSignIn(creds, SIGN_IN_PROXY);
     await setAccountStatus(this.id, "connecting", "Signing in to LinkedIn.");
     await writeRelay(this.id, null);
     const helper = new Helper(this.transport(creds.proxy), () => undefined);
     this.helper = helper;
     try {
-      let result: SignInResult = await helper.call("signin", { email: creds.email ?? "", password: creds.password ?? "", proxy: creds.proxy });
+      let result: SignInResult = await helper.call("signin", { email: creds.email ?? "", password: creds.password ?? "", proxy });
       let attempts = 0;
       for (;;) {
         if (this.stopped) return { stop: true, detail: "" };
@@ -312,6 +315,7 @@ export class LinkedInConnector {
       address: (value) => sealAddress(user, value),
       addressIndex: async (value) => addressIndex(await keysFor(user), value),
       chatIndex: async (value) => chatIndex(await keysFor(user), value),
+      groupIndex: async (value) => groupNameIndex(await keysFor(user), value),
     };
   }
 
@@ -484,7 +488,12 @@ export class LinkedInConnector {
       await markFailed(row.id, "This message belongs to another account.");
       return;
     }
-    const text = ((await open(row.user_id, FIELD.body, row.body)) ?? "").trim();
+    const body = await outboxBody(row);
+    if ("error" in body) {
+      await markFailed(row.id, body.error);
+      return;
+    }
+    const text = body.text.trim();
     if (!text && !(row.attachment_count > 0)) {
       await markFailed(row.id, "There is nothing to send.");
       return;
@@ -493,7 +502,7 @@ export class LinkedInConnector {
     if (!staged) return;
     let result: Commands["send"]["result"];
     try {
-      const attachments = staged.files.length > 0 ? { attachments: staged.files } : {};
+      const attachments = staged.files.length > 0 ? { attachments: staged.files, attachmentDir: staged.dir } : {};
       result = await helper.call("send", { conversation: thread.provider_thread_id, text, token: row.id, ...attachments }, sendTimeoutMs(staged.files.length));
     } catch (err) {
       log.warn("linkedin reply failed", { account: this.id, outbox: row.id, code: errorCode(err) });
@@ -556,7 +565,12 @@ export class LinkedInConnector {
       await markFailed(row.id, START_NO_PERSON);
       return;
     }
-    const text = ((await open(row.user_id, FIELD.body, row.body)) ?? "").trim();
+    const body = await outboxBody(row);
+    if ("error" in body) {
+      await markFailed(row.id, body.error);
+      return;
+    }
+    const text = body.text.trim();
     if (!text && !(row.attachment_count > 0)) {
       await markFailed(row.id, "There is nothing to send.");
       return;
@@ -565,7 +579,7 @@ export class LinkedInConnector {
     if (!staged) return;
     let started: Commands["start"]["result"];
     try {
-      const attachments = staged.files.length > 0 ? { attachments: staged.files } : {};
+      const attachments = staged.files.length > 0 ? { attachments: staged.files, attachmentDir: staged.dir } : {};
       started = await helper.call("start", { profile, text, token: row.id, ...attachments }, sendTimeoutMs(staged.files.length));
     } catch (err) {
       log.warn("linkedin new conversation failed", { account: this.id, outbox: row.id, code: errorCode(err) });

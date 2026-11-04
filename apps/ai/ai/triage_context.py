@@ -12,7 +12,7 @@ from . import log
 from .fields import ADDRESS, BODY, CHOICES, HTML, NAME, PROFILE_ABOUT, PROFILE_PEOPLE, SUBJECT, SUMMARY, TRANSCRIPT
 from .supabase import in_list
 from .text import clean
-from .triage_extras import MAX_AUTO_LABELS, AutoLabel
+from .triage_extras import MAX_AUTO_LABELS, AutoLabel, header_suspicion, twin_key
 from .triage_signals import CONTEXT_CHARS, CONTEXT_MESSAGES, CONTEXT_TTL_S, LATEST_ROWS, SENDER_KEEP, UserContext, latest_incoming, sender_outcome
 
 
@@ -133,8 +133,9 @@ class ContextMixin:
                 out[m["id"]] = outcome
         return out
 
-    def _twins(self, messages: list[dict[str, Any]], contexts: dict[str, UserContext]) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]]:
-        """Triage already done for the same email (Message-ID) in another of the user's accounts."""
+    def _twins(self, messages: list[dict[str, Any]], contexts: dict[str, UserContext]) -> dict[tuple[str, str, str, str], tuple[dict[str, Any], str | None]]:
+        """Triage already done for the same email in another of the user's accounts, by twin_key: the same Message-ID,
+        sender and subject. A Message-ID is the sender's to choose, so on its own it could borrow another mail's verdict."""
         users = sorted({m["user_id"] for m in messages if len(contexts[m["user_id"]].accounts) > 1 and m.get("provider_message_id")})
         if not users:
             return {}
@@ -143,7 +144,7 @@ class ContextMixin:
         rows = self.db.select(
             "messages",
             {
-                "select": "user_id,provider_message_id,message_ai!inner(priority,category,summary,needs_reply,junk,reply_choices,model,suspicious)",
+                "select": "id,user_id,provider_message_id,sender_index,sender_address,subject,message_ai!inner(priority,category,summary,needs_reply,junk,reply_choices,model,suspicious)",
                 "account_id": in_list(accounts),  # with the Message-ID, this is the (account_id, provider_message_id) index
                 "provider_message_id": in_list(ids),
                 "direction": "eq.inbound",
@@ -155,11 +156,40 @@ class ContextMixin:
             ai = r.get("message_ai")
             ai = ai[0] if isinstance(ai, list) and ai else ai
             if r["user_id"] in users and isinstance(ai, dict):
+                self.vault.open_row(r["user_id"], r, [("subject", SUBJECT), ("sender_address", ADDRESS)])  # as the pending rows were
                 copied = {k: ai[k] for k in ("priority", "category", "summary", "needs_reply", "junk")}
                 copied["summary"] = self.vault.open(r["user_id"], SUMMARY, copied["summary"])  # sealed again when written
                 copied["choices"] = self.vault.open(r["user_id"], CHOICES, ai.get("reply_choices"))
                 copied["suspicious"] = ai.get("suspicious")
-                out[(r["user_id"], r["provider_message_id"])] = (copied, ai.get("model"))
+                out[twin_key(r)] = (copied, ai.get("model"))
+        return out
+
+    def _header_checks(self, messages: list[dict[str, Any]]) -> dict[str, str]:
+        """The suspicious kind the headers alone show (triage_extras.header_suspicion), by message id, for email only.
+        Two reads for the batch: the authentication results and Reply-To domain the worker keeps in provider_meta, and
+        the senders' display names. Never fails triage: unread, nothing is added and the model's flag stands."""
+        emails = [m for m in messages if ((m.get("threads") or {}).get("channel") or "email") == "email" and m.get("sender_address")]
+        if not emails:
+            return {}
+        try:
+            heads = {
+                r["id"]: r
+                for r in self.db.select("messages", {"select": "id,auth:provider_meta->auth,reply_to_domain:provider_meta->>reply_to_domain", "id": in_list([m["id"] for m in emails])})
+                if isinstance(r, dict) and r.get("id")
+            }
+            contact_ids = sorted({m["sender_contact_id"] for m in emails if m.get("sender_contact_id")})
+            names = {c["id"]: c.get("display_name") for c in self.db.select("contacts", {"select": "id,display_name", "id": in_list(contact_ids)})} if contact_ids else {}
+        except Exception as err:
+            log.warn("headers not read for triage", code=log.code_of(err))
+            return {}
+        out: dict[str, str] = {}
+        for m in emails:
+            head = heads.get(m["id"]) or {}
+            name = self.vault.open(m["user_id"], NAME, names.get(m.get("sender_contact_id"))) or ""
+            reply_to_domain = head.get("reply_to_domain") if isinstance(head.get("reply_to_domain"), str) else None
+            kind = header_suspicion(name, m.get("sender_address"), head.get("auth"), reply_to_domain)
+            if kind:
+                out[m["id"]] = kind
         return out
 
     # Asking the model -----------------------------------------------------------------------------

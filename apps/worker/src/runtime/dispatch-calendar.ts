@@ -1,5 +1,6 @@
 // Queued calendar work made in the app: new events, deletes, and changes or invitation answers, handed to the calendar
-// account's connector. One that cannot take them fails with a reason (./calendar-problem.ts).
+// account's connector. One that cannot take them fails with a reason (./calendar-problem.ts). What the app sealed in a
+// new event or a change (its text and guests) is opened here, so connectors only ever see plain rows.
 
 import { db } from "../db";
 import { readByIds, readQueued } from "../in-chunks";
@@ -8,6 +9,7 @@ import { ownsAccount } from "../shard";
 import type { CalendarOutboxRow } from "../calendar/create-event";
 import { failDelete, queuedDeletes, type CalendarDeleteRow } from "../calendar/delete-event";
 import { failUpdate, queuedUpdates } from "../calendar/update-queue";
+import { openQueuedIn } from "../calendar/sealed";
 import type { CalendarUpdateRow } from "../calendar/update-event";
 import { failEvent } from "../connectors/google-calendar";
 import { calendarAccountProblem, type CalendarAccount } from "./calendar-problem";
@@ -43,6 +45,7 @@ async function failStuckCalendar(table: CalendarTable, status: string, id: strin
 
 /**
  * Hands queued calendar rows (new events, deletes or changes) to their calendar account's connector. Ones for an account that cannot take them fail with a reason.
+ * `open` turns what the app sealed in a row back into text before the connector reads it; a row it cannot open fails.
  */
 async function dispatchCalendar<Row extends { id: string; status: string; account_id: string }>(
   list: Row[],
@@ -51,6 +54,7 @@ async function dispatchCalendar<Row extends { id: string; status: string; accoun
   pick: (connector: Connector) => ((row: Row) => Promise<void>) | undefined,
   what: string,
   inFlight: { table: CalendarTable; status: string },
+  open?: (row: Row) => Promise<{ row: Row } | { error: string }>,
 ) {
   const queued = list.filter((row) => row.status === "queued");
   const accounts = await calendarAccounts(queued);
@@ -68,7 +72,12 @@ async function dispatchCalendar<Row extends { id: string; status: string; accoun
         const connector = running.get(account.id)?.connector;
         const handle = connector && pick(connector);
         if (!handle) return null; // starting up: picked up on the next pass
-        return () => handle(row);
+        const opened = open ? await open(row) : { row };
+        if ("error" in opened) {
+          await fail(row.id, opened.error);
+          return null;
+        }
+        return () => handle(opened.row);
       },
       (err) => {
         log.error(`${what} failed`, { event: row.id, code: errorCode(err) });
@@ -81,7 +90,7 @@ async function dispatchCalendar<Row extends { id: string; status: string; accoun
 /** Events made in the app. */
 export async function dispatchCalendarOutbox(rows?: CalendarOutboxRow[]) {
   const list = rows ?? (runningIds().length ? await readQueued(runningIds(), (slice) => db.from("calendar_outbox").select("*").eq("status", "queued").in("account_id", slice).order("created_at").limit(50), "load calendar outbox", 50) : []);
-  await dispatchCalendar(list, "added to", failEvent, (c) => c.createEvent?.bind(c), "calendar event", { table: "calendar_outbox", status: "creating" });
+  await dispatchCalendar(list, "added to", failEvent, (c) => c.createEvent?.bind(c), "calendar event", { table: "calendar_outbox", status: "creating" }, openQueuedIn("calendar_outbox"));
 }
 
 /** Events the app asked to delete. */
@@ -91,5 +100,5 @@ export async function dispatchCalendarDeletes(rows?: CalendarDeleteRow[]) {
 
 /** Changes to events, and answers to invitations, made in the app. */
 export async function dispatchCalendarUpdates(rows?: CalendarUpdateRow[]) {
-  await dispatchCalendar(rows ?? (await queuedUpdates(runningIds())), "changed in", failUpdate, (c) => c.updateEvent?.bind(c), "calendar update", { table: "calendar_updates", status: "updating" });
+  await dispatchCalendar(rows ?? (await queuedUpdates(runningIds())), "changed in", failUpdate, (c) => c.updateEvent?.bind(c), "calendar update", { table: "calendar_updates", status: "updating" }, openQueuedIn("calendar_updates"));
 }

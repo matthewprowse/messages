@@ -6,6 +6,7 @@ reason codes and ages in seconds are reported, never content."""
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,8 +71,15 @@ class Health:
         return 404, "application/json", json.dumps({"error": "not_found"})
 
 
-def serve(health: Health, port: int) -> ThreadingHTTPServer:
-    """Starts the endpoint in a daemon thread on all interfaces (the supervisor probes from outside). GET only."""
+def health_host(raw: str | None) -> str:
+    """The address to listen on, from HEALTH_HOST: loopback by default, as the image's HEALTHCHECK probes from inside the
+    container and nothing is published. A supervisor that probes from outside (Cloud Run, a Confidential Space VM) sets
+    HEALTH_HOST=0.0.0.0, as for the sync worker (apps/worker/src/ops/health.ts)."""
+    return (raw or "").strip() or "127.0.0.1"
+
+
+def serve(health: Health, port: int, host: str | None = None) -> ThreadingHTTPServer:
+    """Starts the endpoint in a daemon thread on host (health_host of HEALTH_HOST when not given). GET only."""
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 (name fixed by http.server)
@@ -87,6 +95,6 @@ def serve(health: Health, port: int) -> ThreadingHTTPServer:
         def log_message(self, *_args: object) -> None:  # the default writes every probe to stderr
             pass
 
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server = ThreadingHTTPServer((host or health_host(os.environ.get("HEALTH_HOST")), port), Handler)
     threading.Thread(target=server.serve_forever, name="health", daemon=True).start()
     return server

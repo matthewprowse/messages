@@ -1,0 +1,201 @@
+{
+  "dataKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "teamDataKeyHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "userId": "caabe3e9-0000-4000-8000-000000000001",
+  "workspaceId": "caabe3e9-0000-4000-8000-0000000000a1",
+  "fields": [
+    {
+      "field": "body",
+      "place": "outbox.body",
+      "row": "caabe3e9-0000-4000-8000-0000000000b1",
+      "plaintext": "Hi Sam,\n\nThe plans are attached.\n\nThanks",
+      "nonce": [
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111
+      ],
+      "ciphertext": "e2:C291dGJveC5ib2R5JGNhYWJlM2U5LTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDBiMWRlZmdoaWprbG1ubzZGJcKkfDN9Wzl8Ypu/frJAEeKEniqAz6f2V57vGO+WVOKpUkJ7krtABhmpExjkqkzVMBQYokSs"
+    },
+    {
+      "field": "address",
+      "place": "outbox.to_addresses",
+      "row": "caabe3e9-0000-4000-8000-0000000000b1",
+      "plaintext": "sam@example.com",
+      "nonce": [
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131
+      ],
+      "ciphertext": "e2:E291dGJveC50b19hZGRyZXNzZXMkY2FhYmUzZTktMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMGIxeHl6e3x9fn+AgYKDiGE0LsR7WozfY/r+dF8vKLA4V3AT7HMTp1T1rQAvwA=="
+    },
+    {
+      "field": "filename",
+      "place": "outbox_attachments.filename",
+      "row": "caabe3e9-0000-4000-8000-0000000000b1:caabe3e9-0000-4000-8000-000000000001/outbox/caabe3e9-0000-4000-8000-0000000000c1/file",
+      "plaintext": "Café plans.pdf",
+      "nonce": [
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151
+      ],
+      "ciphertext": "e2:G291dGJveF9hdHRhY2htZW50cy5maWxlbmFtZXpjYWFiZTNlOS0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYjE6Y2FhYmUzZTktMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxL291dGJveC9jYWFiZTNlOS0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwYzEvZmlsZYyNjo+QkZKTlJWWl9o6YvBEl9c6TVrFAAPFc0Bb80ExbHu2ln3d5EcEwEg="
+    },
+    {
+      "field": "subject",
+      "place": "messages.subject",
+      "row": "",
+      "plaintext": "Café ☕ résumé ½",
+      "nonce": [
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168,
+        169,
+        170,
+        171
+      ],
+      "ciphertext": "e2:EG1lc3NhZ2VzLnN1YmplY3QAoKGio6SlpqeoqaqrTqfxMcrDRuRd7Ez6Wb8bAIh5m3N4HaauRX2pmvEfeaFBHMMf5g=="
+    },
+    {
+      "field": "subject",
+      "place": "",
+      "row": "",
+      "plaintext": "",
+      "nonce": [
+        180,
+        181,
+        182,
+        183,
+        184,
+        185,
+        186,
+        187,
+        188,
+        189,
+        190,
+        191
+      ],
+      "ciphertext": "e2:AAC0tba3uLm6u7y9vr9fn00SnMd4XWE05tLDFA0M"
+    }
+  ],
+  "teamFields": [
+    {
+      "field": "name",
+      "place": "threads.share_label",
+      "row": "",
+      "plaintext": "Acme Holdings",
+      "nonce": [
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211
+      ],
+      "ciphertext": "t2:E3RocmVhZHMuc2hhcmVfbGFiZWwAyMnKy8zNzs/Q0dLTYqA4J8Hv2pd5cTqbbhrsjl7Grr7xTjTcWXtCEcA="
+    },
+    {
+      "field": "body",
+      "place": "messages.body_text",
+      "row": "caabe3e9-0000-4000-8000-0000000000d1",
+      "plaintext": "Shared with the team.",
+      "nonce": [
+        220,
+        221,
+        222,
+        223,
+        224,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231
+      ],
+      "ciphertext": "t2:Em1lc3NhZ2VzLmJvZHlfdGV4dCRjYWFiZTNlOS0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwZDHc3d7f4OHi4+Tl5udDr9dZ8NAHtjdGMPAP0xwRdkotJ4UOxy+kl0t5gtDIAGWHa6Ts"
+    }
+  ],
+  "files": [
+    {
+      "owner": "user",
+      "field": "outbox_file_data",
+      "where": "attachments/caabe3e9-0000-4000-8000-000000000001/outbox/caabe3e9-0000-4000-8000-0000000000c1/file",
+      "nonce": [
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61
+      ],
+      "plainHex": "255044462d00ff010203",
+      "sealedHex": "6532623a00ff4b4e32333435363738393a3b3c3d43c5de354faa82729b484ebd00cbd74c452790e054ef6bec5031"
+    },
+    {
+      "owner": "team",
+      "field": "attachment_data",
+      "where": "attachments/team/caabe3e9-0000-4000-8000-0000000000a1/caabe3e9-0000-4000-8000-0000000000e1",
+      "nonce": [
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81
+      ],
+      "plainHex": "255044462d00ff010203",
+      "sealedHex": "6532623a00ff4b4e464748494a4b4c4d4e4f50516788d5eaadd1cf99d764f4dcb91c3db8e9039ecb8916c6ee1e7b"
+    }
+  ]
+}

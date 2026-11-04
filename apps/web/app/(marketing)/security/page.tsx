@@ -16,7 +16,7 @@ const DESCRIPTION = "How Konva protects your client conversations: encryption wi
 export const metadata: Metadata = pageMeta({ title: "Security", description: DESCRIPTION, path: "/security" });
 
 const TODAY = [
-  { icon: LockKeyhole, title: "Encrypted With Your Own Key", text: "Message text, subjects, previews, summaries, drafts and replies waiting to send are encrypted field by field with AES-256-GCM, under a data key that belongs to you alone." },
+  { icon: LockKeyhole, title: "Encrypted With Your Own Key", text: "Message text, subjects, previews, summaries, drafts and replies waiting to send are encrypted field by field with AES-256-GCM, under a data key unique to you and held under Google Cloud KMS. Konva's servers can use it to do their work, as the questions below explain." },
   { icon: Sparkles, title: "AI That Never Trains on Your Data", text: "Konva's AI runs on an enterprise service under terms that forbid using your data to train models. It sees only what a feature needs, when it needs it." },
   { icon: UserLock, title: "Users Kept Apart", text: "Every table in the database checks who is asking. One person's conversations are never returned to another, and a team sees only what was shared with it." },
   { icon: KeyRound, title: "Safe Sign In", text: "Add an authenticator app for two-factor sign in. Gmail and Outlook connect through their own sign in, so Konva never sees those passwords." },

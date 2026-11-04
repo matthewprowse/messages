@@ -153,7 +153,7 @@ export function SearchCommand({ open, onOpenChange }: { open: boolean; onOpenCha
 
 /** A round icon where a photo would be, for results with no person to show (a note, a file, a conversation not loaded here). */
 function IconBadge({ icon: Icon }: { icon: LucideIcon }) {
-  return <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"><Icon className="size-4" /></span>;
+  return <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="size-4" /></span>;
 }
 
 const when = (at: number) => new Date(at).toISOString();

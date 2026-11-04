@@ -1,5 +1,6 @@
 """The kinds of text that are encrypted, the same names as packages/crypto/src/fields.ts. A field's name is
-bound into its ciphertext; names are by meaning, so a value the database copies between tables still opens."""
+bound into its ciphertext; names are by meaning, so a value the database copies between tables still opens. A bound value
+("e2:", crypto.py) also names its owner and the column (and row) it was sealed for."""
 
 SUBJECT = "subject"          # messages.subject, threads.subject, outbox.subject
 PREVIEW = "preview"          # messages.preview, threads.last_message_preview
@@ -13,7 +14,7 @@ INSTRUCTION = "instruction"  # drafts.instruction, drafts.decision
 MARKS = "marks"              # messages.body_marks
 CHOICES = "choices"          # message_ai.reply_choices
 ADDRESS = "address"          # contact_identities.value, messages.sender_address and to_addresses, chat IDs
-NAME = "name"                # contacts.display_name, organizations.name
+NAME = "name"                # contacts.display_name, organizations.name, threads.group_name, labels
 DOMAIN = "domain"            # organizations.domain
 BRIEF = "brief"              # briefs.script, briefs.audio
 TRANSCRIPT = "transcript"    # messages.transcript, meetings.transcript (JSON)
@@ -28,11 +29,17 @@ TASK_NOTES = "task_notes"    # tasks.notes
 TASK_LIST = "task_list"      # tasks.list_name
 MEETING_TITLE = "meeting_title"  # meetings.title
 MEETING_ACTIONS = "meeting_actions"  # meetings.action_items (JSON)
-FILENAME = "filename"        # attachments.filename (a name written by the worker)
+FILENAME = "filename"        # attachments.filename (a name written by the worker), outbox_attachments.filename
 ATTACHMENT_DATA = "attachment_data"  # the bytes of a stored attachment (email, WhatsApp, Instagram)
+OUTBOX_FILE_DATA = "outbox_file_data"  # the bytes of a file you send, sealed in the browser (attachments/<user>/outbox/)
 RECORDING_DATA = "recording_data"    # the bytes of a meeting recording
 EVENT_TITLE = "event_title"          # calendar_events.title
 EVENT_LOCATION = "event_location"    # calendar_events.location
+EVENT_NOTES = "event_notes"          # calendar_events.description: an event's notes
+EVENT_GUESTS = "event_guests"        # calendar_events.attendees: the whole guest list (JSON)
+EVENT_LINK = "event_link"            # calendar_events.conference_url; join_url, meeting_code, online_meeting_id in meetings.provider_meta
+CALENDAR_NAME = "calendar_name"      # calendar_events.calendar_name
+EVENT_FILE = "event_file"            # calendar_events.resource_url: an iCloud event's file on the CalDAV server
 CARD_NAME = "card_name"              # address_book_cards.name
 WRITING_SITUATION = "writing_situation"  # writing_examples.situation
 WRITING_BODY = "writing_body"        # writing_examples.body

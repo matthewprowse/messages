@@ -66,12 +66,18 @@ class VaultTests(unittest.TestCase):
         vault = Vault(KeysDb({"u1": wrapped_row("u1")}), MASTER_B64, False)
         self.assertEqual(vault.seal("u1", SUMMARY, "A summary"), "A summary")
 
-    def test_no_key_yet_writes_plaintext(self):
+    def test_no_key_yet_refuses_to_write_plaintext(self):
+        from ai.vault import KeyUnavailable
+
         db = KeysDb({})
         vault = Vault(db, MASTER_B64, True)
-        self.assertEqual(vault.seal("u2", SUMMARY, "A summary"), "A summary")
-        self.assertEqual(vault.seal("u2", SUMMARY, "Again"), "Again")
+        with self.assertRaises(KeyUnavailable) as raised:
+            vault.seal("u2", SUMMARY, "A summary")
+        self.assertEqual(str(raised.exception), "no_key")
+        with self.assertRaises(KeyUnavailable):
+            vault.seal("u2", SUMMARY, "Again")
         self.assertEqual(db.reads, ["u2"])  # not asked again until MISSING_RECHECK_S has passed
+        self.assertIsNone(vault.seal("u2", SUMMARY, None), "nothing to seal is not a failure")
 
     def test_a_key_that_cannot_be_unwrapped_is_not_written_around(self):
         from ai.vault import KeyUnavailable
@@ -295,7 +301,8 @@ class DraftsDb:
             "examples": [],
             "recent": [{"body_text": enc(BODY, "Cheers, Matt"), "body_html": None}],
             "contact": None,
-            "to_them": [],
+            # They have written to this person before, so similar replies from other conversations may be shown.
+            "to_them": [{"body_text": enc(BODY, "Cheers, Matt"), "body_html": None}],
             "choices": enc(CHOICES, self.choices) if self.choices else None,
         }
 
@@ -379,7 +386,7 @@ class VoiceDrafts(unittest.TestCase):
         self.assertEqual(opened.open("u", DRAFT, written["body"]), "Friday works, I'll bring the keys.")
         drafts._draft({**db.draft})  # the whole job, with its clean-up
         self.assertEqual(db.removed, ["u/drafts/abc.webm"])
-        self.assertIn(("drafts", {"id": "eq.d1"}, {"audio_path": None}), db.updates)
+        self.assertIn(("drafts", {"id": "eq.d1", "user_id": "eq.u"}, {"audio_path": None}), db.updates)
 
     def test_a_recording_that_cannot_be_opened_fails_the_draft(self):
         db, gemini = VoiceDb(b"e1b:\x00\xffKN" + bytes(40)), VoiceGemini()
@@ -485,7 +492,8 @@ class PreDrafts(unittest.TestCase):
     def test_written_and_replaces_older_drafts_as_expired(self):
         db, gemini = self.run_draft({"id": "d2", "for_message_id": "m1"})
         self.assertEqual(len(gemini.prompts), 1)
-        self.assertEqual([p["status"] for t, f, p in db.updates], ["active", "expired"])
+        # The older draft to check and the older live draft are both replaced, as expired.
+        self.assertEqual([(f.get("status"), p["status"]) for t, f, p in db.updates], [("eq.pending", "active"), ("eq.review", "expired"), ("eq.active", "expired")])
 
     def test_dropped_without_the_model_when_a_newer_message_came(self):
         db, gemini = self.run_draft({"id": "d2", "for_message_id": "m0"})
@@ -547,3 +555,41 @@ class EncryptedLearning(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoundVaultTests(unittest.TestCase):
+    """Vault.seal writes values bound to their owner and place once SEAL_BOUND_FIELDS is on, and open_bound, the strict
+    read the Instagram sends and iCloud Reminders writes use, refuses what was not sealed for that column and row."""
+
+    def vault(self, **flags) -> Vault:
+        return Vault(KeysDb({"u1": wrapped_row("u1"), "u2": wrapped_row("u2")}), MASTER_B64, True, **flags)
+
+    def test_bound_values_are_written_only_when_switched_on_and_open_either_way(self):
+        on, off = self.vault(seal_bound=True), self.vault(seal_bound=False)
+        bound = on.seal("u1", BODY, "Hi", "outbox.body", "o1")
+        self.assertTrue(bound.startswith("e2:"))
+        self.assertTrue(off.seal("u1", BODY, "Hi", "outbox.body", "o1").startswith("e1:"))
+        self.assertEqual(off.open("u1", BODY, bound), "Hi")
+        # The same data key under another user does not open it: the owner is part of the value.
+        self.assertEqual(on.open("u2", BODY, bound), "")
+
+    def test_open_bound_refuses_another_place_or_row_plain_text_and_legacy_values_when_required(self):
+        vault = self.vault(seal_bound=True, require_bound=True)
+        good = vault.seal("u1", BODY, "Hi", "outbox.body", "o1")
+        self.assertEqual(vault.open_bound("u1", BODY, good, ["outbox.body"], "o1"), "Hi")
+        for value, row in ((good, "o2"), (vault.seal("u1", BODY, "Hi", "messages.body_text"), "o1"), ("plain", "o1"), (enc(BODY, "Hi"), "o1")):
+            with self.assertRaises(Exception):
+                vault.open_bound("u1", BODY, value, ["outbox.body"], row)
+        lenient = self.vault(seal_bound=True, require_bound=False)
+        self.assertEqual(lenient.open_bound("u1", BODY, enc(BODY, "Old"), ["outbox.body"], "o1"), "Old")
+
+    def test_bound_files_open_only_at_their_place_and_the_sealed_flag_must_agree(self):
+        vault = self.vault(seal_bound=True)
+        sealed = vault.seal_bytes("u1", VOICE_INSTRUCTION, b"audio", "attachments/u1/drafts/d1")
+        self.assertEqual(vault.open_bytes("u1", VOICE_INSTRUCTION, sealed, "attachments/u1/drafts/d1"), b"audio")
+        self.assertIsNone(vault.open_bytes("u1", VOICE_INSTRUCTION, sealed, "attachments/u1/drafts/d2"))
+        self.assertEqual(vault.open_bound_file("u1", VOICE_INSTRUCTION, sealed, "attachments/u1/drafts/d1", True), b"audio")
+        with self.assertRaises(Exception):
+            vault.open_bound_file("u1", VOICE_INSTRUCTION, b"plain", "attachments/u1/drafts/d1")
+        with self.assertRaises(Exception):
+            vault.open_bound_file("u1", VOICE_INSTRUCTION, sealed, "attachments/u1/drafts/d1", False)

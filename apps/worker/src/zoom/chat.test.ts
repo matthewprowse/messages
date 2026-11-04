@@ -12,6 +12,7 @@ const sealer = {
   sealAddress: async (value: string | null) => (value == null ? null : `addr:${value}`),
   addressIndex: async (value: string) => `idx:${value}`,
   chatIndex: async (value: string) => `chat:${value}`,
+  groupIndex: async (value: string) => `group:${value}`,
 };
 const ctx = { selfEmail: "Thandi@konva.co.za" };
 
@@ -34,14 +35,15 @@ test("maps an incoming 1:1 message, matched to its sender by email", async () =>
     chat_index: "chat:pieter@example.co.za",
     is_group: false,
     group_name: null,
+    group_name_index: null,
     resurface: true,
     sent_at: new Date(1_793_008_740_000).toISOString(),
     direction: "inbound",
     is_read: false,
-    sender: { address: "addr:pieter@example.co.za", index: "idx:pieter@example.co.za", display_name: "Pieter van Wyk" },
+    sender: { address: "addr:pieter@example.co.za", index: "idx:pieter@example.co.za", display_name: "sealed:name:Pieter van Wyk", name_rank: 2 },
     sender_address: "addr:pieter@example.co.za",
     sender_index: "idx:pieter@example.co.za",
-    participants: [{ address: "addr:pieter@example.co.za", index: "idx:pieter@example.co.za", display_name: "Pieter van Wyk" }],
+    participants: [{ address: "addr:pieter@example.co.za", index: "idx:pieter@example.co.za", display_name: "sealed:name:Pieter van Wyk", name_rank: 2 }],
     preview: "sealed:preview:Can we move the transfer to Friday?",
     body_text: "sealed:body:Can we move the  transfer\nto Friday?",
     provider_meta: { chat: "addr:pieter@example.co.za", from_me: false },
@@ -64,12 +66,13 @@ test("names the sender in a group's preview, and keeps no participants but the s
   const message: ZoomChatMessage = { id: "msg-3", message: "Bond approved", sender: "lindiwe@bank.co.za", sender_display_name: "Lindiwe Dube", date_time: "2026-10-26T09:58:00Z" };
   const payload = (await chatPayload(message, chatRef(group)!, ctx, sealer, false)) as Record<string, Json>;
   assert.equal(payload.is_group, true);
-  assert.equal(payload.group_name, "Transfers Team");
+  assert.equal(payload.group_name, "sealed:name:Transfers Team");
+  assert.equal(payload.group_name_index, "group:Transfers Team");
   assert.equal(payload.chat_index, "chat:ch-42");
   assert.equal(payload.preview, "sealed:preview:Lindiwe Dube: Bond approved");
   assert.equal(payload.is_read, true); // history arrives read
   assert.deepEqual(payload.participants, []);
-  assert.deepEqual(payload.sender, { address: "addr:lindiwe@bank.co.za", index: "idx:lindiwe@bank.co.za", display_name: "Lindiwe Dube" });
+  assert.deepEqual(payload.sender, { address: "addr:lindiwe@bank.co.za", index: "idx:lindiwe@bank.co.za", display_name: "sealed:name:Lindiwe Dube", name_rank: 2 });
 });
 
 test("lists a message's files by name, and skips one with nothing to show", async () => {

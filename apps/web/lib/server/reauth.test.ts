@@ -21,6 +21,18 @@ test("a password is checked by signing in with it", async () => {
   assert.deepEqual(seen, [["token?grant_type=password", { email: "a@example.com", password: "pw" }]]);
 });
 
+test("a phone or passkey factor also rules out a password or emailed code, and has no code path here", async () => {
+  let calls = 0;
+  const call: AuthCall = async () => { calls++; return { ok: true, json: { id: "c1" } }; };
+  for (const factor_type of ["phone", "webauthn"]) {
+    const other = { email: "a@example.com", factors: [{ id: "f2", factor_type, status: "verified" }] };
+    assert.equal(await verifyProof(call, other, "tok", { method: "password", password: "pw" }), false);
+    assert.equal(await verifyProof(call, other, "tok", { method: "email", code: "123456" }), false);
+    assert.equal(await verifyProof(call, other, "tok", { method: "totp", code: "123456" }), false);
+  }
+  assert.equal(calls, 0);
+});
+
 test("someone with an authenticator app cannot use a password or emailed code instead", async () => {
   let calls = 0;
   const call: AuthCall = async () => { calls++; return { ok: true, json: {} }; };

@@ -551,7 +551,8 @@ class Brief:
             for t in threads:
                 t["summary"] = self.vault.open(user_id, SUMMARY, t.get("summary"))
                 names = [self.vault.open(user_id, NAME, (p.get("contacts") or {}).get("display_name")) for p in t.get("thread_participants") or []]
-                t["_who"] = (t.get("group_name") if t.get("is_group") else None) or next((n for n in names if n), None) or "Someone"
+                group = self.vault.open(user_id, NAME, t.get("group_name")) if t.get("is_group") else None
+                t["_who"] = group or next((n for n in names if n), None) or "Someone"
             waiting, promises, tomorrow, prep = self._v2(user_id, day, end, zone, now, threads)
             prompt = build_prompt(profile.get("display_name") or "", day, zone, events, sections(threads, now), now, task_sections(tasks, day, zone), waiting, promises, tomorrow, prep)
             usage = UsageContext(user_id, "brief")

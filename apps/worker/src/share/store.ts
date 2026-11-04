@@ -36,7 +36,7 @@ export const supabaseStore: ShareStore = {
     const people = must(await db.from("thread_participants").select("contacts(display_name)").eq("thread_id", thread.id), "load chat people");
     const names = await Promise.all(people.map((p) => open(thread.user_id, FIELD.name, p.contacts?.display_name, thread.workspace_id)));
     return {
-      groupName: thread.is_group ? thread.group_name : null,
+      groupName: thread.is_group ? await open(thread.user_id, FIELD.name, thread.group_name, thread.workspace_id) : null,
       contactNames: names.filter((n): n is string => !!n),
       subject: await open(thread.user_id, FIELD.subject, thread.subject, thread.workspace_id),
     };

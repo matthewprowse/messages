@@ -23,10 +23,11 @@ import { errorCode, log } from "../log";
 import { chunks } from "../util";
 import { normAddresses } from "../send/from-address";
 import { finishAction, NotReady } from "../send/actions";
-import { claimReady, markFailed, settleSent, type OutboxRow } from "../send/outbox";
+import { claimReady, markFailed, outboxBody, settleSent, type OutboxRow } from "../send/outbox";
 import { nameFromAddress } from "../ingest/normalize-email";
 import { ownIdentitiesCached } from "../contacts/own";
-import { keysFor, open, openAddresses, seal, sealAddress, sealDomain } from "../vault";
+import { groupNameJson, keysFor, open, openAddresses, seal, sealAddress, sealDomain, sealName } from "../vault";
+import { givenNameRank } from "../contacts/name-rank";
 import { GraphApiError, signInRevoked, type GraphClient, type GraphRequest } from "../microsoft/client";
 import { CALENDAR_SCOPE, CHAT_SCOPE, MEETINGS_SCOPE, TRANSCRIPT_SCOPE } from "../microsoft/oauth";
 import { microsoftFatalDetail, openGraphClient } from "../microsoft/session";
@@ -332,11 +333,13 @@ export class TeamsConnector {
   private async person(keys: UserKeys, email: string, name: string | null) {
     const user = this.account.user_id;
     const domain = companyDomain(email, await ownIdentitiesCached(user));
+    const given = name?.trim() || null;
     return {
       address: await sealAddress(user, email),
       index: await addressIndex(keys, email),
-      display_name: name || nameFromAddress(email),
-      company: domain ? { index: await domainIndex(keys, domain), domain: await sealDomain(user, domain), name: companyNameForDomain(domain) } : null,
+      display_name: await sealName(user, given ?? nameFromAddress(email), { place: "contacts.display_name" }),
+      name_rank: givenNameRank(given),
+      company: domain ? { index: await domainIndex(keys, domain), domain: await sealDomain(user, domain), name: await sealName(user, companyNameForDomain(domain), { place: "organizations.name" }) } : null,
     };
   }
 
@@ -397,7 +400,7 @@ export class TeamsConnector {
       chat_id: await sealAddress(user, chat.id),
       chat_index: index,
       is_group: group,
-      group_name: group ? chat.topic?.trim() || null : null,
+      ...(await groupNameJson(user, group ? chat.topic : null)),
       // A chat you hid in Teams starts archived; a new message brings it back, as in Teams.
       status: history && chat.viewpoint?.isHidden ? "archived" : "inbox",
       resurface: !history && !outbound,
@@ -450,7 +453,12 @@ export class TeamsConnector {
         return;
       }
       thread = { ...found, provider_thread_index: found.provider_thread_index };
-      text = (await open(row.user_id, FIELD.body, row.body)) ?? "";
+      const body = await outboxBody(row);
+      if ("error" in body) {
+        await markFailed(row.id, body.error);
+        return;
+      }
+      text = body.text;
     } catch (err) {
       log.warn("teams send target failed", { account: this.id, outbox: row.id, code: errorCode(err) });
       await markFailed(row.id, "Teams could not be reached, so nothing was sent. Try again.").catch(() => undefined);
@@ -602,7 +610,13 @@ export class TeamsConnector {
       problem = err.status === 403 ? NOT_SHARED : NOT_FOUND;
     }
     const user = this.account.user_id;
-    const meta: TeamsMeetingMeta = { join_url: meeting.joinUrl, online_meeting_id: onlineMeetingId, event_id: meeting.eventId, ical_uid: meeting.icalUid };
+    // The join link, and the online meeting's ID (which names the call's thread), are sealed like a calendar event's link.
+    const meta: TeamsMeetingMeta = {
+      join_url: (await seal(user, FIELD.eventLink, meeting.joinUrl)) ?? undefined,
+      online_meeting_id: await seal(user, FIELD.eventLink, onlineMeetingId),
+      event_id: meeting.eventId,
+      ical_uid: meeting.icalUid,
+    };
     const created = must(
       await db
         .from("meetings")
@@ -650,13 +664,14 @@ export class TeamsConnector {
     if (!transcriptCheckDue(endedAt, now, this.checkedAt.get(row.id))) return;
     this.checkedAt.set(row.id, now);
     const meta = (row.provider_meta ?? {}) as TeamsMeetingMeta;
-    if (!meta.online_meeting_id) {
+    const onlineMeetingId = await open(this.account.user_id, FIELD.eventLink, meta.online_meeting_id);
+    if (!onlineMeetingId) {
       await this.settleMeeting(row.id, { status: "no_transcript", error: NOT_FOUND });
       return;
     }
 
     const client = this.need();
-    const base = `/me/onlineMeetings/${encodeURIComponent(meta.online_meeting_id)}/transcripts`;
+    const base = `/me/onlineMeetings/${encodeURIComponent(onlineMeetingId)}/transcripts`;
     let list: CallTranscript[];
     try {
       list = (await client.request<{ value?: CallTranscript[] }>(base)).value ?? [];

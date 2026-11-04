@@ -1,11 +1,14 @@
 "use client";
 
-// The share history in Settings, What You Share: who covered a person's work chats and which of their chats were exported, by day.
+// The share history in Settings, What You Share: who covered a person's work chats, which of their chats were exported, and
+// which an owner or admin gave themselves access to (thread_assignment_log), by day.
 
 import { useCover, coverState, lastDay } from "@/lib/team-cover";
 import { useAuth } from "@/lib/auth";
 import { useExportedChats } from "@/lib/compliance-export";
 import { useTeam } from "@/lib/team";
+import { useAssignmentLog } from "@/lib/assignment-log";
+import { noticesFor } from "@/lib/assignment-notices";
 import { SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const day = (d: Date | string) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
@@ -18,11 +21,13 @@ export function ShareHistory({ labels }: { labels: Map<string, string> | undefin
   const { periods } = useCover();
   const { state } = useTeam();
   const exported = useExportedChats();
+  const log = useAssignmentLog();
   const me = useAuth().session?.user.id;
   const nameOf = (id: string) => state?.people.find((p) => p.userId === id)?.name || state?.people.find((p) => p.userId === id)?.email || "A former member";
   const covered = (periods ?? []).filter((p) => p.absentId === me);
   const exports = [...(exported?.entries() ?? [])].flatMap(([thread, days]) => days.map((d) => ({ thread, day: d }))).sort((a, b) => b.day.localeCompare(a.day));
-  if (!covered.length && !exports.length) return null;
+  const taken = me && log && state ? noticesFor(log, me, (id) => state.people.find((p) => p.userId === id)?.role) : [];
+  if (!covered.length && !exports.length && !taken.length) return null;
   return (
     <>
       {covered.length > 0 && (
@@ -38,6 +43,19 @@ export function ShareHistory({ labels }: { labels: Map<string, string> | undefin
                 />
               );
             })}
+          </SettingsRows>
+        </SettingsSection>
+      )}
+      {taken.length > 0 && (
+        <SettingsSection level={3} title="Access Taken">
+          <SettingsRows>
+            {taken.slice(0, 20).map((e) => (
+              <SettingsRow
+                key={e.id}
+                title={`${nameOf(e.assigneeId)} gave themselves access`}
+                description={`${e.agentId === me ? labels?.get(e.threadId) || "Your chat" : "A chat assigned to you"}, ${day(e.assignedAt)}`}
+              />
+            ))}
           </SettingsRows>
         </SettingsSection>
       )}

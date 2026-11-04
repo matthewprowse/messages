@@ -54,7 +54,7 @@ class Concurrent(unittest.TestCase):
         drafts.run_once()
         drafts._runner.shutdown(wait=True)
         self.assertEqual(gemini.prompts, [])
-        [failed] = [u for u in db.updates if u[1] == {"id": "eq.d1"} and u[2].get("status") == "failed"]
+        [failed] = [u for u in db.updates if u[1] == {"id": "eq.d1", "user_id": "eq.u"} and u[2].get("status") == "failed"]
         self.assertIn("a lot of drafts", failed[2]["error"])
 
     def test_the_budget_is_read_while_the_context_is(self):

@@ -61,7 +61,13 @@ test("an MP4 recording from Safari converts too", { skip: !hasFfmpeg }, async ()
   assert.equal(seconds(pcm.length), 2);
 });
 
-test("something that is not audio fails the row with a reason", { skip: !hasFfmpeg }, async () => {
+test("something that is not a recording fails the row with a reason, before ffmpeg runs", async () => {
   const out = await prepareVoiceNotes([{ filename: "Voice Note.webm", contentType: "audio/webm", content: Buffer.from("not audio at all"), voiceNote: true }], {});
   assert.ok("error" in out && /could not be prepared/.test(out.error));
+  await assert.rejects(convert(Buffer.from("#EXTM3U\nhttp://169.254.169.254/")), { code: "NOT_AUDIO" });
+});
+
+test("an Ogg recording from Firefox converts too", { skip: !hasFfmpeg }, async () => {
+  const ogg = spawnSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:a", "libopus", "-f", "ogg", "pipe:1"]).stdout;
+  assert.equal(seconds((await convert(ogg)).pcm.length), 2);
 });

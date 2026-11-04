@@ -9,15 +9,20 @@
 //     at most every 10 minutes (it was every 30 seconds during a backfill);
 //   * once a day everything is read and linked as before, the safety net (it was every 6 hours);
 //   * once an hour a bounded batch of finished rows has its review pictures deleted, 3 days after it finished
-//     (company_logos.review_cleared_at, see the migration notes; skipped until that column exists).
+//     (company_logos.review_cleared_at, see the migration notes; skipped until that column exists);
+//   * logos saved before the public bucket move into it a batch per run until none are left, then again daily.
 
 import { allRows, db, must } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { startEvery } from "../backoff";
 import { mapLimit } from "../util";
-import { openAddressRows } from "../vault";
-import { clearReview, gatherCandidates, logoKey, saveJudged, type LogoRow } from "./pipeline";
+import { FIELD } from "@messages/crypto/fields";
+import { companyNameForDomain } from "@messages/email-text/company";
+import { open, openAddressRows } from "../vault";
+import { logoKey } from "./paths";
+import { clearReview, gatherCandidates, saveJudged, type LogoRow } from "./pipeline";
+import { movePublicLogos } from "./public";
 
 const FIRST_RUN_MS = 60_000;
 const POLL_MS = 30_000;
@@ -31,6 +36,8 @@ export const CLEAN_EVERY_MS = 60 * 60_000;
 /** A finished row keeps its review pictures this long. */
 export const REVIEW_KEEP_MS = 3 * 24 * 60 * 60_000;
 const CLEAN_BATCH = 25;
+/** Logos moved to the public bucket per run (each a download, an upload, two updates and a delete). */
+const MOVE_BATCH = 20;
 const RECHECK_MS = 90 * 24 * 60 * 60_000;
 const BATCH = 20;
 /** Companies gathered at once: each is several different servers, and one slow site should not hold up the rest. */
@@ -47,9 +54,11 @@ export interface LogoState {
   watermark: string | null;
   /** Something finished or was queued since the last link, so companies may have a logo to point at. */
   linkDirty: boolean;
+  /** Logos may be left in the private bucket: set by each full read, cleared by a run that moves none. */
+  moving: boolean;
 }
 
-export const newLogoState = (): LogoState => ({ lastFull: 0, lastNewCheck: 0, lastLink: 0, lastClean: 0, watermark: null, linkDirty: false });
+export const newLogoState = (): LogoState => ({ lastFull: 0, lastNewCheck: 0, lastLink: 0, lastClean: 0, watermark: null, linkDirty: false, moving: false });
 
 /** What the enqueue step does now: everything, only organizations newer than the watermark, or nothing. */
 export function enqueueMode(s: LogoState, now: number): "full" | "new" | null {
@@ -75,7 +84,10 @@ async function runCompanyLogos() {
   const now = Date.now();
   const mode = enqueueMode(state, now);
   if (mode) {
-    if (mode === "full") state.lastFull = now;
+    if (mode === "full") {
+      state.lastFull = now;
+      state.moving = true;
+    }
     state.lastNewCheck = now;
     const { added, watermark } = await queueCompaniesSince(mode === "full" ? null : state.watermark);
     if (watermark) state.watermark = watermark;
@@ -92,6 +104,14 @@ async function runCompanyLogos() {
     state.linkDirty = false;
     const linked = await linkOrganizationLogos(link === "without");
     if (linked > 0) log.info("company logos linked", { companies: linked });
+  }
+  if (state.moving) {
+    const moved = await movePublicLogos(MOVE_BATCH).catch((err) => {
+      log.warn("company logo move failed", { code: errorCode(err) });
+      return 0;
+    });
+    if (moved > 0) log.info("company logos moved to the public bucket", { companies: moved });
+    else state.moving = false;
   }
   if (now - state.lastClean >= CLEAN_EVERY_MS) {
     state.lastClean = now;
@@ -151,7 +171,8 @@ export async function queueCompaniesSince(since: string | null): Promise<{ added
   for (const org of orgs) {
     const domain = org.domain?.toLowerCase();
     if (!domain || known.has(domain) || rows.has(domain) || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) continue;
-    rows.set(domain, { domain, name: org.name });
+    // The company's name is sealed with its user's key; the logo queue keeps it readable, as it keeps the domain.
+    rows.set(domain, { domain, name: (await open(org.user_id, FIELD.name, org.name)) || companyNameForDomain(domain) });
   }
   return { added: await queueDomains([...rows.values()]), watermark };
 }

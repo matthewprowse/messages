@@ -1,6 +1,6 @@
 // Prints the test vectors that pin the ciphertext format. Run once; the TS and Python tests check against
 // the saved vectors.json, so a change to the format shows up as a failing test in both languages.
-import { addressKey, chatKey, domainKey } from "../src/addresses";
+import { addressKey, chatKey, domainKey, groupNameKey } from "../src/addresses";
 import { blindIndex, deriveTeamKeys, deriveUserKeys, encryptField, encryptTeamField, teamBlindIndex } from "../src/index";
 import { localWrapper } from "../src/wrap";
 
@@ -20,6 +20,7 @@ const out = {
     ...["Sam@Example.com ", " sam@example.com", "+27 82 416 0503", "27824160503", "+27(82)416-0503", "123456789012@lid", "Sam", "12"].map((value) => ({ kind: "address", value, key: addressKey(value) })),
     ...["27824160503@s.whatsapp.net", "120363025246125486@G.US"].map((value) => ({ kind: "chat", value, key: chatKey(value) })),
     ...["Example.co.za", "@example.co.za", "example.co.za."].map((value) => ({ kind: "domain", value, key: domainKey(value) })),
+    ...["Family Chat", "  Family Chat ", "family chat"].map((value) => ({ kind: "group", value, key: groupNameKey(value) })),
   ],
 };
 // A team's data key and what is sealed under it ("t1:"), with the same fields and values as the user's so a

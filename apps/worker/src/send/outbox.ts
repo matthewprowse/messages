@@ -5,11 +5,13 @@ import { db, failureCode, must, recordEvent, retryWrite } from "../db";
 import { buildNewEmail, buildReply, newMessageId, type OutgoingAttachment, type ReplyInput } from "./compose";
 import type { AttachmentProvider } from "./attachment-rules";
 import { loadAttachmentFiles, waitForAttachments } from "./outbox-attachments";
-import { chooseFrom, fromCandidates, outgoingRecipients, replyToChosen, replyToParticipants } from "./from-address";
+import { chooseFrom, fromCandidates, outgoingRecipients, replyToChosen, replyToParticipants, sendableAliases } from "./from-address";
 import { identitiesMergedFromElsewhere } from "../contacts/merged-identities";
 import { FIELD } from "@messages/crypto/fields";
-import { open, openAddresses, openStrict } from "../vault";
+import { open, openAddresses, openBound } from "../vault";
 import { openOutgoingText } from "./outgoing-text";
+import { openOutboxAddresses, outboxAt, refusalCode, UNVERIFIED } from "./outbox-open";
+import { log } from "../log";
 import { mayUseAccount, replyFor, type ReplyFor } from "./inbox";
 import { dueFilter, isDue } from "./send-after";
 import { flags } from "../flags-db";
@@ -48,21 +50,40 @@ export async function claimReady(row: OutboxRow): Promise<OutboxRow | null> {
   // The row is claimed now, and nothing has gone to a provider yet. A failure while opening it would leave
   // the row in "sending" for good, so it is failed here instead.
   try {
-    // Who it is to and from, opened for sending: the browser stored them encrypted.
-    const opened = await openAddresses(current.user_id, { ...current, status: "sending" });
-    // Cc and Bcc are sealed like To. Opened one by one here, and an unreadable one stays empty so the
-    // send fails rather than going without that person.
-    for (const key of ["cc_addresses", "bcc_addresses"] as const) {
-      opened[key] = await Promise.all((opened[key] ?? []).map(async (a) => (await open(opened.user_id, FIELD.address, a)) ?? ""));
-    }
-    return opened;
-  } catch {
-    await markFailed(current.id, NOTHING_SENT);
+    // Who it is to and from, opened for sending: the browser stored them encrypted, bound to this row (outbox-open.ts).
+    // One that will not open here fails the row: nothing goes to an address moved in from elsewhere, or without a person.
+    return await openOutboxAddresses({ ...current, status: "sending" }, openBound);
+  } catch (err) {
+    await markFailed(current.id, refusedReason(err));
     return null;
   }
 }
 
 const NOTHING_SENT = "Nothing was sent. Try again.";
+
+/**
+ * A claimed row's body opened strictly for sending (bound to this row's body column, outbox-open.ts), or the reason to fail
+ * the row with. For the chat connectors, which send the body alone; email goes through composeOutgoing.
+ */
+export async function outboxBody(row: Pick<OutboxRow, "id" | "user_id" | "body">): Promise<{ text: string } | { error: string }> {
+  try {
+    return { text: (await openBound(row.user_id, FIELD.body, row.body, outboxAt(row.id, "body"))) ?? "" };
+  } catch (err) {
+    return { error: refusedReason(err) };
+  }
+}
+
+/** Codes that mean the row itself is wrong (not a passing outage): it fails for good with UNVERIFIED. */
+const REFUSED = new Set(["plaintext_refused", "legacy_value", "team_value_refused", "sealed_elsewhere", "no_owner", "unreadable"]);
+
+/** The reason to fail a row whose text or addresses would not open: UNVERIFIED for a refusal (logged with its code), else "Try again". */
+export function refusedReason(err: unknown): string {
+  const code = refusalCode(err);
+  // OperationError: WebCrypto's answer to a value altered or sealed under another key, which no retry fixes.
+  const refused = REFUSED.has(code) || (err as { name?: string } | null)?.name === "OperationError";
+  if (refused) log.warn("outbox row refused", { code });
+  return refused ? UNVERIFIED : NOTHING_SENT;
+}
 
 /**
  * Safety net for a send that rejected: a row still in "sending" is failed (only while it is, so a row
@@ -238,7 +259,7 @@ async function replyContext(row: OutboxRow, selfAddresses: Set<string>, explicit
 
 /** The account as it is now. The row a connector started with may predate edits made in the app. */
 export async function freshAccount(accountId: string) {
-  const account = must(await db.from("accounts").select("id, user_id, address, send_addresses").eq("id", accountId).single(), "load send account");
+  const account = must(await db.from("accounts").select("id, user_id, provider, address, send_addresses").eq("id", accountId).single(), "load send account");
   return openAddresses(account.user_id, account);
 }
 
@@ -250,7 +271,8 @@ export type SendAccount = Awaited<ReturnType<typeof freshAccount>>;
  */
 function resolveFrom(row: OutboxRow, account: SendAccount, inboundTo: string[], via: ReplyFor): { address: string } | { error: string } {
   if (!mayUseAccount(account.user_id, row.user_id, via)) return { error: OTHER_ACCOUNT };
-  return chooseFrom({ requested: row.from_address, accountAddress: account.address, sendAddresses: account.send_addresses, inboundTo });
+  // Only aliases the provider vouches for: the list is typed in the app for some providers (from-address.ts).
+  return chooseFrom({ requested: row.from_address, accountAddress: account.address, sendAddresses: sendableAliases(account.provider, account.send_addresses), inboundTo });
 }
 
 const OTHER_ACCOUNT = "This email belongs to another account.";
@@ -377,9 +399,12 @@ export async function composeOutgoing(
   keepBcc = false,
 ): Promise<Outgoing | { error: string }> {
   // What you wrote may be stored encrypted.
-  // Strictly: a body that cannot be decrypted must fail the send, never go out blank.
-  const opened = await openOutgoingText(row, (v) => openStrict(row.user_id, FIELD.body, v), (v) => openStrict(row.user_id, FIELD.subject, v));
-  if (!opened) return { error: NOTHING_SENT };
+  // Strictly: a body that cannot be decrypted, or was sealed for another row, must fail the send, never go out blank.
+  let refusal: unknown = null;
+  const strictly = (field: typeof FIELD.body | typeof FIELD.subject, column: string) => (v: string | null) =>
+    openBound(row.user_id, field, v, outboxAt(row.id, column)).catch((err) => { refusal = err; throw err; });
+  const opened = await openOutgoingText(row, strictly(FIELD.body, "body"), strictly(FIELD.subject, "subject"));
+  if (!opened) return { error: refusedReason(refusal) };
   row = opened;
   // The recipients are checked first: that needs nothing from the database.
   const recipients = outgoingRecipients(row, !!row.thread_id);

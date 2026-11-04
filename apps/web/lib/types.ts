@@ -89,6 +89,10 @@ export interface Message {
   marks?: Emphasis[];
   /** What was said in a WhatsApp voice note, for View Transcript. */
   transcript?: string;
+  /** A voice note the AI worker held back (from a conversation you have never written in) until you reply or ask: Transcribe. */
+  transcriptDeferred?: boolean;
+  /** A held-back voice note you asked to transcribe: queued at the AI worker, shown as Transcribing until it arrives. */
+  transcriptRequested?: boolean;
   /** A WhatsApp message: body is its text as sent, with WhatsApp's formatting markers. */
   whatsapp?: boolean;
   /** The email has an HTML version, which View Original fetches from the provider when opened. */
@@ -140,6 +144,8 @@ export interface Draft {
   feedback?: "up" | "down";
   /** Who the reply should go to when it is not the sender: a lead from a portal enquiry, whose own address is in the email. */
   replyTo?: string;
+  /** Held by the AI worker (status 'review'): it repeats details only the sender gave, so it is checked before use. */
+  review?: boolean;
   generatedAt: string;
 }
 
@@ -193,6 +199,8 @@ export interface Thread {
   /** Konva thinks this personal chat is about work; only its agent sees it (see lib/share.ts). */
   shareSuggestion?: "suggested";
   draft?: Draft;
+  /** A pre-draft held for checking (drafts.status 'review'). Offered beside the live draft, never put in the box on its own. */
+  reviewDraft?: Draft;
   feedback?: "important" | "not_important";
 }
 

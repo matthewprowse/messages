@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { emailMarks, mapAttachment, patchMessage, whatsappExtras } from "./map-message";
+import { emailMarks, mapAttachment, patchMessage, transcriptFlags, whatsappExtras } from "./map-message";
 import type { Message } from "../types";
 
 test("whatsapp extras keep a quote with text, drop an empty one, and only known receipts", () => {
@@ -45,6 +45,18 @@ test("a chat message takes new text and reactions, and an untouched one is retur
 
 test("a voice note transcript written later is added", () => {
   assert.equal(patchMessage(held(), { transcript: "hello" }).transcript, "hello");
+});
+
+test("a held voice note offers Transcribe, then shows it is queued once asked, until the transcript arrives", () => {
+  assert.deepEqual(transcriptFlags("deferred"), { transcriptDeferred: true, transcriptRequested: undefined });
+  assert.deepEqual(transcriptFlags("requested"), { transcriptDeferred: undefined, transcriptRequested: true });
+  assert.deepEqual(transcriptFlags(null), { transcriptDeferred: undefined, transcriptRequested: undefined });
+  const asked = patchMessage(held({ transcriptDeferred: true }), { transcript_status: "requested" });
+  assert.equal(asked.transcriptRequested, true);
+  assert.equal(asked.transcriptDeferred, undefined);
+  const done = patchMessage(asked, { transcript: "hello", transcript_status: "done" });
+  assert.equal(done.transcriptRequested, undefined);
+  assert.equal(done.transcript, "hello");
 });
 
 test("a missed call and a poll with votes come through provider_meta", () => {

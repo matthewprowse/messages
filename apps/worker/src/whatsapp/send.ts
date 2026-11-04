@@ -5,12 +5,10 @@
 // apart, with "typing" shown for a realistic time first and a short pause between the parts of one message.
 
 import type { AnyMessageContent, WAMessage, WASocket } from "baileys";
-import { FIELD } from "@messages/crypto/fields";
 import { sleep } from "../backoff";
 import { errorCode, log } from "../log";
-import { claimReady, markFailed, settleSent, type OutboxRow } from "../send/outbox";
+import { claimReady, markFailed, outboxBody, settleSent, type OutboxRow } from "../send/outbox";
 import { loadAttachmentFiles } from "../send/outbox-attachments";
-import { open } from "../vault";
 import { outgoingMessages, partText } from "./outgoing";
 import type { AccountCtx } from "./person";
 import { holdRow, isColdChat, recentSends, stampSend } from "./send-limits";
@@ -99,7 +97,12 @@ export async function sendQueued(
       await markFailed(row.id, ready.error);
       return;
     }
-    parts = outgoingMessages((await open(row.user_id, FIELD.body, row.body)) ?? "", ready);
+    const body = await outboxBody(row);
+    if ("error" in body) {
+      await markFailed(row.id, body.error);
+      return;
+    }
+    parts = outgoingMessages(body.text, ready);
   } catch (err) {
     log.warn("whatsapp attachments failed", { account: ctx.accountId, outbox: row.id, code: errorCode(err) });
     await markFailed(row.id, "The attachments could not be read. Try again.").catch(() => undefined);

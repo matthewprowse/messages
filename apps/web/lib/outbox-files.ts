@@ -1,8 +1,11 @@
-// Files attached to a message you send. They are uploaded to the private "attachments" bucket first, at
-// "<user id>/outbox/<uuid>/<filename>", then the outbox row is queued with attachment_count, then one
-// outbox_attachments row is added per file. The worker sends once it sees every file.
-// This module has no Supabase import so its helpers can be unit tested.
+// Files attached to a message you send. Each is sealed in the browser (sealOutboxBytes, bound to its path) and uploaded
+// to the private "attachments" bucket first, at "<user id>/outbox/<uuid>/file" (no real name in the path), then the outbox
+// row is queued with attachment_count, then one outbox_attachments row is added per file with its name sealed for that
+// row and file (outbox-places.ts). The worker
+// opens and sends once it sees every file. This module has no Supabase import so its helpers can be unit tested.
 
+import { SEALED_OVERHEAD_BYTES } from "@messages/crypto";
+import { FIELD, type Field } from "@messages/crypto/fields";
 import type { Attachment, Provider } from "./types";
 
 export const BUCKET = "attachments";
@@ -16,8 +19,9 @@ export const OUTBOX_LIMITS: Record<AttachProvider, { totalBytes?: number; perFil
   icloud: { totalBytes: 20 * MB, message: "iCloud Mail allows up to 20 MB per email. Attachments grow by about a third when sent." },
   gmail: { totalBytes: 25 * MB, message: "Gmail allows up to 25 MB per email. Attachments grow by about a third when sent." },
   outlook: { totalBytes: 20 * MB, message: "Outlook allows up to 20 MB per email. Attachments grow by about a third when sent." },
-  // WhatsApp itself takes 100 MB, but uploads go through Supabase Storage, whose Free plan stops at 50 MB.
-  whatsapp: { perFileBytes: 50 * MB, message: "WhatsApp files can be up to 50 MB each here." },
+  // WhatsApp itself takes 100 MB, but uploads go through Supabase Storage, whose Free plan stops at 50 MB, and the
+  // sealed upload is a few bytes larger than the file.
+  whatsapp: { perFileBytes: 50 * MB - SEALED_OVERHEAD_BYTES, message: "WhatsApp files can be up to 50 MB each here." },
   linkedin: { perFileBytes: 20 * MB, message: "LinkedIn files can be up to 20 MB each here." },
   // Instagram direct messages take photos and videos only; the worker says so for any other file.
   instagram: { perFileBytes: 25 * MB, message: "Instagram photos and videos can be up to 25 MB each here." },
@@ -79,26 +83,25 @@ export function displayName(name: string): string {
   return capLength(clean, 255) || "Attachment";
 }
 
-/**
- * The name used in the storage path. Supabase Storage only accepts a limited set of characters in object
- * names, so accents are dropped and anything else outside letters, digits and a few marks becomes "_".
- */
-export function storageName(name: string): string {
-  const [stem, ext] = splitExtension(displayName(name));
-  const ascii = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
-  let safe = ascii(stem)
-    .replace(/[^A-Za-z0-9._()\- ]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/ +/g, " ")
-    .replace(/^[-._ ]+|[-._ ]+$/g, "");
-  if (!/[A-Za-z0-9]/.test(safe)) safe = "file";
-  const extension = ascii(ext.slice(1)).replace(/[^A-Za-z0-9]/g, "");
-  return capLength(extension ? `${safe}.${extension}` : safe, 100);
+/** The object name every outbox upload has. The real name is sealed in outbox_attachments.filename, never in the path. */
+export const OUTBOX_OBJECT_NAME = "file";
+
+/** "<user id>/outbox/<file id>/file", the only form the storage and table policies allow for a new upload. */
+export function outboxPath(userId: string, fileId: string): string {
+  return `${userId}/outbox/${fileId}/${OUTBOX_OBJECT_NAME}`;
 }
 
-/** "<user id>/outbox/<file id>/<safe name>", the folder the storage and table policies allow. */
-export function outboxPath(userId: string, fileId: string, name: string): string {
-  return `${userId}/outbox/${fileId}/${storageName(name)}`;
+/** Seals a file's bytes for one field: lib/vault.ts sealBytesWith with the user's keys and the file's place, or a test's. */
+export type BytesSealer = (field: Field, bytes: Uint8Array<ArrayBuffer>) => Promise<Uint8Array<ArrayBuffer>>;
+
+/**
+ * A file's bytes sealed with the user's key (FIELD.outboxFileData, bound to its storage path once bound values are on),
+ * as the opaque blob that is uploaded. Always sealed, like note files: the worker refuses a plain upload while
+ * encryption is on.
+ */
+export async function sealOutboxBytes(file: Blob, seal: BytesSealer): Promise<Blob> {
+  const sealed = await seal(FIELD.outboxFileData, new Uint8Array(await file.arrayBuffer()));
+  return new Blob([sealed], { type: "application/octet-stream" });
 }
 
 /** The upload address for a path, each segment encoded. */
@@ -181,6 +184,7 @@ export function shouldTakePastedFiles(types: readonly string[], fileCount: numbe
 /** A file uploaded and ready to be listed on an outbox row. */
 export interface OutboxUpload {
   path: string;
+  /** The name as the recipient sees it: plain here, sealed only in the row written (app-store/compose.ts). */
   filename: string;
   mimeType: string;
   size: number;
@@ -188,9 +192,9 @@ export interface OutboxUpload {
   voiceNote?: boolean;
 }
 
-/** The attachment tiles an optimistic sent bubble shows, read from the files already uploaded. */
+/** The attachment tiles an optimistic sent bubble shows, read from the files already uploaded (sealed, so opened in the browser). */
 export function pendingAttachments(files: OutboxUpload[]): Attachment[] {
-  return files.map((f) => ({ id: `outbox:${f.path}`, name: f.filename, kind: kindOf(f.mimeType), size: formatBytes(f.size), path: f.path }));
+  return files.map((f) => ({ id: `outbox:${f.path}`, name: f.filename, kind: kindOf(f.mimeType), size: formatBytes(f.size), path: f.path, sealed: true }));
 }
 
 /** The outbox_attachments rows for an outbox row, in the order the files were added. */

@@ -1,12 +1,19 @@
-// Photos and attachments live in private buckets, so each needs a short-lived signed link. Links asked
-// for in the same tick (a grid of thumbnails, a list of avatars) go out as one request per bucket, and
-// a link is handed out again while it has enough time left. Cached in memory and in sessionStorage.
+// Photos and attachments live in private buckets, so each needs a signed link. Links asked for in the same tick (a
+// grid of thumbnails, a list of avatars) go out as one request per bucket, and a link is handed out again while it has
+// enough time left. Cached in memory and in localStorage, so an installed app keeps the same address for a picture
+// across a day of launches and the browser's HTTP cache serves it instead of downloading it again.
+//
+// A signed link is a bearer address to one of the signed-in user's own files (a sealed file is ciphertext), valid for
+// LINK_SECONDS. In localStorage they outlive a closed app for that long, as the open app's always could: they are stored
+// with the user's id, read back only for that user, and wiped on sign-out and when a different user signs in.
 
 import { supabase } from "../supabase";
 import { fresh, keyOf, type Entry } from "./cache-rules";
+import { readStoredLinks, storedLinksForm } from "./stored-links";
 import { thumbCache } from "./thumb-store";
 
-const LINK_SECONDS = 60 * 60;
+/** A day: a link, and so the browser's cached copy of its picture, is reused across a day of launches. */
+const LINK_SECONDS = 24 * 60 * 60;
 /** A link made for a download is only needed for the click that follows, so it lives five minutes. */
 const DOWNLOAD_SECONDS = 5 * 60;
 /** Small pictures for grid tiles, cut by Supabase Storage so a tile does not download the original. */
@@ -14,6 +21,10 @@ const THUMB_TRANSFORM = { width: 256, resize: "cover" as const };
 const THUMB_PARALLEL = 6;
 const STORE_KEY = "konva:signed-urls";
 const STORE_MAX = 1500;
+/** Writing the stored cache stringifies up to STORE_MAX links, so it happens at most this often, in idle time. */
+const SAVE_EVERY_MS = 5_000;
+/** How long a due write may wait for the browser to be idle before it runs anyway. */
+const SAVE_IDLE_WAIT_MS = 2_000;
 const MAX_PER_REQUEST = 100;
 const RETRY_FAILED_MS = 60 * 1000;
 /** Default time a cached link must still have left, enough for a thumbnail or avatar to load. */
@@ -27,39 +38,74 @@ const cache = new Map<string, Entry>();
 const waiting = new Map<string, Map<string, ((url: string | null) => void)[]>>(); // bucket, then path
 let scheduled = false;
 
-// Links are also kept in sessionStorage with their expiry, so a reload or a second tab does not ask for
-// every visible link again. It can be missing or full, so every use is guarded and optional.
+// Links are also kept in localStorage with their expiry and their user, so a reload, a second tab or the next launch
+// does not ask for every visible link again. It can be missing or full, so every use is guarded and optional.
 let hydrated = false;
+let flagsRead = false;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let saveIdle: number | undefined;
+/** Links came back since the last write. */
+let dirty = false;
+/** The signed-in user the cache belongs to: null until the session is known, and while signed out. */
+let owner: string | null = null;
 
 function hydrate() {
   if (hydrated || typeof window === "undefined") return;
+  if (!flagsRead) {
+    flagsRead = true;
+    try {
+      transformsBroken = window.sessionStorage.getItem(`${STORE_KEY}:no-transforms`) === "1";
+    } catch {
+      // Storage unavailable: carry on without it.
+    }
+  }
+  // Stored links are read back only once it is known whose they may be. Supabase reads the session before the app
+  // shows anything signed, so in practice this is the first call.
+  if (!owner) return;
   hydrated = true;
   try {
-    const stored = JSON.parse(window.sessionStorage.getItem(STORE_KEY) ?? "{}") as Record<string, [string, number]>;
-    const now = Date.now();
-    for (const [key, [url, expires]] of Object.entries(stored)) {
-      if (typeof url !== "string" || typeof expires !== "number" || expires - now <= MIN_LEFT_MS) continue;
-      cache.set(key, { url: Promise.resolve(url), expires, value: url });
+    for (const [key, url, expires] of readStoredLinks(window.localStorage.getItem(STORE_KEY), owner, Date.now(), MIN_LEFT_MS)) {
+      if (!cache.has(key)) cache.set(key, { url: Promise.resolve(url), expires, value: url });
     }
-    transformsBroken = window.sessionStorage.getItem(`${STORE_KEY}:no-transforms`) === "1";
   } catch {
     // Storage unavailable: carry on without it.
   }
 }
 
+function save() {
+  if (!dirty || !owner || typeof window === "undefined") return;
+  dirty = false;
+  try {
+    window.localStorage.setItem(STORE_KEY, storedLinksForm(cache, owner, Date.now(), MIN_LEFT_MS, STORE_MAX));
+  } catch {
+    // Full or blocked: the in-memory cache still works.
+  }
+}
+
+function cancelSave() {
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  if (saveIdle !== undefined) window.cancelIdleCallback?.(saveIdle);
+  saveIdle = undefined;
+}
+
+// Links come back in bursts as a list scrolls: one write per SAVE_EVERY_MS at most, when the browser is idle. Safari has
+// no requestIdleCallback, so there it writes when the wait ends.
 function saveSoon() {
-  if (typeof window === "undefined" || saveTimer) return;
+  dirty = true;
+  if (typeof window === "undefined" || saveTimer || saveIdle !== undefined) return;
   saveTimer = setTimeout(() => {
     saveTimer = undefined;
-    try {
-      const now = Date.now();
-      const live = [...cache].filter(([, e]) => e.value && e.expires - now > MIN_LEFT_MS).slice(-STORE_MAX);
-      window.sessionStorage.setItem(STORE_KEY, JSON.stringify(Object.fromEntries(live.map(([k, e]) => [k, [e.value, e.expires]]))));
-    } catch {
-      // Full or blocked: the in-memory cache still works.
-    }
-  }, 1000);
+    if (typeof window.requestIdleCallback !== "function") return save();
+    saveIdle = window.requestIdleCallback(() => { saveIdle = undefined; save(); }, { timeout: SAVE_IDLE_WAIT_MS });
+  }, SAVE_EVERY_MS);
+}
+
+if (typeof window !== "undefined") {
+  // An installed app is usually closed from the app switcher after it is hidden: write what is waiting while it can.
+  const saveNow = () => { cancelSave(); save(); };
+  window.addEventListener("pagehide", saveNow);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveNow(); });
 }
 
 // Thumbnails are cut by Storage image transforms. If the project does not support them, the first few
@@ -94,6 +140,8 @@ async function ask(bucket: string, paths: string[]): Promise<Map<string, string>
 let thumbRunning = 0;
 const thumbQueue: (() => void)[] = [];
 
+// One request per thumbnail: Storage signs a resized copy only one path at a time (the batch endpoint takes no
+// transform, and the transform is part of what the token signs). They are cached and stored like any other link.
 async function signThumb(bucket: string, path: string): Promise<string | null> {
   if (thumbRunning >= THUMB_PARALLEL) await new Promise<void>((resolve) => thumbQueue.push(resolve));
   thumbRunning++;
@@ -154,9 +202,11 @@ export function signedUrl(bucket: string, path: string, minLeftMs = MIN_LEFT_MS,
   void entry.url.then((url) => {
     entry.value = url;
     if (!url) entry.expires = Date.now() + RETRY_FAILED_MS;
-    else saveSoon();
+    else if (cache.get(key) === entry) saveSoon();
   });
   sweepIfDue();
+  // Moved to the end, so the stored cache (capped to the newest) keeps the links in use.
+  cache.delete(key);
   cache.set(key, entry);
   return entry.url;
 }
@@ -183,23 +233,33 @@ function sweepIfDue() {
 }
 
 /**
- * Forgets every signed link and opened picture, in memory and in sessionStorage. Signing out calls it: the links are
- * bearer URLs for the last person's files, and a tab left open must not hand them to the next one.
+ * Forgets every signed link and opened picture, in memory and in localStorage. Signing out calls it, and so does a
+ * different user signing in: the links are bearer URLs for the last person's files, and a device or tab left signed in
+ * must not hand them to the next one.
  */
 export function clearSignedUrls() {
   cache.clear();
   waiting.clear();
-  clearTimeout(saveTimer);
-  saveTimer = undefined;
+  dirty = false;
   hydrated = true; // nothing stored is read back after this
   thumbCache.clear();
   if (typeof window === "undefined") return;
+  cancelSave();
   try {
-    window.sessionStorage.removeItem(STORE_KEY);
+    window.localStorage.removeItem(STORE_KEY);
   } catch {
     // Storage unavailable: there was nothing kept there.
   }
 }
+
+// Whose links the cache holds. Signing out is also cleared by the callers of clearSignedUrls; a session for a
+// different user (signed in from another tab while this one was open) is caught only here.
+supabase.auth.onAuthStateChange((_event, session) => {
+  const user = session?.user.id ?? null;
+  if (user === owner) return;
+  if (owner !== null) clearSignedUrls();
+  owner = user;
+});
 
 /** A link already in hand, so a remounted image shows at once instead of flashing a placeholder. */
 export function cachedUrl(bucket: string, path: string, thumb: boolean): string | null | undefined {

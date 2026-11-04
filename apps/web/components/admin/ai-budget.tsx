@@ -124,14 +124,15 @@ export function AiBudget({ version, onBusy }: { version: number; onBusy: (busy: 
         />
       </Card>
 
-      <Card title="Monthly Shares" action={<span className={sumOk ? "shrink-0 text-sm tabular-nums" : "shrink-0 text-sm tabular-nums text-destructive"}>{Number.isFinite(sum) ? `${Math.round(sum * 10) / 10}% Of 100%` : "Not A Number"}</span>}>
+      <Card title="Budget Split By Feature" action={<span className={sumOk ? "shrink-0 text-sm tabular-nums" : "shrink-0 text-sm tabular-nums text-destructive"}>{Number.isFinite(sum) ? `${Math.round(sum * 10) / 10}% Of 100%` : "Not A Number"}</span>}>
         <Separated>
           {AI_FEATURES.map((f) => (
             <Row
               key={f.key}
               lead={<IconCircle icon={Sparkles} />}
               title={f.label}
-              detail={Number.isFinite(pct(f.key)) && total > 0 ? `Up To ${money((total * pct(f.key)) / 100)} A Month` : f.note}
+              meta={Number.isFinite(pct(f.key)) && total > 0 ? `Up To ${money((total * pct(f.key)) / 100)} A Month` : undefined}
+              detail={<span title={f.note}>{f.note}</span>}
               end={
                 <>
                   <Switch aria-label={`Weekly limit on ${f.label}`} checked={form.weekly.includes(f.key)} onCheckedChange={(on) => set({ weekly: on ? [...form.weekly, f.key] : form.weekly.filter((k) => k !== f.key) })} />

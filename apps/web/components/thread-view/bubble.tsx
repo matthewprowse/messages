@@ -16,6 +16,7 @@ import { InviteCard } from "@/components/invite-card";
 import { MessageBody, hasFullText } from "@/components/message-body";
 import { VoiceNote } from "@/components/media-player";
 import { askVoiceReply } from "@/lib/voice-reply";
+import { requestTranscription } from "@/lib/voice-transcribe";
 import { ScheduledLine } from "@/components/thread-view/scheduled-line";
 import { CallLine } from "@/components/thread-view/call-line";
 import { DeletedNote, EditedMark } from "@/components/thread-view/message-history";
@@ -47,6 +48,13 @@ export interface BubbleProps extends BubbleHandlers {
   quotedId?: string;
 }
 
+/** Asks for a held-back voice note's transcript. Resolves to false (after a toast) when asking failed. */
+async function transcribe(messageId: string): Promise<boolean> {
+  const problem = await requestTranscription(messageId);
+  if (problem) toast.error(problem);
+  return !problem;
+}
+
 export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderContact, whatsapp, flash, quotedId, nameOf, onJump, onReply, onReact, onOpen, onRetry, onDismiss }: BubbleProps) {
   const touch = useTouchReveal();
   const me = m.from === "me";
@@ -71,7 +79,7 @@ export const Bubble = memo(function Bubble({ m, showMeta, seen, sender, senderCo
               isSticker(a) && a.path
                 ? <StickerImage key={a.id} attachment={a} onOpen={() => onOpen(a)} />
                 : a.kind === "audio"
-                  ? <VoiceNote key={a.id} attachment={a} me={me} transcript={m.transcript} onReplyWithPoints={!me && !m.sendState ? () => askVoiceReply(m.threadId) : undefined} />
+                  ? <VoiceNote key={a.id} attachment={a} me={me} transcript={m.transcript} onReplyWithPoints={!me && !m.sendState ? () => askVoiceReply(m.threadId) : undefined} onTranscribe={m.transcriptDeferred ? () => transcribe(m.id) : undefined} transcribing={m.transcriptRequested} />
                   : <AttachmentTile key={a.id} attachment={a} onOpen={() => onOpen(a)} showName={!(whatsapp && a.kind === "image")} />,
             )}
           </div>

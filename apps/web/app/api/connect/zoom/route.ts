@@ -2,7 +2,7 @@
 // short-lived encrypted cookie, which the callback reads. The refresh token never reaches the browser.
 
 import { randomBytes } from "node:crypto";
-import { accountsReady, sealJson } from "@/lib/server/accounts";
+import { accountsReady, sealHandoff } from "@/lib/server/accounts";
 import { pkce } from "@/lib/server/google";
 import { authUrl, zoomReady } from "@/lib/server/zoom";
 import { appOrigin, fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
@@ -25,12 +25,15 @@ export async function POST(request: Request) {
   const signIn: ZoomSignIn = { userId: user.id, state, verifier, expires: Date.now() + 10 * 60_000 };
   const url = authUrl({ redirectUri: `${appOrigin(request)}/api/connect/zoom/callback`, state, challenge });
 
+  // Sealed under the person's own key (lib/server/handoff.ts), which can be a KMS call.
+  const sealed = await sealHandoff(signIn, "zoom_connect").catch(() => null);
+  if (!sealed) return fail(500, "Could not start the sign-in. Try again.");
   const secure = appOrigin(request).startsWith("https:") ? "; Secure" : "";
   return Response.json({ url }, {
     headers: {
       ...noStore,
       // Lax, so it comes back on Zoom's top-level redirect to the callback.
-      "Set-Cookie": `${ZOOM_COOKIE}=${sealJson(signIn)}; Path=/api/connect/zoom; Max-Age=600; HttpOnly; SameSite=Lax${secure}`,
+      "Set-Cookie": `${ZOOM_COOKIE}=${sealed}; Path=/api/connect/zoom; Max-Age=600; HttpOnly; SameSite=Lax${secure}`,
     },
   });
 }

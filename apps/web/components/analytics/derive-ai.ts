@@ -120,7 +120,8 @@ export function aiReport(s: Summary, days: number): AiReport {
   const plays = count(v.named("brief_play"));
   const audio = v.named("audio_played");
   const calls = v.named("ai_call");
-  const transcribe = calls.filter((g) => str(g, "feature") === "transcribe");
+  // Voice notes are billed to voice_notes since 20261124120000; older calls (and meetings) are under transcribe.
+  const transcribe = calls.filter((g) => str(g, "feature") === "transcribe" || str(g, "feature") === "voice_notes");
   const failedOf = (gs: SummaryGroup[]) => count(gs.filter((g) => !flag(g, "ok")));
   const opened = s.summaries.opened;
   const callsBefore = b.named("ai_call");

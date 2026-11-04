@@ -1,27 +1,33 @@
-// Files sent with an outbox row. The app uploads them to the private "attachments" bucket at
-// "<user id>/outbox/<uuid>/<filename>", inserts the outbox row with attachment_count, then adds one
-// outbox_attachments row per file. The worker waits for those rows before it claims the outbox row:
-// the app can add them only while the row is still queued.
+// Files sent with an outbox row. The app seals each file with the user's key and uploads it to the private
+// "attachments" bucket at "<user id>/outbox/<uuid>/file", inserts the outbox row with attachment_count, then adds one
+// outbox_attachments row per file with its name sealed. The worker waits for those rows before it claims the outbox
+// row (the app can add them only while the row is still queued), and opens the bytes and names just before sending,
+// strictly: each must have been sealed for its own path and row (attachment-rules.ts). Files uploaded plain under their
+// own name, before sealing began, are read only while encryption is off.
 
 import { db, must } from "../db";
-import { log, errorCode } from "../log";
-import { sleep, startEvery } from "../backoff";
+import { sleep } from "../backoff";
 import { ATTACHMENTS_BUCKET, storageError, storageStatus } from "../storage";
 import type { OutgoingAttachment } from "./compose";
+import { keysFor } from "../vault";
+import { env } from "../env";
 import {
   ATTACHMENT_WAIT_MS,
   ATTACHMENTS_CHANGED,
   ATTACHMENTS_MISSING,
+  ATTACHMENTS_UNREADABLE,
   NOT_UPLOADED,
   attachmentProgress,
+  leastPlainBytes,
   limitError,
+  openOutboxFile,
+  openOutboxName,
   ownOutboxPath,
   safeFilename,
   safeMimeType,
   storageUrlPath,
   type AttachmentProvider,
 } from "./attachment-rules";
-import { removableOutboxPath } from "./cleanup-rules";
 
 const POLL_MS = 1_000;
 
@@ -84,7 +90,8 @@ export async function loadAttachmentFiles(row: OutboxFiles, provider: Attachment
   const declared = limitError(provider, rows.map((a) => a.size_bytes));
   if (declared) return { error: declared };
 
-  // The sizes the app recorded can be wrong, so the stored sizes are checked before anything is downloaded.
+  // The sizes the app recorded can be wrong, so the stored sizes are checked before anything is downloaded. A sealed
+  // object carries a few bytes more than its file, so only what it surely holds is counted here.
   const stored = await Promise.all(
     rows.map(async (a): Promise<number | { error: string }> => {
       const { data, error } = await db.storage.from(ATTACHMENTS_BUCKET).info(storageUrlPath(a.storage_path));
@@ -95,17 +102,22 @@ export async function loadAttachmentFiles(row: OutboxFiles, provider: Attachment
   );
   const unreadable = stored.find((s): s is { error: string } => typeof s !== "number");
   if (unreadable) return unreadable;
-  const real = limitError(provider, stored as number[]);
+  const real = limitError(provider, (stored as number[]).map(leastPlainBytes));
   if (real) return { error: real };
 
   // Downloaded together: the total is already within the provider's limit.
+  const keys = () => keysFor(row.user_id);
+  const rule = { sealed: env.encryptContent, legacy: !env.requireBoundFields };
   const downloaded = await Promise.all(
     rows.map(async (a): Promise<OutgoingAttachment | { error: string }> => {
       const { data, error } = await db.storage.from(ATTACHMENTS_BUCKET).download(storageUrlPath(a.storage_path));
       if (error || !data) return storageFailure(error);
-      const content = Buffer.from(await data.arrayBuffer());
+      const opened = await openOutboxFile(new Uint8Array(await data.arrayBuffer()), keys, a.storage_path, rule);
+      const filename = await openOutboxName(a.filename, keys, row.id, a.storage_path, rule);
+      if (!opened || filename === null) return { error: ATTACHMENTS_UNREADABLE };
+      const content = Buffer.from(opened.buffer, opened.byteOffset, opened.byteLength);
       if (content.length === 0) return { error: ATTACHMENTS_MISSING };
-      const file: OutgoingAttachment = { filename: safeFilename(a.filename), contentType: safeMimeType(a.mime_type), content };
+      const file: OutgoingAttachment = { filename: safeFilename(filename), contentType: safeMimeType(a.mime_type), content };
       if (a.voice_note === true && provider === "whatsapp") file.voiceNote = true;
       return file;
     }),
@@ -135,55 +147,4 @@ export async function withAttachmentSlot<T>(row: { attachment_count: number }, r
     fileSends--;
     waitingForSlot.shift()?.();
   }
-}
-
-const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
-const CLEANUP_EVERY_MS = 24 * 60 * 60 * 1000;
-const CLEANUP_FIRST_MS = 60_000;
-const CLEANUP_BATCH = 100;
-
-/**
- * Removes the uploaded files of sent or failed outbox rows whose file was added more than a week ago
- * (filtered on the attachment's created_at), with their file rows. A sent email keeps its own stored
- * copy of each file. Returns how many files were removed.
- */
-async function cleanupOutboxFiles(): Promise<number> {
-  const cutoff = new Date(Date.now() - KEEP_MS).toISOString();
-  let removed = 0;
-  // Rows whose path is not ours to remove are left alone (rows and object both) and left out of the next read, so the loop ends.
-  const skipped: string[] = [];
-  for (;;) {
-    let query = db
-      .from("outbox_attachments")
-      .select("id, user_id, storage_path, outbox!inner(status)")
-      .lt("created_at", cutoff)
-      .in("outbox.status", ["sent", "failed"]);
-    if (skipped.length) query = query.not("id", "in", `(${skipped.join(",")})`);
-    const rows = must(await query.limit(CLEANUP_BATCH), "load old outbox attachments");
-    if (rows.length === 0) break;
-    const ours = rows.filter((r) => removableOutboxPath(r.user_id, r.storage_path));
-    for (const r of rows) if (!ours.includes(r)) skipped.push(r.id);
-    if (ours.length < rows.length) log.warn("outbox files left in place", { skipped: skipped.length });
-    if (ours.length) {
-      const { error } = await db.storage.from(ATTACHMENTS_BUCKET).remove(ours.map((r) => r.storage_path));
-      if (error) throw storageError("remove outbox files", error);
-      must(await db.from("outbox_attachments").delete().in("id", ours.map((r) => r.id)), "delete old outbox attachments");
-      removed += ours.length;
-    }
-    if (rows.length < CLEANUP_BATCH) break;
-  }
-  return removed;
-}
-
-/** Runs the cleanup a minute after startup, then once a day. */
-export function startOutboxCleanup() {
-  startEvery(
-    CLEANUP_FIRST_MS,
-    CLEANUP_EVERY_MS,
-    async () => {
-      const removed = await cleanupOutboxFiles();
-      if (removed > 0) log.info("outbox files removed", { removed });
-    },
-    (err) => log.warn("outbox cleanup failed", { code: errorCode(err) }),
-  );
 }

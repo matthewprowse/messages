@@ -2,7 +2,7 @@
 // encrypted with the Zoom account in the shape the worker reads (apps/worker/src/zoom/oauth.ts,
 // ZoomCredentials). Then back to Settings, with ?connected=zoom or ?connect_error=<reason>.
 
-import { ensureProfile, openJson, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
+import { ensureProfile, openHandoff, saveAccountRow, saveCredentials } from "@/lib/server/accounts";
 import { CHAT_SCOPES, RECORDINGS_SCOPE, ZoomError, exchangeCode, zoomUser } from "@/lib/server/zoom";
 import { appOrigin } from "@/lib/server/request";
 import { ZOOM_COOKIE, ZOOM_RETURN, type ZoomSignIn } from "../shared";
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const origin = appOrigin(request);
   const params = new URL(request.url).searchParams;
-  const signIn = readSignIn(request);
+  const signIn = await readSignIn(request);
   const done = (query: string) =>
     new Response(null, {
       status: 303,
@@ -41,11 +41,11 @@ export async function GET(request: Request) {
   }
 }
 
-function readSignIn(request: Request): ZoomSignIn | null {
+async function readSignIn(request: Request): Promise<ZoomSignIn | null> {
   const raw = request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${ZOOM_COOKIE}=`))?.slice(ZOOM_COOKIE.length + 1);
   if (!raw) return null;
   try {
-    return openJson<ZoomSignIn>(raw);
+    return await openHandoff<ZoomSignIn>(raw, "zoom_connect");
   } catch {
     return null;
   }

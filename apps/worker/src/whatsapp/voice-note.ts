@@ -6,6 +6,7 @@
 import { spawn } from "node:child_process";
 import type { OutgoingAttachment } from "../send/compose";
 import { log } from "../log";
+import { audioFormat, ffmpegEnv, inputArgs } from "./ffmpeg-input";
 import type { WhatsAppFile } from "./outgoing";
 
 /** Samples a second in the copy the length and waveform are read from. */
@@ -14,6 +15,10 @@ const PCM_RATE = 8000;
 const BARS = 64;
 /** Longer than any voice note takes to convert. */
 const CONVERT_MS = 60_000;
+/** Seconds of a recording that are converted; a longer one is cut here. */
+const VOICE_MAX_SECONDS = 30 * 60;
+/** The largest Ogg file written: 30 minutes at 32 kbit/s is about 7 MB. */
+const OGG_MAX_BYTES = 16 * 1024 * 1024;
 
 const FAILED = "The voice note could not be prepared, so nothing was sent. Try recording it again.";
 
@@ -41,18 +46,23 @@ export function seconds(samples: number, rate = PCM_RATE): number {
   return samples > 0 ? Math.max(1, Math.round(samples / rate)) : 0;
 }
 
-/** Converts one recording: the Ogg Opus file, plus a quiet 8 kHz copy the length and waveform come from. */
+/**
+ * Converts one recording: the Ogg Opus file, plus a quiet 8 kHz copy the length and waveform come from. Throws with
+ * code NOT_AUDIO, without running ffmpeg, when the bytes are not an Ogg, WebM or MP4 recording.
+ */
 export function convert(input: Buffer): Promise<{ ogg: Buffer; pcm: Int16Array }> {
+  const format = audioFormat(input);
+  if (!format) return Promise.reject(Object.assign(new Error("not a recording"), { code: "NOT_AUDIO" }));
   return new Promise((resolve, reject) => {
     const child = spawn(
       "ffmpeg",
       [
         "-hide_banner", "-loglevel", "error", "-nostdin",
-        "-i", "pipe:0",
-        "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", "pipe:1",
+        ...inputArgs(format, VOICE_MAX_SECONDS), "-i", "pipe:0",
+        "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-fs", String(OGG_MAX_BYTES), "-f", "ogg", "pipe:1",
         "-map", "0:a:0", "-ac", "1", "-ar", String(PCM_RATE), "-f", "s16le", "pipe:3",
       ],
-      { stdio: ["pipe", "pipe", "pipe", "pipe"] },
+      { stdio: ["pipe", "pipe", "pipe", "pipe"], env: ffmpegEnv() },
     );
     const ogg: Buffer[] = [];
     const pcm: Buffer[] = [];

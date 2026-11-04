@@ -3,15 +3,22 @@
 // (KEY_WRAPPING_KEY) still opens older ones until pnpm rewrap-keys has moved them. A user's key is made on first use.
 // Never stored or logged here. A workspace's key (team_keys, one row per version) is handled the same way, and only for
 // a user whose workspace_members row is active.
+//
+// A user's key can be rotated (apps/worker/src/rekey): their keyring then also holds the other key, which opens and never
+// seals, and the index key their blind indexes keep (packages/crypto/src/wrap.ts, userKeyringFor).
 
-import { deriveUserKeys, type UserKeys } from "@messages/crypto";
-import { dataKeyFor, deriveCredentialKey, teamKeyring, wrappersFromEnv, type KeyStore, type KeyWrapper, type TeamKeyring, type TeamKeyStore } from "@messages/crypto/wrap";
+import { deriveUserKeyring, type UserKeys } from "@messages/crypto";
+import {
+  credentialKeysOf, deriveCredentialKey, teamKeyring, userKeyringFor, wrappersFromEnv, zeroKeyring, type KeyStore, type KeyWrapper, type TeamKeyring,
+  type TeamKeyStore, type UserKeyring,
+} from "@messages/crypto/wrap";
 import { admin } from "./request";
 
 const db = admin;
 const store: KeyStore | null = db && {
   async read(userId) {
-    const { data, error } = await db.from("user_keys").select("wrapped_key, wrapped_by").eq("user_id", userId).maybeSingle();
+    // The whole row: the rotation columns (next, previous, index) when they exist, and the same read before they do.
+    const { data, error } = await db.from("user_keys").select("*").eq("user_id", userId).maybeSingle();
     if (error) throw error;
     return data;
   },
@@ -52,29 +59,51 @@ function keyWrappers(): Promise<KeyWrapper[]> {
 
 export const keysReady = () => !!store && !!(process.env.KMS_KEY_NAME || process.env.KEY_WRAPPING_KEY);
 
-/** The user's raw 32-byte data key, creating it if they have none. */
-export async function dataKey(userId: string): Promise<Uint8Array<ArrayBuffer>> {
-  if (!store || !keysReady()) throw new Error("The key service is not set up.");
-  return dataKeyFor(store, await keyWrappers(), userId);
+const notSetUp = () => Object.assign(new Error("The key service is not set up."), { code: "keys_not_set_up" });
+
+/** The user's raw keyring (current, older, index key), creating their data key if they have none. The caller zeroes it. */
+export async function keyring(userId: string): Promise<UserKeyring> {
+  if (!store || !keysReady()) throw notSetUp();
+  return userKeyringFor(store, await keyWrappers(), userId);
 }
 
-/** The key that seals the user's connector sign-ins (packages/crypto/src/wrap.ts, sealCredential). */
+/**
+ * The user's keyring only if they already have a data key: for a request that names a user without proving it is them
+ * (an OAuth callback opening its cookie), which must never make a key. Throws with the code no_key otherwise.
+ */
+export async function existingKeyring(userId: string): Promise<UserKeyring> {
+  if (!store || !keysReady()) throw notSetUp();
+  if (!(await store.read(userId))) throw Object.assign(new Error("No data key."), { code: "no_key" });
+  return keyring(userId);
+}
+
+/** The key that seals the user's connector sign-ins and handoffs (packages/crypto/src/wrap.ts, sealBound): the current one. */
 export async function credentialKey(userId: string): Promise<Uint8Array<ArrayBuffer>> {
-  const raw = await dataKey(userId);
+  const ring = await keyring(userId);
   try {
-    return await deriveCredentialKey(raw);
+    return await deriveCredentialKey(ring.current);
   } finally {
-    raw.fill(0);
+    zeroKeyring(ring);
   }
 }
 
-/** The user's field and index keys. */
-export async function userKeys(userId: string): Promise<UserKeys> {
-  const raw = await dataKey(userId);
+/** Every credential key that may open the user's sign-ins and handoffs: the current one first, then older ones during a rotation. */
+export async function credentialKeys(userId: string, opts: { existing?: boolean } = {}): Promise<Uint8Array<ArrayBuffer>[]> {
+  const ring = await (opts.existing ? existingKeyring(userId) : keyring(userId));
   try {
-    return await deriveUserKeys(raw);
+    return await credentialKeysOf(ring);
   } finally {
-    raw.fill(0);
+    zeroKeyring(ring);
+  }
+}
+
+/** The user's field and index keys, for them (so bound values, "e2:", open too). */
+export async function userKeys(userId: string): Promise<UserKeys> {
+  const ring = await keyring(userId);
+  try {
+    return await deriveUserKeyring(ring.current, ring.older, ring.indexKey, userId);
+  } finally {
+    zeroKeyring(ring);
   }
 }
 

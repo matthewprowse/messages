@@ -122,7 +122,7 @@ export function WhatsAppLinkPanel({ link }: { link: WhatsAppLink }) {
               </div>
             )}
             {(account?.qr_code || account?.pairing_code) && <p className="text-xs text-muted-foreground">The code refreshes on its own until it is used.</p>}
-            <Button variant="ghost" size="sm" disabled={busy} onClick={cancel}>Cancel</Button>
+            <Button variant="ghost" disabled={busy} onClick={cancel}>Cancel</Button>
             {error && <FieldError>{error}</FieldError>}
           </div>
         </div>

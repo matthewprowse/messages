@@ -9,17 +9,29 @@ with no key yet is asked about again after MISSING_RECHECK_S, so their keys are 
 restart. Keys are cached for KEY_CACHE_S (about 10 minutes) and then read again, never written anywhere. A row
 sealed with a team key (t1:) is opened with its workspace's keys, read and cached the same way from team_keys (every
 version still holding values, the current first: a value sealed before the last rotation opens with an older one until
-the sync worker has re-sealed it); a row's workspace_id says which team. Nothing logged here ever includes a value."""
+the sync worker has re-sealed it); a row's workspace_id says which team. A user whose own key is being rotated
+(apps/worker/src/rekey) is read the same way: their keys open values under the old and the new data key, and seal with
+the current one. Nothing logged here ever includes a value.
+
+Keys are derived for their owner (the user, the workspace), so values bound to their owner and place ("e2:",
+packages/crypto/src/bound.ts) open as well. seal writes that format, at the place its caller names, when
+SEAL_BOUND_FIELDS is "true", and "e1:" otherwise. open_bound is the strict read for columns that drive an action (an
+Instagram send, an iCloud Reminders write): it raises instead of answering "", and refuses plain text when encryption
+is on, legacy values once REQUIRE_BOUND_FIELDS is "true", team values and values sealed for another place or row."""
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
 
 from . import log
-from .crypto import KeySet, TeamKeys, UserKeys, decrypt_any, decrypt_bytes, derive_credential_key, derive_team_keys, derive_user_keys, encrypt_field, is_ciphertext, is_sealed_bytes, is_team_ciphertext
-from .keys import KEY_CACHE_S, unwrap, unwrap_team_ring
+from .crypto import (
+    KeySet, TeamKeys, UserKeys, decrypt_any, decrypt_bytes, derive_credential_key, derive_team_keys, derive_user_keyring, encrypt_at, encrypt_bytes, encrypt_bytes_at, encrypt_field,
+    is_ciphertext, is_sealed_bytes, is_team_ciphertext, open_expected, open_file_expected,
+)
+from .keys import KEY_CACHE_S, unwrap_team_ring, unwrap_user_ring
 
 MISSING_RECHECK_S = 60
 UNWRAP_RETRY_S = 5  # a key that exists but could not be unwrapped (a KMS blip) is tried again this soon
@@ -28,18 +40,30 @@ TEAM_RECHECK_S = 30  # a workspace's key versions are read again this often, so 
 
 
 class KeyUnavailable(Exception):
-    """The user has a key but it cannot be opened right now, so nothing can be sealed (and nothing may be stored plain)."""
+    """The user has no usable key right now (none made yet, or one that cannot be opened), so nothing can be sealed and
+    nothing may be stored plain. str() is the code: no_key or unwrap_failed."""
+
+
+def flag_true(name: str) -> bool:
+    """A switch that is off unless the variable is "true" (or 1, on, yes): the bound-value rollout switches."""
+    return os.environ.get(name, "").strip().lower() in ("true", "1", "on", "yes")
 
 
 class Vault:
-    def __init__(self, db: Any, master_key_b64: str | None = None, encrypt: bool = False):
+    def __init__(self, db: Any, master_key_b64: str | None = None, encrypt: bool = False, *, encrypt_addresses: bool | None = None,
+                 seal_bound: bool | None = None, require_bound: bool | None = None):
         self.db = db
         self.master_key_b64 = master_key_b64 or ""
         self.encrypt = encrypt
+        # Whether addresses are always sealed (ENCRYPT_ADDRESSES): strict reads refuse a plain one when they are.
+        self.encrypt_addresses = encrypt if encrypt_addresses is None else encrypt_addresses
+        # SEAL_BOUND_FIELDS: write "e2:" bound to its place. REQUIRE_BOUND_FIELDS: strict reads refuse "e1:".
+        self.seal_bound = flag_true("SEAL_BOUND_FIELDS") if seal_bound is None else seal_bound
+        self.require_bound = flag_true("REQUIRE_BOUND_FIELDS") if require_bound is None else require_bound
         self._lock = threading.Lock()
         self._keys: dict[str, tuple[float, UserKeys]] = {}  # user_id -> (valid until, keys)
         self._reading: dict[str, threading.Lock] = {}  # user_id -> held while their key is read, so threads asking at once read it once
-        self._credential_keys: dict[str, tuple[float, bytes]] = {}
+        self._credential_keys: dict[str, tuple[float, list[bytes]]] = {}  # user_id -> (valid until, current first, then older)
         self._unwrap_failed: dict[str, float] = {}  # user_id -> until when a key that exists but would not unwrap is not retried
         self._missing: dict[str, float] = {}  # user_id -> monotonic time to look for their key again
         self._team_keys: dict[str, tuple[float, list[TeamKeys]]] = {}  # workspace_id -> (valid until, versions newest first)
@@ -72,15 +96,16 @@ class Vault:
         return False
 
     def _read_keys(self, user_id: str) -> UserKeys | None:
-        row = self.db.first("user_keys", {"select": "wrapped_key,wrapped_by", "user_id": f"eq.{user_id}"})
+        # The whole row: the rotation columns (next, previous, index) when they exist, and the same read before they do.
+        row = self.db.first("user_keys", {"select": "*", "user_id": f"eq.{user_id}"})
         keys = None
-        cred = None
+        cred: list[bytes] | None = None
         failed = False
         if row:
             try:
-                raw = unwrap(row, self.master_key_b64, user_id)
-                keys = derive_user_keys(raw)
-                cred = derive_credential_key(raw)
+                current, older, index_key = unwrap_user_ring(row, self.master_key_b64, user_id)
+                keys = derive_user_keyring(current, older, index_key, user_id)
+                cred = [derive_credential_key(k) for k in [current, *older]]
             except Exception as err:
                 # A missing or wrong KEY_WRAPPING_KEY or KMS setup, or a wrapper this worker does not know.
                 log.warn("user key could not be unwrapped", user=user_id, code=type(err).__name__)
@@ -102,11 +127,17 @@ class Vault:
     def credential_key_for(self, user_id: str) -> bytes | None:
         """The key that seals the user's connector sign-ins and sessions ("v2:", crypto.seal_credential), cached
         like their other keys. None when they have no usable key yet."""
+        keys = self.credential_keys_for(user_id)
+        return keys[0] if keys else None
+
+    def credential_keys_for(self, user_id: str) -> list[bytes]:
+        """Every credential key that may open the user's sign-ins: the current one first, then, during a rotation of
+        their data key, the other. Empty when they have no usable key yet."""
         if self.keys_for(user_id) is None:
-            return None
+            return []
         with self._lock:
             hit = self._credential_keys.get(user_id)
-        return hit[1] if hit else None
+        return list(hit[1]) if hit else []
 
     def team_keyring_for(self, workspace_id: str) -> list[TeamKeys]:
         """The workspace's derived keys, one per version still holding values, the current first. Read and cached
@@ -124,7 +155,7 @@ class Vault:
             try:
                 versions, root = unwrap_team_ring(rows, self.master_key_b64, workspace_id)
                 index = derive_team_keys(root).index
-                ring = [TeamKeys(enc=derive_team_keys(key).enc, index=index) for _, key in versions]
+                ring = [TeamKeys(enc=derive_team_keys(key).enc, index=index, owner=workspace_id) for _, key in versions]
             except Exception as err:
                 log.warn("team key could not be unwrapped", workspace=workspace_id, code=type(err).__name__)
         with self._lock:
@@ -182,9 +213,9 @@ class Vault:
             log.warn("field could not be opened", user=user_id, field=field, code=type(err).__name__)
             return ""
 
-    def open_bytes(self, user_id: str, field: str, data: bytes) -> bytes | None:
-        """The plain bytes of a file the app sealed; unsealed bytes come back as they are. None when it is
-        sealed and cannot be opened."""
+    def open_bytes(self, user_id: str, field: str, data: bytes, where: str | None = None) -> bytes | None:
+        """The plain bytes of a file the app sealed; unsealed bytes come back as they are. A bound file ("e2b:") opens
+        only with where, the "<bucket>/<path>" it was read from. None when it is sealed and cannot be opened."""
         if not is_sealed_bytes(data):
             return data
         keys = self.keys_for(user_id)
@@ -192,7 +223,7 @@ class Vault:
             log.warn("file could not be opened", user=user_id, field=field, code="no_key")
             return None
         try:
-            return decrypt_bytes(keys, field, data)
+            return decrypt_bytes(keys, field, data, where)
         except Exception as err:
             log.warn("file could not be opened", user=user_id, field=field, code=type(err).__name__)
             return None
@@ -208,13 +239,45 @@ class Vault:
                 row[column] = self.open(user_id, field, row[column], workspace_id)
         return row
 
-    def seal(self, user_id: str, field: str, value: str | None) -> str | None:
-        """value encrypted for writing when ENCRYPT_CONTENT is on and the user has keys; otherwise as it is."""
-        if value is None or not self.encrypt:
-            return value
+    def _keys_or_raise(self, user_id: str) -> UserKeys:
         keys = self.keys_for(user_id)
         if keys is None:
-            if self._unwrap_failed.get(user_id, 0.0) > 0.0:
-                raise KeyUnavailable("user key exists but could not be unwrapped")  # never fall back to plain text for them
+            raise KeyUnavailable("no_key" if self._unwrap_failed.get(user_id, 0.0) <= 0.0 else "unwrap_failed")
+        return keys
+
+    def seal(self, user_id: str, field: str, value: str | None, place: str = "", row: str | None = None) -> str | None:
+        """value encrypted for writing when ENCRYPT_CONTENT is on; as it is when it is off. Bound to its owner and
+        place ("table.column", and row when the writer knows it) when SEAL_BOUND_FIELDS is on. Raises KeyUnavailable when
+        encryption is on and the user has no usable key (none yet, or one that would not unwrap): nothing is ever
+        written plain. Callers let it fail the job, which is tried again later (the sync worker makes the key)."""
+        if value is None or not self.encrypt:
             return value
-        return encrypt_field(keys, field, value)
+        return self.seal_text(user_id, field, value, place, row)
+
+    def seal_text(self, user_id: str, field: str, value: str, place: str = "", row: str | None = None) -> str:
+        """value sealed with the user's key whatever ENCRYPT_CONTENT says (for addresses, which follow their own flag):
+        "e2:" at place when SEAL_BOUND_FIELDS is on, else "e1:". Raises KeyUnavailable like seal."""
+        keys = self._keys_or_raise(user_id)
+        return encrypt_at(keys, field, place, row, value) if self.seal_bound else encrypt_field(keys, field, value)
+
+    def seal_bytes(self, user_id: str, field: str, data: bytes, where: str | None = None) -> bytes:
+        """A file's bytes sealed with the user's key: bound to where ("<bucket>/<path>") when SEAL_BOUND_FIELDS is on and
+        it is given, else the legacy "e1b:". Raises KeyUnavailable like seal."""
+        keys = self._keys_or_raise(user_id)
+        return encrypt_bytes_at(keys, field, where, data) if self.seal_bound and where else encrypt_bytes(keys, field, data)
+
+    def open_bound(self, user_id: str, field: str, value: str | None, places: list[str], row: str | None, kind: str = "content") -> str | None:
+        """The plain text of a value in a column that drives an action, or an error: crypto.BoundError (with its code)
+        when it is refused, KeyUnavailable when the user's key cannot be had right now, or the decryption's own error.
+        Never "". kind "address" follows ENCRYPT_ADDRESSES for plain text, "content" ENCRYPT_CONTENT."""
+        if value is None:
+            return None
+        sealed = self.encrypt_addresses if kind == "address" else self.encrypt
+        keys = self._keys_or_raise(user_id) if is_ciphertext(value) else UserKeys(enc=b"", index=b"")
+        return open_expected(keys, field, value, places, row, sealed, not self.require_bound)
+
+    def open_bound_file(self, user_id: str, field: str, data: bytes, where: str, flagged: bool | None = None) -> bytes:
+        """The plain bytes of a stored file about to be sent, read from where ("<bucket>/<path>"): raises like open_bound,
+        and with sealed_mismatch when the row's sealed flag and the header disagree."""
+        keys = self._keys_or_raise(user_id) if is_sealed_bytes(data) else UserKeys(enc=b"", index=b"")
+        return open_file_expected(keys, field, data, where, self.encrypt, not self.require_bound, flagged)

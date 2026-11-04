@@ -46,7 +46,7 @@ export function ShareNotice({ thread }: { thread: Pick<Thread, "id" | "workspace
               setBusy(false);
               if (problem) toast.error(problem);
             }}>Not Work</Button>
-            <Button size="sm" disabled={busy} onClick={() => setMarking(true)}>Mark as Work</Button>
+            <Button disabled={busy} onClick={() => setMarking(true)}>Mark as Work</Button>
           </>
         )}
       </div>

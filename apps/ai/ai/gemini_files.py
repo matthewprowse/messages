@@ -1,18 +1,46 @@
 """The Files API and context caching side of the Gemini client: upload a large file, delete it, cache it for
-repeated calls. A mixin of Gemini; uses the client's key, billing breaker and recorder."""
+repeated calls. A mixin of Gemini; uses the client's key, billing breaker and recorder.
+
+The resumable upload address comes back in a response header, so it is checked (HTTPS on Gemini's own host) before
+the API key and the file go to it. A delete that fails is not retried (Gemini drops files after 48 hours and caches
+at their ttl) but is counted in the log, so a run of them shows."""
 
 from __future__ import annotations
 
 import http.client
 import json
+import threading
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from . import log
 from .gemini_estimate import error_reason
 from .gemini_types import CACHE_ENDPOINT, FILE_ENDPOINT, FILE_READY_S, UPLOAD_ENDPOINT, GeminiError, Usage, UsageContext, guarded
 from .http import POOL
 from .pricing import cache_storage_usd, cost_usd
+
+
+GEMINI_HOST = "generativelanguage.googleapis.com"
+_failed_deletes = {"files": 0, "caches": 0}  # since start, for the log: a count only, never a name
+_failed_lock = threading.Lock()
+
+
+def upload_url_ok(url: str | None) -> bool:
+    """Whether a resumable upload address may be sent the API key and the file: HTTPS on port 443 to Gemini's own host,
+    with no user part."""
+    try:
+        u = urlsplit(str(url or "").strip())
+        return u.scheme == "https" and (u.hostname or "").lower() == GEMINI_HOST and u.port in (None, 443) and "@" not in u.netloc
+    except ValueError:
+        return False
+
+
+def _delete_failed(kind: str, status: int | None) -> None:
+    with _failed_lock:
+        _failed_deletes[kind] += 1
+        count = _failed_deletes[kind]
+    log.warn("gemini delete failed", kind=kind, status=status, count=count)
 
 
 class FilesMixin:
@@ -35,6 +63,8 @@ class FilesMixin:
             url = res.headers.get("x-goog-upload-url")
             if res.status >= 300 or not url:
                 raise self._failure(res.status, *error_reason(res.body))
+            if not upload_url_ok(url):
+                raise GeminiError(res.status, "upload address not on Gemini")
             sent = POOL.request(
                 "POST",
                 url,
@@ -68,11 +98,16 @@ class FilesMixin:
         return name, uri
 
     def delete_file(self, name: str) -> None:
-        """Removes a file sent with upload_file. Failures are ignored: Gemini drops it after 48 hours anyway."""
+        """Removes a file sent with upload_file. A failure is logged as a count, not raised: Gemini drops it after 48 hours anyway."""
+        self._delete("files", name)
+
+    def _delete(self, kind: str, name: str) -> None:
         try:
-            POOL.request("DELETE", FILE_ENDPOINT.format(name=name), None, {"x-goog-api-key": self._key}, timeout=30)
+            res = POOL.request("DELETE", FILE_ENDPOINT.format(name=name), None, {"x-goog-api-key": self._key}, timeout=30)
+            if res.status >= 300:
+                _delete_failed(kind, res.status)
         except Exception:
-            pass
+            _delete_failed(kind, None)
 
     def cache_file(self, model: str, system: str, file: tuple[str, str], usage: UsageContext, *, ttl_s: int = 1500) -> str | None:
         """Stores the system text and an uploaded file once as a cache (cachedContents), so several calls that
@@ -104,12 +139,9 @@ class FilesMixin:
         return name
 
     def delete_cache(self, name: str) -> None:
-        """Removes a cache made with cache_file and records the storage it cost. Failures are ignored: it expires on its own."""
+        """Removes a cache made with cache_file and records the storage it cost. A failure is logged as a count: it expires on its own."""
         self._record_storage(name)
-        try:
-            POOL.request("DELETE", FILE_ENDPOINT.format(name=name), None, {"x-goog-api-key": self._key}, timeout=30)
-        except Exception:
-            pass
+        self._delete("caches", name)
 
     def _record_storage(self, name: str, *, expired: bool = False) -> None:
         """Records a cache's storage cost once: for the time it lived, never more than its ttl."""

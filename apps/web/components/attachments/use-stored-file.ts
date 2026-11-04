@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { withSealedColumns } from "@/lib/sealed-columns";
-import { acquireNoteFile, isNotePath, mimeFor, rememberNoteMime, signedUrl } from "@/lib/signed-urls";
+import { acquireNoteFile, isBrowserSealedPath, mimeFor, rememberNoteMime, signedUrl } from "@/lib/signed-urls";
 import { ATTACHMENT_BUCKET as BUCKET, VIEW_MIN_LEFT_MS, downloadLink } from "@/lib/attachment-view";
 import type { Attachment } from "@/lib/types";
 
@@ -31,7 +31,7 @@ export function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
         path = data?.team_path ?? data?.storage_path ?? undefined;
         sealed = !!data?.sealed;
       }
-      if (isNotePath(path) || (path && sealed)) {
+      if (isBrowserSealedPath(path) || (path && sealed)) {
         // A note file or a sealed attachment is opened here: it is unsealed in the browser and held until the viewer closes.
         rememberNoteMime(path!, mimeFor({ name, kind }));
         const handle = acquireNoteFile(path!);

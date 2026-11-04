@@ -1,7 +1,8 @@
 "use client";
 
-// The Activity view of Settings, Team, for an owner or admin: response times per person and how many chats were moved back
-// to personal. Counts only, never the chats themselves.
+// The Activity view of Settings, Team, for an owner or admin: response times per person, how many chats were moved back
+// to personal, and who gave themselves access to someone else's chat (the owner sees all of these, an admin those that
+// concern them). Counts and names only, never the chats themselves.
 
 import { useState } from "react";
 import { replyTime, useResponseStats, type ResponseStat, type WeekCount } from "@/lib/team-work";
@@ -10,7 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ROLE_LABEL, type TeamRole } from "@/lib/team";
+import { ROLE_LABEL, useTeam, type TeamRole } from "@/lib/team";
+import { useAssignmentLog } from "@/lib/assignment-log";
+import { noticeDate, selfAssignments } from "@/lib/assignment-notices";
 import { SettingsBody, SettingsEmpty, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -126,13 +129,38 @@ export function MovedBackSection({ weeks, ready }: { weeks: WeekCount[]; ready: 
   );
 }
 
-/** The Activity view: both cards, loaded when the view opens. */
+/** "Sam gave themselves access to Lerato's chat": every self-assignment of a chat that was not the person's own, newest first. */
+export function AccessTakenSection() {
+  const log = useAssignmentLog();
+  const { state } = useTeam();
+  const person = (id: string | null) => state?.people.find((p) => p.userId === id);
+  const nameOf = (id: string | null) => person(id)?.name || person(id)?.email || "A former member";
+  const rows = log && state ? selfAssignments(log, (id) => person(id)?.role) : null;
+  return (
+    <SettingsSection id="access-taken" title="Chats Opened by Owners and Admins">
+      {!rows ? (
+        <SettingsBody><Skeleton className="h-24 w-full rounded-lg" /></SettingsBody>
+      ) : rows.length === 0 ? (
+        <SettingsEmpty>Nobody has given themselves access to someone else&apos;s chat.</SettingsEmpty>
+      ) : (
+        <SettingsRows>
+          {rows.slice(0, 50).map((e) => (
+            <SettingsRow key={e.id} title={`${nameOf(e.assigneeId)} gave themselves access to ${e.agentId ? `${nameOf(e.agentId)}'s chat` : "a chat"}`} description={noticeDate(e.assignedAt)} />
+          ))}
+        </SettingsRows>
+      )}
+    </SettingsSection>
+  );
+}
+
+/** The Activity view: all three cards, loaded when the view opens. */
 export function TeamActivity() {
   const { stats, weeks, failed, load } = useResponseStats();
   return (
     <>
       <ResponseSection stats={stats} failed={failed} load={load} />
       <MovedBackSection weeks={weeks} ready={!!stats} />
+      <AccessTakenSection />
     </>
   );
 }

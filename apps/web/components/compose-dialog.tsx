@@ -266,8 +266,8 @@ export function ComposeDialog({ open, onOpenChange, to = [], subject: initialSub
               <div className="flex items-center justify-between">
                 <Label htmlFor="compose-to">To</Label>
                 <div className="flex gap-1">
-                  {!showCc && <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => setShowCc(true)}>Cc</Button>}
-                  {!showBcc && <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={() => setShowBcc(true)}>Bcc</Button>}
+                  {!showCc && <Button type="button" variant="ghost" disabled={locked} onClick={() => setShowCc(true)}>Cc</Button>}
+                  {!showBcc && <Button type="button" variant="ghost" disabled={locked} onClick={() => setShowBcc(true)}>Bcc</Button>}
                 </div>
               </div>
               <Input

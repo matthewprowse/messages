@@ -16,6 +16,19 @@ export function normAddresses(list: readonly (string | null | undefined)[]): str
 }
 
 /**
+ * Providers whose send addresses an email may go out from. Gmail and Outlook lists are written by the worker from the
+ * provider's own list and cannot be edited in the app, and iCloud's mail server refuses a From that is not yours. A
+ * generic IMAP and SMTP server can't list your addresses and may accept any From, so there the list typed in the app
+ * is not trusted and only the account's own address is used.
+ */
+const ALIAS_PROVIDERS: ReadonlySet<string> = new Set(["gmail", "outlook", "icloud"]);
+
+/** The send addresses an account of this provider may use as From: its whole list, or none beyond its own address. */
+export function sendableAliases(provider: string, sendAddresses: readonly string[]): string[] {
+  return ALIAS_PROVIDERS.has(provider) ? [...sendAddresses] : [];
+}
+
+/**
  * The From address for one email. A chosen address is used only when the account can send from it.
  * With none chosen, a reply goes from whichever of your addresses the email it answers was sent to,
  * else from the account's main address.

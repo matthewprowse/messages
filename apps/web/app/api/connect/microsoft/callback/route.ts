@@ -1,10 +1,12 @@
 // Microsoft sends the browser back here with a code. The code is traded for a refresh token, which is stored
 // encrypted with the Outlook, Outlook Calendar, Microsoft To Do and Teams accounts exactly as pnpm connect:microsoft
 // stores it. Then back to the page that started it, with ?connected=microsoft or ?connect_error=<reason>. When an
-// IT admin has to approve the app first, the page also gets &admin=<the link the admin opens>.
+// IT admin has to approve the app first, the page gets connect_error=admin_approval and flags for what was asked
+// (admin_teams, admin_calendar_write), never the link itself: it asks /api/connect/microsoft/admin-link for that, so a
+// crafted address cannot put another app's consent page in front of an IT admin.
 
-import { ensureProfile, openJson, saveAccounts } from "@/lib/server/accounts";
-import { CALENDAR_WRITE_SCOPE, CHAT_SCOPE, MicrosoftError, accountsFor, adminConsentUrl, exchangeCode, needsAdminApproval, signedInAddress, SEND_SCOPE, MAIL_SCOPE, type MicrosoftCredentials } from "@/lib/server/microsoft";
+import { ensureProfile, openHandoff, saveAccounts } from "@/lib/server/accounts";
+import { CALENDAR_WRITE_SCOPE, CHAT_SCOPE, MicrosoftError, accountsFor, exchangeCode, needsAdminApproval, signedInAddress, SEND_SCOPE, MAIL_SCOPE, type MicrosoftCredentials } from "@/lib/server/microsoft";
 import { appOrigin } from "@/lib/server/request";
 import { MICROSOFT_COOKIE, MICROSOFT_RETURNS, readCookie, signInProblem, type MicrosoftSignIn } from "../shared";
 
@@ -14,7 +16,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const origin = appOrigin(request);
   const params = new URL(request.url).searchParams;
-  const signIn = readSignIn(request);
+  const signIn = await readSignIn(request);
   const back = signIn?.back ?? MICROSOFT_RETURNS[0];
   const done = (query: string) =>
     new Response(null, {
@@ -23,7 +25,7 @@ export async function GET(request: Request) {
     });
   const teams = signIn?.teams === true;
   const calendarWrite = signIn?.calendarWrite === true;
-  const needsAdmin = () => done(`connect_error=admin_approval&admin=${encodeURIComponent(adminConsentUrl({ teams, calendarWrite }))}`);
+  const needsAdmin = () => done(["connect_error=admin_approval", teams ? "admin_teams=1" : "", calendarWrite ? "admin_calendar_write=1" : ""].filter(Boolean).join("&"));
 
   const error = params.get("error");
   if (signIn && signIn.expires >= Date.now() && params.get("state") === signIn.state) {
@@ -63,11 +65,11 @@ export async function GET(request: Request) {
   }
 }
 
-function readSignIn(request: Request): MicrosoftSignIn | null {
+async function readSignIn(request: Request): Promise<MicrosoftSignIn | null> {
   const raw = readCookie(request.headers.get("cookie"), MICROSOFT_COOKIE);
   if (!raw) return null;
   try {
-    const signIn = openJson<MicrosoftSignIn>(raw);
+    const signIn = await openHandoff<MicrosoftSignIn>(raw, "microsoft_connect");
     return MICROSOFT_RETURNS.some((r) => r === signIn.back) ? signIn : null;
   } catch {
     return null;

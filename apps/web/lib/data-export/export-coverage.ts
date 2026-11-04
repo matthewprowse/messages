@@ -83,6 +83,7 @@ export const EXCLUDED_TABLES: Record<string, string> = {
   thread_label_removals: "A queue of label removals for the mail provider.",
   thread_notes: "Written by teammates and sealed with the team key, so not the person's own to open.",
   user_keys: "The person's wrapped encryption keys, never exported.",
+  user_key_rotations: "Progress of a rotation of the person's encryption key: key handling, never exported.",
   workspace_activity: "The team's activity log, kept by the team owner.",
   workspace_contact_agents: "Team assignment bookkeeping.",
   workspace_inbox_access: "Team access settings.",

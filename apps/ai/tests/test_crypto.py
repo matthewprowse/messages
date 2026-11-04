@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from ai.crypto import (
-    KeySet, address_key, blind_index, chat_key, decrypt_any, decrypt_bytes, decrypt_field, decrypt_team_field, derive_team_keys, derive_user_keys, domain_key,
+    KeySet, address_key, blind_index, chat_key, decrypt_any, decrypt_bytes, decrypt_field, decrypt_team_field, derive_team_keys, derive_user_keys, domain_key, group_name_key,
     encrypt_bytes, encrypt_field, encrypt_optional, encrypt_team_field, is_ciphertext, is_team_ciphertext, team_address_index, team_blind_index, team_domain_index,
 )
 
@@ -26,7 +26,7 @@ class SharedFormat(unittest.TestCase):
             self.assertEqual(blind_index(KEYS, v["value"]), v["token"])
 
     def test_address_keys_match(self):
-        rule = {"address": address_key, "chat": chat_key, "domain": domain_key}
+        rule = {"address": address_key, "chat": chat_key, "domain": domain_key, "group": group_name_key}
         for v in VECTORS["addressKeys"]:
             self.assertEqual(rule[v["kind"]](v["value"]), v["key"], v["value"])
 
@@ -142,3 +142,52 @@ class Unwrap(unittest.TestCase):
         from ai.keys import unwrap_local
         w = VECTORS["localWrap"]
         self.assertEqual(unwrap_local(w["masterKeyBase64"], w["wrapped"], w["userId"], "user").hex(), VECTORS["dataKeyHex"])
+
+
+RING = json.loads((Path(__file__).resolve().parents[3] / "packages" / "crypto" / "keyring-vectors.json").read_text())
+
+
+class RotatedKeys(unittest.TestCase):
+    """A rotated user's keyring against packages/crypto/keyring-vectors.json, so both languages read a rotation alike."""
+
+    def test_the_index_key_is_the_one_the_old_data_key_made(self):
+        from ai.crypto import derive_index_key
+        self.assertEqual(derive_index_key(bytes.fromhex(RING["previousKeyHex"])).hex(), RING["indexKeyHex"])
+
+    def test_the_keyring_opens_both_seals_with_the_new_and_keeps_the_old_index_tokens(self):
+        from ai.crypto import address_index, derive_user_keyring
+        previous, current = bytes.fromhex(RING["previousKeyHex"]), bytes.fromhex(RING["currentKeyHex"])
+        ring = derive_user_keyring(current, [previous], bytes.fromhex(RING["indexKeyHex"]))
+        self.assertEqual(decrypt_field(ring, RING["field"], RING["sealedUnderPrevious"]), RING["plaintext"])
+        self.assertEqual(decrypt_field(ring, RING["field"], RING["sealedUnderCurrent"]), RING["plaintext"])
+        self.assertEqual(decrypt_any(KeySet(user=ring), RING["field"], RING["sealedUnderPrevious"]), RING["plaintext"])
+        self.assertEqual(address_index(ring, RING["address"]), RING["addressToken"])
+        fresh = encrypt_field(ring, RING["field"], "new")
+        self.assertEqual(decrypt_field(derive_user_keys(current), RING["field"], fresh), "new")
+        with self.assertRaises(Exception):
+            decrypt_field(derive_user_keys(previous), RING["field"], fresh)
+        with self.assertRaises(Exception):
+            decrypt_field(derive_user_keyring(current), RING["field"], RING["sealedUnderPrevious"])
+        old_file = encrypt_bytes(derive_user_keys(previous), "attachment_data", b"abc")
+        self.assertEqual(decrypt_bytes(ring, "attachment_data", old_file), b"abc")
+
+    def test_unwraps_the_index_key_the_typescript_side_wrapped(self):
+        from ai.keys import unwrap_local, unwrap_user_ring
+        w = RING["indexWrap"]
+        self.assertEqual(unwrap_local(w["masterKeyBase64"], w["wrapped"], w["userId"], "user_index").hex(), RING["indexKeyHex"])
+        with self.assertRaises(Exception):  # an index key is never a data key of the user
+            unwrap_local(w["masterKeyBase64"], w["wrapped"], w["userId"])
+        from ai.keys import wrap_local
+        row = {
+            "wrapped_by": "local:v1", "wrapped_key": wrap_local(w["masterKeyBase64"], bytes.fromhex(RING["currentKeyHex"]), w["userId"]),
+            "previous_wrapped_by": "local:v1", "previous_wrapped_key": wrap_local(w["masterKeyBase64"], bytes.fromhex(RING["previousKeyHex"]), w["userId"]),
+            "next_wrapped_key": None, "next_wrapped_by": None,
+            "index_wrapped_by": "local:v1", "index_wrapped_key": w["wrapped"],
+        }
+        current, older, index_key = unwrap_user_ring(row, w["masterKeyBase64"], w["userId"])
+        self.assertEqual((current.hex(), [k.hex() for k in older], index_key.hex()), (RING["currentKeyHex"], [RING["previousKeyHex"]], RING["indexKeyHex"]))
+
+    def test_a_local_key_without_the_wrapping_key_names_the_cause(self):
+        from ai.keys import LegacyKeyMissing, unwrap
+        with self.assertRaises(LegacyKeyMissing):
+            unwrap({"wrapped_by": "local:v1", "wrapped_key": VECTORS["localWrap"]["wrapped"]}, "", VECTORS["localWrap"]["userId"])

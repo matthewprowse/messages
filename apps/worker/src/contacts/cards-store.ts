@@ -1,7 +1,8 @@
 // Saves the address book cards the photo job reads, so the contact linker can tell which addresses and
-// numbers belong to one person. Cards that disappear from the address book are deleted.
+// numbers belong to one person. Cards that disappear from the address book are deleted. Every sync reads the whole
+// address book, so rows saved under an older kind of card_key (an unkeyed hash, before card-row.ts) are not in the new
+// set: the next sync deletes them and saves each card again under its keyed name, with no separate rekey step.
 
-import { createHash } from "node:crypto";
 import { addressIndex } from "@messages/crypto/addresses";
 import { allRows, db, must } from "../db";
 import { FIELD } from "@messages/crypto/fields";
@@ -9,6 +10,7 @@ import { keysFor, openAddresses, seal, sealAddress } from "../vault";
 import { errorCode, log } from "../log";
 import type { Card } from "../photos/cards";
 import { chunks } from "../util";
+import { cardRow, type CardRow } from "./card-row";
 import { countryCodeOf, DEFAULT_COUNTRY_CODE, toE164 } from "./signature-phones";
 
 /** The country for local numbers: from your own WhatsApp number, else a number you linked with, else +27. */
@@ -30,23 +32,14 @@ export function countryCodeFrom(accounts: { provider: string; address: string; p
   return DEFAULT_COUNTRY_CODE;
 }
 
-/** A card reduced to what is stored, with a key that stays the same while the card does. */
-export function cardRow(card: Card, countryCode: string): { card_key: string; name: string | null; emails: string[]; phones: string[] } | null {
-  const emails = [...new Set(card.emails.map((e) => e.trim().toLowerCase()).filter((e) => e.includes("@")))].sort();
-  const phones = [...new Set(card.phones.map((p) => toE164(p, countryCode) ?? p.replace(/[^\d+]/g, "")).filter((p) => p.replace(/\D/g, "").length >= 7))].sort();
-  if (emails.length + phones.length === 0) return null;
-  const name = card.name?.trim() || null;
-  const card_key = createHash("sha256").update(JSON.stringify([name, emails, phones])).digest("hex").slice(0, 32);
-  return { card_key, name, emails, phones };
-}
-
 /** Never throws: a failure here must not stop the photo sync. */
 export async function saveCards(account: { id: string; user_id: string }, cards: Card[]): Promise<void> {
   try {
     const cc = await userCountryCode(account.user_id);
-    const rows = new Map<string, NonNullable<ReturnType<typeof cardRow>>>();
+    const keys = await keysFor(account.user_id);
+    const rows = new Map<string, CardRow>();
     for (const card of cards) {
-      const row = cardRow(card, cc);
+      const row = await cardRow(keys, card, cc);
       if (row) rows.set(row.card_key, row);
     }
 
@@ -59,7 +52,6 @@ export async function saveCards(account: { id: string; user_id: string }, cards:
 
     const saved = new Set(existing);
     const fresh = [...rows.values()].filter((r) => !saved.has(r.card_key));
-    const keys = await keysFor(account.user_id);
     for (const batch of chunks(fresh, 500)) {
       // Stored with their indexes, so a contact's cards can be found by address without reading them.
       const stored = await Promise.all(

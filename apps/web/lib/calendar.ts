@@ -6,7 +6,7 @@
 
 import { addressIndex } from "@messages/crypto/addresses";
 import { supabase } from "./supabase";
-import { openEvents } from "./open-rows";
+import { openAddresses, openEvents } from "./open-rows";
 import { eventNotes } from "@messages/email-text/event-notes";
 import { userKeys } from "./vault";
 
@@ -114,6 +114,7 @@ async function contactsFor(emails: string[]): Promise<Map<string, Contact>> {
   const matched = new Map<string, Contact>();
   for (const { data: ids, error: idError } of results) {
     if (idError) throw new Error(`Load attendees failed (${idError.code})`);
+    await openAddresses(ids); // the contacts' names are sealed
     for (const row of ids) {
       const email = row.value_index ? byIndex.get(row.value_index) : undefined;
       if (row.contacts && email) matched.set(email, { id: row.contacts.id, name: row.contacts.display_name });
@@ -220,6 +221,14 @@ export async function loadEvents(start: Date, end: Date, options: { details?: bo
     if (data.length < PAGE) break;
   }
   return toEvents(await openEvents(rows), detailed);
+}
+
+/** Some events by id, with what a grid needs (as loadEvents with details: false). Ids not returned are gone or not yours. */
+export async function loadEventsByIds(ids: string[]): Promise<CalendarEvent[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase.from("calendar_events").select(GRID_COLUMNS).in("id", ids);
+  if (error) throw new Error(`Load events failed (${error.code})`);
+  return toEvents(await openEvents(data as unknown as Row[]), false);
 }
 
 /** One event with everything about it, or null when it is not there (any more). */

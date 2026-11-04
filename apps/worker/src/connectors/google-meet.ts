@@ -20,8 +20,10 @@ import { db, getSyncState, must, saveSyncState, setAccountStatus, touchAccount, 
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { mapLimit } from "../util";
-import { claimReady, markFailed, settleSent, type OutboxRow } from "../send/outbox";
-import { keysFor, open, openAddresses, seal, sealAddress } from "../vault";
+import { claimReady, markFailed, outboxBody, settleSent, type OutboxRow } from "../send/outbox";
+import { groupNameJson, keysFor, open, openAddresses, seal, sealAddress, sealName } from "../vault";
+import { givenNameRank } from "../contacts/name-rank";
+import { openEvent } from "../calendar/sealed";
 import { GoogleApiError, signInRevoked, type GoogleClient } from "../google/client";
 import { CHAT_MESSAGES_SCOPE, CHAT_SPACES_SCOPE, GoogleAuthError, MEET_SCOPE } from "../google/oauth";
 import { googleFatalDetail, openGoogleClient } from "../google/session";
@@ -324,7 +326,7 @@ export class GoogleMeetConnector {
         transcript_source: status === "transcribed" ? "provider" : null,
         status,
         error: null,
-        provider_meta: { join_url: space?.meetingUri ?? null, conference_record: record.name, space: record.space ?? null, meeting_code: meetingCode } satisfies Json,
+        provider_meta: { join_url: await seal(userId, FIELD.eventLink, space?.meetingUri ?? null), conference_record: record.name, space: record.space ?? null, meeting_code: await seal(userId, FIELD.eventLink, meetingCode) } satisfies Json,
       };
       const meeting = must(await db.from("meetings").upsert(row, { onConflict: "account_id,provider_meeting_id" }).select("id").single(), "save meeting");
 
@@ -364,25 +366,32 @@ export class GoogleMeetConnector {
     return items;
   }
 
-  /** The calendar event a meeting was held for, by its Meet link and time: only its guests' addresses and title are used. */
+  /**
+   * The calendar event a meeting was held for, by its Meet link and time: only its guests' addresses and title are used.
+   * Join links are sealed, so the day around the meeting is read and each event's link opened here to compare.
+   */
   private async calendarEvent(meetingCode: string | null, startedAt: string) {
     if (!meetingCode || !/^[a-z0-9-]+$/i.test(meetingCode)) return null;
     const at = Date.parse(startedAt);
-    const events = must(
+    const user = this.account.user_id;
+    const sealed = must(
       await db
         .from("calendar_events")
-        .select("id, title, starts_at, conference_url, attendees")
-        .eq("user_id", this.account.user_id)
-        .ilike("conference_url", `%${meetingCode}%`)
+        .select("id, user_id, title, starts_at, conference_url, attendees")
+        .eq("user_id", user)
+        .not("conference_url", "is", null)
         .gte("starts_at", new Date(at - 12 * 3_600_000).toISOString())
         .lte("starts_at", new Date(at + 12 * 3_600_000).toISOString())
-        .limit(20),
+        .order("starts_at")
+        .limit(500),
       "load meeting's event",
     );
-    const event = eventForMeeting(events, { meetingCode, startedAt });
-    if (!event) return null;
+    const events = await Promise.all(sealed.map(async (e) => ({ ...e, conference_url: await open(user, FIELD.eventLink, e.conference_url) })));
+    const found = eventForMeeting(events, { meetingCode, startedAt });
+    if (!found) return null;
+    const event = await openEvent(user, found);
     return {
-      title: (await open(this.account.user_id, FIELD.eventTitle, event.title)) || null,
+      title: event.title || null,
       attendees: attendeesOf(event.attendees).filter((a) => !isCiphertext(a.email)),
     };
   }
@@ -509,7 +518,8 @@ export class GoogleMeetConnector {
       : {
           address: await sealAddress(userId, email),
           index: email ? await addressIndex(keys, email) : null,
-          display_name: m.senderName,
+          display_name: await sealName(userId, m.senderName, { place: "contacts.display_name" }),
+          name_rank: givenNameRank(m.senderName),
           user_index: await addressIndex(keys, m.senderUser),
         };
     return {
@@ -517,7 +527,7 @@ export class GoogleMeetConnector {
       space: await sealAddress(userId, m.space),
       space_index: await chatIndex(keys, m.space),
       is_group: m.isGroup,
-      group_name: m.groupName,
+      ...(await groupNameJson(userId, m.groupName)),
       status: "inbox",
       resurface: opts.live && !m.fromMe,
       sent_at: m.sentAt,
@@ -557,7 +567,9 @@ export class GoogleMeetConnector {
       if (!thread || thread.account_id !== this.id || thread.user_id !== row.user_id || thread.channel !== "google_chat") {
         return markFailed(row.id, "This message belongs to another account.");
       }
-      const text = ((await open(row.user_id, FIELD.body, row.body)) ?? "").trim();
+      const body = await outboxBody(row);
+      if ("error" in body) return markFailed(row.id, body.error);
+      const text = body.text.trim();
       if (!text) return markFailed(row.id, "There is nothing to send.");
       if (Buffer.byteLength(text) > MAX_CHAT_BYTES) return markFailed(row.id, "This message is too long for Google Chat. Shorten it and send again.");
       // A reply to one message in a named space goes in that message's thread.

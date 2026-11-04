@@ -37,6 +37,15 @@ class Links(unittest.TestCase):
         self.assertEqual(len(extract_links(text)), 12)
         self.assertEqual(len(extract_links("a https://x.example.com/1\nb https://x.example.com/1")), 1)
 
+    def test_only_links_on_the_senders_own_site_are_offered(self):
+        from ai.bulk_read_text import own_links, sender_site, site_of
+
+        links = [{"url": u, "host": h, "context": ""} for u, h in (("https://shop.co.za/a", "shop.co.za"), ("https://click.shop.co.za/b", "click.shop.co.za"), ("https://evil.co.za/c", "evil.co.za"), ("https://shop.co.za.evil.example/d", "shop.co.za.evil.example"), ("https://t.sendgrid.net/e", "t.sendgrid.net"))]
+        self.assertEqual([l["host"] for l in own_links(links, "Shop <news@mail.shop.co.za>")], ["shop.co.za", "click.shop.co.za"])
+        self.assertEqual(own_links(links, "news@shop.co.za", suspicious="phishing"), [])
+        self.assertEqual(own_links(links, ""), [])
+        self.assertEqual((site_of("a.b.example.com"), site_of("x.co.uk"), site_of("localhost"), sender_site("no address")), ("example.com", "x.co.uk", "", ""))
+
     def test_text_for_the_model_has_no_addresses(self):
         body = readable_text(EMAIL)
         self.assertNotIn("http", body)
@@ -48,7 +57,7 @@ class Answers(unittest.TestCase):
 
     def test_a_good_answer_is_kept_with_real_addresses_for_the_chosen_links(self):
         got = check_answer(EMAIL, self.links, {"summary": "A winter sale starts on Friday 30 October.", "points": ["Up to 40% off everything", "Prices from R499"], "links": [{"label": "View the Sale", "id": 1}]})
-        self.assertEqual(got, {"summary": "A winter sale starts on Friday 30 October.", "points": ["Up to 40% off everything", "Prices from R499"], "links": [{"label": "View the Sale", "url": "https://shop.example.com/sale?utm=abc"}]})
+        self.assertEqual(got, {"summary": "A winter sale starts on Friday 30 October.", "points": ["Up to 40% off everything", "Prices from R499"], "links": [{"label": "View the Sale", "url": "https://shop.example.com/sale?utm=abc", "host": "shop.example.com"}]})
 
     def test_a_point_with_a_figure_the_email_lacks_is_dropped(self):
         got = check_answer(EMAIL, self.links, {"summary": "A sale.", "points": ["Prices from R399", "Up to 40% off"], "links": []})
@@ -61,7 +70,7 @@ class Answers(unittest.TestCase):
 
     def test_links_must_be_numbers_from_the_list_and_are_used_once(self):
         got = check_answer(EMAIL, self.links, {"summary": "A sale.", "points": [], "links": [{"label": "A", "id": 2}, {"label": "B", "id": 2}, {"label": "C", "id": 9}, {"label": "D", "id": True}, {"label": "", "id": 1}, {"label": "E", "id": "1"}]})
-        self.assertEqual(got["links"], [{"label": "A", "url": "https://shop.example.com/orders/12345"}])
+        self.assertEqual(got["links"], [{"label": "A", "url": "https://shop.example.com/orders/12345", "host": "shop.example.com"}])
 
     def test_output_is_plain_short_and_has_no_dashes(self):
         long = "Sale " * 100
@@ -159,11 +168,22 @@ class Worker(unittest.TestCase):
         self.assertEqual(self.run_with(db, gemini), 1)
         [(table, filters, patch)] = [u for u in db.updates if u[0] == "message_ai"]
         self.assertEqual(filters, {"message_id": "eq.m1"})
-        self.assertEqual(json.loads(patch["bulk_read"])["links"], [{"label": "View the Sale", "url": "https://shop.example.com/sale?utm=abc"}])
+        self.assertEqual(json.loads(patch["bulk_read"])["links"], [{"label": "View the Sale", "url": "https://shop.example.com/sale?utm=abc", "host": "shop.example.com"}])
         self.assertEqual(db.deleted, [("bulk_reads", {"message_id": "eq.m1"})])
         prompt_text, usage, kw = gemini.calls[0]
         self.assertEqual((usage.feature, usage.user_id, kw["thinking"]), ("bulk_read", "u", "minimal"))
         self.assertNotIn("http", prompt_text.split("Email:")[1])  # addresses go by number, not in the text
+
+    def test_suspicious_mail_and_links_off_the_senders_site_get_no_buttons(self):
+        db, gemini = FakeDb(message(message_ai={"message_id": "m1", "suspicious": "phishing"})), FakeGemini(GOOD)
+        self.run_with(db, gemini)
+        [(_, _, patch)] = [u for u in db.updates if u[0] == "message_ai"]
+        self.assertEqual(json.loads(patch["bulk_read"])["links"], [])
+        self.assertIn("Links you may use:\n(none)", gemini.calls[0][0])
+        db, gemini = FakeDb(message(sender_address="Shop <shop@examp1e-mail.com>")), FakeGemini(GOOD)
+        self.run_with(db, gemini)
+        [(_, _, patch)] = [u for u in db.updates if u[0] == "message_ai"]
+        self.assertEqual(json.loads(patch["bulk_read"])["links"], [], "a lookalike sender cannot offer shop.example.com, nor its own redirect")
 
     def test_a_request_someone_else_claimed_is_left_alone(self):
         db, gemini = FakeDb(message(), claim=False), FakeGemini(GOOD)

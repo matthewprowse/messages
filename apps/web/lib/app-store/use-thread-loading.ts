@@ -1,10 +1,11 @@
-// Loading conversations' messages on demand: opening, paging back, prefetching on hover, and dropping held ones.
-// Split out of the store provider; the refs it shares with Realtime (use-realtime.ts) are passed in.
+// Loading conversations' messages on demand: opening, paging back, prefetching (a press, a hover, the idle prefetch), and
+// dropping held ones. Split out of the store provider; the refs it shares with Realtime (use-realtime.ts) are passed in.
+// Loading only reads: it never marks anything read or reaches a provider (the open conversation's view does that).
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { loadThread, loadThreadMessages, messageSentAt } from "../data";
-import { touchHeld } from "./recent-threads";
+import { holdPrefetched, roomToPrefetch, touchHeld } from "./recent-threads";
 import type { Action, State } from "./reducer";
 import type { Thread } from "../types";
 
@@ -28,11 +29,13 @@ export function useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRe
   const markFailed = useCallback((threadId: string, failed: boolean) => {
     setFailedThreadIds((prev) => (prev.has(threadId) === failed ? prev : failed ? new Set(prev).add(threadId) : new Set([...prev].filter((id) => id !== threadId))));
   }, []);
+  // Held conversations loaded ahead of being opened and not opened since: the first to go (recent-threads.ts).
+  const prefetchedRef = useRef(new Set<string>());
   const evictHeld = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
     const gone = new Set(ids);
     heldRef.current = heldRef.current.filter((id) => !gone.has(id));
-    for (const id of ids) moreRef.current.delete(id);
+    for (const id of ids) { moreRef.current.delete(id); prefetchedRef.current.delete(id); }
     rawDispatch({ type: "evictMessages", ids });
     setLoadedThreadIds((prev) => { const next = new Set(prev); for (const id of ids) next.delete(id); return next; });
   }, []);
@@ -51,10 +54,16 @@ export function useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRe
         // A jump into a loaded conversation fetches only the stretch older than what is there.
         const oldest = from && loadedRef.current.has(threadId) ? stateRef.current.byThread[threadId]?.[0] : undefined;
         const page = await loadThreadMessages(threadId, from ? { from, before: oldest } : {});
+        // A prefetch that was opened while it loaded counts as opened.
+        const opened = explicit || openRef.current === threadId;
+        const { order, evict } = opened ? touchHeld(heldRef.current, threadId, openRef.current) : holdPrefetched(heldRef.current, threadId, openRef.current, prefetchedRef.current);
+        // A guess with no room left (every held one opened since it started) is let go rather than push one out.
+        if (evict.includes(threadId)) return;
+        if (opened) prefetchedRef.current.delete(threadId);
+        else prefetchedRef.current.add(threadId);
         // A jump keeps what is loaded; a fresh load replaces it.
         rawDispatch({ type: from ? "mergeMessages" : "setThreadMessages", threadId, messages: page.messages });
         moreRef.current.set(threadId, page.more);
-        const { order, evict } = touchHeld(heldRef.current, threadId, openRef.current);
         heldRef.current = order;
         evictHeld(evict);
         setLoadedThreadIds((prev) => (prev.has(threadId) ? prev : new Set(prev).add(threadId)));
@@ -92,9 +101,26 @@ export function useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRe
   // Whether earlier messages are left to load, so a scroll near the top asks only when there is something to get.
   const hasOlder = useCallback((threadId: string) => !!moreRef.current.get(threadId), []);
 
-  const prefetchMessages = useCallback((threadId: string) => {
-    if (!loadedRef.current.has(threadId)) void loadThreadInto(threadId, undefined, false);
-  }, [loadThreadInto]);
+  // A guess loads only when it can be held without dropping a conversation you opened. With `opened` the conversation is
+  // on screen: one already loaded (often by a prefetch) is marked as the open one, so later guesses never drop it.
+  const prefetchMessages = useCallback((threadId: string, opened = false): Promise<void> => {
+    if (opened && loadedRef.current.has(threadId)) {
+      openRef.current = threadId;
+      prefetchedRef.current.delete(threadId);
+      const { order, evict } = touchHeld(heldRef.current, threadId, threadId);
+      heldRef.current = order;
+      evictHeld(evict);
+      return Promise.resolve();
+    }
+    if (opened) return loadThreadInto(threadId, undefined, true);
+    if (loadedRef.current.has(threadId)) return Promise.resolve();
+    const running = loadingRef.current.get(threadId);
+    if (running) return running;
+    // Forget guesses no longer held (a sign-out resets the held list without evicting).
+    for (const id of prefetchedRef.current) if (!heldRef.current.includes(id)) prefetchedRef.current.delete(id);
+    if (!roomToPrefetch(heldRef.current, openRef.current, prefetchedRef.current)) return Promise.resolve();
+    return loadThreadInto(threadId, undefined, false);
+  }, [loadThreadInto, evictHeld]);
 
   const ensureThread = useCallback(async (threadId: string) => {
     if (threadMapRef.current.has(threadId)) return true;

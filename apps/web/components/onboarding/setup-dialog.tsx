@@ -63,7 +63,9 @@ export function SetupDialog() {
 }
 
 function Setup({ saved, fresh }: { saved: SetupStep; fresh: boolean }) {
-  const { accounts, profile, dispatch, loading, threads, contacts } = useApp();
+  const { accounts, profile, dispatch, loading: listLoading, fromCopy, threads, contacts } = useApp();
+  // The device copy can be from before an account finished importing, so the steps wait for the server.
+  const loading = listLoading || fromCopy;
   const signInName = useSignInName();
   const router = useRouter();
   const [step, setStep] = useState<SetupStep>(saved);
@@ -285,11 +287,11 @@ function AccountsStep() {
                   description={SERVICES[service].description}
                 >
                   {live && status !== "error" ? null : service === "google" ? (
-                    <Button size="sm" disabled={leaving} onClick={startGoogle}>{status === "error" ? "Reconnect" : "Connect"}</Button>
+                    <Button disabled={leaving} onClick={startGoogle}>{status === "error" ? "Reconnect" : "Connect"}</Button>
                   ) : service === "microsoft" ? (
                     <Button variant="secondary" asChild><Link href="/settings/accounts/microsoft">Set Up</Link></Button>
                   ) : (
-                    <Button size="sm" variant={open === service ? "secondary" : "default"} onClick={() => setOpen(open === service ? null : service)}>
+                    <Button variant={open === service ? "secondary" : "default"} onClick={() => setOpen(open === service ? null : service)}>
                       {open === service ? "Close" : status === "error" ? "Reconnect" : "Connect"}
                     </Button>
                   )}

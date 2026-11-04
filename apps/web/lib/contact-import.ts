@@ -23,8 +23,8 @@ export const MAX_IMPORT_ROWS = 500;
 
 const empty = (): ImportRow => ({ name: "", emails: [], phones: [], company: "", role: "", relationship: "", about: "", vip: false });
 
-/** Undoes safeCell (contact-export.ts): an apostrophe put in front of a formula-looking cell. */
-const unsafeCell = (v: string) => (/^'[=@+-]/.test(v) ? v.slice(1) : v);
+/** Undoes safeCell (contact-export.ts): an apostrophe put in front of a formula-looking cell, or one opening with a tab or CR. */
+const unsafeCell = (v: string) => (/^'[=@+\-\t\r]/.test(v) ? v.slice(1) : v);
 
 const uniq = <T,>(list: T[]) => [...new Set(list)];
 

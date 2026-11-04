@@ -24,7 +24,7 @@ from ai.pricing import cost_usd
 from ai.signals import TONE_RULES, plan_signals, tone_counts
 from ai.text import clean
 from ai.triage import SYSTEM as TRIAGE_SYSTEM
-from ai.triage import Triage, UserContext, apply_signals, earlier_messages, groups, known_outcome, latest_incoming, matches, pending_query, read_results, sender_outcome, triage_prompt
+from ai.triage import SENDER_DAILY_CAP, Triage, UserContext, apply_signals, earlier_messages, groups, known_outcome, latest_incoming, matches, pending_query, read_results, sender_outcome, triage_prompt
 from ai.retry import MAX_WAIT_S, Backoff, not_in
 from ai.voice import PROMPT_CHARS, build_prompt, plan_voice, tidy_rule, voice_due
 
@@ -664,10 +664,10 @@ class TriageRun(unittest.TestCase):
         self.assertNotIn("sam@x.com", str(events))
 
     def test_junk_conversation_and_twins_skip_the_model(self):
-        pending = [self.msg("m1", "t1"), self.msg("m2", "t2", account="acc2", provider_message_id="<same@x>"),
-                   self.msg("m3", "t3", provider_message_id="<same@x>")]
+        pending = [self.msg("m1", "t1"), self.msg("m2", "t2", account="acc2", provider_message_id="<same@x>", subject="Sale"),
+                   self.msg("m3", "t3", provider_message_id="<same@x>", subject="Sale")]
         rows = [{"id": m["id"], "thread_id": m["thread_id"], "direction": "inbound"} for m in pending]
-        twins = [{"user_id": "u", "provider_message_id": "<same@x>",
+        twins = [{"user_id": "u", "provider_message_id": "<same@x>", "sender_address": "sam@x.com", "subject": "Sale",
                   "message_ai": {"priority": "low", "category": "newsletter", "summary": "Sale", "needs_reply": False, "junk": True, "model": "fast"}}]
         db = FakeTriageDb(pending, rows, twins=twins, feedback=[{"thread_id": "t1", "value": "junk"}], accounts=("acc1", "acc2"))
         gemini = FakeTriageGemini()
@@ -679,12 +679,40 @@ class TriageRun(unittest.TestCase):
         self.assertEqual(db.body_reads, [])  # no bodies read when the model is not asked
 
     def test_same_email_twice_in_a_batch_is_asked_once(self):
-        pending = [self.msg("m1", "t1", provider_message_id="<same@x>"), self.msg("m2", "t2", account="acc2", provider_message_id="<same@x>")]
+        pending = [self.msg("m1", "t1", provider_message_id="<same@x>", subject="Same"), self.msg("m2", "t2", account="acc2", provider_message_id="<same@x>", subject="Same")]
         rows = [{"id": m["id"], "thread_id": m["thread_id"], "direction": "inbound"} for m in pending]
         db, gemini = FakeTriageDb(pending, rows, accounts=("acc1", "acc2")), FakeTriageGemini()
         self.assertEqual(Triage(db, gemini, "fast").run_once(), 2)
         self.assertEqual(len(gemini.calls), 1)
         self.assertEqual({r["summary"] for r in db.upserts[0][1]}, {"s1"})
+
+    def test_a_borrowed_message_id_from_another_sender_is_asked_about_on_its_own(self):
+        pending = [self.msg("m1", "t1", provider_message_id="<same@x>", subject="Invoice"),
+                   self.msg("m2", "t2", account="acc2", provider_message_id="<same@x>", subject="Invoice", sender_address="billing@evil.biz")]
+        rows = [{"id": m["id"], "thread_id": m["thread_id"], "direction": "inbound"} for m in pending]
+        twins = [{"user_id": "u", "provider_message_id": "<same@x>", "sender_address": "sam@x.com", "subject": "Other",
+                  "message_ai": {"priority": "low", "category": "fyi", "summary": "Fine", "needs_reply": False, "junk": False, "model": "fast"}}]
+        db, gemini = FakeTriageDb(pending, rows, twins=twins, accounts=("acc1", "acc2")), FakeTriageGemini()
+        self.assertEqual(Triage(db, gemini, "fast").run_once(), 2)
+        self.assertEqual(sum(p.count("=== Message ") for p, _, _ in gemini.calls), 2)  # neither the stored verdict nor each other's is copied
+        self.assertNotIn("Fine", {r["summary"] for r in db.upserts[0][1]})
+
+    def test_the_41st_message_from_one_sender_in_a_day_gets_the_neutral_verdict_without_a_model_call(self):
+        pending = [self.msg(f"m{i}", f"t{i}", sender_address="flood@spam.example") for i in range(SENDER_DAILY_CAP)]
+        rows = [{"id": m["id"], "thread_id": m["thread_id"], "direction": "inbound"} for m in pending]
+        gemini = FakeTriageGemini()
+        triage = Triage(FakeTriageDb(pending, rows), gemini, "fast")
+        self.assertEqual(triage.run_once(), SENDER_DAILY_CAP)
+        self.assertEqual(sum(p.count("=== Message ") for p, _, _ in gemini.calls), SENDER_DAILY_CAP)
+        gemini.calls.clear()
+        last = [self.msg("m41", "t41", sender_address="flood@spam.example", subject="Buy now")]
+        db = FakeTriageDb(last, [{"id": "m41", "thread_id": "t41", "direction": "inbound"}])
+        triage.db = db
+        self.assertEqual(triage.run_once(), 1)
+        self.assertEqual((gemini.calls, db.body_reads), ([], []))
+        [(_, [row])] = db.upserts
+        self.assertEqual((row["priority"], row["junk"], row["needs_reply"], row["model"]), ("normal", False, False, None))
+        self.assertEqual((row["summary"], row["traits"]["source"]), ("Buy now", "capped"))
 
     def test_a_group_the_model_will_not_answer_is_asked_one_by_one(self):
         pending = [self.msg("m1", "t1"), self.msg("m2", "t2")]
@@ -865,7 +893,8 @@ class DraftOrder(unittest.TestCase):
 
     def test_person_rules_and_voice_come_after_you(self):
         p = self.prompt(person_rules=["Calls him mate"], more_voice=["Hey Sam"])
-        self.assertLess(p.index("Replying to (name"), p.index("Rules for writing to this person:\n- Calls him mate"))
+        self.assertLess(p.index("Replying to (name"), p.index("Their style preferences for writing to this person"))
+        self.assertLess(p.index("Their style preferences for writing to this person"), p.index("- Calls him mate"))
         self.assertLess(p.index("Hey Sam"), p.index("The conversation, oldest first"))
 
     def test_unknown_recipient_is_greeted_without_a_name(self):

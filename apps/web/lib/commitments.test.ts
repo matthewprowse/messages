@@ -1,8 +1,9 @@
-// Pins down lib/commitments.ts: which promises the Summary lists and which the open conversation shows, and the due wording.
+// Pins down lib/commitments.ts: which promises the Summary lists and which the open conversation shows, the due wording,
+// and how a Realtime change is patched into the list.
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dayOf, daysBetween, dueText, isActive, promisesFor, promisesForSummary, type Commitment } from "./commitments";
+import { applyCommitment, dayOf, daysBetween, dueText, isActive, promisesFor, promisesForSummary, removeCommitment, type Commitment } from "./commitments";
 
 const now = new Date(2026, 10, 4, 10, 0, 0); // Wednesday 4 November 2026, local
 const make = (id: string, owner: "me" | "them", dueOn: string | null, extra: Partial<Commitment> = {}): Commitment => ({ id, threadId: "t1", messageId: "m1", owner, text: `Promise ${id}`, dueOn, status: "open", snoozedUntil: null, ...extra });
@@ -47,4 +48,20 @@ test("due wording", () => {
   assert.equal(dueText({ dueOn: "2026-11-01" }, now), "3 Days Overdue");
   assert.equal(dueText({ dueOn: null }, now), "No Date");
   assert.match(dueText({ dueOn: "2026-11-13" }, now), /^Due Fri 13 Nov/);
+});
+
+test("a changed promise replaces its copy in place, a done one leaves, a new one goes in by due day", () => {
+  const list = [make("a", "me", "2026-11-03"), make("b", "me", "2026-11-05"), make("n", "me", null)];
+  assert.deepEqual(applyCommitment(list, make("b", "me", "2026-11-05", { snoozedUntil: "x" })).map((c) => [c.id, c.snoozedUntil]), [["a", null], ["b", "x"], ["n", null]]);
+  assert.deepEqual(applyCommitment(list, make("a", "me", "2026-11-03", { status: "done" })).map((c) => c.id), ["b", "n"]);
+  assert.deepEqual(applyCommitment(list, make("c", "them", "2026-11-04")).map((c) => c.id), ["a", "c", "b", "n"]);
+  assert.deepEqual(applyCommitment(list, make("d", "them", null)).map((c) => c.id), ["a", "b", "n", "d"]);
+  assert.deepEqual(applyCommitment(list, make("a", "me", "2026-11-09")).map((c) => c.id), ["b", "a", "n"]);
+  assert.equal(applyCommitment(list, make("z", "me", null, { status: "done" })), list);
+});
+
+test("a deleted promise leaves, and an unknown id changes nothing", () => {
+  const list = [make("a", "me", null)];
+  assert.deepEqual(removeCommitment(list, "a"), []);
+  assert.equal(removeCommitment(list, "b"), list);
 });

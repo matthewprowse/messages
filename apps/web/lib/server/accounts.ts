@@ -1,7 +1,7 @@
 // Saving a connected account from the app: the account row and its sign-in, stored exactly as the terminal
 // connect commands store them (apps/worker/scripts/owner.ts), so the sync worker cannot tell them apart.
 
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createDecipheriv } from "node:crypto";
 import { encryptField } from "@messages/crypto";
 import { flagOn } from "@messages/crypto/flags";
 import type { UserKeys } from "@messages/crypto";
@@ -9,38 +9,75 @@ import { addressIndex } from "@messages/crypto/addresses";
 import { FIELD } from "@messages/crypto/fields";
 import { openCredential, sealCredential } from "@messages/crypto/wrap";
 import type { TablesInsert } from "@messages/db";
-import { credentialKey, keysReady, userKeys } from "./keys";
+import { cookieUser, openCookie, openRowHandoff, sealCookie, sealRowHandoff, type HandoffColumn, type HandoffPurpose } from "./handoff";
+import { credentialKey, credentialKeys, keysReady, userKeys } from "./keys";
 import { admin } from "./request";
 
+export type { HandoffPurpose } from "./handoff";
+
 /**
- * The old static key. It now seals only short-lived handoffs that no account owns yet (the 10 minute OAuth cookies,
- * a sign-in code waiting for the connector): sealJson and openJson below. Stored sign-ins and sessions use the owner's
- * own key (sealAccountJson). The same value as ENCRYPTION_KEY in apps/worker/.env, which still reads old "v1:" rows.
+ * The old static key, now only read: a sign-in or handoff sealed "v1:" before per-user keys opens with it while it is set.
+ * Nothing is sealed with it any more. Once `pnpm --filter worker keys:readiness` reports no "v1:" value left it is
+ * removed, and such a value then fails with the code legacy_key_missing.
  */
 const encryptionKey = process.env.ENCRYPTION_KEY;
 
-export const accountsReady = () => !!admin && !!encryptionKey && keysReady();
+export const accountsReady = () => !!admin && keysReady();
 
-function key(): Buffer {
-  const buf = Buffer.from(encryptionKey ?? "", "base64");
-  if (buf.length !== 32) throw new Error("ENCRYPTION_KEY must be 32 bytes, base64 encoded.");
-  return buf;
-}
-
-/** AES-256-GCM under the static key, "v1:" + base64(iv | tag | ciphertext): apps/worker/src/crypto.ts reads it. For short-lived handoffs only. */
-export function sealJson(value: unknown): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key(), iv);
-  const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-  return "v1:" + Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
-}
-
+/** Opens a "v1:" value sealed with the old static key, "v1:" + base64(iv | tag | ciphertext), no additional data. */
 export function openJson<T>(payload: string): T {
-  if (!payload.startsWith("v1:")) throw new Error("Unknown ciphertext format.");
+  if (!payload.startsWith("v1:")) throw Object.assign(new Error("Unknown ciphertext format."), { code: "unknown_format" });
+  const key = Buffer.from(encryptionKey ?? "", "base64");
+  if (key.length !== 32) throw Object.assign(new Error("A v1 value needs ENCRYPTION_KEY, which is not set."), { code: "legacy_key_missing" });
   const buf = Buffer.from(payload.slice(3), "base64");
-  const decipher = createDecipheriv("aes-256-gcm", key(), buf.subarray(0, 12));
+  const decipher = createDecipheriv("aes-256-gcm", key, buf.subarray(0, 12));
   decipher.setAuthTag(buf.subarray(12, 28));
   return JSON.parse(Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8")) as T;
+}
+
+/** Seals an OAuth sign-in cookie for this purpose under the user's own key (handoff.ts). Makes their key if they have none. */
+export async function sealHandoff(value: { userId: string }, purpose: HandoffPurpose): Promise<string> {
+  const key = await credentialKey(value.userId);
+  try {
+    return await sealCookie(key, value, purpose);
+  } finally {
+    key.fill(0);
+  }
+}
+
+/**
+ * Opens an OAuth sign-in cookie for this purpose with the key of the user it names. The callback has no session, so the
+ * key is only read, never made: a cookie naming someone without a key fails (no_key), as does any change to it.
+ */
+export async function openHandoff<T extends { userId: string }>(payload: string, purpose: HandoffPurpose): Promise<T> {
+  const user = cookieUser(payload);
+  if (!user) throw Object.assign(new Error("Unknown handoff format."), { code: "handoff_format" });
+  const keys = await credentialKeys(user, { existing: true });
+  try {
+    return await openCookie<T>(keys, payload, purpose);
+  } finally {
+    for (const k of keys) k.fill(0);
+  }
+}
+
+/** Seals a handoff to store in one column of one row (a sign-in code, an iCloud setup) under the user's own key. */
+export async function sealRowJson(userId: string, where: HandoffColumn, rowId: string, value: unknown): Promise<string> {
+  const key = await credentialKey(userId);
+  try {
+    return await sealRowHandoff(key, where, rowId, value);
+  } finally {
+    key.fill(0);
+  }
+}
+
+/** Opens a handoff stored in this column of this row: "v2:" with the user's keys, or a "v1:" one from before with the static key. */
+export async function openRowJson<T>(userId: string, where: HandoffColumn, rowId: string, payload: string): Promise<T> {
+  let held: Uint8Array<ArrayBuffer>[] = [];
+  try {
+    return await openRowHandoff<T>(async () => (held = await credentialKeys(userId)), (v) => openJson<T>(v), where, rowId, payload);
+  } finally {
+    for (const k of held) k.fill(0);
+  }
 }
 
 /** The user an account belongs to. */
@@ -65,14 +102,17 @@ export async function sealAccountJson(accountId: string, value: unknown, ownerId
   }
 }
 
-/** Opens an account's sign-in or session: "v2:" with its owner's key, or an older "v1:" with the static key. */
+/**
+ * Opens an account's sign-in or session: "v2:" with its owner's keys (during a rotation of their key, the old one too), or
+ * an older "v1:" with the static key while it is set.
+ */
 export async function openAccountJson<T>(accountId: string, payload: string, ownerId?: string): Promise<T> {
   if (!payload.startsWith("v2:")) return openJson<T>(payload);
-  const key = await credentialKey(ownerId ?? (await ownerOf(accountId)));
+  const keys = await credentialKeys(ownerId ?? (await ownerOf(accountId)));
   try {
-    return JSON.parse(await openCredential(key, accountId, payload)) as T;
+    return JSON.parse(await openCredential(keys, accountId, payload)) as T;
   } finally {
-    key.fill(0);
+    for (const k of keys) k.fill(0);
   }
 }
 

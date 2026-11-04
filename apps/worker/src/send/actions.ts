@@ -33,14 +33,29 @@ export async function claimAction(id: string): Promise<Tables<"mail_actions"> | 
   );
 }
 
+/** The conversation an action acts on, as the worker read it: whose it is. */
+export type ActionThread = { id: string; user_id: string };
+
+/**
+ * Whether the person who queued an action owns the conversation it acts on. The insert policy already says so, but
+ * the worker uses the service role and checks every row itself, as it does for sends, calendar and task writes.
+ */
+export function actionOwned(row: Pick<Tables<"mail_actions">, "thread_id" | "user_id">, thread: ActionThread | null): boolean {
+  return !!thread && row.thread_id === thread.id && row.user_id === thread.user_id;
+}
+
 /**
  * Claims the action, applies it, and makes sure it does not stay 'working' if applying throws. The connector finishes
  * the row itself on every normal path; a throw is failed here with a reason, never put back to queued, so a
- * permanently broken action cannot loop.
+ * permanently broken action cannot loop. An action on a conversation that is not its person's is failed unapplied.
  */
-export async function applyClaimed(id: string, apply: (row: Tables<"mail_actions">) => Promise<void>) {
+export async function applyClaimed(id: string, apply: (row: Tables<"mail_actions">) => Promise<void>, thread: ActionThread | null) {
   const row = await claimAction(id);
   if (!row) return;
+  if (!actionOwned(row, thread)) {
+    await finishAction(id, "This conversation belongs to another account.");
+    return;
+  }
   try {
     await apply(row);
   } catch (err) {

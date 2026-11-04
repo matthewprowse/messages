@@ -505,7 +505,7 @@ class Summarising(unittest.TestCase):
 class Upload(unittest.TestCase):
     def test_upload_starts_sends_and_waits_until_ready(self):
         replies = [
-            Response(200, {"x-goog-upload-url": "https://upload.example/u?id=1"}, b""),
+            Response(200, {"x-goog-upload-url": "https://generativelanguage.googleapis.com/upload/v1beta/files?upload_id=1"}, b""),
             Response(200, {}, json.dumps({"file": {"name": "files/f1", "uri": "https://g/files/f1", "state": "PROCESSING"}}).encode()),
             Response(200, {}, json.dumps({"name": "files/f1", "state": "ACTIVE"}).encode()),
         ]
@@ -521,8 +521,32 @@ class Upload(unittest.TestCase):
         self.assertEqual(start[2]["X-Goog-Upload-Command"], "start")
         self.assertEqual(start[2]["X-Goog-Upload-Header-Content-Length"], "3")
         self.assertEqual(json.loads(start[3]), {"file": {"display_name": "recording"}})
-        self.assertEqual((upload[1], upload[2]["X-Goog-Upload-Command"], upload[3]), ("https://upload.example/u?id=1", "upload, finalize", b"abc"))
+        self.assertEqual((upload[1], upload[2]["X-Goog-Upload-Command"], upload[3]), ("https://generativelanguage.googleapis.com/upload/v1beta/files?upload_id=1", "upload, finalize", b"abc"))
         self.assertEqual((poll[0], poll[1]), ("GET", "https://generativelanguage.googleapis.com/v1beta/files/f1"))
+
+    def test_an_upload_address_off_gemini_is_never_sent_the_key_or_the_file(self):
+        from ai.gemini_files import upload_url_ok
+
+        for bad in ("https://upload.example/u", "http://generativelanguage.googleapis.com/u", "https://generativelanguage.googleapis.com.evil.example/u",
+                    "https://x@generativelanguage.googleapis.com/u", "https://generativelanguage.googleapis.com:8443/u", None):
+            self.assertFalse(upload_url_ok(bad), bad)
+        sent = []
+
+        def request(method, url, body=None, headers=None, timeout=30):
+            sent.append(url)
+            return Response(200, {"x-goog-upload-url": "https://upload.example/u?id=1"}, b"")
+
+        with mock.patch("ai.gemini.POOL.request", side_effect=request):
+            with self.assertRaises(GeminiError):
+                Gemini("key", None).upload_file(b"abc", "audio/mp4")
+        self.assertEqual(len(sent), 1, "only the start went out")
+
+    def test_a_failed_delete_is_counted_in_the_log_not_raised(self):
+        with mock.patch("ai.gemini.POOL.request", return_value=Response(500, {}, b"")), mock.patch("ai.gemini_files.log.warn") as warn:
+            Gemini("key", None).delete_file("files/f1")
+        kind, status = warn.call_args.kwargs["kind"], warn.call_args.kwargs["status"]
+        self.assertEqual((warn.call_args.args[0], kind, status), ("gemini delete failed", "files", 500))
+        self.assertNotIn("files/f1", str(warn.call_args))
 
     def test_a_refused_upload_raises(self):
         with mock.patch("ai.gemini.POOL.request", return_value=Response(403, {}, b'{"error": {"status": "PERMISSION_DENIED"}}')):

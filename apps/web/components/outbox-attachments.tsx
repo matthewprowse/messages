@@ -1,11 +1,13 @@
 "use client";
 
 // Files attached to an outgoing message: the hook that holds, checks and uploads them, the paperclip button and the chips that list them.
-// Nothing uploads until Send.
+// Nothing uploads until Send, and what uploads is sealed with the user's key under a path with no real name in it.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { File as FileIcon, Pause, Play, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { sealBytesWith, userKeys } from "@/lib/vault";
+import { outboxFileWhere } from "@/lib/outbox-places";
 import {
   MAX_FILES,
   UploadError,
@@ -15,6 +17,7 @@ import {
   mimeOf,
   outboxPath,
   pastedName,
+  sealOutboxBytes,
   shouldTakePastedFiles,
   uploadFile,
   uniqueName,
@@ -132,10 +135,13 @@ export function useOutboxFiles(provider: AttachProvider | null, disabled = false
       const apiKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "";
       const paths = await Promise.all(list.map(async (item) => {
         if (item.path) return item.path;
-        const path = outboxPath(session.user.id, crypto.randomUUID(), item.name);
+        const path = outboxPath(session.user.id, crypto.randomUUID());
         patch(item.id, { progress: 0, error: undefined });
         try {
-          await uploadFile({ base, apiKey, token: session.access_token, path, file: item.file, mimeType: item.mimeType, onProgress: (progress) => patch(item.id, { progress }) });
+          // Sealed here, so Storage only ever holds ciphertext; the row keeps the real type for the worker.
+          const keys = await userKeys();
+          const sealed = await sealOutboxBytes(item.file, (field, bytes) => sealBytesWith(keys, field, bytes, outboxFileWhere(path)));
+          await uploadFile({ base, apiKey, token: session.access_token, path, file: sealed, mimeType: "application/octet-stream", onProgress: (progress) => patch(item.id, { progress }) });
           patch(item.id, { path, progress: undefined });
           return path;
         } catch (e) {
@@ -269,7 +275,7 @@ function VoiceChip({ item, locked, onRemove }: { item: Item; locked: boolean; on
   return (
     <li className="flex w-72 max-w-full min-w-0 items-center gap-2 rounded-md border bg-background p-1.5">
       <audio ref={ref} src={item.preview} preload="metadata" />
-      <Button type="button" variant="ghost" size="icon-sm" className="shrink-0 rounded-full" disabled={failed} onClick={toggle} aria-label={playing ? "Pause Voice Note" : "Play Voice Note"}>
+      <Button type="button" variant="ghost" size="icon" className="shrink-0" disabled={failed} onClick={toggle} aria-label={playing ? "Pause Voice Note" : "Play Voice Note"}>
         {playing ? <Pause /> : <Play />}
       </Button>
       <span className="min-w-0 flex-1">

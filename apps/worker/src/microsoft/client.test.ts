@@ -1,9 +1,9 @@
-// Tests for client.ts: GraphApiError keeps status, Graph code and Retry-After, only a dead sign-in counts as revoked, and a
-// refresh token that cannot be saved does not fail the request or get lost.
+// Tests for client.ts: GraphApiError keeps status, Graph code and Retry-After, only a dead sign-in counts as revoked, a
+// refresh token that cannot be saved does not fail the request or get lost, and the token only goes to Graph's own host.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GraphApiError, GraphClient, signInRevoked } from "./client";
+import { GraphApiError, GraphClient, graphUrl, signInRevoked } from "./client";
 import { MicrosoftAuthError } from "./oauth";
 
 test("a Graph error keeps the status, Graph's own code and Retry-After", () => {
@@ -12,6 +12,19 @@ test("a Graph error keeps the status, Graph's own code and Retry-After", () => {
   assert.equal(err.code, "HTTP_429");
   assert.equal(err.graphCode, "TooManyRequests");
   assert.equal(err.retryAfter, "12");
+});
+
+test("paths go under v1.0 and full links are kept only on graph.microsoft.com", () => {
+  assert.equal(graphUrl("/me/messages").href, "https://graph.microsoft.com/v1.0/me/messages");
+  const next = "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=abc";
+  assert.equal(graphUrl(next).href, next);
+  for (const bad of [
+    "https://evil.example.com/v1.0/me",
+    "https://graph.microsoft.com.evil.com/v1.0/me",
+    "http://graph.microsoft.com/v1.0/me",
+    "https://graph.microsoft.com:8443/v1.0/me",
+    "https://user@graph.microsoft.com/v1.0/me",
+  ]) assert.throws(() => graphUrl(bad), { code: "BAD_HOST" }, bad);
 });
 
 test("only a dead sign-in counts as revoked", () => {

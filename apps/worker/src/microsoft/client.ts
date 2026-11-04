@@ -11,6 +11,24 @@ import { MicrosoftAuthError, refreshAccessToken } from "./oauth";
 export const GRAPH = "https://graph.microsoft.com/v1.0";
 
 /**
+ * The Graph URL for a path under v1.0 or a full link Graph handed back (@odata.nextLink, a stored deltaLink). The
+ * access token goes with it, so a full link must be https on graph.microsoft.com itself; anything else throws BAD_HOST.
+ */
+export function graphUrl(url: string): URL {
+  if (!/^https?:\/\//i.test(url)) return new URL(`${GRAPH}${url}`);
+  let target: URL | null = null;
+  try {
+    target = new URL(url);
+  } catch {
+    // falls through to the error below
+  }
+  if (!target || target.protocol !== "https:" || target.hostname.toLowerCase() !== "graph.microsoft.com" || target.port || target.username || target.password) {
+    throw Object.assign(new Error("graph link is not on graph.microsoft.com"), { code: "BAD_HOST" });
+  }
+  return target;
+}
+
+/**
  * A failed Graph call. `status` is the HTTP status; `graphCode` is Graph's own, e.g. "ErrorItemNotFound";
  * `retryAfter` is Graph's Retry-After header, when it sent one with a throttled reply.
  */
@@ -107,7 +125,7 @@ export class GraphClient {
    * since Graph refused the request before doing anything. A server error is retried only for a GET.
    */
   private async send(url: string, init: GraphRequest): Promise<Response> {
-    const target = new URL(url.startsWith("https://") ? url : `${GRAPH}${url}`);
+    const target = graphUrl(url);
     for (const [key, value] of Object.entries(init.query ?? {})) if (value !== undefined) target.searchParams.set(key, String(value));
     const method = init.method ?? "GET";
     const prefer = ['IdType="ImmutableId"', ...(init.prefer ?? [])].join(", ");

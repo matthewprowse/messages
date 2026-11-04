@@ -12,7 +12,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ai import keys as keys_module
-from ai.crypto import derive_credential_key, open_credential, seal_credential
+from ai.crypto import derive_credential_key, handoff_context, open_bound, open_credential, seal_bound, seal_credential
 from ai.keys import Kms, google_access_token, set_kms, unwrap, unwrap_team, unwrap_team_ring, wrap_new
 
 ROOT = Path(__file__).resolve().parents[3] / "packages" / "crypto"
@@ -209,3 +209,25 @@ class CredentialTests(unittest.TestCase):
         sealed = seal_credential(key, "acc", "secret")
         self.assertNotEqual(sealed, seal_credential(key, "acc", "secret"))
         self.assertEqual(open_credential(key, "acc", sealed), "secret")
+
+
+class Handoffs(unittest.TestCase):
+    """A handoff stored in a row: the same "v2:" sealing bound to its table, column and row, pinned by the shared vector."""
+
+    def test_matches_the_typescript_vector_and_opens_nowhere_else(self):
+        key = derive_credential_key(bytes.fromhex(CRED["dataKeyHex"]))
+        h = CRED["handoff"]
+        self.assertEqual(handoff_context("icloud_setups", "sign_in", "5E7A0C1D-0000-4000-8000-0000000000D2"), h["context"])
+        self.assertEqual(seal_bound(key, h["context"], h["plaintext"], bytes.fromhex(h["ivHex"])), h["sealed"])
+        self.assertEqual(open_bound(key, h["context"], h["sealed"]), h["plaintext"])
+        with self.assertRaises(Exception):
+            open_bound(key, handoff_context("icloud_setups", "result", "5e7a0c1d-0000-4000-8000-0000000000d2"), h["sealed"])
+        with self.assertRaises(Exception):
+            open_credential(key, CRED["accountId"], h["sealed"])
+
+    def test_opens_with_any_key_given_the_current_first(self):
+        a, b = derive_credential_key(bytes(32)), derive_credential_key(bytes(range(32)))
+        sealed = seal_credential(b, "acc", "s")
+        self.assertEqual(open_credential([a, b], "acc", sealed), "s")
+        with self.assertRaises(Exception):
+            open_credential([a], "acc", sealed)

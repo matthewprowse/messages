@@ -7,12 +7,15 @@
     "./fields": "./src/fields.ts",
     "./addresses": "./src/addresses.ts",
     "./wrap": "./src/wrap.ts",
-    "./flags": "./src/flags.ts"
+    "./flags": "./src/flags.ts",
+    "./bound": "./src/bound.ts",
+    "./places": "./src/places.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
-    "vectors": "tsx scripts/make-vectors.ts > vectors.json"
+    "vectors": "tsx scripts/make-vectors.ts > vectors.json",
+    "vectors:bound": "tsx scripts/make-bound-vectors.ts > bound-vectors.json"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

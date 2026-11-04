@@ -3,13 +3,17 @@
 // One page to sign in and to sign up. No password to make up: Google, or a code sent to your email (the
 // email's link works too). An account with a password set can still use it. An account with two-factor sign-in on
 // is asked for its authenticator code after that first step (useAuth().mfaRequired), before it counts as signed in.
+// Only approved emails can create an account (the database refuses the rest, lib/signup-refusal.ts): a refused email or
+// Google sign-in is told so, with the way to ask for access.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { signOut, useAuth } from "@/lib/auth";
 import { cleanCode, verifiedTotp } from "@/lib/mfa";
 import { INVITE_KEY } from "@/lib/team";
+import { authErrorInUrl, isRefusedSignup } from "@/lib/signup-refusal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,7 +40,18 @@ export default function LoginPage() {
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [refused, setRefused] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // Back from Google with an error: a new account the database refused, or Google sign-in failing. The address is cleaned so a
+  // reload does not show it again.
+  useEffect(() => {
+    const problem = authErrorInUrl(window.location.search, window.location.hash);
+    if (!problem) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    if (isRefusedSignup(problem)) setRefused(true);
+    else setError("Google sign-in did not work. Try again, or use your email instead.");
+  }, []);
 
   // Into the app, or back to the team invite they were sent to sign in for. Someone new finds the setup dialog open over it.
   useEffect(() => {
@@ -60,6 +75,7 @@ export default function LoginPage() {
   const run = async (work: () => Promise<string | null>) => {
     setBusy(true);
     setError(null);
+    setRefused(false);
     try {
       setError(await work());
     } catch {
@@ -76,6 +92,10 @@ export default function LoginPage() {
 
   const sendCode = () => run(async () => {
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true, emailRedirectTo: `${window.location.origin}/login` } });
+    if (error && isRefusedSignup(error.message)) {
+      setRefused(true);
+      return null;
+    }
     if (error) return error.status === 429 ? "Too many emails sent. Wait a minute and try again." : "That email could not be used. Check it and try again.";
     setCode("");
     setMode("code");
@@ -151,20 +171,26 @@ export default function LoginPage() {
         )}
 
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        {refused && (
+          <div role="alert" className="space-y-1 text-sm">
+            <p className="font-medium">This Email Is Not On The Approved List Yet</p>
+            <p className="text-muted-foreground">Konva is open to approved emails and team invites for now. <Link href="/request-access" className="underline underline-offset-4">Join the Waitlist</Link></p>
+          </div>
+        )}
 
         <div className="space-y-2">
           <Button type="submit" className="w-full" disabled={busy}>
             {mfaRequired ? (busy ? "Checking…" : "Verify") : mode === "email" ? (busy ? "Sending…" : "Continue With Email") : mode === "code" ? (busy ? "Checking…" : "Continue") : busy ? "Signing In…" : "Sign In"}
           </Button>
           {mfaRequired ? (
-            <Button type="button" variant="link" size="sm" className="w-full" onClick={() => { setCode(""); setError(null); void signOut(); }}>Sign Out</Button>
+            <Button type="button" variant="link" className="w-full" onClick={() => { setCode(""); setError(null); void signOut(); }}>Sign Out</Button>
           ) : mode === "code" ? (
             <div className="flex justify-between">
-              <Button type="button" variant="link" size="sm" className="px-0" onClick={() => { setMode("email"); setError(null); }}>Use a Different Email</Button>
-              <Button type="button" variant="link" size="sm" className="px-0" disabled={busy} onClick={sendCode}>Send a New Code</Button>
+              <Button type="button" variant="link" className="px-0" onClick={() => { setMode("email"); setError(null); }}>Use a Different Email</Button>
+              <Button type="button" variant="link" className="px-0" disabled={busy} onClick={sendCode}>Send a New Code</Button>
             </div>
           ) : (
-            <Button type="button" variant="link" size="sm" className="w-full" onClick={() => { setMode(mode === "password" ? "email" : "password"); setError(null); }}>
+            <Button type="button" variant="link" className="w-full" onClick={() => { setMode(mode === "password" ? "email" : "password"); setError(null); }}>
               {mode === "password" ? "Email Me a Code Instead" : "Sign In With a Password"}
             </Button>
           )}

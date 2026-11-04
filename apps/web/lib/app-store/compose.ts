@@ -2,9 +2,12 @@
 
 
 import type { Tables } from "@messages/db";
+import { FIELD } from "@messages/crypto/fields";
 import type { Attachment, Draft } from "../types";
 import { supabase } from "../supabase";
+import { seal } from "../vault";
 import { attachmentRows, type OutboxUpload } from "../outbox-files";
+import { outboxFileNamePlace } from "../outbox-places";
 
 export interface NewEmail {
   accountId: string;
@@ -81,11 +84,14 @@ export interface PendingSend {
  * Lists uploaded files on a queued outbox row, straight after it is inserted with attachment_count.
  * Tried twice; the worker fails the row if they never arrive. Each file has its own position, so a
  * retry after a lost answer is refused as a duplicate (23505), which means the first try worked. If
- * the worker has already taken the row, the files were all there, so that counts as attached too.
+ * the worker has already taken the row, the files were all there, so that counts as attached too. Each file's name is
+ * sealed like the body; a key request that fails rejects, which the caller treats as not attached.
  */
 export async function attachToOutbox(outboxId: string, files: OutboxUpload[]): Promise<boolean> {
   if (files.length === 0) return true;
-  const rows = attachmentRows(outboxId, files);
+  // Each name is sealed for this outbox row and its own file, so a name, a file and a row cannot be recombined.
+  const named = await Promise.all(files.map(async (f) => ({ ...f, filename: await seal(FIELD.filename, f.filename, outboxFileNamePlace(outboxId, f.path)) })));
+  const rows = attachmentRows(outboxId, named);
   for (let attempt = 0; attempt < 2; attempt++) {
     const { error } = await supabase.from("outbox_attachments").insert(rows);
     if (!error) return true;

@@ -7,6 +7,7 @@ import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "../supabase";
 import { isOverdue, isTempTask, taskOfWrite, taskWriteFields, tempTaskId, withTicks, type PendingTick, type TaskForm } from "../tasks";
 import { seal } from "../vault";
+import { queuePlace } from "../outbox-places";
 import { track } from "../analytics";
 import type { Task } from "../types";
 import { followTaskUpdate } from "./task-follow";
@@ -58,11 +59,13 @@ export function useTasks({ userId, stored, rawDispatch, stateRef, saveFailed }: 
 
   // Tasks made, changed and deleted here go through the same queue as a tick. Title and notes are sealed before the row is stored.
   const queueTaskWrite = useCallback(async (row: { action: "create" | "update" | "delete"; task_id?: string; account_id?: string }, write?: ReturnType<typeof taskWriteFields>) => {
-    const sealed = write ? await Promise.all([seal(FIELD.taskTitle, write.title), seal(FIELD.taskNotes, write.notes)]).catch(() => null) : undefined;
+    // The id is chosen here so the title and notes are sealed for this row alone (outbox-places.ts).
+    const id = crypto.randomUUID();
+    const sealed = write ? await Promise.all([seal(FIELD.taskTitle, write.title, queuePlace("task_updates", id, "title")), seal(FIELD.taskNotes, write.notes, queuePlace("task_updates", id, "notes"))]).catch(() => null) : undefined;
     if (write && !sealed) return null;
     const { data, error } = await supabase
       .from("task_updates")
-      .insert({ ...row, ...(write && sealed ? { title: sealed[0], notes: sealed[1], due_at: write.due_at, due_all_day: write.due_all_day, priority: write.priority } : {}) })
+      .insert({ ...row, id, ...(write && sealed ? { title: sealed[0], notes: sealed[1], due_at: write.due_at, due_all_day: write.due_all_day, priority: write.priority } : {}) })
       .select("id")
       .single();
     return error || !data ? null : data.id;

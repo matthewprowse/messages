@@ -12,9 +12,17 @@ ARG EXTRA_REQUIREMENTS=
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /src
 COPY apps/ai/requirements*.txt ./
+# Every download is checked against a hash once deploy/lock-ai-requirements.sh has written the *.lock.txt files: a lock
+# holds the whole tree (an extra one includes requirements.txt), so it installs alone with --no-deps. Until a lock exists
+# the image installs from the pins as before, so the build never breaks while the locks are being made.
 RUN python -m venv /opt/venv \
- && /opt/venv/bin/pip install -r requirements.txt \
- && if [ -n "$EXTRA_REQUIREMENTS" ]; then /opt/venv/bin/pip install -r "$EXTRA_REQUIREMENTS"; fi
+ && if [ -n "$EXTRA_REQUIREMENTS" ]; then lock="${EXTRA_REQUIREMENTS%.txt}.lock.txt"; else lock=requirements.lock.txt; fi \
+ && if [ -f "$lock" ]; then \
+      /opt/venv/bin/pip install --require-hashes --no-deps -r "$lock"; \
+    else \
+      /opt/venv/bin/pip install -r requirements.txt \
+      && if [ -n "$EXTRA_REQUIREMENTS" ]; then /opt/venv/bin/pip install -r "$EXTRA_REQUIREMENTS"; fi; \
+    fi
 
 FROM python:3.13-slim-bookworm@sha256:281d39ff02e3b389401586134ff9e6572954687822a58055ec07a60ded4e0b7f
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin konva

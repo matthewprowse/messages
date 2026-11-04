@@ -32,7 +32,7 @@ function trackTime(screen: string, secs: number) {
 export function AnalyticsTracker() {
   const pathname = usePathname();
   const { session } = useAuth();
-  const { profile, loading } = useApp();
+  const { profile, loading, fromCopy } = useApp();
   const signedIn = !!session;
   const entered = useRef<{ screen: string; visible: number; since: number | null }>({ screen: "", visible: 0, since: null });
   const opened = useRef(false);
@@ -72,13 +72,20 @@ export function AnalyticsTracker() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname, signedIn]);
 
-  // How long the first list takes to appear after the app opens.
+  // How long the first list takes to load from the server after the app opens, and apart from that, how long the
+  // device copy takes to show (lib/local-copy) on the opens that have one.
   const timed = useRef(false);
+  const copyTimed = useRef(false);
   useEffect(() => {
-    if (!signedIn || loading || timed.current) return;
+    if (!signedIn) return;
+    if (fromCopy && !copyTimed.current) {
+      copyTimed.current = true;
+      track("load_timing", { what: "inbox_copy", ms: Math.round(performance.now()) });
+    }
+    if (loading || fromCopy || timed.current) return;
     timed.current = true;
     track("load_timing", { what: "conversation_list", ms: Math.round(performance.now()) });
-  }, [signedIn, loading]);
+  }, [signedIn, loading, fromCopy]);
 
   useEffect(() => {
     const onVisibility = () => {

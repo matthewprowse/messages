@@ -3,7 +3,8 @@
 // Reading and writing a note's links (note_links, 20261118180000_note_links.sql) and making a note straight from
 // somewhere else in the app (a conversation, a contact, a meeting). This works without the Notes page's provider, so
 // the Notes chip and quick capture can be used on any screen: a note made here opens at /notes/<id>, where the
-// provider loads the list afresh. Titles are sealed with the user's keys, as everywhere in notes.
+// provider loads the list afresh. Titles are sealed with the user's keys, as everywhere in notes. The notes linked to
+// each conversation, contact or event are kept in memory, so opening a conversation again does not read them again.
 
 import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
@@ -11,9 +12,16 @@ import { open } from "./vault";
 import { insertNoteRow } from "./notes";
 import { linkColumn, linkInsert, targetOfRow, uniqueTargets, type LinkRow, type LinkTarget } from "./note-link-map";
 import { track } from "./analytics";
+import { createMemoryCache } from "./memory-cache";
 
 /** A note as the Notes chip lists it. */
 export interface LinkedNote { id: string; title: string; updatedAt: string }
+
+/** How long a kept list of linked notes is shown without reading it again. Opening the list always reads it. */
+export const LINKED_NOTES_FRESH_MS = 2 * 60_000;
+// Titles are opened here: memory only, emptied on sign out.
+const linked = createMemoryCache<LinkedNote[]>({ max: 100 });
+const linkKey = (t: LinkTarget) => `${t.kind}|${t.id}`;
 
 /** Where a note's links are stored, as its id and target. */
 export interface StoredLink { rowId: string; target: LinkTarget }
@@ -32,12 +40,14 @@ export async function addNoteLinks(noteId: string, targets: LinkTarget[]): Promi
   // One insert each: the unique indexes are partial, which an upsert cannot name, and a repeat (23505) is fine.
   const results = await Promise.all(rows.map((r) => supabase.from("note_links").insert(r)));
   const failed = results.find((r) => r.error && r.error.code !== "23505");
+  for (const t of targets) linked.invalidate(linkKey(t));
   if (failed?.error) throw failed.error;
 }
 
 /** Takes one link off a note. */
 export async function removeNoteLink(noteId: string, target: LinkTarget): Promise<void> {
   const { error } = await supabase.from("note_links").delete().eq("note_id", noteId).eq(linkColumn(target.kind), target.id);
+  linked.invalidate(linkKey(target));
   if (error) throw error;
 }
 
@@ -48,6 +58,16 @@ export async function loadLinkedNotes(target: LinkTarget): Promise<LinkedNote[]>
   const rows = (data as unknown as { notes: { id: string; title: string; updated_at: string; archived: boolean } }[]).map((r) => r.notes).filter((n) => !n.archived);
   const notes = await Promise.all(rows.map(async (n) => ({ id: n.id, title: (await open(FIELD.noteTitle, n.title)) ?? "", updatedAt: n.updated_at })));
   return notes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** The notes linked to this as last read, or undefined. */
+export function cachedLinkedNotes(target: LinkTarget): LinkedNote[] | undefined {
+  return linked.get(linkKey(target));
+}
+
+/** loadLinkedNotes through the cache: the kept list when read within maxAgeMs, else one read shared by every caller. */
+export function loadLinkedNotesCached(target: LinkTarget, maxAgeMs = LINKED_NOTES_FRESH_MS): Promise<LinkedNote[]> {
+  return linked.load(linkKey(target), () => loadLinkedNotes(target), maxAgeMs);
 }
 
 export interface CaptureOptions {

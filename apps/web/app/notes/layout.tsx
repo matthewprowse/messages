@@ -18,7 +18,7 @@ export default function NotesLayout({ children }: { children: React.ReactNode })
       <NotesViewProvider>
         <NoteCaptureShortcut />
         <div className="flex h-full min-h-0">
-          <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-80 lg:w-1/3", isDetail ? "hidden" : "flex")}>
+          <aside className={cn("h-full w-full shrink-0 flex-col md:flex md:w-80 md:border-r lg:w-1/3", isDetail ? "hidden" : "flex")}>
             <NoteList />
           </aside>
           <section className={cn("h-full w-full min-w-0 shrink-0 flex-col bg-muted/50 md:flex md:flex-1", isDetail ? "flex" : "hidden")}>{children}</section>

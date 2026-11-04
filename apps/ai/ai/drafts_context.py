@@ -13,9 +13,12 @@ from .text import clean
 
 SIMILAR_LIMIT = 3
 MIN_SIMILARITY = 0.7  # cosine similarity below this is not "an email like this one"
-SIMILAR_IN_CHARS = 250
-SIMILAR_OUT_CHARS = 500
+# Similar replies and the extra voice examples come from other conversations: they are there for how the person writes,
+# so they are kept short enough to show a voice and too short to carry another client's details into this reply.
+SIMILAR_IN_CHARS = 160
+SIMILAR_OUT_CHARS = 300
 VOICE_CHARS = 400
+MORE_VOICE_CHARS = 250  # of each extra voice example (pick_more_voice), after the RECENT_VOICE at VOICE_CHARS
 OLDER_CHARS = 600  # of a message older than the last two in the conversation; the last two get 1500
 MAX_VOICE = 6  # similar replies and voice examples together, unless this person's own emails add more
 RECENT_VOICE = 2  # recent sent emails in the part of the prompt that is the same for every draft
@@ -112,12 +115,21 @@ def stale(d: dict[str, Any], newest_first: list[dict[str, Any]], choices: str | 
         return False
 
 
-def pick_voice(to_them: list[dict[str, Any]], recent: list[dict[str, Any]], *, limit: int = MAX_VOICE, skip: list[str] | None = None) -> list[str]:
-    """A few of their own sent emails, to this person first, then anyone, at most `limit`. Emails
+def others_voice_ok(newest_first: list[dict[str, Any]], to_them: list[dict[str, Any]], suspicious: bool) -> bool:
+    """Whether a reply may be shown other conversations (similar replies, more sent mail) for its voice. Not when the
+    latest message is flagged suspicious, nor for a sender they have never written to (nothing outbound in this
+    conversation and no sent mail to them): a stranger's email is the one that would ask for another client's details."""
+    if suspicious:
+        return False
+    return any(m.get("direction") == "outbound" for m in newest_first) or bool(to_them)
+
+
+def pick_voice(to_them: list[dict[str, Any]], recent: list[dict[str, Any]], *, limit: int = MAX_VOICE, skip: list[str] | None = None, chars: int = VOICE_CHARS) -> list[str]:
+    """A few of their own sent emails, to this person first, then anyone, at most `limit`, each cut to chars. Emails
     already shown as similar replies (`skip`) are not repeated."""
     picked: list[str] = []
     for m in to_them + recent:
-        text = clean(m.get("body_text"), m.get("body_html"), limit=VOICE_CHARS)
+        text = clean(m.get("body_text"), m.get("body_html"), limit=chars)
         if text and text not in picked and text[:200] not in [s[:200] for s in skip or []] and len(picked) < max(limit, 0):
             picked.append(text)
     return picked
@@ -128,9 +140,9 @@ def pick_more_voice(to_them: list[dict[str, Any]], recent: list[dict[str, Any]],
     of their emails to this person, then more recent mail while the prompt holds fewer than MAX_VOICE
     examples in all. Nothing already shown (recent or a similar reply) is repeated."""
     skip = shown + [reply for _, reply in similar]
-    theirs = pick_voice(to_them, [], limit=TO_THEM_VOICE, skip=skip)
+    theirs = pick_voice(to_them, [], limit=TO_THEM_VOICE, skip=skip, chars=MORE_VOICE_CHARS)
     room = MAX_VOICE - len(similar) - len(shown) - len(theirs)
-    return theirs + pick_voice([], recent, limit=room, skip=skip + theirs)
+    return theirs + pick_voice([], recent, limit=room, skip=skip + theirs, chars=MORE_VOICE_CHARS)
 
 
 def pick_similar(rows: list[dict[str, Any]], current_thread: str) -> list[tuple[str, str]]:

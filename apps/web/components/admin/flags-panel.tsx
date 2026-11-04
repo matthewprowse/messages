@@ -41,7 +41,7 @@ function FlagRow({ flag, onSaved }: { flag: AdminFlag; onSaved: () => void }) {
         end={
           <>
             <Switch aria-label={flagLabel(flag.key)} checked={enabled} onCheckedChange={setEnabled} />
-            <Button size="sm" variant="secondary" className="ml-2" disabled={!changed || busy} onClick={() => void save()}>Save</Button>
+            <Button variant="secondary" className="ml-2" disabled={!changed || busy} onClick={() => void save()}>Save</Button>
           </>
         }
       />

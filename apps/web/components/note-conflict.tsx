@@ -27,9 +27,9 @@ export function NoteConflictBar({ id }: { id: string }) {
             ? "Your latest changes are not saved yet. Save the note again to keep what you wrote."
             : "It was edited in another tab or on another device. Your changes are not saved yet, and nothing is overwritten until you choose."}
           <div className="mt-2 flex flex-wrap gap-2">
-            {other !== null && <Button size="sm" disabled={busy} onClick={() => void pick("both")}>Keep Both</Button>}
-            {other !== null && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void pick("theirs")}>Use Other Version</Button>}
-            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void pick("mine")}>{other === null ? "Save Again" : "Keep Mine Only"}</Button>
+            {other !== null && <Button disabled={busy} onClick={() => void pick("both")}>Keep Both</Button>}
+            {other !== null && <Button variant="secondary" disabled={busy} onClick={() => void pick("theirs")}>Use Other Version</Button>}
+            <Button variant="secondary" disabled={busy} onClick={() => void pick("mine")}>{other === null ? "Save Again" : "Keep Mine Only"}</Button>
           </div>
         </AlertDescription>
       </Alert>

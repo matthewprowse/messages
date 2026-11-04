@@ -37,7 +37,7 @@ function DailyLimit({ value, onSaved }: { value: number; onSaved: () => void }) 
       end={
         <>
           <Input aria-label="Daily AI spend limit in dollars" aria-invalid={!valid || undefined} inputMode="decimal" className="h-8 w-20 text-right" value={text} onChange={(e) => setText(e.target.value)} />
-          <Button size="sm" variant="secondary" disabled={!valid || busy || n === value} onClick={() => void save()}>Save</Button>
+          <Button variant="secondary" disabled={!valid || busy || n === value} onClick={() => void save()}>Save</Button>
         </>
       }
     />

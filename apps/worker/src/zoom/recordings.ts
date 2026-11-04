@@ -21,6 +21,8 @@ const PAGE_SIZE = 300;
 export const TRANSCRIPT_GRACE_MS = 2 * 60 * 60_000;
 /** The largest recording uploaded for transcribing: Supabase's default upload limit. */
 export const MAX_RECORDING_BYTES = 50 * 1024 * 1024;
+/** A transcript is text; one bigger than this is not a real meeting's. */
+const MAX_TRANSCRIPT_BYTES = 10 * 1024 * 1024;
 /** The private bucket recordings are uploaded to, at <user id>/meetings/<meeting id>/<uuid>. */
 export const RECORDINGS_BUCKET = "attachments";
 
@@ -109,7 +111,8 @@ export interface Sealer {
   seal(field: Field, value: string | null): Promise<string | null>;
   sealAddress(value: string | null): Promise<string | null>;
   /** A file's bytes sealed with the user's key, or null when sealing is off (the bytes are then stored as they are). */
-  sealBytes?(field: Field, bytes: Buffer): Promise<Buffer | null>;
+  /** `where` is the object's place ("attachments/<path>"), which the bytes are bound to once bound values are on. */
+  sealBytes?(field: Field, bytes: Buffer, where?: string): Promise<Buffer | null>;
 }
 
 export interface RecordingSyncContext {
@@ -198,7 +201,8 @@ export class RecordingSync {
     const meta: ZoomMeetingMeta = {
       uuid: meeting.uuid,
       meeting_id: meeting.id,
-      join_url: before?.join_url ?? (await this.joinUrl(meeting.id)),
+      // Sealed like a calendar event's link; one stored before sealing stays as it is until the backfill seals it.
+      join_url: before?.join_url ?? (await this.sealer.seal(FIELD.eventLink, await this.joinUrl(meeting.id))),
     };
     const row: TablesInsert<"meetings"> = {
       user_id: this.ctx.userId,
@@ -214,7 +218,7 @@ export class RecordingSync {
     };
 
     if (plan.kind === "transcript") {
-      const vtt = (await this.api.download(plan.file.download_url!)).toString("utf8");
+      const vtt = (await this.api.download(plan.file.download_url!, MAX_TRANSCRIPT_BYTES)).toString("utf8");
       const segments = parseVtt(vtt);
       if (segments.length > 0) {
         Object.assign(row, { status: "transcribed", transcript_source: "provider", transcript: await this.sealer.seal(FIELD.transcript, JSON.stringify(segments)) });
@@ -235,13 +239,18 @@ export class RecordingSync {
 
   /** Uploads the audio for the AI worker, which transcribes meetings whose provider_meta names a recording. */
   private async uploadAudio(meetingId: string, file: ZoomRecordingFile, meta: ZoomMeetingMeta) {
-    const bytes = await this.api.download(file.download_url!);
-    if (bytes.length > MAX_RECORDING_BYTES) {
+    // Zoom's file_size was checked in the plan, but the download is capped too in case it was missing or wrong.
+    const bytes = await this.api.download(file.download_url!, MAX_RECORDING_BYTES).catch((err: unknown) => {
+      if (err instanceof ZoomApiError && err.status === 413) return null;
+      throw err;
+    });
+    if (!bytes) {
       await this.store.update(meetingId, { status: "failed", error: "The recording is too long to transcribe." });
       return;
     }
-    const sealed = (await this.sealer.sealBytes?.(FIELD.recordingData, bytes)) ?? null;
-    const recording = { storage_path: `${this.ctx.userId}/meetings/${meetingId}/${randomUUID()}`, mime_type: "audio/mp4", ...(sealed ? { sealed: true } : {}) };
+    const storagePath = `${this.ctx.userId}/meetings/${meetingId}/${randomUUID()}`;
+    const sealed = (await this.sealer.sealBytes?.(FIELD.recordingData, bytes, `attachments/${storagePath}`)) ?? null;
+    const recording = { storage_path: storagePath, mime_type: "audio/mp4", ...(sealed ? { sealed: true } : {}) };
     await this.store.upload(recording.storage_path, sealed ?? bytes, sealed ? "application/octet-stream" : recording.mime_type);
     await this.store.update(meetingId, { status: "waiting", transcript_source: "recording", provider_meta: { ...meta, recording } as unknown as Json });
   }

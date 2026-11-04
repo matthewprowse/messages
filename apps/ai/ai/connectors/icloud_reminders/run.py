@@ -21,6 +21,7 @@ from ... import log
 from ...config import _load_env_file, check_encryption, flag_on
 from ...supabase import Supabase, missing_relation
 from ...vault import Vault
+from ..tempdirs import sweep_stale
 from .setup import SetupRunner, Setups
 from .store import Store
 from .sync import AccountSync
@@ -34,7 +35,7 @@ RUNNING = ("connecting", "syncing", "connected")
 class Config:
     supabase_url: str
     service_role_key: str
-    encryption_key: str  # the sync worker's ENCRYPTION_KEY, for sign-ins and sessions
+    encryption_key: str  # the sync worker's old ENCRYPTION_KEY, only for "v1:" sign-ins and sessions not yet resealed; may be empty
     key_wrapping_key: str
     encrypt_content: bool
 
@@ -57,7 +58,8 @@ def load() -> Config:
     return Config(
         supabase_url=required("SUPABASE_URL"),
         service_role_key=required("SUPABASE_SERVICE_ROLE_KEY"),
-        encryption_key=required("ENCRYPTION_KEY"),
+        # Optional: only reads sign-ins sealed before per-user keys. Unset once `pnpm --filter worker keys:readiness` reports none.
+        encryption_key=os.environ.get("ENCRYPTION_KEY", "").strip(),
         key_wrapping_key=wrapping_key,
         encrypt_content=flag_on("ENCRYPT_CONTENT"),
     )
@@ -151,7 +153,8 @@ def main() -> None:
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     log.info("icloud reminders connector starting", encrypt_content=cfg.encrypt_content)
-    setups = SetupRunner(Setups(db, cfg.encryption_key), stop)
+    sweep_stale("konva-icloud-")  # Apple session cookies left by a run that was killed before it could tidy up
+    setups = SetupRunner(Setups(db, cfg.encryption_key, vault), stop)
     threading.Thread(target=setups.run, name="icloud-setups", daemon=True).start()
     try:
         while not stop.is_set():

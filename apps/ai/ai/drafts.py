@@ -22,7 +22,10 @@ A pre-draft (drafts.auto, asked for by the app with public.request_auto_draft wh
 written after the drafts people asked for, and dropped as 'expired' without asking the model when its
 message (for_message_id) is no longer the latest or has guided drafting choices: those need your
 decision first. A pre-draft that is replaced is expired, not discarded, so learning never reads a
-draft you did not see as one you threw away.
+draft you did not see as one you threw away. A pre-draft that states an amount, account, phone number or address that
+only the other side's newest message gives (drafts_facts.held_for_review) is stored as 'review' instead of 'active':
+the app shows it as one to check before use, beside any live draft, which it never replaces. It lives as a live draft
+does: a newer draft in the conversation, or a newer message (public.expire_auto_drafts), expires it.
 
 A draft with tone 'edit' carries text you wrote yourself (drafts.source). It is not rewritten: the same
 prompt, ending with your text instead, asks for the fewest changes that fix it (EDIT_SYSTEM). Shorter,
@@ -88,7 +91,7 @@ from .drafts_context import (  # noqa: F401  re-exported: other modules and test
     pick_voice,
     stale,
 )
-from .drafts_facts import RETRY_TEMPERATURE, check, needs_retry, retry_note
+from .drafts_facts import RETRY_TEMPERATURE, check, held_for_review, needs_retry, retry_note
 from .drafts_gather import GatherMixin
 from .drafts_prompt import (  # noqa: F401  re-exported: other modules and tests import these from here
     ADJUST_SYSTEM,
@@ -248,11 +251,15 @@ class Drafts(GatherMixin):
                 self.claims.release("draft", [d["id"]])
             self._active_until = time.monotonic() + ACTIVE_FOR_S
 
+    def _mine(self, d: dict[str, Any], **filters: str) -> dict[str, str]:
+        """Filters for a write to this draft's row. The worker uses the service role, so the owner is named too."""
+        return {"id": f"eq.{d['id']}", **({"user_id": f"eq.{d['user_id']}"} if d.get("user_id") else {}), **filters}
+
     def _fail(self, d: dict[str, Any], reason: str) -> None:
-        self.db.update("drafts", {"id": f"eq.{d['id']}"}, {"status": "failed", "error": reason, "updated_at": _now()}, minimal=True)
+        self.db.update("drafts", self._mine(d), {"status": "failed", "error": reason, "updated_at": _now()}, minimal=True)
 
     def _expire(self, d: dict[str, Any]) -> None:
-        self.db.update("drafts", {"id": f"eq.{d['id']}", "status": "eq.pending"}, {"status": "expired", "updated_at": _now()}, minimal=True)
+        self.db.update("drafts", self._mine(d, status="eq.pending"), {"status": "expired", "updated_at": _now()}, minimal=True)
 
     def _draft(self, d: dict[str, Any]) -> None:
         try:
@@ -261,7 +268,7 @@ class Drafts(GatherMixin):
             if d.get("audio_path"):  # heard or not, a recording is not kept once its draft is done
                 if own_audio_path(d.get("user_id"), d["audio_path"]):
                     self.db.remove_files(BUCKET, [d["audio_path"]])
-                self.db.update("drafts", {"id": f"eq.{d['id']}"}, {"audio_path": None}, minimal=True)
+                self.db.update("drafts", self._mine(d), {"audio_path": None}, minimal=True)
 
     def _recording(self, d: dict[str, Any]) -> tuple[bytes, str] | None:
         """The recording of what the draft should say, opened, with its type; None if it cannot be read."""
@@ -269,7 +276,7 @@ class Drafts(GatherMixin):
             log.warn("draft recording path refused", draft=d["id"])
             return None
         try:
-            data = self.vault.open_bytes(d["user_id"], VOICE_INSTRUCTION, self.db.download(BUCKET, d["audio_path"]))
+            data = self.vault.open_bytes(d["user_id"], VOICE_INSTRUCTION, self.db.download(BUCKET, d["audio_path"]), f"{BUCKET}/{d['audio_path']}")
         except Exception as err:
             log.warn("draft recording unavailable", draft=d["id"], code=log.code_of(err))
             return None
@@ -358,18 +365,22 @@ class Drafts(GatherMixin):
         if not body:
             self._fail(d, "The draft came back empty. Try again.")
             return
-        done: dict[str, Any] = {"body": self.vault.seal(d["user_id"], DRAFT, body), "status": "active", "model": model, "error": None, "updated_at": _now()}
+        # Sealed for this draft's own columns (packages/crypto/src/places.ts): what you send from it is what was written for it.
+        done: dict[str, Any] = {"body": self.vault.seal(d["user_id"], DRAFT, body, "drafts.body", d["id"]), "status": "active", "model": model, "error": None, "updated_at": _now()}
         if report is not None:
             # The report names details from the draft, so it is sealed as the draft is; the audit is counts only.
-            done["report"] = self.vault.seal(d["user_id"], DRAFT, json.dumps(report, separators=(",", ":")))
+            done["report"] = self.vault.seal(d["user_id"], DRAFT, json.dumps(report, separators=(",", ":")), "drafts.report", d["id"])
             done["audit"] = gathered.get("audit")
         title = plain_dashes((result.get("subject") or "").replace("\n", " ")).strip()[:200] if subject else ""
         if title:
-            done["subject"] = self.vault.seal(d["user_id"], SUBJECT, title)
+            done["subject"] = self.vault.seal(d["user_id"], SUBJECT, title, "drafts.subject", d["id"])
         said = (result.get("said") or "").strip() if audio else ""
         if said:  # what you said becomes the instruction, so the app shows it and another try reuses it
-            done["instruction"] = self.vault.seal(d["user_id"], INSTRUCTION, said[:1000])
-        written = self.db.update("drafts", {"id": f"eq.{d['id']}", "status": "eq.pending"}, done)
+            done["instruction"] = self.vault.seal(d["user_id"], INSTRUCTION, said[:1000], "drafts.instruction", d["id"])
+        held = bool(d.get("auto")) and held_for_review(report)
+        if held:  # shown marked for checking, never as the live draft (20261124160100_draft_review_status.sql)
+            done["status"] = "review"
+        written = self.db.update("drafts", self._mine(d, status="eq.pending"), done)
         if not written:
             # The app gave up waiting and withdrew it, so the draft it already shows (if any) stays.
             log.info("draft withdrawn", draft=d["id"])
@@ -377,12 +388,23 @@ class Drafts(GatherMixin):
         if compose:  # a new message has no conversation, and the dialog keeps its own draft
             log.info("draft written", draft=d["id"])
             return
+        # One draft to check per conversation: this one replaces any older. It was never the live draft, so it is
+        # expired, not discarded: learning must not read a draft you were not offered as one you threw away.
+        self.db.update(
+            "drafts",
+            {"thread_id": f"eq.{thread['id']}", "user_id": f"eq.{d['user_id']}", "status": "eq.review", "id": f"neq.{d['id']}"},
+            {"status": "expired", "updated_at": _now()},
+            minimal=True,
+        )
+        if held:  # the live draft, if any, stays; no next step rides on a draft still to be checked
+            log.info("pre-draft held for review", draft=d["id"], review=report["review"] if report else 0)
+            return
         # One live draft per conversation: older ones are replaced. One you asked for again was turned
         # down; one a pre-draft replaces answered an older message, and is only out of date; one you
         # edited or adjusted was kept and worked on.
         self.db.update(
             "drafts",
-            {"thread_id": f"eq.{thread['id']}", "status": "eq.active", "id": f"neq.{d['id']}"},
+            {"thread_id": f"eq.{thread['id']}", "user_id": f"eq.{d['user_id']}", "status": "eq.active", "id": f"neq.{d['id']}"},
             {"status": "expired" if d.get("auto") else "revised" if revises(d) else "discarded", "updated_at": _now()},
             minimal=True,
         )
@@ -394,7 +416,7 @@ class Drafts(GatherMixin):
         """The fact report for a model answer: its body against everything it was written from, and what the person
         said into a recording (which is part of what the draft may rightly state)."""
         spoken = (result.get("said") or "") if isinstance(result.get("said"), str) else ""
-        return check(plain_dashes(result.get("body")), list(gathered.get("evidence") or []) + [spoken])
+        return check(plain_dashes(result.get("body")), list(gathered.get("evidence") or []) + [spoken], list(gathered.get("untrusted") or []))
 
     def _hedged(self, call: Any, *, hedge: bool = True) -> dict[str, Any]:
         """call(), and when it has not answered after HEDGE_AFTER_S, the same call again: whichever answers

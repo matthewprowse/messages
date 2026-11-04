@@ -218,6 +218,18 @@ test("share_from is respected: older messages stay under the agent's key with no
   assert.deepEqual(store.attachments.map((a) => a.workspace_id), [null, WS, WS]);
 });
 
+test("a group's name moves to the team's key with the chat, even when its latest message is older than the share, and back", async () => {
+  const f = await fixture();
+  const store = new FakeStore({ share_from: "2026-11-01T00:00:00Z", is_group: true });
+  await seed(f, store);
+  store.thread_.group_name = await encryptField(f.user, FIELD.name, "Mokoena Family");
+  await runShareJob(job("to_work"), store, f.keys);
+  assert.equal(await decryptTeamField(f.team, FIELD.name, store.thread_.group_name!), "Mokoena Family");
+  store.thread_.workspace_id = null;
+  await runShareJob(job("to_personal"), store, f.keys);
+  assert.equal(await decryptField(f.user, FIELD.name, store.thread_.group_name!), "Mokoena Family");
+});
+
 test("a chat shared from today keeps an older preview and summary under the agent's key, and still seals its subject", async () => {
   const f = await fixture();
   const store = new FakeStore({ share_from: "2026-11-01T00:00:00Z" });

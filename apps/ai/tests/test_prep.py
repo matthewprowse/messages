@@ -2,13 +2,15 @@
 summaries (no model), who counts as a guest, and that the brief is written sealed once per start time."""
 
 import json
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 
 import ai.prep as prep
 from ai.contact_facts import Facts, MeetingFact, ThreadFact, ago_text, facts_lines, parse_actions, preferred_channel
-from ai.fields import SUMMARY
-from ai.prep import Prep, guest_emails, person_brief, prep_due
+from ai.crypto import decrypt_field, derive_user_keys, encrypt_field, is_ciphertext
+from ai.fields import EVENT_GUESTS, SUMMARY
+from ai.prep import Prep, guest_emails, open_guests, person_brief, prep_due
 
 NOW = datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc)
 
@@ -139,6 +141,42 @@ class RunOnce(unittest.TestCase):
         self.assertTrue(row["brief"].startswith(f"sealed:{SUMMARY}:"))
         body = json.loads(row["brief"].split(":", 2)[2])
         self.assertEqual(body["people"][0]["name"], "Sam")
+
+
+class SealedGuests(unittest.TestCase):
+    """The sync worker seals an event's guest list whole, as one JSON string under EVENT_GUESTS (calendar/event-text.ts)."""
+
+    def setUp(self):
+        self.keys = derive_user_keys(os.urandom(32))
+        keys = self.keys
+
+        class RealVault(Vault):
+            def open(self, user_id, field, value):
+                return decrypt_field(keys, field, value) if is_ciphertext(value) else value
+
+        self.vault = RealVault()
+
+    def test_a_sealed_list_opens_and_a_plain_one_reads_as_it_is(self):
+        guests = [{"email": "Sam@X.com"}, {"email": "me@x.com", "self": True}]
+        sealed = encrypt_field(self.keys, EVENT_GUESTS, json.dumps(guests))
+        self.assertEqual(open_guests(self.vault, "u", sealed), guests)
+        self.assertEqual(open_guests(self.vault, "u", guests), guests)
+        self.assertEqual(guest_emails(open_guests(self.vault, "u", sealed)), ["sam@x.com"])
+
+    def test_a_list_that_will_not_open_reads_as_no_guests(self):
+        self.assertEqual(open_guests(Vault(), "u", "e1:AAAA"), [])  # the fake hands back the sealed text: not JSON
+        self.assertEqual(open_guests(self.vault, "u", None), [])
+
+    def test_run_once_briefs_an_event_whose_guests_are_sealed(self):
+        original = (prep.address_index, prep.load_facts)
+        prep.address_index = lambda keys, a: "idx" if a == "a@x.com" else "other"
+        prep.load_facts = lambda *a: Facts("c1", "Sam", about="Neighbour.")
+        try:
+            event = {"id": "e", "user_id": "u", "starts_at": iso(10), "all_day": False, "attendees": encrypt_field(self.keys, EVENT_GUESTS, json.dumps([{"email": "a@x.com"}]))}
+            db = Db([event], [{"contact_id": "c1", "value_index": "idx"}])
+            self.assertEqual(Prep(db, self.vault).run_once(NOW), 1)
+        finally:
+            prep.address_index, prep.load_facts = original
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ export async function storeWindow(
         .range(from, to),
     "load stored events",
   );
-  // Titles and locations are stored encrypted, so they are opened to compare with what the calendar has now.
+  // The text and guests are stored sealed, so they are opened to compare with what the calendar has now.
   const stored = await Promise.all(sealedStored.map((e) => openEvent(e.user_id, e)));
   const byEventId = new Map(stored.map((e) => [e.provider_event_id, e]));
 

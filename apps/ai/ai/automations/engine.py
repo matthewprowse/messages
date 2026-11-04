@@ -101,6 +101,10 @@ class Automations:
                     candidates.append((m, a))
         done = 0
         for user in sorted({m["user_id"] for m, _ in candidates}):
+            if getattr(self.vault, "encrypt", False) and self.vault.keys_for(user) is None:
+                # Nothing can be sealed for them (vault.seal refuses): a run claimed now could never be recorded or undone.
+                log.warn("automations skipped", code="no_key", messages=len([1 for m, _ in candidates if m["user_id"] == user]))
+                continue
             mine = [(m, a) for m, a in candidates if m["user_id"] == user]
             texts = bodies(self.db, self.vault, user, sorted({m["id"] for m, _ in mine}))
             own = own_addresses(self.db, self.vault, user)

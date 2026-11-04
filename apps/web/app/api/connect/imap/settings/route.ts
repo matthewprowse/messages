@@ -10,6 +10,8 @@ export const dynamic = "force-dynamic";
 
 // Each look-up makes a few DNS and HTTPS requests: 30 every 10 minutes is plenty for typing an address.
 const overLimit = limiter(30, 10 * 60_000, { name: "connect-imap-settings" });
+// A day's cap per person and per address on top, so the look-ups cannot be scripted as a free DNS and autoconfig relay.
+const overDailyLimit = limiter(200, 24 * 60 * 60_000, { name: "connect-imap-settings-day", perAddress: 500 });
 
 export async function POST(request: Request) {
   if (foreignOrigin(request)) return fail(403, "Not allowed from this site.");
@@ -22,6 +24,8 @@ export async function POST(request: Request) {
   if (!isEmail(email)) return fail(400, "Enter your email address.");
   const wait = await overLimit(user.id);
   if (wait > 0) return fail(429, "Too many look-ups. Wait a few minutes, or type the settings in.", { "Retry-After": String(wait) });
+  const waitDay = await overDailyLimit(user.id, request);
+  if (waitDay > 0) return fail(429, "Too many look-ups today. Type the settings in, or try again tomorrow.", { "Retry-After": String(waitDay) });
 
   const found = await discover(email, nodeLookups());
   if ("elsewhere" in found) return Response.json({ elsewhere: found.elsewhere }, { headers: noStore });

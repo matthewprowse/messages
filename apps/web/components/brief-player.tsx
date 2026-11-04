@@ -10,7 +10,7 @@ import { useApp } from "@/lib/store";
 import { track } from "@/lib/analytics";
 import { supabase } from "@/lib/supabase";
 import { cooldownWait, noteRefresh, readLastRefresh, REQUESTS_PER_DAY, whenAllowed } from "@/lib/brief-pace";
-import { loadAllowance, loadBrief, loadBriefPart, loadBriefSettings, localDate, requestBrief, requestSpeech, syncTimezone, type BriefSettings, type DailyBrief } from "@/lib/brief";
+import { ALLOWANCE_FRESH_MS, cachedBriefDay, loadAllowance, loadBrief, loadBriefDay, loadBriefPart, loadBriefSettings, localDate, requestBrief, requestSpeech, staleBriefDay, syncTimezone, type BriefSettings, type DailyBrief } from "@/lib/brief";
 import type { Thread } from "@/lib/types";
 import { joinParts } from "@/lib/wav";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -44,7 +44,8 @@ export function BriefPlayer() {
   const { session } = useAuth();
   const userId = session?.user.id;
   const { threads } = useApp();
-  const [brief, setBrief] = useState<DailyBrief | null>(null);
+  // Shown from memory at once when the Summary was open before; read again underneath when old.
+  const [brief, setBrief] = useState<DailyBrief | null>(() => (userId ? cachedBriefDay(localDate(), userId)?.brief ?? null : null));
   const [waiting, setWaiting] = useState(false);
   const [playing, setPlaying] = useState(false);
   // The part now playing (from 0) and how many there are, while listening, paused or not. Null otherwise.
@@ -110,25 +111,30 @@ export function BriefPlayer() {
     [nap],
   );
 
-  const refreshAllowance = useCallback(async (uid: string) => {
-    const next = await loadAllowance(uid);
+  // maxAgeMs 0 reads the log now: after a request, and when the oldest request ages out.
+  const refreshAllowance = useCallback(async (uid: string, maxAgeMs = 0) => {
+    const next = await loadAllowance(uid, maxAgeMs);
     if (next) setAllowance(next);
   }, []);
   useEffect(() => {
     if (!userId) return;
     void syncTimezone(userId);
-    void loadBrief(localDate(), userId).then(setBrief);
+    void loadBriefDay(localDate(), userId).then((d) => setBrief(d.brief), () => {});
     setLastRefresh(readLastRefresh());
-    void refreshAllowance(userId);
+    void refreshAllowance(userId, ALLOWANCE_FRESH_MS);
     // Changes to the brief (written, speaking, ready) and to its parts (each stored) end the waits at once
     // instead of at the next check.
     const wake = () => {
       changes.current++;
       for (const w of [...wakers.current]) w();
     };
+    const briefChanged = () => {
+      staleBriefDay(localDate(), userId);
+      wake();
+    };
     const channel = supabase
       .channel(`brief-${userId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "briefs", filter: `user_id=eq.${userId}` }, wake)
+      .on("postgres_changes", { event: "*", schema: "public", table: "briefs", filter: `user_id=eq.${userId}` }, briefChanged)
       .on("postgres_changes", { event: "*", schema: "public", table: "brief_parts", filter: `user_id=eq.${userId}` }, wake)
       .subscribe();
     return () => { void supabase.removeChannel(channel); };

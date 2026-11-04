@@ -136,13 +136,13 @@ function People({ people, onChange }: { people: Person[]; onChange: (p: Person[]
             <div className="truncate text-sm font-medium">{p.name}</div>
             {p.why && <div className="truncate text-xs text-muted-foreground">{p.why}</div>}
           </div>
-          <Button variant="ghost" size="icon-sm" aria-label={`Remove ${p.name}`} onClick={() => onChange(people.filter((x) => x !== p))}><X /></Button>
+          <Button variant="ghost" size="icon" aria-label={`Remove ${p.name}`} onClick={() => onChange(people.filter((x) => x !== p))}><X /></Button>
         </div>
       ))}
       <form onSubmit={add} className="flex flex-wrap items-center gap-2 p-2">
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="Name" className="h-8 min-w-32 flex-1" />
         <Input value={why} onChange={(e) => setWhy(e.target.value)} placeholder="Who They Are to You" aria-label="Who they are to you" className="h-8 min-w-40 flex-[2]" />
-        <Button type="submit" variant="secondary" size="sm" disabled={!name.trim()}>Add</Button>
+        <Button type="submit" variant="secondary" disabled={!name.trim()}>Add</Button>
       </form>
     </div>
   );

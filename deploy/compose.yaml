@@ -1,6 +1,8 @@
 # The workers on the production VM (docs/RUNBOOK.md, "Production VM"). deploy/release.sh copies the repo at a commit to
-# /opt/konva/src and runs this file from there. Secrets live only on the VM, in /opt/konva/env (deploy/push-env.sh).
-# The web app is not here: it runs on Vercel.
+# /opt/konva/src and runs this file from there. Secrets live only on the VM, in /opt/konva/env (deploy/push-env.sh), one
+# file per service holding only the variables that service reads. The web app is not here: it runs on Vercel.
+# Images are built here from source unless release.sh is given a REGISTRY, in which case the KONVA_*_IMAGE variables
+# name images CI built (.github/workflows/release-images.yml) by digest and nothing is built on the VM.
 
 name: konva
 
@@ -8,42 +10,71 @@ x-worker: &worker
   restart: unless-stopped
   # The worker finishes in-flight sends for up to 10 s after SIGTERM.
   stop_grace_period: 20s
+  # Nothing in the images needs a Linux capability or setuid, and the code only writes to the temp dir (os.tmpdir() and
+  # tempfile: GIF and voice note conversion, LinkedIn attachment staging, the iCloud session folder), so the root
+  # filesystem is read only and /tmp is a small in-memory disk that counts towards the memory limit.
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  tmpfs: ["/tmp:size=256m,mode=1777"]
+  # Threads count as pids: Node's pool, Python's job threads and one LinkedIn helper (Go) per connected account.
+  pids_limit: 512
   logging:
     driver: json-file
-    options: { max-size: "20m", max-file: "5" }
+    # The tag names the container in each line, so the Ops Agent (deploy/vm-startup.sh) can tell the services apart.
+    options: { max-size: "20m", max-file: "5", tag: "{{.Name}}" }
 
 services:
   worker:
     <<: *worker
     build: { context: .., dockerfile: apps/worker/Dockerfile }
-    image: konva-worker
+    image: ${KONVA_WORKER_IMAGE:-konva-worker}
     env_file: /opt/konva/env/worker.env
     # The env file is copied from a laptop, where HEALTH_PORT is blank; the image's health check needs it on.
     environment: { HEALTH_PORT: "8080" }
+    mem_limit: 1536m
+    networks: [core]
 
   ai:
     <<: *worker
     build: { context: .., dockerfile: apps/ai/Dockerfile }
-    image: konva-ai
+    image: ${KONVA_AI_IMAGE:-konva-ai}
     env_file: /opt/konva/env/ai.env
     environment: { HEALTH_PORT: "8080" }
+    mem_limit: 1g
+    networks: [core]
 
   # The optional connector processes have no health endpoint, so the image's check is off. Turned on per VM with
-  # /opt/konva/profiles (for example "icloud-reminders,instagram").
+  # /opt/konva/profiles (for example "icloud-reminders,instagram"). Each has its own env file: they run unofficial
+  # libraries (pyicloud, instagrapi), so they never see the Gemini key or anything else the AI worker holds.
   icloud-reminders:
     <<: *worker
     profiles: [icloud-reminders]
     build: { context: .., dockerfile: apps/ai/Dockerfile, args: { EXTRA_REQUIREMENTS: requirements-icloud-reminders.txt } }
-    image: konva-ai-icloud-reminders
+    image: ${KONVA_ICLOUD_REMINDERS_IMAGE:-konva-ai-icloud-reminders}
     command: ["python", "-m", "ai", "icloud-reminders"]
-    env_file: /opt/konva/env/ai.env
+    env_file: /opt/konva/env/icloud-reminders.env
     healthcheck: { disable: true }
+    mem_limit: 512m
+    networks: [connectors]
 
   instagram:
     <<: *worker
     profiles: [instagram]
     build: { context: .., dockerfile: apps/ai/Dockerfile, args: { EXTRA_REQUIREMENTS: requirements-instagram.txt } }
-    image: konva-ai-instagram
+    image: ${KONVA_INSTAGRAM_IMAGE:-konva-ai-instagram}
     command: ["python", "-m", "ai", "instagram"]
-    env_file: /opt/konva/env/ai.env
+    env_file: /opt/konva/env/instagram.env
     healthcheck: { disable: true }
+    mem_limit: 512m
+    networks: [connectors]
+
+# Named bridges, because deploy/vm-startup.sh lets only these two interfaces reach the metadata server (169.254.169.254):
+# every service unwraps user keys with Cloud KMS on a token from it. Image builds and any other container run on
+# docker0 and are refused. The connectors sit on their own bridge so they cannot reach the workers' health ports, and so
+# their metadata access can be taken away on its own once they no longer need KMS.
+networks:
+  core:
+    driver_opts: { com.docker.network.bridge.name: konva-core }
+  connectors:
+    driver_opts: { com.docker.network.bridge.name: konva-conn }

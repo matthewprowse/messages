@@ -6,7 +6,7 @@ import contextlib
 import unittest
 
 from ai.ops import errors, metrics
-from ai.ops.health import Health, health_port, readiness
+from ai.ops.health import Health, health_host, health_port, readiness
 
 
 class Boom(Exception):
@@ -54,6 +54,11 @@ class HealthTests(unittest.TestCase):
         for raw in (None, "", "off", "abc", "0", "70000"):
             self.assertIsNone(health_port(raw))
         self.assertEqual(health_port("8080"), 8080)
+
+    def test_the_endpoint_listens_on_loopback_unless_health_host_says_otherwise(self):
+        self.assertEqual(health_host(None), "127.0.0.1")
+        self.assertEqual(health_host("  "), "127.0.0.1")
+        self.assertEqual(health_host("0.0.0.0"), "0.0.0.0")
 
 
 class ErrorTests(unittest.TestCase):

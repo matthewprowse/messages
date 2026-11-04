@@ -6,7 +6,7 @@ import type { Stat } from "@messages/analytics/stats";
 const NAMES: Record<string, string> = {
   summary: "Summary",
   briefing: "Summary", // the Summary page's address before 27 October 2026
-  inbox: "Inbox",
+  inbox: "Conversations", // the Conversations page lives at /inbox
   calendar: "Calendar",
   contacts: "Contacts",
   attachments: "Attachments",
@@ -14,6 +14,9 @@ const NAMES: Record<string, string> = {
   home: "Home",
   login: "Sign In",
   whatsapp: "WhatsApp",
+  linkedin: "LinkedIn",
+  instagram: "Instagram",
+  imap: "IMAP",
   icloud: "iCloud",
   gmail: "Gmail",
   outlook: "Outlook",
@@ -33,8 +36,8 @@ export function nice(code: string): string {
 
 export const num = (n: number) => new Intl.NumberFormat("en-GB").format(Math.round(n * 10) / 10);
 export const percent = (n: number) => `${num(n)}%`;
-/** Dollars; under $1 keeps four decimals so a few cents of AI cost does not round to $0.00. */
-export const money = (usd: number) => (usd === 0 ? "$0.00" : usd < 1 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`);
+/** Dollars; under $1 keeps three places (as spend() in lib/ai-features.ts) so a few cents of AI cost does not round to $0.00. */
+export const money = (usd: number) => (usd === 0 ? "$0.00" : usd < 1 ? `$${usd.toFixed(3)}` : `$${usd.toFixed(2)}`);
 export function seconds(s: number) {
   if (s < 60) return `${Math.round(s)}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;

@@ -20,9 +20,10 @@ const WIDTH = { "2xl": "max-w-2xl", "5xl": "max-w-5xl", full: "max-w-none" } as 
  */
 export function PaneColumn({ children, width = "2xl", center = false, grey = false, className }: { children: ReactNode; width?: keyof typeof WIDTH; center?: boolean; grey?: boolean; className?: string }) {
   return (
-    <div className={cn("h-full overflow-y-auto", grey && "bg-muted/50")}>
+    // Never sideways: a long subject or an unbroken link inside a card truncates or wraps instead of widening the column.
+    <div className={cn("h-full overflow-x-hidden overflow-y-auto", grey && "bg-muted/50")}>
       <div className="flex min-h-full justify-center p-3 md:p-6">
-        <div className={cn("flex w-full flex-col gap-3", WIDTH[width], center && "my-auto", className)}>{children}</div>
+        <div className={cn("flex w-full min-w-0 flex-col gap-3", WIDTH[width], center && "my-auto", className)}>{children}</div>
       </div>
     </div>
   );
@@ -31,7 +32,7 @@ export function PaneColumn({ children, width = "2xl", center = false, grey = fal
 /** A white card with a 40px title row: the title, quiet, on the left; an action or See All on the right. */
 export function Card({ title, action, href, hrefLabel = "See All", id, className, children }: { title?: ReactNode; action?: ReactNode; href?: string; hrefLabel?: string; id?: string; className?: string; children: ReactNode }) {
   return (
-    <section id={id} aria-label={typeof title === "string" ? title : undefined} className={cn("scroll-mt-3 rounded-lg border bg-background p-1", className)}>
+    <section id={id} aria-label={typeof title === "string" ? title : undefined} className={cn("relative min-w-0 scroll-mt-3 rounded-lg border bg-background p-1 break-words", className)}>
       {(title || action || href) && (
         <div className="flex h-10 items-center justify-between gap-3 px-3">
           <h2 className="min-w-0 truncate text-sm text-muted-foreground">{title}</h2>
@@ -53,10 +54,10 @@ export function StatCard({ label, value }: { label: string; value: ReactNode | u
   );
 }
 
-/** A 40px grey circle with an icon, where a row has no avatar. */
+/** A 40px grey tile with an icon, where a row has no avatar: rounded like the rail's icon buttons, since only people are round. */
 export function IconCircle({ icon: Icon, className }: { icon: LucideIcon; className?: string }) {
   return (
-    <span aria-hidden className={cn("flex size-10 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground", className)}>
+    <span aria-hidden className={cn("flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground", className)}>
       <Icon className="size-4" />
     </span>
   );

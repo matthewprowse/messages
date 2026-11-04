@@ -20,5 +20,5 @@ export function useMeetingNote() {
 export function MeetingNoteButton({ meeting, className }: { meeting: Meeting; className?: string }) {
   const make = useMeetingNote();
   if (!canNoteMeeting(meeting)) return null;
-  return <Button variant="secondary" size="sm" className={className} onClick={() => void make(meeting)}><NotebookPen />Create Note From Summary</Button>;
+  return <Button variant="secondary" className={className} onClick={() => void make(meeting)}><NotebookPen />Create Note From Summary</Button>;
 }

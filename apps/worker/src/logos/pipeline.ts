@@ -1,18 +1,18 @@
 // The sync worker's part of the shared company logo queue (supabase/migrations/20261031100000_company_logos.sql):
 // gathering and framing candidates, and saving the judge's pick. The AI worker (apps/ai/ai/logos.py) only
-// asks Gemini: it judges the numbered sheet saved here, and searches when nothing passed.
+// asks Gemini: it judges the numbered sheet saved here, and searches when nothing passed. Review files stay in the
+// private "logos" bucket; a pick is saved by public.ts.
 
-import { createHash } from "node:crypto";
 import sharp from "sharp";
 import type { Tables } from "@messages/db";
-import { sleep } from "../backoff";
 import { db, must } from "../db";
+import { errorCode, log } from "../log";
 import { storageError, uploadObject } from "../storage";
 import { frameLogo, type Logo, type Rgb } from "../photos/logo-image";
+import { LOGOS_BUCKET, logoKey } from "./paths";
+import { downloadLogo, retireLogo, saveChosenLogo } from "./public";
 import { judgeSheet } from "./sheet";
 import { gather, searchResults, SOURCE_ORDER, type Found, type LogoSource } from "./sources";
-
-export const LOGOS_BUCKET = "logos";
 /** A framed logo less sharp than this (see Logo.quality) is never offered: a 48px favicon's mark is about 28. */
 const MIN_QUALITY = 28;
 /** Sharper than this counts the same, so a huge file does not beat a better-placed one. */
@@ -40,11 +40,6 @@ export interface Framed {
   found: Found;
   logo: Logo;
 }
-
-/** The domain's name in the bucket: its SHA-256, so file names do not list the companies people hear from. */
-export const logoKey = (domain: string) => createHash("sha256").update(domain).digest("hex");
-/** Where a domain's chosen logo is kept. */
-export const logoPath = (domain: string) => `${logoKey(domain)}.png`;
 
 async function thumbnail(png: Buffer): Promise<Buffer> {
   return sharp(png).resize(16, 16, { fit: "fill" }).removeAlpha().raw().toBuffer();
@@ -142,7 +137,7 @@ export async function gatherCandidates(row: LogoRow): Promise<Candidate[]> {
   if (row.round === 2) {
     for (const earlier of (row.candidates as unknown as Candidate[]) ?? []) {
       if (row.excluded.includes(earlier.url) || candidates.some((c) => c.url === earlier.url)) continue;
-      const picture = await download(earlier.path).catch(() => null);
+      const picture = await downloadLogo(earlier.path).catch(() => null);
       if (!picture) continue;
       candidates.push({ ...earlier, n: candidates.length + 1, note: `Earlier candidate, before searching: ${earlier.note ?? earlier.source}` });
       pictures.push(picture);
@@ -160,16 +155,6 @@ export async function gatherCandidates(row: LogoRow): Promise<Candidate[]> {
   return candidates;
 }
 
-/** A stored file's bytes. Storage turns away bursts of requests (429), so a few tries are made. */
-async function download(path: string): Promise<Buffer> {
-  for (let attempt = 0; ; attempt++) {
-    const { data, error } = await db.storage.from(LOGOS_BUCKET).download(path);
-    if (data) return Buffer.from(await data.arrayBuffer());
-    if (attempt >= 3) throw storageError("download logo", error);
-    await sleep(1000 * 2 ** attempt);
-  }
-}
-
 /** A judged company: the pick saved as its logo, or on to searching after round 1, or the first letter after round 2. */
 export async function saveJudged(row: LogoRow): Promise<void> {
   const candidates = (row.candidates as unknown as Candidate[]) ?? [];
@@ -185,8 +170,9 @@ async function finish(row: LogoRow, chosen: Candidate | null, verdict?: string) 
     await update(row.domain, { status: "done", path: null, source: null, url: null, checked_at: now, ...(row.path ? { changed_at: now } : {}), ...(verdict ? { verdict } : {}) });
     return;
   }
-  const path = logoPath(row.domain);
-  await uploadObject(LOGOS_BUCKET, path, await download(chosen.path), "image/png");
+  const path = await saveChosenLogo(row.domain, await downloadLogo(chosen.path), row.path);
   const changed = row.url !== chosen.url || row.path !== path;
   await update(row.domain, { status: "done", path, source: chosen.source, url: chosen.url, checked_at: now, ...(changed ? { changed_at: now } : {}) });
+  // A new name (a new picture, or the first save in the public bucket): companies move to it now, not at the daily link.
+  if (row.path && row.path !== path) await retireLogo(row.path, path).catch((err) => log.warn("old company logo not retired", { code: errorCode(err) }));
 }

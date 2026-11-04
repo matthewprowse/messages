@@ -3,10 +3,12 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { deriveUserKeys, encryptAt, newDataKey, openExpected } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
 import {
   NOT_A_TASK_ACCOUNT,
   NOT_SUPPORTED_WRITE,
+  TASK_UNVERIFIED,
   TaskUpdateError,
   planTaskUpdates,
   taskKey,
@@ -146,6 +148,19 @@ test("the state a row asks for is opened, trimmed and kept to a day when all-day
   const day = await taskWriteOf({ ...base, title: "sealed:A", due_at: "2026-11-03T22:00:00Z", due_all_day: true, priority: 9 }, opener);
   assert.deepEqual([day.dueAt, day.priority], ["2026-11-03T00:00:00.000Z", null]);
   assert.equal((await taskWriteOf({ ...base, title: "sealed:A", due_at: "nonsense" }, opener)).dueAt, null);
+});
+
+test("a create whose title was not sealed for its row fails as unverified, and a key outage stays a passing failure", async () => {
+  const keys = await deriveUserKeys(newDataKey(), "u1");
+  const base = update("r1", null, "2026-10-26T08:00:00Z", { action: "create", account_id: "a1", user_id: "u1" });
+  const strict = (rowId: string) => (_u: string, field: string, value: string | null | undefined, column: string) =>
+    openExpected(keys, field, value, { places: [`task_updates.${column}`], row: rowId, sealed: true, legacy: false });
+  const title = await encryptAt(keys, FIELD.taskTitle, { place: "task_updates.title", row: "r1" }, "Call Sam");
+  assert.equal((await taskWriteOf({ ...base, title }, strict("r1"))).title, "Call Sam");
+  await assert.rejects(taskWriteOf({ ...base, title }, strict("r2")), (err) => err instanceof TaskUpdateError && err.message === TASK_UNVERIFIED);
+  await assert.rejects(taskWriteOf({ ...base, title: "Plain title" }, strict("r1")), (err) => err instanceof TaskUpdateError);
+  const outage = async () => { throw Object.assign(new Error("key service down"), { code: "kms_503" }); };
+  await assert.rejects(taskWriteOf({ ...base, title }, outage), (err) => !(err instanceof TaskUpdateError));
 });
 
 test("an unsupported change is worded and coded as not supported", () => {

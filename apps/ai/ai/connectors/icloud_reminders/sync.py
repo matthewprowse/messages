@@ -40,6 +40,7 @@ REASONS = {
     "deleted": "This reminder was deleted in iCloud.",
     "no_list": "iCloud Reminders has no list to add this to. Create a list in Reminders, then try again.",
     "no_title": "A task needs a title.",
+    "unverified": "This change could not be verified, so it was not made. Make it again.",
 }
 TICKS = ("complete", "reopen")
 CHANGES = ("create", "update", "delete")
@@ -395,7 +396,10 @@ class AccountSync:
 
     def create(self, reminders: Any, row: dict[str, Any]) -> None:
         """Adds a reminder to the account's default list (the one called Reminders, else the first) and stores it."""
-        title, notes = self.store.open_task_text(row)
+        opened = self.store.open_task_text(row)
+        if opened is None:
+            raise Rejected(REASONS["unverified"])
+        title, notes = opened
         if not title.strip():
             raise Rejected(REASONS["no_title"])
         names = self.list_names(reminders)
@@ -423,7 +427,10 @@ class AccountSync:
         reminder = reminders.get(reminder_id)
         if getattr(reminder, "deleted", False):
             raise LookupError(reminder_id)
-        title, notes = self.store.open_task_text(row)
+        opened = self.store.open_task_text(row)
+        if opened is None:
+            raise Rejected(REASONS["unverified"])
+        title, notes = opened
         if not title.strip():
             raise Rejected(REASONS["no_title"])
         reminder.title = title.strip()

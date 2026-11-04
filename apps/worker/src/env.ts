@@ -1,6 +1,6 @@
 // Configuration from apps/worker/.env. Fails fast with a readable message rather than half-starting.
 
-import { encryptionOffError, ENCRYPTION_FLAGS, flagOn } from "@messages/crypto/flags";
+import { encryptionOffError, ENCRYPTION_FLAGS, flagOn, flagTrue } from "@messages/crypto/flags";
 import { shardCount, shardError, shardIndex } from "./shard";
 
 function required(name: string): string {
@@ -56,6 +56,16 @@ export const env = {
   encryptContent: flagOn(process.env.ENCRYPT_CONTENT),
   /** On unless "false": addresses, numbers and chat IDs are stored encrypted (encryption stage 2); they are matched on their blind indexes either way. */
   encryptAddresses: flagOn(process.env.ENCRYPT_ADDRESSES),
+  /**
+   * "true": new values are sealed bound to their owner and place ("e2:", "e2b:", packages/crypto/src/bound.ts). Off until
+   * every reader (workers and web) that opens them is released: docs/RUNBOOK.md, Binding Values To Their Place.
+   */
+  sealBoundFields: flagTrue(process.env.SEAL_BOUND_FIELDS),
+  /**
+   * "true": the columns that drive an action (outbox, calendar and task writes) refuse the legacy unbound formats ("e1:",
+   * "e1b:"). Turned on once the re-seal (fields:bind or keys:rekey) has moved every value.
+   */
+  requireBoundFields: flagTrue(process.env.REQUIRE_BOUND_FIELDS),
   /** "true" works the shared company logo queue (src/logos). Off until the logo system is rolled out. */
   companyLogos: process.env.COMPANY_LOGOS === "true",
   /** This worker's slice of the accounts: shard `shardIndex` of `shardCount`. The defaults (0 of 1) are one worker that owns everything. */

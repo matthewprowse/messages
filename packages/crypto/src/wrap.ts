@@ -4,17 +4,41 @@
 // Two wrappers live side by side, and a reader picks by `wrapped_by`:
 //   "local:v1"  AES-256-GCM under a 32-byte master key from the environment (KEY_WRAPPING_KEY).
 //   "kms:v1"    Google Cloud KMS Encrypt and Decrypt (KMS_KEY_NAME), over the REST API with a bearer token from
-//               Application Default Credentials, so no SDK is needed. Unwrapped keys are cached in memory for about
+//               Workload Identity Federation, a service account key or the metadata server (google-token.ts), so no
+//               SDK is needed. Unwrapped keys are cached in memory for about
 //               10 minutes and never written anywhere.
 // Both use "user_keys:<user id>" as additional authenticated data (a workspace's key, in team_keys, uses
 // "team_keys:<workspace id>"), so a wrapped key cannot be swapped onto another user or workspace or passed off as
 // a user's. Writers (wrappersFromEnv) use kms:v1 when KMS_KEY_NAME is set and local:v1 otherwise.
 // apps/ai/ai/keys.py unwraps the same way.
+//
+// local:v1 is being retired: once `pnpm --filter worker keys:readiness` reports no local:v1 row left, KEY_WRAPPING_KEY is
+// unset everywhere, and a row still made by it fails with the code legacy_wrapper_missing rather than anything worse.
+//
+// A user's key can be rotated (apps/worker/src/rekey): user_keys then also holds, beside the current key, the next one
+// (being made ready, opens only) or the previous one (being re-sealed away from, opens only), and the index key their
+// blind indexes are made with (wrapped with "user_index_keys:<user id>"). userKeyringFor reads all of them.
 
-import { newDataKey } from "./index";
+import { deriveIndexKey, newDataKey } from "./index";
+import { googleAccessToken, KMS_TIMEOUT_MS } from "./google-token";
 
-/** Whose key it is: a user's (user_keys) or a workspace's (team_keys). Part of the additional data. */
-export type KeyScope = "user" | "team";
+export { googleAccessToken, KMS_TIMEOUT_MS, usesWorkloadIdentity, vercelOidcToken, type TokenOptions } from "./google-token";
+
+/**
+ * Whose key it is: a user's (user_keys), a workspace's (team_keys), or a user's index key kept after a rotation
+ * (user_keys.index_wrapped_key). Part of the additional data, so one can never be passed off as another.
+ */
+export type KeyScope = "user" | "team" | "user_index";
+
+/** The wrapped_by of the retired local wrapper: rows it made open only while KEY_WRAPPING_KEY is still set. */
+export const LOCAL_WRAPPER = "local:v1";
+
+/** The wrapper named by a row's wrapped_by. Throws with a stable code when this process is not set up for it. */
+function wrapperFor(wrappers: KeyWrapper[], by: string): KeyWrapper {
+  const wrapper = wrappers.find((w) => w.id === by);
+  if (wrapper) return wrapper;
+  throw Object.assign(new Error(`No key wrapper for ${by}.`), { code: by === LOCAL_WRAPPER ? "legacy_wrapper_missing" : "no_key_wrapper" });
+}
 
 export interface KeyWrapper {
   /** The `wrapped_by` value written beside keys this wrapper makes. */
@@ -41,8 +65,6 @@ function fromB64(text: string): Uint8Array<ArrayBuffer> {
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
   return out;
 }
-
-const b64url = (bytes: Uint8Array) => toB64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
 /** The local wrapper: AES-256-GCM under a master key given as base64. */
 export async function localWrapper(masterKeyBase64: string): Promise<KeyWrapper> {
@@ -74,8 +96,6 @@ export async function localWrapper(masterKeyBase64: string): Promise<KeyWrapper>
 /** How long an unwrapped key stays in memory. Keeps KMS calls (and their cost) low without holding keys for long. */
 export const KEY_CACHE_MS = 10 * 60_000;
 
-/** A KMS or token call that takes longer than this is abandoned: a hung request must not hold every unwrap behind it. */
-export const KMS_TIMEOUT_MS = 10_000;
 
 export interface KmsOptions {
   /** projects/<project>/locations/<region>/keyRings/<ring>/cryptoKeys/<key>. Decrypt picks the version itself. */
@@ -144,58 +164,6 @@ export function kmsWrapper(opts: KmsOptions): KeyWrapper {
 type Env = Record<string, string | undefined>;
 
 /**
- * A bearer token for Google APIs, cached until a minute before it expires. In order:
- *  1. GOOGLE_APPLICATION_CREDENTIALS_JSON (or the file named by GOOGLE_APPLICATION_CREDENTIALS): a service account
- *     key, exchanged for a token with a signed JWT. For Vercel and for the developer's machine.
- *  2. KMS_ACCESS_TOKEN: a token given as it is (for a quick test with `gcloud auth print-access-token`).
- *  3. The metadata server, which is how a Confidential Space or other Google Cloud VM gets its identity.
- */
-export function googleAccessToken(env: Env = process.env, doFetch: typeof fetch = globalThis.fetch): () => Promise<string> {
-  let cached: { token: string; until: number } | null = null;
-  const fetchToken = async (): Promise<{ token: string; ttlS: number }> => {
-    let json = env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-    if (!json && env.GOOGLE_APPLICATION_CREDENTIALS) {
-      const fs = await import("node:fs/promises");
-      json = await fs.readFile(env.GOOGLE_APPLICATION_CREDENTIALS, "utf8");
-    }
-    if (json) {
-      const account = JSON.parse(json) as { client_email: string; private_key: string; token_uri?: string };
-      const aud = account.token_uri ?? "https://oauth2.googleapis.com/token";
-      const iat = Math.floor(Date.now() / 1000);
-      const claims = { iss: account.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud, iat, exp: iat + 3600 };
-      const unsigned = `${b64url(utf8.encode(JSON.stringify({ alg: "RS256", typ: "JWT" })))}.${b64url(utf8.encode(JSON.stringify(claims)))}`;
-      const pem = account.private_key.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "");
-      const key = await subtle.importKey("pkcs8", fromB64(pem), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
-      const sig = new Uint8Array(await subtle.sign("RSASSA-PKCS1-v1_5", key, utf8.encode(unsigned)));
-      const res = await doFetch(aud, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${unsigned}.${b64url(sig)}` }),
-        signal: AbortSignal.timeout(KMS_TIMEOUT_MS),
-      });
-      if (!res.ok) throw new Error(`Google token request failed (${res.status}).`);
-      const out = (await res.json()) as { access_token: string; expires_in?: number };
-      return { token: out.access_token, ttlS: out.expires_in ?? 3600 };
-    }
-    if (env.KMS_ACCESS_TOKEN) return { token: env.KMS_ACCESS_TOKEN, ttlS: 300 };
-    const host = env.GCE_METADATA_HOST || "metadata.google.internal";
-    const res = await doFetch(`http://${host}/computeMetadata/v1/instance/service-accounts/default/token`, { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(KMS_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`Metadata server token request failed (${res.status}).`);
-    const out = (await res.json()) as { access_token: string; expires_in?: number };
-    return { token: out.access_token, ttlS: out.expires_in ?? 300 };
-  };
-  let refreshing: Promise<string> | null = null; // concurrent callers share one refresh
-  return async () => {
-    if (cached && cached.until > Date.now()) return cached.token;
-    refreshing ??= fetchToken().then(({ token, ttlS }) => {
-      cached = { token, until: Date.now() + Math.max(0, ttlS - 60) * 1000 };
-      return token;
-    }).finally(() => { refreshing = null; });
-    return refreshing;
-  };
-}
-
-/**
  * The wrappers this process is set up for, the one that writes first: kms:v1 when KMS_KEY_NAME is set, then
  * local:v1 when KEY_WRAPPING_KEY is set (kept so rows made before the move still open until they are rewrapped).
  */
@@ -203,7 +171,7 @@ export async function wrappersFromEnv(env: Env = process.env): Promise<KeyWrappe
   const out: KeyWrapper[] = [];
   if (env.KMS_KEY_NAME) out.push(kmsWrapper({ keyName: env.KMS_KEY_NAME, token: googleAccessToken(env) }));
   if (env.KEY_WRAPPING_KEY) out.push(await localWrapper(env.KEY_WRAPPING_KEY));
-  if (!out.length) throw new Error("Set KMS_KEY_NAME or KEY_WRAPPING_KEY.");
+  if (!out.length) throw Object.assign(new Error("Set KMS_KEY_NAME (or, until it is retired, KEY_WRAPPING_KEY)."), { code: "no_key_wrapper" });
   return out;
 }
 
@@ -229,13 +197,19 @@ export async function deriveCredentialKey(dataKey: Uint8Array<ArrayBuffer>): Pro
   return new Uint8Array(bits);
 }
 
-const credAad = (accountId: string) => utf8.encode(`account:${accountId}`);
+// The same sealing binds other short-lived secrets to where they belong (the "context", the additional data): a handoff
+// stored in a table row, such as an iCloud sign-in waiting for the connector or a code typed in the app, uses
+// handoffContext ("handoff:<table>.<column>:<row id>"), so it opens only in that column of that row; an OAuth cookie uses
+// "handoff:<purpose>:<user id>" (apps/web/lib/server/handoff.ts). An account's context, "account:<id>", can never equal one.
 
-/** Seals text for one account as "v2:". `iv` is only passed by the test vectors. */
-export async function sealCredential(credKey: Uint8Array<ArrayBuffer>, accountId: string, plaintext: string, iv?: Uint8Array<ArrayBuffer>): Promise<string> {
+/** The additional data of a handoff stored in a table row. */
+export const handoffContext = (table: string, column: string, rowId: string) => `handoff:${table}.${column}:${rowId.toLowerCase()}`;
+
+/** Seals text bound to `context` as "v2:". `iv` is only passed by the test vectors. */
+export async function sealBound(credKey: Uint8Array<ArrayBuffer>, context: string, plaintext: string, iv?: Uint8Array<ArrayBuffer>): Promise<string> {
   const key = await subtle.importKey("raw", credKey, "AES-GCM", false, ["encrypt"]);
   const nonce = iv ?? globalThis.crypto.getRandomValues(new Uint8Array(12));
-  const sealed = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: credAad(accountId) }, key, utf8.encode(plaintext)));
+  const sealed = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv: nonce, additionalData: utf8.encode(context) }, key, utf8.encode(plaintext)));
   // WebCrypto puts the tag after the ciphertext; the v1 layout has it before.
   const out = new Uint8Array(12 + sealed.length);
   out.set(nonce);
@@ -244,26 +218,67 @@ export async function sealCredential(credKey: Uint8Array<ArrayBuffer>, accountId
   return CREDENTIAL_PREFIX + toB64(out);
 }
 
-/** Opens a "v2:" value made for this account. Throws if it was altered or belongs to another account. */
-export async function openCredential(credKey: Uint8Array<ArrayBuffer>, accountId: string, payload: string): Promise<string> {
+/**
+ * Opens a "v2:" value sealed for `context`, with the one key given or the first of several that opens it (the current
+ * credential key first, then older ones during a rotation). Throws if it was altered, belongs elsewhere or no key opens it.
+ */
+export async function openBound(credKeys: Uint8Array<ArrayBuffer> | Uint8Array<ArrayBuffer>[], context: string, payload: string): Promise<string> {
   if (!payload.startsWith(CREDENTIAL_PREFIX)) throw new Error("Not a v2 credential.");
   const raw = fromB64(payload.slice(CREDENTIAL_PREFIX.length));
   if (raw.length < 28) throw new Error("Credential is too short.");
   const body = new Uint8Array(raw.length - 12);
   body.set(raw.subarray(28));
   body.set(raw.subarray(12, 28), raw.length - 28);
-  const key = await subtle.importKey("raw", credKey, "AES-GCM", false, ["decrypt"]);
-  const plain = await subtle.decrypt({ name: "AES-GCM", iv: raw.subarray(0, 12), additionalData: credAad(accountId) }, key, body);
-  return new TextDecoder("utf-8", { fatal: true }).decode(plain);
+  const keys = Array.isArray(credKeys) ? credKeys : [credKeys];
+  if (!keys.length) throw new Error("No credential key.");
+  let first: unknown;
+  for (const credKey of keys) {
+    try {
+      const key = await subtle.importKey("raw", credKey, "AES-GCM", false, ["decrypt"]);
+      const plain = await subtle.decrypt({ name: "AES-GCM", iv: raw.subarray(0, 12), additionalData: utf8.encode(context) }, key, body);
+      return new TextDecoder("utf-8", { fatal: true }).decode(plain);
+    } catch (err) {
+      first ??= err;
+    }
+  }
+  throw first;
+}
+
+/** Seals text for one account as "v2:". `iv` is only passed by the test vectors. */
+export async function sealCredential(credKey: Uint8Array<ArrayBuffer>, accountId: string, plaintext: string, iv?: Uint8Array<ArrayBuffer>): Promise<string> {
+  return sealBound(credKey, `account:${accountId}`, plaintext, iv);
+}
+
+/** Opens a "v2:" value made for this account, with any of the keys given. Throws if it was altered or belongs to another account. */
+export async function openCredential(credKeys: Uint8Array<ArrayBuffer> | Uint8Array<ArrayBuffer>[], accountId: string, payload: string): Promise<string> {
+  return openBound(credKeys, `account:${accountId}`, payload);
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Stores
 // ---------------------------------------------------------------------------------------------------------
 
+/**
+ * A user_keys row. The current key seals and opens. During a rotation (apps/worker/src/rekey) `next_*` is the key being
+ * made ready (it opens, nothing is sealed with it yet) and `previous_*` the key being re-sealed away from (it opens until
+ * the job retires it). `index_*` is the raw index key (deriveIndexKey) the user's blind indexes are made with, set at
+ * their first rotation; without it the current key makes them.
+ */
+export interface UserKeyRow {
+  wrapped_key: string;
+  wrapped_by: string;
+  next_wrapped_key?: string | null;
+  next_wrapped_by?: string | null;
+  previous_wrapped_key?: string | null;
+  previous_wrapped_by?: string | null;
+  index_wrapped_key?: string | null;
+  index_wrapped_by?: string | null;
+}
+
 /** The rows a key store reads and writes: user_keys, through whichever database client the caller has. */
 export interface KeyStore {
-  read(userId: string): Promise<{ wrapped_key: string; wrapped_by: string } | null>;
+  /** The whole row (select "*", so it reads the same before and after the rotation columns exist). */
+  read(userId: string): Promise<UserKeyRow | null>;
   /** Inserts unless a key already exists, so two processes racing to create one keep the first. */
   insertIfAbsent(row: { user_id: string; wrapped_key: string; wrapped_by: string }): Promise<void>;
 }
@@ -298,9 +313,54 @@ export async function dataKeyFor(store: KeyStore, wrappers: KeyWrapper[], userId
     row = await store.read(userId);
     if (!row) throw new Error("Could not create a data key.");
   }
-  const wrapper = wrappers.find((w) => w.id === row.wrapped_by);
-  if (!wrapper) throw new Error(`No key wrapper for ${row.wrapped_by}.`);
-  return wrapper.unwrap(row.wrapped_key, userId);
+  return wrapperFor(wrappers, row.wrapped_by).unwrap(row.wrapped_key, userId);
+}
+
+/** A user's keys as their keyring holds them, raw. Callers zero them once derived (zeroKeyring). */
+export interface UserKeyring {
+  /** Seals and opens. */
+  current: Uint8Array<ArrayBuffer>;
+  /** Open only: the next key while a rotation is being made ready, and the previous one while it is re-sealed away from. */
+  older: Uint8Array<ArrayBuffer>[];
+  /** The raw index key, or null when the blind indexes still come from `current`. */
+  indexKey: Uint8Array<ArrayBuffer> | null;
+}
+
+/**
+ * A user's keyring, creating their data key on first use like dataKeyFor. Every key the row names must unwrap: a value
+ * sealed under a key this process cannot open would otherwise read as empty, so a failure throws instead.
+ */
+export async function userKeyringFor(store: KeyStore, wrappers: KeyWrapper[], userId: string): Promise<UserKeyring> {
+  let row = await store.read(userId);
+  if (!row) {
+    await store.insertIfAbsent({ user_id: userId, wrapped_key: await wrappers[0].wrap(newDataKey(), userId), wrapped_by: wrappers[0].id });
+    row = await store.read(userId);
+    if (!row) throw new Error("Could not create a data key.");
+  }
+  const open = (wrapped: string, by: string, scope: KeyScope = "user") => wrapperFor(wrappers, by).unwrap(wrapped, userId, scope);
+  const olders: [string | null | undefined, string | null | undefined][] = [[row.next_wrapped_key, row.next_wrapped_by], [row.previous_wrapped_key, row.previous_wrapped_by]];
+  // Unwrapped at once: each can be a KMS call.
+  const [current, older, indexKey] = await Promise.all([
+    open(row.wrapped_key, row.wrapped_by),
+    Promise.all(olders.filter(([k, by]) => k && by).map(([k, by]) => open(k!, by!))),
+    row.index_wrapped_key && row.index_wrapped_by ? open(row.index_wrapped_key, row.index_wrapped_by, "user_index") : Promise.resolve(null),
+  ]);
+  return { current, older, indexKey };
+}
+
+/** The index key to keep when a user's key is first rotated: the one their blind indexes were made with so far. */
+export async function indexKeyOf(ring: UserKeyring): Promise<Uint8Array<ArrayBuffer>> {
+  return ring.indexKey ? ring.indexKey.slice() : deriveIndexKey(ring.current);
+}
+
+/** Every credential key of a keyring, the current one first (it seals), then the older ones (they only open). */
+export async function credentialKeysOf(ring: UserKeyring): Promise<Uint8Array<ArrayBuffer>[]> {
+  return Promise.all([ring.current, ...ring.older].map((k) => deriveCredentialKey(k)));
+}
+
+/** Zeroes every raw key of a keyring, once the caller has derived what it needs. */
+export function zeroKeyring(ring: UserKeyring): void {
+  for (const k of [ring.current, ...ring.older, ...(ring.indexKey ? [ring.indexKey] : [])]) k.fill(0);
 }
 
 /**
@@ -337,20 +397,25 @@ export async function teamKeyring(store: TeamKeyStore, wrappers: KeyWrapper[], w
   const sorted = [...rows].sort((a, b) => b.key_version - a.key_version);
   const newest = sorted[0];
   const first = sorted[sorted.length - 1];
+  const wanted = sorted.filter((row) => !row.retired_at || row === first); // nothing is sealed under a retired one any more
+  // Unwrapped at once (each can be a KMS call), then read in version order, so the outcome and the error thrown are
+  // what one at a time would give.
+  const opened = await Promise.allSettled(wanted.map(async (row) => {
+    return wrapperFor(wrappers, row.wrapped_by).unwrap(row.wrapped_key, workspaceId, "team");
+  }));
   const all: TeamKeyring["all"] = [];
   let indexRoot: TeamKeyring["indexRoot"] | undefined;
-  for (const row of sorted) {
-    if (row.retired_at && row !== first) continue; // nothing is sealed under it any more
-    try {
-      const wrapper = wrappers.find((w) => w.id === row.wrapped_by);
-      if (!wrapper) throw new Error(`No key wrapper for ${row.wrapped_by}.`);
-      const key = await wrapper.unwrap(row.wrapped_key, workspaceId, "team");
-      if (!row.retired_at) all.push({ version: row.key_version, key });
-      if (row === first) indexRoot = { version: row.key_version, key: key.slice() };
-    } catch (err) {
-      if (row === newest || row === first) throw err; // the current key and the index root are needed; another version is not
+  wanted.forEach((row, i) => {
+    const result = opened[i];
+    // The current key and the index root are needed; another version is not.
+    if (result.status === "rejected") {
+      if (row === newest || row === first) throw result.reason;
+      return;
     }
-  }
+    const key = result.value;
+    if (!row.retired_at) all.push({ version: row.key_version, key });
+    if (row === first) indexRoot = { version: row.key_version, key: key.slice() };
+  });
   if (!all.length || !indexRoot) throw new Error("Could not open the team key.");
   return { current: all[0], all, indexRoot };
 }

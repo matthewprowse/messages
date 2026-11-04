@@ -1047,11 +1047,70 @@ function stripBlocks(html: string): string {
   return out.join("");
 }
 
+// The rewrites below are defence in depth: the frame's sandbox (no scripts) and its own CSP are what keep the email
+// inert. They still read attributes the way a browser does, so the easy tricks do not pass: "<img/onerror=...>" and
+// '"onclick=' need no space before them, entities and stray tabs hide a "javascript:", and CSS escapes hide a "url(".
+// Each pattern is linear: a quoted value ends at its quote, an unquoted one at a space or ">".
+const EVENT_ATTR = /(?<=[\s/"'])on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
+const URL_ATTR = /(?<=[\s/"'])((?:xlink:)?href|src|action|formaction)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
+const STYLE_ATTR = /(?<=[\s/"'])style\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
+const LINK_SCHEMES = new Set(["http", "https", "mailto"]);
+const SOURCE_SCHEMES = new Set(["http", "https", "cid", "data"]);
+// A remote url() in CSS, also with its quote written as an entity (a style attribute after the decoding below).
+const REMOTE_CSS_URL = /url\(\s*(?:["']|&quot;|&#0*3[49];|&apos;)?\s*(?:https?:)?\/\/[^()]*\)/gi;
+
+const unquote = (value: string) => (/^(["']).*\1$/s.test(value) ? value.slice(1, -1) : value);
+
+/**
+ * Whether a link or source may keep its value: read as a browser would (entities decoded, controls and spaces
+ * dropped), it is relative or uses one of schemes. A scheme hidden behind an entity this decoder does not know
+ * ("&colon;") is refused rather than guessed at.
+ */
+export function isSafeUrlValue(value: string, schemes: ReadonlySet<string>): boolean {
+  const url = decodeEntities(unquote(value)).replace(/[\u0000-\u0020\u007f]+/g, "");
+  const head = url.split(/[/?#]/, 1)[0];
+  const colon = head.indexOf(":");
+  if (colon < 0) return !head.includes("&");
+  return schemes.has(head.slice(0, colon).toLowerCase());
+}
+
+/** CSS escapes that spell a letter, digit or URL character ("u\\72l(", "\\75rl(") written out, so url() can be found. Others stay. */
+export function unescapeCss(css: string): string {
+  return css.replace(/\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?|\\([g-zG-Z])/g, (whole, hex?: string, letter?: string) => {
+    const c = letter ?? String.fromCodePoint(Math.min(parseInt(hex ?? "", 16), 0x10ffff));
+    return /^[a-zA-Z0-9:/().-]$/.test(c) ? c : whole;
+  });
+}
+
+/** Runs fix over the text of each <style> element. One pass of indexOf, so unclosed tags cost nothing extra. */
+function mapStyleBlocks(html: string, fix: (css: string) => string): string {
+  const lower = html.toLowerCase();
+  const out: string[] = [];
+  let at = 0;
+  for (let open = lower.indexOf("<style", at); open >= 0; open = lower.indexOf("<style", at)) {
+    const gt = html.indexOf(">", open);
+    if (gt < 0) break;
+    const close = lower.indexOf("</style", gt);
+    const end = close < 0 ? html.length : close;
+    out.push(html.slice(at, gt + 1), fix(html.slice(gt + 1, end)));
+    at = end;
+    if (close < 0) break;
+  }
+  out.push(html.slice(at));
+  return out.join("");
+}
+
 export function originalDoc(html: string, allowImages: boolean): OriginalDoc {
   let blocked = 0;
   let body = stripBlocks(html.length > MAX_ORIGINAL_HTML ? html.slice(0, MAX_ORIGINAL_HTML) : html)
-    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-    .replace(/(href|src)\s*=\s*(["']?)\s*javascript:[^"'\s>]*\2/gi, '$1=""');
+    .replace(EVENT_ATTR, "")
+    .replace(URL_ATTR, (attr, name: string, value: string) => (isSafeUrlValue(value, /src$/i.test(name) ? SOURCE_SCHEMES : LINK_SCHEMES) ? attr : `${name}=""`))
+    // A style attribute is read after its entities are decoded, so it is decoded here too and written back quoted.
+    .replace(STYLE_ATTR, (_attr, value: string) => `style="${unescapeCss(decodeEntities(unquote(value))).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`)
+    // Pages a link opens get no handle on this frame, even where a browser ignores the base target's implied noopener.
+    // Put first, so it wins over any rel the email sets.
+    .replace(/<(a|area)(?=[\s/>])/gi, '<$1 rel="noopener noreferrer"');
+  body = mapStyleBlocks(body, unescapeCss);
   if (!allowImages) {
     body = body
       .replace(IMG_TAG, (tag) =>
@@ -1065,7 +1124,7 @@ export function originalDoc(html: string, allowImages: boolean): OriginalDoc {
           }),
       )
       .replace(/\sbackground\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-      .replace(/url\(\s*(["']?)\s*(?:https?:)?\/\/[^()]*\)/gi, "url()");
+      .replace(REMOTE_CSS_URL, "url()");
     // Remote images in forms the rewrite above misses are still stopped by the CSP; count them so Load Images shows.
     if (blocked === 0 && REMOTE_IMAGE.test(html)) blocked = 1;
   }

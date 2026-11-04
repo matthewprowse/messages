@@ -77,7 +77,7 @@ async function mergePerson(item: ImportItem): Promise<string | null> {
   const next = fills(item.row, have);
   const changed = item.emails.length > 0 || item.phones.length > 0 || next.company !== have.company || next.role !== have.role || next.relationship !== have.relationship;
   if (changed) {
-    const saved = await updateContact(target.id, { name: target.name, ...next, addEmails: item.emails, addPhones: item.phones, remove: [] });
+    const saved = await updateContact(target.id, { name: target.name, previousName: target.name, ...next, addEmails: item.emails, addPhones: item.phones, remove: [] });
     if (!saved.ok) return saved.error;
   }
   if (item.row.about.trim() && !data.about_note?.trim()) await setContactAbout(target.id, item.row.about.slice(0, 1000));

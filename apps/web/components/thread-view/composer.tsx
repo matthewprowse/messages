@@ -37,6 +37,7 @@ import { InstagramReplyNotice, useInstagramReplyClosed } from "@/components/inst
 import { ActionCards } from "@/components/actions/action-card";
 import { DraftBar } from "@/components/thread-view/draft-bar";
 import { DraftTrust } from "@/components/thread-view/draft-trust";
+import { ReviewDraftOffer, ReviewWarning } from "@/components/thread-view/review-draft";
 import { onVoiceReply, VOICE_REPLY_INSTRUCTION } from "@/lib/voice-reply";
 import { beforeAsk, typedText } from "@/components/thread-view/composer-memory";
 
@@ -199,6 +200,8 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
       {/* One card for everything about the reply: the AI's choices and draft bar, the text, the tools and Send. */}
       <div {...files.dropProps} className={cn("mx-auto w-full max-w-2xl rounded-lg border bg-background p-3 focus-within:ring-3 focus-within:ring-ring/30", files.dragging && "border-ring ring-3 ring-ring/30")}>
         {closed && <InstagramReplyNotice />}
+        {!recorder && <ReviewDraftOffer thread={thread} disabled={busy} />}
+        {!recorder && draft?.review && <div className="mb-2"><ReviewWarning /></div>}
         {!draft && !busy && <GuidedChoices thread={thread} msgs={msgs} disabled={busy} onPick={(decision) => ask("default", undefined, decision)} />}
         {!recorder && (
           <DraftBar

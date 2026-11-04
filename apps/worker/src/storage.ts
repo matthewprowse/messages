@@ -19,9 +19,22 @@ export function storageStatus(error: unknown): number | undefined {
   return Number.isFinite(status) ? status : undefined;
 }
 
-/** Uploads (or replaces) one object. Throws an error whose code is STORAGE or STORAGE_<status>. */
-export async function uploadObject(bucket: string, path: string, bytes: Buffer, contentType: string): Promise<void> {
-  const { error } = await db.storage.from(bucket).upload(path, bytes, { contentType, upsert: true });
+// How long a browser keeps a stored object (Cache-Control max-age, seconds). The web app reuses a signed link for a day
+// (apps/web/lib/signed-urls/links.ts), and its cached copy is keyed by that link, so:
+/**
+ * A path written again in place: contact and group photos and company icons (refreshed under the same name), team
+ * copies (sealed again on key rotation, after which the old key is retired) and logo review files. An hour, so an old
+ * photo or bytes nobody can open any more do not linger; after it the browser revalidates, a 304 when unchanged.
+ */
+export const REWRITTEN_CACHE_S = 60 * 60;
+/** A path written once (an attachment or its thumbnail, by id; a meeting recording): a day, the life of a signed link. */
+export const WRITE_ONCE_CACHE_S = 24 * 60 * 60;
+/** A content-addressed path in a public bucket (chosen company logos): new content always gets a new name. A year. */
+export const IMMUTABLE_CACHE_S = 365 * 24 * 60 * 60;
+
+/** Uploads (or replaces) one object, cached by browsers for cacheSeconds. Throws an error whose code is STORAGE or STORAGE_<status>. */
+export async function uploadObject(bucket: string, path: string, bytes: Buffer, contentType: string, cacheSeconds = REWRITTEN_CACHE_S): Promise<void> {
+  const { error } = await db.storage.from(bucket).upload(path, bytes, { contentType, upsert: true, cacheControl: String(cacheSeconds) });
   if (error) throw storageError("storage upload", error);
 }
 

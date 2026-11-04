@@ -1,6 +1,7 @@
 "use client";
 
 // Settings, Accounts, Sending, Send From: the addresses each email account can send from, which the reply box and New Email offer.
+// A generic IMAP mailbox sends only from its own address (lib/send-from.ts), so it has no list to add to.
 
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
@@ -11,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsBody, SettingsRow, SettingsRows, SettingsSection } from "@/components/settings/primitives";
 
-/** iCloud and other IMAP mailboxes: the server cannot say which addresses you send from, so you list them. */
+/** iCloud: the server cannot say which addresses you send from, so you list them. */
 function ListedAddresses({ account }: { account: Account }) {
   const { saveSendAddresses, notify } = useApp();
   const [value, setValue] = useState("");
@@ -55,6 +56,15 @@ function ListedAddresses({ account }: { account: Account }) {
   );
 }
 
+/** A generic IMAP mailbox: its own address only. Its server may accept any From, so another address is never offered. */
+function OwnAddressOnly({ account }: { account: Account }) {
+  return (
+    <SettingsRows>
+      <SettingsRow title={account.detail.toLowerCase()} description="Mail from this mailbox is sent from its own address only. Other addresses can be used with Gmail, Outlook and iCloud." />
+    </SettingsRows>
+  );
+}
+
 function GmailAddresses({ account }: { account: Account }) {
   return (
     <SettingsRows>
@@ -72,7 +82,7 @@ export function SendAddressesSection() {
     <SettingsSection id="send-from" level={3} title="Send From">
       {email.map((a) => (
         <SettingsSection key={a.id} level={4} title={a.label}>
-          {a.provider === "gmail" ? <GmailAddresses account={a} /> : <ListedAddresses account={a} />}
+          {a.provider === "gmail" ? <GmailAddresses account={a} /> : a.provider === "imap" ? <OwnAddressOnly account={a} /> : <ListedAddresses account={a} />}
         </SettingsSection>
       ))}
     </SettingsSection>

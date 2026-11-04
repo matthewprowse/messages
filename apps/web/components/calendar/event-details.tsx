@@ -21,7 +21,7 @@ import { DIALOG_BUTTONS } from "@/components/merge-dialog";
 import { EventMeetings } from "@/components/meeting-card";
 import { EventPrep } from "@/components/prep/event-prep";
 
-import { isDimmed, timeRange } from "./dates";
+import { isDimmed, longDate, timeRange } from "./dates";
 import { Now, Page } from "./page-context";
 
 export function Attendees({ event }: { event: CalendarEvent }) {
@@ -90,7 +90,7 @@ export function eventWhen(e: CalendarEvent) {
   // A conference over several days reads as its span; the days are in the text, so there is no separate time.
   const span = allDaySpanText(e);
   if (span) return span;
-  const day = (e.allDay ? new Date(`${e.startsAt.slice(0, 10)}T12:00:00`) : new Date(e.startsAt)).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const day = longDate(e.allDay ? new Date(`${e.startsAt.slice(0, 10)}T12:00:00`) : new Date(e.startsAt), undefined, true);
   return `${day}, ${timeRange(e)}`;
 }
 

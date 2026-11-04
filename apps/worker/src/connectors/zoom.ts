@@ -3,17 +3,16 @@
 // queued in the outbox go out with the chat messages API. Each part runs when its scopes were granted.
 
 import type { Json, Tables, TablesInsert, TablesUpdate } from "@messages/db";
-import { FIELD } from "@messages/crypto/fields";
-import { addressIndex, chatIndex } from "@messages/crypto/addresses";
+import { addressIndex, chatIndex, groupNameIndex } from "@messages/crypto/addresses";
 import { Backoff, Sleeper } from "../backoff";
 import { db, getSyncState, must, saveSyncState, setAccountStatus, type AccountRow } from "../db";
 import { env } from "../env";
 import { errorCode, log } from "../log";
 import { finishAction } from "../send/actions";
-import { claimReady, markFailed, settleSent, type OutboxRow } from "../send/outbox";
-import { ATTACHMENTS_BUCKET, uploadObject } from "../storage";
+import { claimReady, markFailed, outboxBody, settleSent, type OutboxRow } from "../send/outbox";
+import { ATTACHMENTS_BUCKET, uploadObject, WRITE_ONCE_CACHE_S } from "../storage";
 import { chunks } from "../util";
-import { keysFor, open, openAddresses, seal, sealAddress, sealBytes } from "../vault";
+import { keysFor, openAddresses, seal, sealAddress, sealBytes } from "../vault";
 import { rateLimited, signInRevoked, ZoomApiError, type ZoomClient } from "../zoom/client";
 import { ChatSync, chatPayload, sendBody, type ChatRef, type ChatSealer, type ZoomChatStored } from "../zoom/chat";
 import { CHAT_NEEDS, CHAT_SEND_SCOPE, MEETING_SCOPE, MEETINGS_NEEDS, PARTICIPANTS_SCOPE, USER_SCOPE } from "../zoom/oauth";
@@ -105,7 +104,7 @@ export class ZoomConnector {
 
     const userId = this.account.user_id;
     const recordings = meetings
-      ? new RecordingSync(client, meetingStore(this.id), { seal: (f, v) => seal(userId, f, v), sealAddress: (v) => sealAddress(userId, v), sealBytes: (f, b) => sealBytes(userId, f, b) }, {
+      ? new RecordingSync(client, meetingStore(this.id), { seal: (f, v) => seal(userId, f, v), sealAddress: (v) => sealAddress(userId, v), sealBytes: (f, b, where) => sealBytes(userId, f, b, where) }, {
           userId,
           accountId: this.id,
           selfId,
@@ -155,6 +154,7 @@ export class ZoomConnector {
       sealAddress: (value) => sealAddress(userId, value),
       addressIndex: async (value) => addressIndex(await keysFor(userId), value),
       chatIndex: async (value) => chatIndex(await keysFor(userId), value),
+      groupIndex: async (value) => groupNameIndex(await keysFor(userId), value),
     };
   }
 
@@ -187,7 +187,12 @@ export class ZoomConnector {
       }
       chat = target.chat;
       replyMain = target.replyMain;
-      text = ((await open(row.user_id, FIELD.body, row.body)) ?? "").trim();
+      const body = await outboxBody(row);
+      if ("error" in body) {
+        await markFailed(row.id, body.error);
+        return;
+      }
+      text = body.text.trim();
     } catch (err) {
       log.warn("zoom send target failed", { account: this.id, outbox: row.id, code: errorCode(err) });
       await markFailed(row.id, "The conversation could not be loaded, so nothing was sent. Try again.").catch(() => undefined);
@@ -302,7 +307,7 @@ function meetingStore(accountId: string): MeetingStore {
       must(await db.from("meeting_participants").insert(rows), "save meeting participants");
     },
     async upload(path, bytes, contentType) {
-      await uploadObject(ATTACHMENTS_BUCKET, path, bytes, contentType);
+      await uploadObject(ATTACHMENTS_BUCKET, path, bytes, contentType, WRITE_ONCE_CACHE_S);
     },
   };
 }

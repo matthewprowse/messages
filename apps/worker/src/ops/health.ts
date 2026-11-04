@@ -75,14 +75,18 @@ export function createHealth(opts: { now?: () => number; maxTickAgeMs?: number; 
   };
 }
 
-/** Starts the endpoint on all interfaces (the supervisor probes from outside the container). Read only, GET only. */
-export function startHealthServer(health: Health, port: number): Server {
+/**
+ * Starts the endpoint on loopback by default: the image's HEALTHCHECK probes from inside the container and nothing is
+ * published, so no other container or host needs it. A supervisor that probes from outside (Cloud Run, a Confidential
+ * Space VM) sets HEALTH_HOST=0.0.0.0. Read only, GET only.
+ */
+export function startHealthServer(health: Health, port: number, host = process.env.HEALTH_HOST?.trim() || "127.0.0.1"): Server {
   const server = createServer((req, res) => {
     const out = req.method === "GET" ? health.respond((req.url ?? "/").split("?")[0]) : { status: 405, type: "application/json", body: '{"error":"method_not_allowed"}' };
     res.writeHead(out.status, { "content-type": out.type, "cache-control": "no-store" });
     res.end(out.body);
   });
-  server.listen(port);
+  server.listen(port, host);
   server.unref(); // never keeps the process alive on its own
   return server;
 }

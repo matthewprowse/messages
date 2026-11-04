@@ -2,9 +2,11 @@
 
 Stored sign-ins and sessions are sealed "v2:" under a key derived from the account owner's data key, the account's ID
 as additional data (AccountSealer below; ai/crypto.py seal_credential, apps/worker/src/crypto.ts). Older "v1:" values
-(the static ENCRYPTION_KEY, "v1:" + base64(iv 12 | GCM tag 16 | ciphertext)) are still read until
-`pnpm credentials:reseal` has moved them. seal_json and open_json (v1) remain for short-lived handoffs the web app seals
-with the static key, such as a sign-in code. Message text and addresses are sealed with the user's own keys, through the
+(the static ENCRYPTION_KEY, "v1:" + base64(iv 12 | GCM tag 16 | ciphertext)) are still read while ENCRYPTION_KEY is set,
+until `pnpm credentials:reseal` has moved them. Short-lived handoffs stored in a row (a sign-in code typed in the app,
+the iCloud setup's sign-in and made password) are sealed the same way under the user's key, bound to their table,
+column and row (seal_handoff, open_handoff); "v1:" handoffs from before that release are still read while
+ENCRYPTION_KEY is set, and they live minutes. Message text and addresses are sealed with the user's own keys, through the
 AI worker's Vault, and indexed with their blind-index key. A user connecting Instagram before any other account has no
 data key yet, so one is made here the way the sync worker makes it (packages/crypto/src/wrap.ts: kms:v1 when
 KMS_KEY_NAME is set, else local:v1)."""
@@ -18,7 +20,7 @@ from typing import Any, Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from ...crypto import CREDENTIAL_PREFIX, UserKeys, address_index, blind_index, chat_key, encrypt_field, open_credential, seal_credential
+from ...crypto import CREDENTIAL_PREFIX, UserKeys, address_index, blind_index, chat_key, group_name_index, handoff_context, open_bound, open_credential, seal_bound, seal_credential
 from ...fields import ADDRESS
 from ...keys import wrap_new
 from ...vault import Vault
@@ -44,6 +46,38 @@ def open_json(payload: str, key_b64: str) -> Any:
     raw = base64.b64decode(payload[3:])
     iv, tag, body = raw[:12], raw[12:28], raw[28:]
     return json.loads(AESGCM(_key(key_b64)).decrypt(iv, body + tag, None).decode("utf-8"))
+
+
+class LegacyKeyMissing(ValueError):
+    """A "v1:" value while ENCRYPTION_KEY is not set: the old static key has been retired, so it cannot be read."""
+
+
+def open_legacy(payload: str, key_b64: str) -> Any:
+    """open_json for a value that may predate per-user keys, failing with LegacyKeyMissing once the static key is gone."""
+    if not key_b64:
+        raise LegacyKeyMissing("A v1 value needs ENCRYPTION_KEY, which is not set.")
+    return open_json(payload, key_b64)
+
+
+def seal_handoff(vault: Vault, user_id: str, table: str, column: str, row_id: str, value: Any) -> str:
+    """A handoff to store in one column of one row, sealed "v2:" under the user's key and bound to that place."""
+    key = vault.credential_key_for(user_id)
+    if key is None:
+        raise RuntimeError("no user key")
+    return seal_bound(key, handoff_context(table, column, row_id), json.dumps(value))
+
+
+def open_handoff(vault: Vault, legacy_key_b64: str, user_id: str, table: str, column: str, row_id: str, payload: str) -> Any:
+    """Opens a handoff stored by seal_handoff (or the web app's sealHandoffValue) in this column of this row; a "v1:" one
+    from before per-user handoffs is read with the old static key while it is still set."""
+    if payload.startswith(CREDENTIAL_PREFIX):
+        keys = vault.credential_keys_for(user_id)
+        if not keys:
+            raise RuntimeError("no user key")
+        return json.loads(open_bound(keys, handoff_context(table, column, row_id), payload))
+    if payload.startswith("v1:"):
+        return open_legacy(payload, legacy_key_b64)
+    raise ValueError("Unknown ciphertext format.")
 
 
 def wrap_local(master_key_b64: str, data_key: bytes, user_id: str) -> str:
@@ -91,13 +125,12 @@ class AccountSealer:
 
     def open(self, account_id: str, payload: str) -> Any:
         if payload.startswith(CREDENTIAL_PREFIX):
-            key = self.vault.credential_key_for(self.owner(account_id))
-            if key is None:
+            # Every key the owner holds, the current first: during a rotation of their key a sign-in may be under either.
+            keys = self.vault.credential_keys_for(self.owner(account_id))
+            if not keys:
                 raise RuntimeError("no user key")
-            return json.loads(open_credential(key, account_id, payload))
-        if not self.legacy_key_b64:
-            raise ValueError("A v1 credential needs ENCRYPTION_KEY, which is not set.")
-        return open_json(payload, self.legacy_key_b64)
+            return json.loads(open_credential(keys, account_id, payload))
+        return open_legacy(payload, self.legacy_key_b64)
 
     @staticmethod
     def sealed(payload: str | None) -> bool:
@@ -121,10 +154,14 @@ class UserSealer:
     def address(self, value: str | None) -> str | None:
         if value is None or not self.encrypt_addresses:
             return value
-        return encrypt_field(self.keys, ADDRESS, value)
+        # Through the vault, so it is bound to its owner ("e2:") once SEAL_BOUND_FIELDS is on, like the text.
+        return self.vault.seal_text(self.user_id, ADDRESS, value)
 
     def address_index(self, value: str) -> str:
         return address_index(self.keys, value)
 
     def chat_index(self, value: str) -> str:
         return blind_index(self.keys, chat_key(value))
+
+    def group_index(self, value: str) -> str:
+        return group_name_index(self.keys, value)

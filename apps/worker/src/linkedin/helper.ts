@@ -126,9 +126,9 @@ export interface Commands {
   changes: { args: Record<string, never>; result: { conversations: LinkedInConversation[]; deleted: string[]; syncToken: string } };
   messages: { args: { conversation: string; before?: number; count?: number }; result: { messages: LinkedInMessage[] } };
   /** With attachments the text may be empty. Each file is a message of its own (messages), the text with the first. */
-  send: { args: { conversation: string; text: string; token: string; attachments?: HelperAttachment[] }; result: { message: LinkedInMessage; messages?: LinkedInMessage[] } };
+  send: { args: { conversation: string; text: string; token: string; attachments?: HelperAttachment[]; attachmentDir?: string }; result: { message: LinkedInMessage; messages?: LinkedInMessage[] } };
   /** With attachments the text may be empty. The first file opens the conversation; the others are in conversation.messages. */
-  start: { args: { profile: string; text: string; token: string; attachments?: HelperAttachment[] }; result: { conversation: LinkedInConversation; message: LinkedInMessage } };
+  start: { args: { profile: string; text: string; token: string; attachments?: HelperAttachment[]; attachmentDir?: string }; result: { conversation: LinkedInConversation; message: LinkedInMessage } };
   /** A person's picture, fetched by the helper (through the account's proxy, from LinkedIn's image servers only). */
   picture: { args: { url: string }; result: { data: string; type: string } };
   read: { args: { conversation: string }; result: Record<string, never> };

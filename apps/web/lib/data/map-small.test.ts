@@ -2,8 +2,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { EMPTY_PROFILE, latestSync, mapAccount, mapDraft, mapProfile, profilePatch } from "./map-small";
-import type { ProfileRow } from "./columns";
+import { EMPTY_PROFILE, latestSync, mapAccount, mapDraft, mapProfile, mapUnsubscribe, profilePatch } from "./map-small";
+import type { ProfileRow, UnsubscribeRow } from "./columns";
 
 test("a missing profile row is the empty profile", () => {
   assert.equal(mapProfile(null), EMPTY_PROFILE);
@@ -46,4 +46,10 @@ test("a draft for a portal lead keeps the lead's own address to reply to", () =>
   const row = { id: "d", body: "", tone: "default", instruction: null, decision: null, decision_kind: null, source: null, auto: false, updated_at: "2026-11-02T10:00:00Z", report: null, audit: null, feedback: null, reply_to: "thandi@example.co.za" };
   assert.equal(mapDraft(row as never).replyTo, "thandi@example.co.za");
   assert.equal(mapDraft({ ...row, reply_to: null } as never).replyTo, undefined);
+});
+
+test("an unsubscribe page is kept only when it is https", () => {
+  const row = (manual_url: string | null) => ({ id: "u1", account_id: "a1", sender_address: "news@shop.example", status: "manual", manual_url, error: null }) as unknown as UnsubscribeRow;
+  assert.equal(mapUnsubscribe(row("https://shop.example/unsub?x=1")).manualUrl, "https://shop.example/unsub?x=1");
+  for (const bad of ["javascript:alert(1)", " https://x.example", "http://shop.example/u", "data:text/html,x", null]) assert.equal(mapUnsubscribe(row(bad)).manualUrl, undefined, String(bad));
 });

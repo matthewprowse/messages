@@ -2,17 +2,17 @@
 
 // "Your Day": what the space beside the Summary shows with nothing open. The greeting, three numbers (replied today,
 // waiting on others, promises), today's brief as text, and the week from the calendar as one row of seven days.
-// Counts, titles and times only, apart from the brief, which is yours and sealed.
+// Counts, titles and times only, apart from the brief, which is yours and sealed. The brief and the week come from the
+// memory caches the Listen button and the Summary's events share, so a return shows them at once.
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { FIELD } from "@messages/crypto/fields";
 import { useAuth } from "@/lib/auth";
 import { useApp } from "@/lib/store";
 import { supabase } from "@/lib/supabase";
-import { open } from "@/lib/vault";
-import { localDate } from "@/lib/brief";
+import { cachedBriefDay, loadBriefDay, localDate } from "@/lib/brief";
 import { dayKey, loadEvents, type CalendarEvent } from "@/lib/calendar";
+import { eventsCache, eventsKey } from "@/lib/events-cache";
 import { promisesForSummary } from "@/lib/commitments";
 import { timeOf } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -25,6 +25,8 @@ import { useNow } from "@/components/summary/use-now";
 
 /** The same slow clock as the Summary, so the two agree. */
 const REFRESH_MS = 5 * 60_000;
+/** The week is read again on a return only when the kept copy is older than this. */
+const WEEK_FRESH_MS = 60_000;
 /** Days in the week row, today first, and how many events each day shows before "+2". */
 const WEEK_DAYS = 7;
 const PER_DAY = 3;
@@ -44,20 +46,17 @@ function useRepliedToday(now: Date): number | undefined {
   return count;
 }
 
-/** Today's brief as text, or null when there is none yet. */
+/** Today's brief as text, or null when there is none yet. Shares one read with the Listen button (lib/brief.ts). */
 function useBriefText(now: Date): string | null {
   const { session } = useAuth();
   const userId = session?.user.id;
-  const [text, setText] = useState<string | null>(null);
   const day = localDate(now);
+  const [text, setText] = useState<string | null>(() => (userId ? cachedBriefDay(day, userId)?.script ?? null : null));
   useEffect(() => {
     if (!userId) return;
     let cancelled = false;
-    void supabase.from("briefs").select("script").eq("for_date", day).eq("user_id", userId).maybeSingle()
-      .then(async ({ data }) => {
-        const script = data?.script ? await open(FIELD.brief, data.script) : null;
-        if (!cancelled) setText(script?.trim() || null);
-      });
+    // The clock ticking over reads only when the kept brief is old or Realtime said it changed.
+    loadBriefDay(day, userId).then((d) => { if (!cancelled) setText(d.script); }, () => {});
     return () => { cancelled = true; };
   }, [userId, day, now]);
   return text;
@@ -65,19 +64,29 @@ function useBriefText(now: Date): string | null {
 
 /** Events from today to the end of the week row, soonest first. */
 function useWeek(now: Date): CalendarEvent[] | undefined {
-  const [events, setEvents] = useState<CalendarEvent[]>();
+  const { session } = useAuth();
+  const userId = session?.user.id;
   const day = dayKey(now);
+  const key = userId ? eventsKey(userId, day, WEEK_DAYS, false) : null;
+  const [all, setAll] = useState<CalendarEvent[] | undefined>(() => (key ? eventsCache.get(key) : undefined));
   useEffect(() => {
+    if (!key) return;
     let cancelled = false;
     const [y, m, d] = day.split("-").map(Number);
-    const from = new Date(y, m - 1, d);
-    const to = new Date(y, m - 1, d + WEEK_DAYS);
-    loadEvents(from, to, { details: false })
-      .then((all) => { if (!cancelled) setEvents(all.filter((e) => Date.parse(e.startsAt) >= from.getTime() && Date.parse(e.startsAt) < to.getTime()).sort((a, b) => a.startsAt.localeCompare(b.startsAt))); })
-      .catch(() => { if (!cancelled) setEvents([]); });
+    const held = eventsCache.get(key);
+    if (held) setAll(held);
+    eventsCache.load(key, () => loadEvents(new Date(y, m - 1, d), new Date(y, m - 1, d + WEEK_DAYS), { details: false }), WEEK_FRESH_MS)
+      .then((list) => { if (!cancelled) setAll(list); })
+      .catch(() => { if (!cancelled) setAll((prev) => prev ?? []); });
     return () => { cancelled = true; };
-  }, [day]);
-  return events;
+  }, [key, day]);
+  return useMemo(() => {
+    if (!all) return undefined;
+    const [y, m, d] = day.split("-").map(Number);
+    const from = new Date(y, m - 1, d).getTime();
+    const to = new Date(y, m - 1, d + WEEK_DAYS).getTime();
+    return all.filter((e) => Date.parse(e.startsAt) >= from && Date.parse(e.startsAt) < to).sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  }, [all, day]);
 }
 
 export function YourDay() {

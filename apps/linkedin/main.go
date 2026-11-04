@@ -101,8 +101,10 @@ type sendArgs struct {
 	Conversation string `json:"conversation"`
 	Text         string `json:"text"`
 	Token        string `json:"token"`
-	// Attachments are files the worker wrote under the temp folder. With them the text is optional.
-	Attachments []attachmentArg `json:"attachments,omitempty"`
+	// Attachments are files the worker wrote in AttachmentDir, its staging folder for this send. With them the
+	// text is optional.
+	Attachments   []attachmentArg `json:"attachments,omitempty"`
+	AttachmentDir string          `json:"attachmentDir,omitempty"`
 }
 
 type readArgs struct {
@@ -297,7 +299,11 @@ func (h *Helper) Handle(ctx context.Context, req Request) (resp Response, stop b
 			return Fail(req.ID, &Error{Kind: KindBadRequest}), false
 		}
 		if len(args.Attachments) > 0 {
-			files, bad := checkAttachments(args.Attachments, os.TempDir())
+			root, bad := stagingRoot(args.AttachmentDir, os.TempDir())
+			if bad != nil {
+				return Fail(req.ID, bad), false
+			}
+			files, bad := checkAttachments(args.Attachments, root)
 			if bad != nil {
 				return Fail(req.ID, bad), false
 			}

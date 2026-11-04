@@ -2,13 +2,14 @@
 
 // Today's calendar events for the Summary page: loaded for the signed in user, refreshed every few minutes and when the
 // tab is visited again, kept between visits so the section is there at once. Which events still count is in
-// lib/summary-list.ts; the in-memory copy is in lib/todays-events-cache.ts.
+// lib/summary-list.ts; the in-memory copy is in lib/events-cache.ts, and a mount within a minute of the last load reads
+// nothing (the Summary and Your Day mount and remount often).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { dayKey, daysOf, loadEvents, type CalendarEvent } from "@/lib/calendar";
+import { eventsCache, eventsKey } from "@/lib/events-cache";
 import { unfinishedEvents } from "@/lib/summary-list";
-import { cacheEvents, cachedEvents } from "@/lib/todays-events-cache";
 
 /** Refetches today's events this often, which also retries a failed load. */
 const EVENTS_REFRESH_MINUTES = 5;
@@ -25,20 +26,26 @@ export function useTodaysEvents(now: Date) {
   const userId = session?.user.id;
   const today = dayKey(now);
   const tick = Math.floor(now.getTime() / (EVENTS_REFRESH_MINUTES * 60_000));
-  const [loaded, setLoaded] = useState<CalendarEvent[] | undefined>(() => cachedEvents(userId, today));
+  const key = userId ? eventsKey(userId, today, 1, true) : null;
+  const [loaded, setLoaded] = useState<CalendarEvent[] | undefined>(() => (key ? eventsCache.get(key) : undefined));
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const lastLoad = useRef(0);
+  const forced = useRef(0);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!key) return;
+    const force = attempt !== forced.current;
+    forced.current = attempt;
     let cancelled = false;
     const [y, m, d] = today.split("-").map(Number);
-    loadEvents(new Date(y, m - 1, d), new Date(y, m - 1, d + 1))
+    const held = eventsCache.get(key);
+    if (held) setLoaded(held);
+    // Retry and the tab coming back always read; a mount or the clock ticking over reads only when the copy is old.
+    eventsCache.load(key, () => loadEvents(new Date(y, m - 1, d), new Date(y, m - 1, d + 1)), force ? 0 : FOCUS_REFETCH_MS)
       .then((events) => {
         if (cancelled) return;
-        cacheEvents(userId, today, events);
-        lastLoad.current = Date.now();
+        lastLoad.current = Date.now() - eventsCache.age(key);
         setLoaded(events);
         setFailed(false);
       })
@@ -49,7 +56,7 @@ export function useTodaysEvents(now: Date) {
     return () => {
       cancelled = true;
     };
-  }, [userId, today, tick, attempt]);
+  }, [key, today, tick, attempt]);
 
   // Calendar rows have no realtime feed here, so a visit to the tab is the moment to look again.
   useEffect(() => {

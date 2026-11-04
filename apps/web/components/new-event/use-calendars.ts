@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { openEvents } from "@/lib/open-rows";
 import { browserStorage, calendarChoices, readDefaults, writeDefault, type CalendarAccount, type CalendarChoice, type StoredCalendar } from "@/lib/event-calendars";
 
 const TTL = 5 * 60_000; // ms a loaded list is reused
@@ -16,8 +17,10 @@ async function loadStored(userKey: string): Promise<StoredCalendar[]> {
   if (cache && cache.userKey === userKey && Date.now() - cache.at < TTL) return cache.rows;
   const { data, error } = await supabase.from("calendar_events").select("account_id, calendar_id, calendar_name").order("starts_at", { ascending: false }).limit(ROWS);
   if (error) throw new Error(`Load calendars failed (${error.code})`);
-  cache = { at: Date.now(), userKey, rows: data };
-  return data;
+  // Calendar names are sealed: opened once here, then kept with the cache.
+  const rows = await openEvents(data);
+  cache = { at: Date.now(), userKey, rows };
+  return rows;
 }
 
 /** The choices for these accounts, and a function that makes a calendar its account's default. A failed load leaves each account's primary calendar. */

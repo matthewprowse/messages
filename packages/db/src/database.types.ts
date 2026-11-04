@@ -1559,6 +1559,7 @@ export type Database = {
           company: string | null
           created_at: string
           display_name: string
+          display_name_rank: number
           id: string
           name_locked: boolean
           organization_id: string | null
@@ -1582,6 +1583,7 @@ export type Database = {
           company?: string | null
           created_at?: string
           display_name: string
+          display_name_rank?: number
           id?: string
           name_locked?: boolean
           organization_id?: string | null
@@ -1605,6 +1607,7 @@ export type Database = {
           company?: string | null
           created_at?: string
           display_name?: string
+          display_name_rank?: number
           id?: string
           name_locked?: boolean
           organization_id?: string | null
@@ -2594,6 +2597,7 @@ export type Database = {
           body_marks: string | null
           body_shrunk_at: string | null
           body_text: string | null
+          content_index: string | null
           created_at: string
           direction: string
           has_original: boolean
@@ -2629,6 +2633,7 @@ export type Database = {
           body_marks?: string | null
           body_shrunk_at?: string | null
           body_text?: string | null
+          content_index?: string | null
           created_at?: string
           direction: string
           has_original?: boolean
@@ -2664,6 +2669,7 @@ export type Database = {
           body_marks?: string | null
           body_shrunk_at?: string | null
           body_text?: string | null
+          content_index?: string | null
           created_at?: string
           direction?: string
           has_original?: boolean
@@ -3612,6 +3618,57 @@ export type Database = {
           },
         ]
       }
+      thread_assignment_log: {
+        Row: {
+          agent_id: string | null
+          assigned_at: string
+          assigned_by: string | null
+          assignee_id: string
+          id: number
+          previous_assignees: string[]
+          self_assigned: boolean
+          thread_id: string
+          workspace_id: string
+        }
+        Insert: {
+          agent_id?: string | null
+          assigned_at?: string
+          assigned_by?: string | null
+          assignee_id: string
+          id?: number
+          previous_assignees?: string[]
+          self_assigned?: boolean
+          thread_id: string
+          workspace_id: string
+        }
+        Update: {
+          agent_id?: string | null
+          assigned_at?: string
+          assigned_by?: string | null
+          assignee_id?: string
+          id?: number
+          previous_assignees?: string[]
+          self_assigned?: boolean
+          thread_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "thread_assignment_log_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "threads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "thread_assignment_log_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       thread_label_removals: {
         Row: {
           label_id: string
@@ -3803,6 +3860,7 @@ export type Database = {
           channel: string
           created_at: string
           group_name: string | null
+          group_name_index: string | null
           id: string
           is_group: boolean
           junk: boolean
@@ -3846,6 +3904,7 @@ export type Database = {
           channel: string
           created_at?: string
           group_name?: string | null
+          group_name_index?: string | null
           id?: string
           is_group?: boolean
           junk?: boolean
@@ -3889,6 +3948,7 @@ export type Database = {
           channel?: string
           created_at?: string
           group_name?: string | null
+          group_name_index?: string | null
           id?: string
           is_group?: boolean
           junk?: boolean
@@ -4069,21 +4129,81 @@ export type Database = {
         }
         Relationships: []
       }
+      user_key_rotations: {
+        Row: {
+          clean_pass_at: string | null
+          cursor: Json
+          finished_at: string | null
+          moved: number
+          phase: string
+          prepared_at: string
+          switched_at: string | null
+          unreadable: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          clean_pass_at?: string | null
+          cursor?: Json
+          finished_at?: string | null
+          moved?: number
+          phase: string
+          prepared_at?: string
+          switched_at?: string | null
+          unreadable?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          clean_pass_at?: string | null
+          cursor?: Json
+          finished_at?: string | null
+          moved?: number
+          phase?: string
+          prepared_at?: string
+          switched_at?: string | null
+          unreadable?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_keys: {
         Row: {
           created_at: string
+          index_wrapped_by: string | null
+          index_wrapped_key: string | null
+          next_wrapped_by: string | null
+          next_wrapped_key: string | null
+          previous_wrapped_by: string | null
+          previous_wrapped_key: string | null
+          rotated_at: string | null
           user_id: string
           wrapped_by: string
           wrapped_key: string
         }
         Insert: {
           created_at?: string
+          index_wrapped_by?: string | null
+          index_wrapped_key?: string | null
+          next_wrapped_by?: string | null
+          next_wrapped_key?: string | null
+          previous_wrapped_by?: string | null
+          previous_wrapped_key?: string | null
+          rotated_at?: string | null
           user_id: string
           wrapped_by: string
           wrapped_key: string
         }
         Update: {
           created_at?: string
+          index_wrapped_by?: string | null
+          index_wrapped_key?: string | null
+          next_wrapped_by?: string | null
+          next_wrapped_key?: string | null
+          previous_wrapped_by?: string | null
+          previous_wrapped_key?: string | null
+          rotated_at?: string | null
           user_id?: string
           wrapped_by?: string
           wrapped_key?: string
@@ -4713,6 +4833,7 @@ export type Database = {
       list_my_sessions: { Args: never; Returns: { id: string; created_at: string; refreshed_at: string | null; user_agent: string | null; aal: string | null; current: boolean }[] }
       set_attachment_hidden: { Args: { p_ids: string[]; p_hidden: boolean }; Returns: number }
       delete_attachment_files: { Args: { p_ids: string[] }; Returns: number }
+      orphan_outbox_files: { Args: { p_before: string; p_limit?: number }; Returns: { path: string }[] }
       attachment_copies: { Args: { p_id: string }; Returns: { attachment_id: string; message_id: string; thread_id: string }[] }
       my_ai_allowance: { Args: never; Returns: Json }
       my_workspace_id: { Args: never; Returns: string }
@@ -4770,6 +4891,7 @@ export type Database = {
       }
       assign_thread: { Args: { p_assignee: string; p_thread: string }; Returns: undefined }
       unassign_thread: { Args: { p_assignee: string; p_thread: string }; Returns: undefined }
+      thread_agent_has_left: { Args: { p_thread: string }; Returns: boolean }
       work_chats: {
         Args: { p_filter?: string; p_limit?: number; p_offset?: number }
         Returns: {
@@ -4991,6 +5113,7 @@ export type Database = {
           body_html: string | null
           body_marks: string | null
           body_text: string | null
+          content_index: string | null
           created_at: string
           direction: string
           has_original: boolean
@@ -5058,6 +5181,8 @@ export type Database = {
         }[]
       }
       share_write: { Args: { p_rows: Json; p_table: string; p_thread: string; p_workspace: string | null }; Returns: number }
+      rekey_page: { Args: { p_after: Json | null; p_limit: number; p_owner: string; p_scope: string; p_table: string }; Returns: Json }
+      rekey_write: { Args: { p_owner: string; p_rows: Json; p_scope: string; p_table: string }; Returns: number }
       queue_share_followup: { Args: { p_thread: string }; Returns: undefined }
       bump_workspace_activity: { Args: { p_moved_back: number; p_shared: number; p_user: string; p_workspace: string }; Returns: undefined }
       feature_flag_state: { Args: never; Returns: Json }
@@ -5142,6 +5267,10 @@ export type Database = {
       }
       calendar_attendees_valid: {
         Args: { p_attendees: string[] }
+        Returns: boolean
+      }
+      calendar_text_valid: {
+        Args: { p_max: number; p_required?: boolean; p_value: string }
         Returns: boolean
       }
       confirm_unsubscribe: { Args: { p_id: string }; Returns: undefined }
@@ -5301,6 +5430,10 @@ export type Database = {
         Args: { p_thread: string }
         Returns: string
       }
+      request_transcription: {
+        Args: { p_message: string }
+        Returns: boolean
+      }
       request_whatsapp_link: {
         Args: { p_phone?: string; p_user: string }
         Returns: string
@@ -5337,7 +5470,7 @@ export type Database = {
           p_add?: Json
           p_company: string
           p_contact: string
-          p_name: string
+          p_name: string | null
           p_relationship: string
           p_remove?: string[]
           p_role: string

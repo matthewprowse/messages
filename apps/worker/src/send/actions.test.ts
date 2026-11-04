@@ -1,4 +1,5 @@
-// Tests for send/actions.ts against a fake database client: the atomic claim, the throw safety net and the not-ready requeue.
+// Tests for send/actions.ts against a fake database client: the atomic claim, the ownership check, the throw safety net and
+// the not-ready requeue.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -39,7 +40,8 @@ function fake(answer: (q: Query) => unknown) {
   return queries;
 }
 
-const row = { id: "a1", action: "trash", status: "working", thread_id: "t" };
+const row = { id: "a1", action: "trash", status: "working", thread_id: "t", user_id: "u" };
+const thread = { id: "t", user_id: "u" };
 
 test("claiming updates a queued row to working and only if it is still queued", async () => {
   const queries = fake(() => row);
@@ -51,20 +53,20 @@ test("claiming updates a queued row to working and only if it is still queued", 
 test("a row someone else claimed is not applied", async () => {
   fake(() => null);
   let applied = 0;
-  await actions.applyClaimed("a1", async () => void applied++);
+  await actions.applyClaimed("a1", async () => void applied++, thread);
   assert.equal(applied, 0);
 });
 
 test("a claimed row is applied once", async () => {
   fake(() => row);
   let applied = 0;
-  await actions.applyClaimed("a1", async () => void applied++);
+  await actions.applyClaimed("a1", async () => void applied++, thread);
   assert.equal(applied, 1);
 });
 
 test("an apply that throws leaves the row failed, not working", async () => {
   const queries = fake(() => row);
-  await assert.rejects(() => actions.applyClaimed("a1", async () => { throw new Error("boom"); }), /boom/);
+  await assert.rejects(() => actions.applyClaimed("a1", async () => { throw new Error("boom"); }, thread), /boom/);
   const settle = queries.at(-1)!;
   assert.equal((settle.payload as { status: string }).status, "failed");
   assert.equal(typeof (settle.payload as { error: string }).error, "string");
@@ -72,8 +74,19 @@ test("an apply that throws leaves the row failed, not working", async () => {
 
 test("a connector that is not ready puts the row back to queued without failing it", async () => {
   const queries = fake(() => row);
-  await actions.applyClaimed("a1", async () => { throw new actions.NotReady(); });
+  await actions.applyClaimed("a1", async () => { throw new actions.NotReady(); }, thread);
   const settle = queries.at(-1)!;
   assert.deepEqual(settle.payload, { status: "queued" });
   assert.deepEqual(settle.filters, [["eq", "id", "a1"], ["eq", "status", "working"]]);
+});
+
+test("an action on someone else's conversation is failed and never applied", async () => {
+  for (const other of [{ id: "t", user_id: "someone else" }, { id: "another thread", user_id: "u" }, null]) {
+    const queries = fake(() => row);
+    let applied = 0;
+    await actions.applyClaimed("a1", async () => void applied++, other);
+    assert.equal(applied, 0);
+    assert.equal((queries.at(-1)!.payload as { status: string }).status, "failed");
+  }
+  assert.equal(actions.actionOwned(row, thread), true);
 });

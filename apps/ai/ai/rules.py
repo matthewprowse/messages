@@ -1,6 +1,7 @@
 """How the three learners (learn.py from edits, voice.py from sent mail, signals.py from steering) compare, clean and
-match style rules, in one place so they cannot drift apart: the same fuzzy match, the same dash cleanup, and the same
-rule for when a rule learned from edits goes live. Pure."""
+match style rules, in one place so they cannot drift apart: the same fuzzy match, the same dash cleanup, the same
+check that a rule is about style and nothing a sender could plant, and the same rule for when a learned rule goes live.
+Pure."""
 
 from __future__ import annotations
 
@@ -14,6 +15,19 @@ from .text import plain_dashes
 SAME_RULE = 0.88  # wording this close to an existing rule is that rule
 MIN_SUPPORT = 2  # a rule seen in a single edit stays off ("tentative") until a second one supports it
 MEDIAN_AFTER = 20  # outcomes before the median is trusted
+RULE_CHARS = 200  # a style rule is one short sentence; anything longer is not one
+
+# A rule is learned from text other people can shape (their mail quoted in a reply, drafts written from it) and then goes
+# into every draft. So a rule may only describe style: one carrying an address, a link, a long number or a word about
+# recipients or payment ("always CC x", "bank details are ...") is dropped, whatever the model meant by it.
+_ADDRESS = re.compile(r"@")
+_LINK = re.compile(r"https?://|www\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b", re.I)
+_DIGITS = re.compile(r"(?:\d[\s.\-/]?){6,}")  # a phone, account or reference number, with or without spaces
+_PLANTED = re.compile(
+    r"\b(?:b?cc|iban|swift|bank(?:ing)?|account (?:number|no|details)|password|passcode|otp|wire|crypto|bitcoin|"
+    r"gift ?cards?|payment details)\b",
+    re.I,
+)
 
 
 def rule_key(text: str) -> str:
@@ -23,6 +37,17 @@ def rule_key(text: str) -> str:
 def tidy_rule(text: str) -> str:
     """The app never shows dashes; the model sometimes writes them anyway."""
     return re.sub(r"\s+", " ", plain_dashes(text)).strip()
+
+
+def safe_rule(text: str) -> bool:
+    """False for a rule that carries an address, a link or domain, a long digit run, or a word about recipients or
+    payment: those are never style, and are how a sender would plant an instruction in every future draft."""
+    return not (_ADDRESS.search(text) or _LINK.search(text) or _DIGITS.search(text) or _PLANTED.search(text))
+
+
+def learnable(text: str) -> bool:
+    """A tidied rule that may be stored: not empty, one short sentence, and safe_rule."""
+    return bool(rule_key(text)) and len(text) <= RULE_CHARS and safe_rule(text)
 
 
 def same_rule(a: str, b: str) -> bool:
@@ -37,6 +62,16 @@ def find_rule(rules: list[dict[str, Any]], text: str, contact_id: str | None = N
 
 def goes_live(support: int) -> bool:
     return support >= MIN_SUPPORT
+
+
+def promoted(rule: dict[str, Any], support: int) -> bool:
+    """Whether a tentative rule (seen once, stored off) now has the support to go live. A rule turned off for any other
+    reason is not switched on here."""
+    return rule.get("disabled_reason") == "tentative" and not rule.get("enabled", False) and goes_live(support)
+
+
+# What a learned rule is stored with the first time it is seen: off until a second pass supports it (rules.MIN_SUPPORT).
+TENTATIVE = {"enabled": False, "disabled_reason": "tentative"}
 
 
 def worth_learning(ratio: float, recent: list[float]) -> bool:

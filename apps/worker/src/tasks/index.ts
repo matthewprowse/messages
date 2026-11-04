@@ -4,7 +4,7 @@
 import type { AccountRow } from "../db";
 import { db, must, recordEvent, retryWrite } from "../db";
 import { log } from "../log";
-import { open, seal } from "../vault";
+import { openBound, seal } from "../vault";
 import { INTERRUPTED, taskFailureCode, taskRow, taskStatusPatch, taskWriteOf, type TaskInput, type TaskRow, type TaskUpdateRow, type TaskWrite } from "./rows";
 
 export * from "./rows";
@@ -88,9 +88,9 @@ export async function taskOfUpdate(row: TaskUpdateRow): Promise<TaskRow | null> 
   return must(await db.from("tasks").select("*").eq("id", row.task_id).eq("user_id", row.user_id).maybeSingle(), "load task to tick");
 }
 
-/** The wanted state of a create or update row, its sealed text opened. */
+/** The wanted state of a create or update row, its sealed text opened strictly: only what was sealed for this row. */
 export function taskWriteOfRow(row: TaskUpdateRow): Promise<TaskWrite> {
-  return taskWriteOf(row, open);
+  return taskWriteOf(row, (userId, field, value, column) => openBound(userId, field, value, { places: [`task_updates.${column}`], row: row.id }));
 }
 
 export async function queuedTaskUpdates(): Promise<TaskUpdateRow[]> {

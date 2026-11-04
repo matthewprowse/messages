@@ -53,7 +53,7 @@ function LabelRow({ label }: { label: Label }) {
       <Input value={name} maxLength={NAME_MAX} aria-label="Label Name" className="h-8 min-w-0 flex-1" onChange={(e) => setName(e.target.value)} onBlur={save} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
       <ColorSelect value={label.color} label={`Colour of ${label.name}`} onChange={(color) => api.updateLabel(label.id, { color })} />
       {confirm
-        ? <Button type="button" variant="secondary" size="sm" onClick={() => api.deleteLabel(label.id)} onBlur={() => setConfirm(false)}>Delete</Button>
+        ? <Button type="button" variant="secondary" onClick={() => api.deleteLabel(label.id)} onBlur={() => setConfirm(false)}>Delete</Button>
         : <Button type="button" variant="ghost" size="icon" aria-label={`Delete ${label.name}`} onClick={() => setConfirm(true)}><Trash2 /></Button>}
     </div>
   );

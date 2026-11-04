@@ -8,12 +8,13 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
-  dataKeyFor, deriveCredentialKey, googleAccessToken, kmsWrapper, localWrapper, openCredential, sealCredential, teamDataKeyFor, teamKeyring, wrappersFromEnv,
-  type KeyStore, type TeamKeyRow, type TeamKeyStore,
+  credentialKeysOf, dataKeyFor, deriveCredentialKey, googleAccessToken, handoffContext, indexKeyOf, kmsWrapper, localWrapper, openBound, openCredential, sealBound,
+  sealCredential, teamDataKeyFor, teamKeyring, userKeyringFor, wrappersFromEnv, type KeyStore, type TeamKeyRow, type TeamKeyStore, type UserKeyRow,
 } from "./wrap";
 
 const vectors = JSON.parse(readFileSync(new URL("../vectors.json", import.meta.url), "utf8"));
 const credVectors = JSON.parse(readFileSync(new URL("../credential-vectors.json", import.meta.url), "utf8"));
+const ringVectors = JSON.parse(readFileSync(new URL("../keyring-vectors.json", import.meta.url), "utf8"));
 
 test("the local wrapper unwraps the saved key, and only for the user it was wrapped for", async () => {
   const w = await localWrapper(vectors.localWrap.masterKeyBase64);
@@ -133,6 +134,38 @@ test("a retired version is left out of what readers try, but the first version s
   assert.deepEqual(ring.indexRoot.key, first.current.key);
 });
 
+test("team key versions unwrap at once, a broken middle version is skipped, and a broken current one still throws", async () => {
+  const store = fakeTeamStore();
+  const local = await localWrapper(vectors.localWrap.masterKeyBase64);
+  for (let i = 0; i < 3; i++) { store.due = i > 0; await teamKeyring(store, [local], "w1"); }
+  let inFlight = 0, most = 0;
+  const broken = new Set<number>();
+  const slow = {
+    id: local.id,
+    wrap: local.wrap.bind(local),
+    async unwrap(wrapped: string, owner: string, scope?: "user" | "team") {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      const version = [...store.rows.values()].find((r) => r.wrapped_key === wrapped)?.key_version ?? 0;
+      if (broken.has(version)) throw new Error(`broken ${version}`);
+      return local.unwrap(wrapped, owner, scope);
+    },
+  };
+  const ring = await teamKeyring(store, [slow], "w1");
+  assert.equal(most, 3);
+  assert.deepEqual(ring.all.map((k) => k.version), [3, 2, 1]);
+  broken.add(2);
+  const skipped = await teamKeyring(store, [slow], "w1");
+  assert.deepEqual(skipped.all.map((k) => k.version), [3, 1]);
+  assert.deepEqual(skipped.current.key, ring.current.key);
+  broken.add(3);
+  broken.add(1);
+  // Version order decides which error comes back, as it did one at a time: the current one first.
+  await assert.rejects(teamKeyring(store, [slow], "w1"), /broken 3/);
+});
+
 // A fake Cloud KMS: AES-GCM under a key of its own, additional data checked, like the real one. It records calls.
 async function fakeKms(): Promise<{ url: string; server: Server; calls: { path: string; auth: string | undefined }[]; close(): Promise<void> }> {
   const master = randomBytes(32);
@@ -249,7 +282,7 @@ test("wrappersFromEnv puts KMS first when KMS_KEY_NAME is set, and needs one of 
   const both = await wrappersFromEnv({ KMS_KEY_NAME: KEY_NAME, KMS_ACCESS_TOKEN: "t", KEY_WRAPPING_KEY: vectors.localWrap.masterKeyBase64 });
   assert.deepEqual(both.map((w) => w.id), ["kms:v1", "local:v1"]);
   assert.deepEqual((await wrappersFromEnv({ KEY_WRAPPING_KEY: vectors.localWrap.masterKeyBase64 })).map((w) => w.id), ["local:v1"]);
-  await assert.rejects(wrappersFromEnv({}), /KMS_KEY_NAME or KEY_WRAPPING_KEY/);
+  await assert.rejects(wrappersFromEnv({}), (err: { code?: string }) => err.code === "no_key_wrapper");
 });
 
 test("googleAccessToken reads the metadata server, and caches the token", async () => {
@@ -340,4 +373,76 @@ test("concurrent token callers share one refresh", async () => {
   const token = googleAccessToken({ GCE_METADATA_HOST: "x" }, stub);
   assert.deepEqual(await Promise.all([token(), token(), token()]), ["tk", "tk", "tk"]);
   assert.equal(hits, 1);
+});
+
+test("a handoff sealed for one row and column matches the saved vector, and opens nowhere else", async () => {
+  const key = await deriveCredentialKey(Uint8Array.from(Buffer.from(credVectors.dataKeyHex, "hex")));
+  const h = credVectors.handoff;
+  assert.equal(h.context, handoffContext("icloud_setups", "sign_in", "5E7A0C1D-0000-4000-8000-0000000000D2"));
+  assert.equal(await sealBound(key, h.context, h.plaintext, Uint8Array.from(Buffer.from(h.ivHex, "hex"))), h.sealed);
+  assert.equal(await openBound(key, h.context, h.sealed), h.plaintext);
+  await assert.rejects(openBound(key, handoffContext("icloud_setups", "result", "5e7a0c1d-0000-4000-8000-0000000000d2"), h.sealed));
+  await assert.rejects(openBound(key, handoffContext("icloud_setups", "sign_in", "5e7a0c1d-0000-4000-8000-0000000000d3"), h.sealed));
+  // An account's credential is never a handoff, and the other way round.
+  await assert.rejects(openCredential(key, credVectors.accountId, h.sealed));
+  await assert.rejects(openBound(key, h.context, credVectors.sealed));
+});
+
+test("openBound tries every key given, the current first, and fails when none opens", async () => {
+  const [a, b, c] = await Promise.all([1, 2, 3].map((n) => deriveCredentialKey(Uint8Array.from({ length: 32 }, () => n))));
+  const sealed = await sealBound(b, "handoff:x.y:1", "code");
+  assert.equal(await openBound([a, b], "handoff:x.y:1", sealed), "code");
+  assert.equal(await openCredential([c, b], "1", await sealCredential(b, "1", "s")), "s");
+  await assert.rejects(openBound([a, c], "handoff:x.y:1", sealed));
+  await assert.rejects(openBound([], "handoff:x.y:1", sealed));
+});
+
+// A fake in-memory user_keys table holding whole rows.
+function fakeUserStore(rows = new Map<string, UserKeyRow>()): KeyStore & { rows: Map<string, UserKeyRow> } {
+  return {
+    rows,
+    read: async (id) => rows.get(id) ?? null,
+    insertIfAbsent: async (r) => { if (!rows.has(r.user_id)) rows.set(r.user_id, { wrapped_key: r.wrapped_key, wrapped_by: r.wrapped_by }); },
+  };
+}
+
+test("a user's keyring opens the current, next and previous keys and the kept index key", async () => {
+  const w = await localWrapper(vectors.localWrap.masterKeyBase64);
+  const user = ringVectors.indexWrap.userId;
+  const bytes = (hex: string) => Uint8Array.from(Buffer.from(hex, "hex"));
+  const next = Uint8Array.from({ length: 32 }, () => 5);
+  const store = fakeUserStore(new Map([[user, {
+    wrapped_key: await w.wrap(bytes(ringVectors.currentKeyHex), user), wrapped_by: "local:v1",
+    next_wrapped_key: await w.wrap(next, user), next_wrapped_by: "local:v1",
+    previous_wrapped_key: await w.wrap(bytes(ringVectors.previousKeyHex), user), previous_wrapped_by: "local:v1",
+    index_wrapped_key: ringVectors.indexWrap.wrapped, index_wrapped_by: "local:v1",
+  }]]));
+  const ring = await userKeyringFor(store, [w], user);
+  assert.equal(Buffer.from(ring.current).toString("hex"), ringVectors.currentKeyHex);
+  assert.deepEqual(ring.older.map((k) => Buffer.from(k).toString("hex")), [Buffer.from(next).toString("hex"), ringVectors.previousKeyHex]);
+  assert.equal(Buffer.from(ring.indexKey!).toString("hex"), ringVectors.indexKeyHex);
+  assert.equal(Buffer.from(await indexKeyOf(ring)).toString("hex"), ringVectors.indexKeyHex);
+  assert.equal((await credentialKeysOf(ring)).length, 3);
+  // The index key is wrapped for its own purpose: it is not a data key of the user.
+  await assert.rejects(w.unwrap(ringVectors.indexWrap.wrapped, user));
+});
+
+test("a user never rotated has a keyring of one key, and their index key comes from it", async () => {
+  const w = await localWrapper(vectors.localWrap.masterKeyBase64);
+  const store = fakeUserStore();
+  const ring = await userKeyringFor(store, [w], ringVectors.indexWrap.userId);
+  assert.equal(store.rows.size, 1);
+  assert.deepEqual(ring.older, []);
+  assert.equal(ring.indexKey, null);
+  const again = await userKeyringFor(store, [w], ringVectors.indexWrap.userId);
+  assert.deepEqual(again.current, ring.current);
+  assert.equal((await indexKeyOf(ring)).length, 32);
+});
+
+test("a key wrapped by the retired local wrapper fails with legacy_wrapper_missing once KEY_WRAPPING_KEY is gone", async () => {
+  const w = await localWrapper(vectors.localWrap.masterKeyBase64);
+  const kms = kmsWrapper({ keyName: KEY_NAME, token: async () => "t", fetch: (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch });
+  const store = fakeUserStore(new Map([["u", { wrapped_key: await w.wrap(Uint8Array.from({ length: 32 }, () => 1), "u"), wrapped_by: "local:v1" }]]));
+  await assert.rejects(userKeyringFor(store, [kms], "u"), (err: { code?: string }) => err.code === "legacy_wrapper_missing");
+  await assert.rejects(dataKeyFor(store, [kms], "u"), (err: { code?: string }) => err.code === "legacy_wrapper_missing");
 });

@@ -51,14 +51,6 @@ function useSeen<T extends Element>() {
   return { ref, seen };
 }
 
-function host(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
-
 /** `fallback` is the existing trimmed preview, shown while there is nothing better and when the version could not be made. */
 export function BulkRead({ messageId, fallback }: { messageId: string; fallback: ReactNode }) {
   const { ref, seen } = useSeen<HTMLDivElement>();
@@ -89,10 +81,11 @@ export function BulkRead({ messageId, fallback }: { messageId: string; fallback:
         {links.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {links.map((l, i) => (
-              <Button key={`${i}-${l.url}`} variant="outline" size="sm" asChild>
-                <a href={l.url} target="_blank" rel="noopener noreferrer nofollow" title={l.url}>
-                  {l.label}
-                  <span className="text-xs text-muted-foreground">{host(l.url)}</span>
+              <Button key={`${i}-${l.url}`} variant="outline" asChild>
+                {/* The label is the AI's words about a stranger's email, so the real site sits beside it at full size and a long label is cut, never the site. */}
+                <a href={l.url} target="_blank" rel="noopener noreferrer nofollow" title={l.url} aria-label={`${l.label}, Opens ${l.host}`}>
+                  <span className="max-w-48 truncate">{l.label}</span>
+                  <span className="font-normal text-muted-foreground">{l.host}</span>
                   <ExternalLink />
                 </a>
               </Button>
@@ -109,7 +102,7 @@ export function BulkRead({ messageId, fallback }: { messageId: string; fallback:
         {fallback}
         <div className="flex flex-wrap items-center gap-2 text-xs opacity-70">
           <span>{mine.message}</span>
-          {mine.retry && <Button variant="ghost" size="sm" onClick={() => setTries((n) => n + 1)}>Retry</Button>}
+          {mine.retry && <Button variant="ghost" onClick={() => setTries((n) => n + 1)}>Retry</Button>}
         </div>
       </div>
     );

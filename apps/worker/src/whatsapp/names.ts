@@ -7,10 +7,12 @@ import { addressIndex, chatIndex } from "@messages/crypto/addresses";
 import { db, must } from "../db";
 import { log } from "../log";
 import { chunks, mapLimit } from "../util";
-import { keysFor, sealAddress } from "../vault";
+import { FIELD } from "@messages/crypto/fields";
+import { groupNameJson, keysFor, open, sealAddress } from "../vault";
 import type { BoundedMap } from "./bounded-map";
 import { e164 } from "./normalize";
 import { personJson, type AccountCtx } from "./person";
+import { whatsappName } from "../contacts/name-rank";
 
 /** Remembers contact names in the maps (a saved name wins over a pushed one) and stores them on the account's people. */
 export async function saveContactNames(ctx: AccountCtx, contacts: Partial<Contact>[], names: { saved: BoundedMap<string, string>; push: BoundedMap<string, string> }) {
@@ -23,14 +25,15 @@ export async function saveContactNames(ctx: AccountCtx, contacts: Partial<Contac
       if (c.name) names.saved.set(j, c.name);
       if (c.notify) names.push.set(j, c.notify);
     }
-    // A saved name wins. A name the person set for themselves only replaces a bare number (decided in SQL).
-    const name = c.name ?? c.verifiedName ?? c.notify ?? null;
-    if (!name) continue;
+    // A saved name wins. A name the person set for themselves only replaces a bare number (decided in SQL by rank).
+    const best = whatsappName(c.name ?? c.verifiedName, c.notify, "");
+    if (!best.name.trim()) continue;
     people.push(
       await personJson(keys, {
         phone: e164(jids.find((j) => isPnUser(j))),
         lid: jids.find((j) => isLidUser(j)) ?? null,
-        display_name: name,
+        display_name: best.name,
+        name_rank: best.rank,
         push_name: c.notify ?? null,
       }, ctx.userId),
     );
@@ -53,19 +56,23 @@ export async function saveGroupNames(ctx: AccountCtx, named: Map<string, string>
   // Conversations are found by their chat's index: the database matches on that, not the JID.
   const keys = await keysFor(ctx.userId);
   const indexes = new Map(await Promise.all([...named.keys()].map(async (id) => [id, await chatIndex(keys, id)] as const)));
-  const stored = new Map<string, string | null>();
+  const stored = new Map<string, { group_name: string | null; group_name_index: string | null }>();
   for (const batch of chunks([...indexes.values()], 100)) {
     const rows = must(
-      await db.from("threads").select("provider_thread_index, group_name").eq("account_id", ctx.accountId).in("provider_thread_index", batch),
+      await db.from("threads").select("provider_thread_index, group_name, group_name_index").eq("account_id", ctx.accountId).in("provider_thread_index", batch),
       "load group names",
     );
-    for (const r of rows) if (r.provider_thread_index) stored.set(r.provider_thread_index, r.group_name);
+    for (const r of rows) if (r.provider_thread_index) stored.set(r.provider_thread_index, r);
   }
   let renamed = 0;
   for (const [id, subject] of named) {
     const index = indexes.get(id)!;
-    if (!stored.has(index) || stored.get(index) === subject) continue; // no conversation yet, or unchanged
-    must(await db.from("threads").update({ group_name: subject }).eq("account_id", ctx.accountId).eq("provider_thread_index", index), "save group name");
+    const row = stored.get(index);
+    if (!row) continue; // no conversation yet
+    // The name is sealed, so it is compared by its index (or opened, for a row stored before it had one).
+    const next = await groupNameJson(ctx.userId, subject);
+    if (row.group_name_index ? row.group_name_index === next.group_name_index : (await open(ctx.userId, FIELD.name, row.group_name)) === subject.trim()) continue;
+    must(await db.from("threads").update(next).eq("account_id", ctx.accountId).eq("provider_thread_index", index), "save group name");
     renamed++;
   }
   if (renamed > 0) log.info("whatsapp group names saved", { account: ctx.accountId, renamed });

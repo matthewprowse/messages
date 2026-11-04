@@ -15,8 +15,8 @@ from ... import log
 from ...analytics import Analytics, event
 from ...fields import TASK_LIST, TASK_NOTES, TASK_TITLE
 from ...supabase import Supabase, SupabaseError, in_list
-from ...vault import Vault
-from ..instagram.sealing import AccountSealer, open_json  # "v2:" under the owner's key; open_json reads the web app's short-lived "v1:" codes
+from ...vault import KeyUnavailable, Vault
+from ..instagram.sealing import AccountSealer, open_handoff, open_legacy  # "v2:" under the owner's key; open_handoff reads the web app's sign-in codes
 
 PROVIDER = "icloud_reminders"
 STATE_SCOPE = "icloud_reminders"
@@ -32,7 +32,7 @@ class Store:
     def __init__(self, db: Supabase, vault: Vault, *, encryption_key: str):
         self.db = db
         self.vault = vault
-        self.encryption_key = encryption_key  # the old static key: reads "v1:" values and the web app's short-lived sign-in codes
+        self.encryption_key = encryption_key  # the old static key: reads "v1:" values made before per-user keys; empty once retired
         self.creds = AccountSealer(db, vault, encryption_key)  # stored sign-ins and sessions, "v2:" under the owner's key
         self.analytics = Analytics(db)
 
@@ -173,11 +173,19 @@ class Store:
         rows = [r for r in found if not (r["id"] in seen or seen.add(r["id"]))]
         return sorted(rows, key=lambda r: str(r.get("created_at") or ""))
 
-    def open_task_text(self, row: dict[str, Any]) -> tuple[str, str | None]:
-        """(title, notes) of a create or update row in plain text; the app sealed them in the browser."""
+    def open_task_text(self, row: dict[str, Any]) -> tuple[str, str | None] | None:
+        """(title, notes) of a create or update row in plain text; the app sealed them in the browser for this row's
+        title and notes columns. None when either was not (copied in from elsewhere, plain while encryption is on, or
+        legacy once refused): the caller fails the row unmade. A key that cannot be had right now raises."""
         user = row["user_id"]
-        title = self.vault.open(user, TASK_TITLE, row.get("title")) or ""
-        notes = self.vault.open(user, TASK_NOTES, row.get("notes"))
+        try:
+            title = self.vault.open_bound(user, TASK_TITLE, row.get("title"), ["task_updates.title"], row["id"]) or ""
+            notes = self.vault.open_bound(user, TASK_NOTES, row.get("notes"), ["task_updates.notes"], row["id"])
+        except KeyUnavailable:
+            raise
+        except Exception as err:
+            log.warn("task change refused", user=user, code=log.code_of(err))
+            return None
         return str(title), (str(notes) if notes else None)
 
     def task_id_of(self, account_id: str, provider_id: str) -> str | None:
@@ -251,7 +259,10 @@ class SignInRow:
         # Cleared only if it is still what was just read, so one typed in the meantime is not lost.
         self.store.db.update("instagram_sign_ins", {"account_id": f"eq.{self.account['id']}", "code": f"eq.{sealed}"}, {"code": None}, minimal=True)
         try:
-            return str(open_json(sealed, self.store.encryption_key))
+            if sealed.startswith("v1:"):  # typed before per-user handoffs: read while the old static key is still set
+                return str(open_legacy(sealed, self.store.encryption_key))
+            # Sealed by the web app under the owner's key, bound to this row's code.
+            return str(open_handoff(self.store.vault, self.store.encryption_key, self.account["user_id"], "instagram_sign_ins", "code", self.account["id"], sealed))
         except Exception:
             return None
 

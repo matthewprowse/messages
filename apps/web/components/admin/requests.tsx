@@ -123,8 +123,8 @@ export function Requests({ version, onInvite, onTeamsChanged, onBusy, onPending 
               detail={e.kind === "team" ? `${e.company ?? "Team"}, ${teamSizeLabel(e.team_size)}` : "Individual"}
               end={
                 <>
-                  {e.status !== "rejected" && <Button size="sm" variant="ghost" onClick={() => void decide(e, "rejected")}>Reject</Button>}
-                  {e.status !== "approved" && <Button size="sm" variant="secondary" onClick={() => void decide(e, "approved")}>Approve</Button>}
+                  {e.status !== "rejected" && <Button variant="ghost" onClick={() => void decide(e, "rejected")}>Reject</Button>}
+                  {e.status !== "approved" && <Button variant="secondary" onClick={() => void decide(e, "approved")}>Approve</Button>}
                 </>
               }
             />

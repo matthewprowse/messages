@@ -36,6 +36,16 @@ export const teamAddressIndex = (keys: TeamKeys, value: string) => teamBlindInde
 export const teamChatIndex = (keys: TeamKeys, value: string) => teamBlindIndex(keys, chatKey(value));
 export const teamDomainIndex = (keys: TeamKeys, value: string) => teamBlindIndex(keys, domainKey(value));
 
+/**
+ * A group chat's name (threads.group_name_index), so ingest can tell a renamed group from the same name sealed again.
+ * Not lowercased: a change of case is a rename the app should show. Only equality within one user's rows is learnt.
+ */
+export function groupNameKey(value: string): string {
+  return `group:${value.trim()}`;
+}
+
+export const groupNameIndex = (keys: UserKeys, value: string) => blindIndex(keys, groupNameKey(value));
+
 /** A priority rule's target, a whole address or a domain (with or without its @). */
 export const ruleTargetIndex = (keys: UserKeys, target: string) =>
   /^[^@\s]+@/.test(target.trim()) ? addressIndex(keys, target) : domainIndex(keys, target);

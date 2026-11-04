@@ -18,10 +18,11 @@ export const CSV_HEADER = ["Name", "Emails", "Phones", "Company", "Role", "Relat
 
 /**
  * A spreadsheet runs a cell that starts with = or @ (and + or - when it is not a number) as a formula, and a contact's name
- * or note comes from other people. Such a cell gets a leading apostrophe, which contact-import.ts removes again.
+ * or note comes from other people. Such a cell gets a leading apostrophe, which contact-import.ts removes again. A leading
+ * tab or carriage return gets one too: some spreadsheets drop it and then read the formula behind it.
  */
 export function safeCell(value: string): string {
-  return /^[=@]/.test(value) || (/^[+-]/.test(value) && !/^[+-]?[\d\s().-]+$/.test(value)) ? `'${value}` : value;
+  return /^[=@\t\r]/.test(value) || (/^[+-]/.test(value) && !/^[+-]?[\d\s().-]+$/.test(value)) ? `'${value}` : value;
 }
 
 function csvCell(value: string): string {

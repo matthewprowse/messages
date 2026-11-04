@@ -71,7 +71,7 @@ export function Failed({ title, onRetry, busy = false }: { title: string; onRetr
     <Alert variant="destructive" className="bg-background">
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>Check your connection and try again.</AlertDescription>
-      {onRetry && <AlertAction><Button size="sm" variant="secondary" disabled={busy} onClick={onRetry}>Retry</Button></AlertAction>}
+      {onRetry && <AlertAction><Button variant="secondary" disabled={busy} onClick={onRetry}>Retry</Button></AlertAction>}
     </Alert>
   );
 }
@@ -81,7 +81,7 @@ export function Advanced({ title = "Advanced", children }: { title?: string; chi
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Card title={title} action={<Button type="button" variant="ghost" size="sm" aria-expanded={open} onClick={() => setOpen((o) => !o)}>{open ? "Hide" : "Show"}</Button>}>
+      <Card title={title} action={<Button type="button" variant="ghost" aria-expanded={open} onClick={() => setOpen((o) => !o)}>{open ? "Hide" : "Show"}</Button>}>
         {null}
       </Card>
       {open && children}

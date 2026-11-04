@@ -63,9 +63,9 @@ export function CandidatesDialog({ logo, onClose, onChanged }: { logo: CompanyLo
                         <span className="text-xs text-muted-foreground">{chosen ? logo.verdict : (reasons.get(c.n) ?? c.note ?? "")}</span>
                       </div>
                       {chosen ? (
-                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => rejectLogo(logo.domain, c.n), "Searching Again Without It")}>Reject</Button>
+                        <Button variant="ghost" disabled={busy} onClick={() => void act(() => rejectLogo(logo.domain, c.n), "Searching Again Without It")}>Reject</Button>
                       ) : (
-                        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void act(() => chooseLogo(logo.domain, c.n), "Saved For Every User")}>Use This</Button>
+                        <Button variant="secondary" disabled={busy} onClick={() => void act(() => chooseLogo(logo.domain, c.n), "Saved For Every User")}>Use This</Button>
                       )}
                     </div>
                   );

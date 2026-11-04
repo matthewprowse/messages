@@ -7,6 +7,15 @@ export interface DraftReport { facts: DraftFact[]; placeholders: string[]; missi
 export interface DraftAudit { messages: number; facts: number; rules: number; replies: number; note: boolean; calendar: boolean }
 export type FeedbackReason = "too_formal" | "too_casual" | "too_long" | "too_short" | "wrong_facts" | "wrong_language" | "not_like_me";
 
+/**
+ * drafts.status of a pre-draft the AI worker held back because it repeats an amount, account, phone number or address only
+ * the sender's newest message gave (migration 20261124160100, apps/ai/ai/drafts_facts.py). Shown to check, never as ready.
+ */
+export const REVIEW_STATUS = "review";
+
+/** The warning shown with a held draft. */
+export const REVIEW_WARNING = "Check This Draft Before Sending: It Repeats Details Only The Sender Gave";
+
 /** The reasons offered after a thumbs down, in the order shown. */
 export const FEEDBACK_REASONS: { key: FeedbackReason; label: string }[] = [
   { key: "too_formal", label: "Too Formal" },

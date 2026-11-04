@@ -13,11 +13,11 @@ import { PrioritiesSection } from "@/components/settings/priorities-section";
 import { WritingSection } from "@/components/settings/writing-section";
 
 export default function AiPage() {
-  const { loading } = useApp();
+  const { loading, fromCopy } = useApp();
   return (
     <SettingsPage title="AI">
-      {/* The form copies the profile when it mounts, so it remounts once the saved profile has loaded. */}
-      <AboutSection key={loading ? "loading" : "loaded"} />
+      {/* The form copies the profile when it mounts, so it remounts once the saved profile has loaded from the server. */}
+      <AboutSection key={loading || fromCopy ? "loading" : "loaded"} />
       <WritingSection />
       <Suspense fallback={null}>
         <PrioritiesSection />

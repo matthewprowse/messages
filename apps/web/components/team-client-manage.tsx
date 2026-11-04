@@ -40,7 +40,7 @@ export function ClientMenu({ client, onChanged }: { client: TeamClient; onChange
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${client.name}`}><MoreHorizontal /></Button>
+          <Button variant="ghost" size="icon" aria-label={`Actions for ${client.name}`}><MoreHorizontal /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {manages && (

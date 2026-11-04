@@ -39,3 +39,13 @@ export function importRows(
   });
   return rows;
 }
+
+/**
+ * The name to send for a card: its name for a new contact, and for an existing one only when it differs from the
+ * stored name (`stored`, opened), since the database cannot compare sealed names. null sends none.
+ */
+export function cardName(name: string | null, stored: string | undefined): string | null {
+  const n = name?.trim() || null;
+  if (!n || stored === undefined) return n;
+  return stored.trim() === n ? null : n;
+}

@@ -77,12 +77,13 @@ const RATES = [1, 1.5, 2];
  * A voice note or audio file in a conversation: play and pause, a bar to scrub through it, the time,
  * and a speed button (1x, 1.5x, 2x), drawn to match the bubble it sits in.
  */
-export function VoiceNote({ attachment: a, me, transcript, onReplyWithPoints }: { attachment: Attachment; me: boolean; transcript?: string; onReplyWithPoints?: () => void }) {
+export function VoiceNote({ attachment: a, me, transcript, onReplyWithPoints, onTranscribe, transcribing }: { attachment: Attachment; me: boolean; transcript?: string; onReplyWithPoints?: () => void; onTranscribe?: () => Promise<boolean>; transcribing?: boolean }) {
   const url = useSignedUrl("attachments", a.path, false, a.sealed ? mimeFor(a) : undefined);
   const ref = useRef<HTMLAudioElement>(null);
   const { playing, time, duration, failed, toggle, seek } = useMedia(ref);
   const [rate, setRate] = useState(1);
   const [reading, setReading] = useState(false);
+  const [asked, setAsked] = useState(false);
   useEffect(() => { if (ref.current) ref.current.playbackRate = rate; }, [rate, url]);
 
   const ready = !!url && !failed;
@@ -125,6 +126,13 @@ export function VoiceNote({ attachment: a, me, transcript, onReplyWithPoints }: 
             <Button variant="ghost" size="xs" className="mt-1 self-start hover:bg-current/10" onClick={onReplyWithPoints}>Reply With These Points</Button>
           )}
         </>
+      )}
+      {/* Held back until you reply, so a stranger cannot spend your AI allowance: written out only when you ask. Asked for
+          (here, or before a reload: transcribing), it reads Transcribing until the transcript arrives. */}
+      {!transcript && (onTranscribe || asked || transcribing) && (
+        <Button variant="ghost" size="xs" className="mt-1 self-start hover:bg-current/10" disabled={asked || transcribing} onClick={async () => { setAsked(true); if (onTranscribe && !(await onTranscribe())) setAsked(false); }}>
+          {asked || transcribing ? "Transcribing" : "Transcribe"}
+        </Button>
       )}
     </div>
   );

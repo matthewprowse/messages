@@ -17,8 +17,10 @@ import { countryCodeFrom } from "./cards-store";
 import { chooseKeep, findMatches, mergeReason, ordered, pairKey, type MatchInput, type Suggestion } from "./match";
 import { ownIdentities } from "./own";
 import { signaturePhones } from "./signature-phones";
+import { staleSuggestions } from "./stale";
 import { FIELD } from "@messages/crypto/fields";
-import { open, openAddresses } from "../vault";
+import { open, openAddresses, sealName } from "../vault";
+import { fullerName } from "./name-rank";
 
 const FIRST_RUN_MS = 45_000;
 const EVERY_MS = 15 * 60_000;
@@ -81,7 +83,8 @@ async function loadLinkerData(user: string) {
   const [accounts, own, contacts, identities, cards, decided, groupThreads] = await Promise.all([
     db.from("accounts").select("id, provider, address, pairing_phone").eq("user_id", user).then((r) => openAddresses(user, must(r, "load accounts"))),
     ownIdentities(user),
-    allRows((f, t) => db.from("contacts").select("id, display_name, organization_id, created_at").eq("user_id", user).order("id").range(f, t), "load contacts"),
+    // Names are sealed: opened here, since the rules compare them.
+    allRows((f, t) => db.from("contacts").select("id, display_name, display_name_rank, organization_id, created_at").eq("user_id", user).order("id").range(f, t), "load contacts").then((r) => openAddresses(user, r)),
     allRows((f, t) => db.from("contact_identities").select("id, contact_id, kind, value").eq("user_id", user).order("id").range(f, t), "load identities").then((r) => openAddresses(user, r)),
     allRows((f, t) => db.from("address_book_cards").select("id, name, emails, phones").eq("user_id", user).order("id").range(f, t), "load cards").then(async (r) => {
       await openAddresses(user, r);
@@ -89,7 +92,7 @@ async function loadLinkerData(user: string) {
       return Promise.all(r.map(async (c) => ({ ...c, name: await open(user, FIELD.cardName, c.name) })));
     }),
     allRows(
-      (f, t) => db.from("contact_suggestions").select("id, contact_a, contact_b, status").eq("user_id", user).neq("status", "merged").order("id").range(f, t),
+      (f, t) => db.from("contact_suggestions").select("id, contact_a, contact_b, status, evidence").eq("user_id", user).neq("status", "merged").order("id").range(f, t),
       "load suggestions",
     ),
     // Group chats: everyone in one is a different person from everyone else in it.
@@ -159,7 +162,7 @@ async function linkUser(user: string) {
   const { input, contacts, decided, recent } = await loadLinkerData(user);
   const result = findMatches(input);
 
-  const contactInfo = new Map(contacts.map((c) => [c.id, { name: c.display_name, createdAt: c.created_at }]));
+  const contactInfo = new Map(contacts.map((c) => [c.id, { name: c.display_name, rank: c.display_name_rank, createdAt: c.created_at }]));
   // Message counts pick which contact a merge keeps. Only contacts in certain merges need one, counted at once.
   const counted = await Promise.all(
     [...new Set(result.certain.flatMap((c) => c.contacts))].map(async (id) => {
@@ -196,6 +199,14 @@ async function linkUser(user: string) {
       }
       merged++;
       keptAs.set(other, keep);
+      // The database cannot compare sealed names, so "a full name beats one word" is applied here, where they are open.
+      const fuller = fullerName(contactInfo.get(keep)?.name, contactInfo.get(other)?.name);
+      if (fuller) {
+        const rank = contactInfo.get(other)!.rank;
+        const { error: nameError } = await db.from("contacts").update({ display_name: await sealName(user, fuller, { place: "contacts.display_name", row: keep }), display_name_rank: rank }).eq("id", keep).eq("user_id", user);
+        if (nameError) log.warn("merged contact name not kept", { user, keep, code: nameError.code });
+        else contactInfo.set(keep, { ...contactInfo.get(keep)!, name: fuller, rank });
+      }
     }
   }
 
@@ -233,7 +244,7 @@ async function linkUser(user: string) {
     );
   }
 
-  const stale = decided.filter((s) => s.status === "pending" && !wanted.has(pairKey(rep(s.contact_a), rep(s.contact_b)))).map((s) => s.id);
+  const stale = staleSuggestions(decided, wanted, rep); // an automation's suggestions are left for you to decide
   for (const ids of chunks(stale, 200)) {
     must(await db.from("contact_suggestions").delete().eq("user_id", user).eq("status", "pending").in("id", ids), "remove stale suggestions");
   }

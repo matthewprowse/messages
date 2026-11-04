@@ -1,8 +1,11 @@
 // iCloud Contacts over CardDAV, signed in with the same app-specific password as iCloud Mail. Read only:
-// it finds your address books and reads their cards, nothing is ever written.
+// it finds your address books and reads their cards, nothing is ever written. The sign-in is only ever sent to
+// iCloud's contacts hosts (photo-hosts.ts), and no request follows a redirect, which could carry it elsewhere.
 
 import type { ICloudCredentials } from "../connectors/icloud";
+import { readCapped } from "../whatsapp/media-guard";
 import { parseVCard, unescapeXml, vcardsFromMultistatus, type Card } from "./cards";
+import { icloudContactsUrl, isICloudContactsUrl, PHOTO_MAX_BYTES } from "./photo-hosts";
 
 const ROOT = "https://contacts.icloud.com/";
 const DAV = 'xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav"';
@@ -13,8 +16,9 @@ export function icloudAuth(creds: ICloudCredentials): string {
 }
 
 async function dav(auth: string, url: string, method: "PROPFIND" | "REPORT", depth: 0 | 1, body: string): Promise<string> {
-  const response = await fetch(url, {
+  const response = await fetch(icloudContactsUrl(url, ROOT), {
     method,
+    redirect: "error",
     headers: {
       authorization: auth,
       depth: String(depth),
@@ -42,17 +46,17 @@ export async function icloudCards(auth: string): Promise<Card[]> {
   const principal = hrefIn(principalXml, "current-user-principal");
   if (!principal) throw Object.assign(new Error("no principal"), { code: "NO_PRINCIPAL" });
 
-  const homeXml = await dav(auth, new URL(principal, ROOT).href, "PROPFIND", 0, `<d:propfind ${DAV}><d:prop><card:addressbook-home-set/></d:prop></d:propfind>`);
+  const homeXml = await dav(auth, icloudContactsUrl(principal, ROOT), "PROPFIND", 0, `<d:propfind ${DAV}><d:prop><card:addressbook-home-set/></d:prop></d:propfind>`);
   const home = hrefIn(homeXml, "addressbook-home-set");
   if (!home) throw Object.assign(new Error("no address book home"), { code: "NO_HOME" });
-  const homeUrl = new URL(home, ROOT).href;
+  const homeUrl = icloudContactsUrl(home, ROOT);
 
   const listXml = await dav(auth, homeUrl, "PROPFIND", 1, `<d:propfind ${DAV}><d:prop><d:resourcetype/></d:prop></d:propfind>`);
   const books: string[] = [];
   for (const m of listXml.matchAll(/<(?:\w+:)?response[^>]*>([\s\S]*?)<\/(?:\w+:)?response>/g)) {
     if (!/<(?:\w+:)?addressbook(\s[^>]*)?\/>/.test(m[1])) continue;
     const href = /<(?:\w+:)?href[^>]*>([^<]+)<\/(?:\w+:)?href>/.exec(m[1])?.[1];
-    if (href) books.push(new URL(unescapeXml(href.trim()), homeUrl).href);
+    if (href) books.push(icloudContactsUrl(unescapeXml(href.trim()), homeUrl));
   }
 
   const cards: Card[] = [];
@@ -72,12 +76,17 @@ export async function icloudCards(auth: string): Promise<Card[]> {
   return cards;
 }
 
-/** A photo iCloud keeps at its own address needs the same sign-in. Other hosts are not contacted. */
+/** A photo iCloud keeps at its own address needs the same sign-in. Other hosts are not contacted; too large is null. */
 export async function fetchICloudPhoto(auth: string, url: string): Promise<Buffer | null> {
-  if (!/^https:\/\/[\w.-]+\.icloud\.com\//i.test(url)) return null;
+  if (!isICloudContactsUrl(url)) return null;
   const response = await fetch(url, {
     headers: { authorization: auth },
+    redirect: "error",
     signal: AbortSignal.timeout(60_000),
   }).catch(() => null);
-  return response?.ok ? Buffer.from(await response.arrayBuffer()) : null;
+  if (!response?.ok || !response.body || Number(response.headers.get("content-length") ?? 0) > PHOTO_MAX_BYTES) {
+    await response?.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  return readCapped(response.body, PHOTO_MAX_BYTES).catch(() => null);
 }

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { LIMITS, badFields, billingState, budgetProblem, formSnapshot, mergeShares, projectMonth, sharesOf, shareTotal, unknownShares, usageSummary, zeroedFeatures, type BudgetForm } from "./admin-budget";
 
 const form = (over: Partial<BudgetForm> = {}): BudgetForm => ({
-  monthly: "5", shares: { triage: "30", draft: "30", learn: "15", brief: "10", transcribe: "15", bulk_read: "0", documents: "0", automations: "0" }, weeklyPct: "40", weekly: ["draft"], setupUsd: "1", setupDays: "7",
+  monthly: "5", shares: { triage: "30", draft: "30", learn: "15", brief: "10", transcribe: "15", voice_notes: "0", bulk_read: "0", documents: "0", automations: "0" }, weeklyPct: "40", weekly: ["draft"], setupUsd: "1", setupDays: "7",
   limits: Object.fromEntries(LIMITS.map((x) => [x.key, "10"])) as BudgetForm["limits"], ...over,
 });
 
@@ -61,9 +61,9 @@ test("the usage summary counts people and features", () => {
   const s = usageSummary([
     { month_usd: 2, flag: "x", paused: ["draft"] },
     { month_usd: 3, flag: null, paused: ["draft", "learn"] },
-    { month_usd: 1, flag: null, paused: [] },
+    { month_usd: 1, setup_usd: 0.5, flag: null, paused: [] },
   ]);
-  assert.equal(s.total, 6);
+  assert.equal(s.total, 6.5);
   assert.equal(s.flagged, 1);
   assert.equal(s.paused, 2);
   assert.deepEqual(s.byFeature, [["draft", 2], ["learn", 1]]);

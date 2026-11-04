@@ -14,7 +14,8 @@ export async function loadContacts(): Promise<Contact[]> {
     allRows("Load contacts", (from, to) => supabase.from("contacts").select(CONTACT_COLUMNS).order("id").range(from, to)),
     allRows("Load contacts", (from, to) => supabase.from("contact_identities").select("id, contact_id, kind, value").order("id").range(from, to)),
   ]);
-  await openAddresses(identities);
+  // Names, companies and roles are sealed, like the addresses.
+  await Promise.all([openAddresses(identities), openAddresses(contacts)]);
   const identitiesOf = new Map<string, IdentityRow[]>();
   for (const i of identities) {
     const list = identitiesOf.get(i.contact_id);

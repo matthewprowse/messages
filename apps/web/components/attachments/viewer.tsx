@@ -9,7 +9,7 @@ import { ArrowLeft, ArrowRight, Download, ExternalLink, Eye, EyeOff, Trash2 } fr
 import { track } from "@/lib/analytics";
 import { FETCH_TEXT } from "@/lib/attachment-fetch";
 import { ATTACHMENT_BUCKET as BUCKET, KIND_LABEL, notKeptMessage, swipeOf } from "@/lib/attachment-view";
-import { downloadUrl, isNotePath, thumbsEnabled, useSignedUrl } from "@/lib/signed-urls";
+import { downloadUrl, isBrowserSealedPath, thumbsEnabled, useSignedUrl } from "@/lib/signed-urls";
 import type { Attachment, Contact } from "@/lib/types";
 import { fullDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -89,7 +89,7 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
   const notStored = a.hiddenReason === "tiny" || a.hiddenReason === "junk" || !!a.notKept;
   const wide = file?.state === "ready" && a.kind === "pdf";
   // The tile's small copy is usually cached already, so a picture has something to show while the full one loads.
-  const preview = useSignedUrl(BUCKET, open && a.kind === "image" && !a.sealed && !isNotePath(a.path) && thumbsEnabled() ? a.path : undefined, true);
+  const preview = useSignedUrl(BUCKET, open && a.kind === "image" && !a.sealed && !isBrowserSealedPath(a.path) && thumbsEnabled() ? a.path : undefined, true);
   // Pictures, videos and voice notes have no name worth showing; PDFs and other files keep theirs.
   const titled = a.kind === "pdf" || a.kind === "file";
   const count = items?.length ?? 0;

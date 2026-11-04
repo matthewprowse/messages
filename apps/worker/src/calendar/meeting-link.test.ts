@@ -12,6 +12,27 @@ test("only https addresses of known call services count", () => {
   assert.equal(isMeetingUrl(null), false);
 });
 
+test("a call service named anywhere but the host does not count", () => {
+  for (const bad of [
+    "https://evil.example/?u=https://zoom.us/j/1",
+    "https://evil.example/#https://meet.google.com/abc",
+    "https://zoom.us.evil.example/j/1",
+    "https://evilzoom.us/j/1",
+    "https://zoom.us@evil.example/j/1",
+    "https://user:pw@zoom.us/j/1",
+    "https://zoom.us/",
+    "not a url",
+  ]) assert.equal(isMeetingUrl(bad), false, bad);
+  for (const good of ["https://zoom.us/j/1", "https://a.b.zoom.us/j/1", "https://MEET.google.com/abc-defg-hij", "https://teams.live.com/meet/1", "https://acme.webex.com/meet/x"]) {
+    assert.equal(isMeetingUrl(good), true, good);
+  }
+});
+
+test("a disguised link in the text is skipped for a real one after it", () => {
+  assert.equal(findMeetingLink([], ["See https://evil.example/?u=https://zoom.us/j/1 or https://zoom.us/j/2."]), "https://zoom.us/j/2");
+  assert.equal(findMeetingLink(["https://evil.example/?u=https://zoom.us/j/1"], ["nothing"]), null);
+});
+
 test("a provider's own link beats one in the text", () => {
   assert.equal(findMeetingLink([null, "https://teams.microsoft.com/l/x"], ["https://zoom.us/j/1"]), "https://teams.microsoft.com/l/x");
 });

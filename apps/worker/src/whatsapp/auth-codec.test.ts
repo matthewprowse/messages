@@ -10,7 +10,7 @@ import { encrypt } from "../crypto";
 import { decodeKey, encodeKey } from "./auth-codec";
 
 const credKey = Uint8Array.from(randomBytes(32));
-const sealer = makeSealer("account-1", async () => credKey, "");
+const sealer = makeSealer("account-1", async () => [credKey], "");
 
 test("credentials survive a round trip, Buffers included", async () => {
   const creds = initAuthCreds();
@@ -37,13 +37,13 @@ test("app state sync keys come back as protobuf objects", async () => {
 
 test("another user's key, or another account, cannot read it", async () => {
   const sealed = await encodeKey({ a: 1 }, sealer);
-  await assert.rejects(decodeKey("creds", sealed, makeSealer("account-1", async () => Uint8Array.from(randomBytes(32)), "")));
-  await assert.rejects(decodeKey("creds", sealed, makeSealer("account-2", async () => credKey, "")));
+  await assert.rejects(decodeKey("creds", sealed, makeSealer("account-1", async () => [Uint8Array.from(randomBytes(32))], "")));
+  await assert.rejects(decodeKey("creds", sealed, makeSealer("account-2", async () => [credKey], "")));
 });
 
 test("a session sealed under the old static key still opens, for the rows credentials:reseal has not moved", async () => {
   const legacy = randomBytes(32).toString("base64");
   const old = encrypt(JSON.stringify({ a: 1 }), legacy);
-  assert.deepEqual(await decodeKey("creds", old, makeSealer("account-1", async () => credKey, legacy)), { a: 1 });
+  assert.deepEqual(await decodeKey("creds", old, makeSealer("account-1", async () => [credKey], legacy)), { a: 1 });
   await assert.rejects(decodeKey("creds", old, sealer), /ENCRYPTION_KEY/);
 });

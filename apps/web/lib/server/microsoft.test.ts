@@ -71,9 +71,28 @@ test("adminConsentUrl targets organizations by default and lists the Teams scope
   assert.equal(url.searchParams.get("redirect_uri"), "http://localhost");
   assert.ok(url.searchParams.get("scope")!.includes("OnlineMeetingTranscript.Read.All"));
   assert.ok(!new URL(adminConsentUrl({ teams: false, clientId: "client-1" })).searchParams.get("scope")!.includes("Chat.ReadWrite"));
-  assert.ok(isAdminLink(url.toString()));
+  assert.ok(isAdminLink(url.toString(), "client-1"));
   assert.ok(!isAdminLink("https://evil.example/https://login.microsoftonline.com/"));
   assert.ok(!isAdminLink(null));
+});
+
+test("isAdminLink takes only our own admin consent address, never another app's or another page on the host", () => {
+  const ours = adminConsentUrl({ teams: false, clientId: "client-1" });
+  // Made before the checks below, which narrow `ours` by its type guard.
+  const lookalike = ours.replace("https://login.microsoftonline.com", "https://login.microsoftonline.com.evil.example");
+  const plainHttp = ours.replace("https:", "http:");
+  assert.ok(isAdminLink(ours));
+  assert.ok(!isAdminLink(ours, "client-2"));
+  const swap = (edit: (u: URL) => void) => { const u = new URL(ours); edit(u); return u.toString(); };
+  assert.ok(!isAdminLink(swap((u) => u.searchParams.set("client_id", "attacker")), "client-1"));
+  assert.ok(!isAdminLink(swap((u) => u.searchParams.set("redirect_uri", "https://evil.example")), "client-1"));
+  assert.ok(!isAdminLink(swap((u) => { u.pathname = "/common/oauth2/v2.0/authorize"; }), "client-1"));
+  assert.ok(!isAdminLink(swap((u) => { u.pathname = "/organizations/v2.0/adminconsent/../x"; }), "client-1"));
+  assert.ok(!isAdminLink(swap((u) => { u.username = "a"; }), "client-1"));
+  assert.ok(!isAdminLink(swap((u) => { u.hash = "x"; }), "client-1"));
+  assert.ok(!isAdminLink(lookalike, "client-1"));
+  assert.ok(!isAdminLink(plainHttp, "client-1"));
+  assert.ok(!isAdminLink("not a url"));
 });
 
 const signIn: MicrosoftSignIn = { userId: "u1", state: "abc", verifier: "v", back: "/summary", teams: false, expires: 2_000 };

@@ -3,7 +3,7 @@
 // One conversation row: hover and swipe actions, the checkbox over the avatar, and a right-click menu. Memoised, and
 // shared with the Summary list, which links rows to /summary and adds each conversation's AI summary.
 
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Archive, Clock, MailCheck, OctagonAlert, Pin, Trash2, type LucideIcon } from "lucide-react";
@@ -25,6 +25,9 @@ import { SnoozeItems } from "@/components/snooze/snooze-items";
 import { ROW_FADE, SWIPED_FADE, SWIPE_PX } from "./fade";
 import { RowButton } from "./row-button";
 import type { RowAction } from "./use-row-actions";
+
+/** How long the mouse rests on a row before its messages start loading. */
+const HOVER_PREFETCH_MS = 150;
 
 // A row's hover actions, in order from the left.
 const ROW_ACTIONS = (thread: Thread, doneForNow: boolean): { action: RowAction; label: string; icon: LucideIcon; keys: string }[] => [
@@ -71,7 +74,7 @@ export const ThreadRow = memo(function ThreadRow({
   selecting: boolean;
   onCheck: (id: string, range: boolean) => void;
   onAction: (id: string, action: RowAction) => void;
-  /** Called on pointer down, so the conversation's messages start loading before the click lands. */
+  /** Called on pointer down, and after a short rest of the mouse, so the conversation's messages start loading before the click lands. */
   onPress: (id: string) => void;
   /** Where the row links: /inbox by default, /summary on the Summary page. */
   baseHref?: string;
@@ -109,6 +112,11 @@ export const ThreadRow = memo(function ThreadRow({
   const lit = selected || checked;
   // Viewport prefetching would fetch every row, so a row is fetched once the pointer or focus reaches it.
   const prefetch = () => router.prefetch(href);
+  // Messages start loading once the mouse rests on a row, so the pointer passing over the list on its way does not fetch each one.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const stopHover = () => { clearTimeout(hoverTimer.current); hoverTimer.current = undefined; };
+  useEffect(() => stopHover, []);
+  const startHover = () => { stopHover(); hoverTimer.current = setTimeout(() => onPress(thread.id), HOVER_PREFETCH_MS); };
   const act = (action: RowAction) => onAction(thread.id, action);
   const open = swiped && !selecting;
   // 100+ rows would each mount three tooltip buttons and a checkbox that stay hidden until hover, so they mount when the pointer or focus first reaches the row.
@@ -149,9 +157,11 @@ export const ThreadRow = memo(function ThreadRow({
             prefetch={false}
             data-row-link
             aria-current={selected ? "page" : undefined}
-            onMouseEnter={prefetch}
+            onMouseEnter={() => { prefetch(); startHover(); }}
+            onMouseLeave={stopHover}
             onFocus={prefetch}
-            onPointerDown={() => onPress(thread.id)}
+            // Pointer down also covers a finger on a touch screen, before the tap lands.
+            onPointerDown={() => { stopHover(); onPress(thread.id); }}
             // Cmd or Ctrl-click checks one row, Shift-click a range. Once any are checked, a click checks too.
             onClick={(e) => {
               // The end of a swipe is not a tap, and a tap on a row swiped open closes it.

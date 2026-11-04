@@ -106,7 +106,7 @@ export function DraftStep() {
             )}
             <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (said.trim()) write(mockFromInstruction(msg, channel, said, firstName), "said"); }}>
               <Input value={said} onChange={(e) => setSaid(e.target.value)} disabled={working} placeholder={drafted ? "What To Change" : "What To Say, e.g. yes, Saturday at 10"} aria-label="What To Say" className="h-8 min-w-48 flex-1" />
-              <Button type="submit" variant="secondary" size="sm" disabled={working || !said.trim()}>{drafted ? "Redraft" : "Draft"}</Button>
+              <Button type="submit" variant="secondary" disabled={working || !said.trim()}>{drafted ? "Redraft" : "Draft"}</Button>
               {text.trim() && !working && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><Button type="button" variant="secondary">Adjust <ChevronDown /></Button></DropdownMenuTrigger>
@@ -129,8 +129,8 @@ export function DraftStep() {
               />
             )}
             <div className="flex items-center justify-between gap-2">
-              <div>{own && <Button variant="secondary" size="sm" onClick={() => write(mockTidy(msg, channel, text, firstName), "own")}>Edit Text</Button>}</div>
-              <Button size="sm" disabled={!text.trim() || working} onClick={() => toast("A practice reply, so nothing was sent.")}>Send via {sendLabel}</Button>
+              <div>{own && <Button variant="secondary" onClick={() => write(mockTidy(msg, channel, text, firstName), "own")}>Edit Text</Button>}</div>
+              <Button disabled={!text.trim() || working} onClick={() => toast("A practice reply, so nothing was sent.")}>Send via {sendLabel}</Button>
             </div>
           </div>
         </div>

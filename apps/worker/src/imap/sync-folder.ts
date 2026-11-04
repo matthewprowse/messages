@@ -1,6 +1,7 @@
 // Imports the mail in one IMAP folder that is newer than where the last sync stopped. Stored in batches (25 messages or
-// about 16 MB of attachments), with progress saved after each so a restart resumes, not repeats. Used by
-// connectors/imap.ts, which keeps the session state this reads through SyncCtx.
+// about 16 MB of attachments), with progress saved after each so a restart resumes, not repeats. A message over
+// MESSAGE_MAX_BYTES is stored from its headers only (message-size.ts). Used by connectors/imap.ts, which keeps the
+// session state this reads through SyncCtx.
 
 import type { ImapFlow } from "imapflow";
 import { db, must, type AccountRow } from "../db";
@@ -10,6 +11,7 @@ import { saveFilesQuietly } from "../ingest/attachment-files";
 import { isFailure } from "../ingest/batch-rpc";
 import { parseEmail, type NormalizedEmail } from "../ingest/normalize-email";
 import { storeEmails, type FolderRole } from "../ingest/store-email";
+import { oversizeSource, sizeRuns } from "./message-size";
 
 export interface Folder {
   path: string;
@@ -104,19 +106,30 @@ export async function syncFolder(ctx: SyncCtx, client: ImapFlow, folder: Folder)
       }
     };
 
-    for await (const msg of client.fetch(range, { uid: true, flags: true, source: true }, { uid: true })) {
-      // "N:*" always returns the newest message, even when it is older than N.
-      if (msg.uid <= floor || !msg.source) continue;
-      const mail = await parseEmail(msg.source, `${folder.path}:${uidValidity}:${msg.uid}`);
-      pending.push({ uid: msg.uid, mail, seen: msg.flags?.has("\\Seen") ?? false });
-      seenCount++;
-      pendingBytes += mail.attachments.reduce((n, a) => n + a.content.length, 0);
-      if (pending.length >= CHECKPOINT_EVERY || pendingBytes >= CHECKPOINT_BYTES) {
-        await flush();
-        if (lastUid > savedUid) await ctx.saveFolderState(folder.path, uidValidity, (savedUid = lastUid));
+    // Sizes first (cheap), so a message too large to hold in memory is never downloaded whole. Runs keep UID order,
+    // which the progress above relies on. "N:*" always returns the newest message, even when it is older than N.
+    const sizes: { uid: number; size?: number }[] = [];
+    for await (const msg of client.fetch(range, { uid: true, size: true }, { uid: true })) if (msg.uid > floor) sizes.push({ uid: msg.uid, size: msg.size });
+    let oversize = 0;
+    for (const run of sizeRuns(sizes)) {
+      const query = run.big ? { uid: true, flags: true, headers: true } : { uid: true, flags: true, source: true };
+      for await (const msg of client.fetch(run.uids, query, { uid: true })) {
+        if (msg.uid <= floor) continue;
+        const raw = run.big ? msg.headers && oversizeSource(msg.headers) : msg.source;
+        if (!raw) continue;
+        if (run.big) oversize++;
+        const mail = await parseEmail(raw, `${folder.path}:${uidValidity}:${msg.uid}`);
+        pending.push({ uid: msg.uid, mail, seen: msg.flags?.has("\\Seen") ?? false });
+        seenCount++;
+        pendingBytes += mail.attachments.reduce((n, a) => n + a.content.length, 0);
+        if (pending.length >= CHECKPOINT_EVERY || pendingBytes >= CHECKPOINT_BYTES) {
+          await flush();
+          if (lastUid > savedUid) await ctx.saveFolderState(folder.path, uidValidity, (savedUid = lastUid));
+        }
       }
     }
     await flush();
+    if (oversize) log.info(`${ctx.tag} oversize mail stored as headers only`, { account: ctx.account.id, count: oversize });
 
     // After a failure, progress stops before the message that failed, so the next sync tries it again.
     // A first sync that stored nothing saves nothing, so it stays a first sync.

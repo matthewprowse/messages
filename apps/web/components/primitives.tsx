@@ -10,8 +10,7 @@ import { Building2, User, Users, type LucideIcon } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
-import { useAvatarUrl } from "@/lib/avatars";
-import { useSignedUrl } from "@/lib/signed-urls";
+import { useAvatarUrl, useLogoUrl } from "@/lib/avatars";
 import type { Contact, Provider, Thread } from "@/lib/types";
 
 function PhotoAvatar({ path, icon: Icon, className }: { path?: string; icon: LucideIcon; className?: string }) {
@@ -30,10 +29,10 @@ export function ContactAvatar({ contact, className }: { contact?: Pick<Contact, 
 }
 
 /**
- * A company's picture: its logo from the shared "logos" bucket, or a building icon while it has none.
+ * A company's picture: its shared logo (lib/logo-paths.ts), or a building icon while it has none.
  */
 export function CompanyAvatar({ logoPath, className }: { logoPath?: string | null; className?: string }) {
-  const url = useSignedUrl("logos", logoPath ?? undefined) ?? undefined;
+  const url = useLogoUrl(logoPath ?? undefined);
   return (
     <Avatar className={cn("size-8", className)}>
       {url && <AvatarImage src={url} alt="" className="object-cover" />}

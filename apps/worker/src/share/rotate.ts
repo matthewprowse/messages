@@ -269,8 +269,8 @@ export async function resealFiles(workspaceId: string, files: TeamFileStore, rin
         const sealed = await files.read(row.team_path);
         if (!sealed) { failed++; continue; } // the copy is missing: counted, never hidden
         // Already under the current key (a pass stopped between the upload and the record): only the record is missing.
-        if (!(await openTeamFile([ring.current], sealed))) {
-          const plain = await openTeamFile(ring.olds, sealed);
+        if (!(await openTeamFile([ring.current], sealed, row.team_path))) {
+          const plain = await openTeamFile(ring.olds, sealed, row.team_path);
           if (!plain) { failed++; continue; }
           attempted++;
           await files.write(row.team_path, await encryptTeamBytes(ring.current, FIELD.attachmentData, plain));
@@ -312,7 +312,7 @@ export async function rotateWorkspace(
 const omit = (o: Record<string, Json>, key: string) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== key));
 
 const SHARED_SELECT: Record<"threads" | "messages" | "message_ai" | "attachments", string> = {
-  threads: "id, subject, last_message_preview, summary, share_label, share_match",
+  threads: "id, subject, group_name, last_message_preview, summary, share_label, share_match",
   messages: "id, thread_id, subject, preview, body_text, body_html, list_unsubscribe, body_marks, transcript, sender_address, to_addresses, provider_meta",
   message_ai: "message_id, summary, reply_choices, messages!inner(thread_id)",
   attachments: "id, filename, messages!inner(thread_id)",

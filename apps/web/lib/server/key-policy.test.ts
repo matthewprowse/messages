@@ -20,6 +20,13 @@ test("a verified factor needs an aal2 session", () => {
   assert.deepEqual(keyAccess(f, "aal2"), { ok: true });
 });
 
+test("a verified phone or passkey factor needs aal2 as much as an authenticator app", () => {
+  for (const factor_type of ["totp", "phone", "webauthn"]) {
+    assert.equal(keyAccess([{ status: "verified", factor_type }], "aal1").ok, false);
+    assert.deepEqual(keyAccess([{ status: "verified", factor_type }], "aal2"), { ok: true });
+  }
+});
+
 test("the refusal is a 401 that asks for the code", () => {
   const r = keyAccess([{ status: "verified" }], "aal1");
   assert.ok(!r.ok && r.status === 401 && /two-factor/.test(r.message));

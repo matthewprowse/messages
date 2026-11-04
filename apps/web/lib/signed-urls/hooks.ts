@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { BUCKET } from "../outbox-files";
 import { cachedUrl, MIN_LEFT_MS, signedUrl, thumbsEnabled } from "./links";
 import { keyOf } from "./cache-rules";
-import { isNotePath } from "./sealed-paths";
+import { isBrowserSealedPath } from "./sealed-paths";
 import { acquireNoteFile, cachedThumb, openThumb, rememberNoteMime, type OpenedNoteFile } from "./sealed-files";
 
 /**
@@ -48,7 +48,7 @@ function useNoteFile(path: string | undefined): OpenedNoteFile | null | undefine
 export function useSignedUrl(bucket: string, path: string | undefined, thumb = false, sealedType?: string): string | null | undefined {
   // sealedType is the content type of a stored attachment known to be sealed, which is opened here like a note file.
   if (path && sealedType) rememberNoteMime(path, sealedType);
-  const note = bucket === BUCKET && (isNotePath(path) || (!!path && !!sealedType));
+  const note = bucket === BUCKET && (isBrowserSealedPath(path) || (!!path && !!sealedType));
   const opened = useNoteFile(note ? path : undefined);
   const small = thumb && thumbsEnabled() && !note;
   const [got, setGot] = useState<{ key: string; url: string | null } | null>(null);

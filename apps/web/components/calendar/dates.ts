@@ -17,19 +17,33 @@ export const MAX_COLUMNS_WIDE = 5; // and this many in a wide one (the day view)
 export const LABELS = 56; // width of the hour labels, in pixels
 export const DAY_MIN = 80; // narrowest a day column in the week view is allowed to be, in pixels
 
-export function dayTitle(key: string, today: Date) {
+/**
+ * "Tuesday, 10 November", the way Calendar writes a day everywhere, with the year added when it is not this year's (or
+ * always, with `year`). Built by hand: en-GB leaves out the comma after the weekday.
+ */
+export function longDate(d: Date, today?: Date, year = false) {
+  const weekday = d.toLocaleDateString("en-GB", { weekday: "long" });
+  const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
+  return `${weekday}, ${date}${year || (today && d.getFullYear() !== today.getFullYear()) ? ` ${d.getFullYear()}` : ""}`;
+}
+
+/** Today, Tomorrow and Yesterday by name, any other day as its long date. */
+export function dayName(key: string, today: Date): string | null {
   if (key === dayKey(today)) return "Today";
   if (key === dayKey(addDays(today, 1))) return "Tomorrow";
   if (key === dayKey(addDays(today, -1))) return "Yesterday";
-  const d = fromKey(key);
-  return d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) });
+  return null;
+}
+
+export function dayTitle(key: string, today: Date) {
+  return dayName(key, today) ?? longDate(fromKey(key), today);
 }
 
 export function rangeLabel(start: Date, end: Date, today: Date) {
   const last = addDays(end, -1);
   const sameMonth = start.getMonth() === last.getMonth() && start.getFullYear() === last.getFullYear();
-  const from = start.toLocaleDateString("en-GB", sameMonth ? { day: "numeric" } : { day: "numeric", month: "short" });
-  const to = last.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...(last.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) });
+  const from = start.toLocaleDateString("en-GB", sameMonth ? { day: "numeric" } : { day: "numeric", month: "long" });
+  const to = last.toLocaleDateString("en-GB", { day: "numeric", month: "long", ...(last.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) });
   return start.getTime() === last.getTime() ? to : `${from} to ${to}`;
 }
 

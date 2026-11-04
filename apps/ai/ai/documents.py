@@ -235,7 +235,7 @@ class Documents:
         paused, nothing stored), "budget" (the share is used up), "unknown" (the budget could not be read) or "failed"
         (the model could not answer)."""
         data = self.db.download(BUCKET, a["storage_path"])
-        opened = self.vault.open_bytes(user_id, ATTACHMENT_DATA, data)
+        opened = self.vault.open_bytes(user_id, ATTACHMENT_DATA, data, f"{BUCKET}/{a['storage_path']}")
         if opened is None:
             raise OSError("file could not be opened")
         if len(opened) > MAX_FILE_BYTES:

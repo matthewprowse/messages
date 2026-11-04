@@ -168,7 +168,7 @@ export function browserExportSource(): ExportSource {
       if (error || !data) return null;
       const bytes = new Uint8Array(await data.arrayBuffer());
       // A file stored before sealing began has no header and is already readable.
-      return isSealedBytes(bytes) ? decryptBytes(await userKeys(), s.field, bytes) : bytes;
+      return isSealedBytes(bytes) ? decryptBytes(await userKeys(), s.field, bytes, `${s.bucket}/${s.path}`) : bytes;
     },
   };
 }

@@ -4,14 +4,22 @@
 // going too fast (429) is tried again after Retry-After, a few times, before it fails with the wait Zoom asked
 // for, so the connector can back off for that long.
 
+import { pinnedGet, type PinnedResponse } from "@messages/mail-servers/net";
 import { sleep } from "../backoff";
 import { retryDelay } from "../google/client";
+import { readCapped } from "../whatsapp/media-guard";
 import { DEFAULT_API_URL, ZoomAuthError, apiBase, refreshAccessToken } from "./oauth";
 
 /** Zoom's own code for an access token it no longer accepts, sent with a 401 or 400. */
 const INVALID_TOKEN = 124;
 /** The most redirects followed for a file download. */
 const MAX_REDIRECTS = 5;
+const DOWNLOAD_TIMEOUT_MS = 300_000;
+/** The most a download reads unless the caller sets its own cap; a meeting's audio is capped lower by recordings.ts. */
+export const DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024;
+
+/** One GET to a host off Zoom, connected only to a vetted public address and never following a redirect. */
+export type OutsideGet = (url: URL, timeoutMs: number) => Promise<PinnedResponse>;
 
 /** A failed Zoom API call. `status` is the HTTP status; `zoomCode` is Zoom's own, e.g. 3001 "Meeting does not exist". */
 export class ZoomApiError extends Error {
@@ -32,8 +40,16 @@ export interface ZoomRequest {
 /** What the syncs need from Zoom, so they can be unit tested on recorded replies. */
 export interface ZoomApi {
   request<T>(path: string, init?: ZoomRequest): Promise<T>;
-  download(url: string): Promise<Buffer>;
+  /** Rejects with a 413 ZoomApiError when the file is larger than maxBytes. */
+  download(url: string, maxBytes?: number): Promise<Buffer>;
 }
+
+/** True for zoom.us and its subdomains, the only hosts the access token is sent to. */
+export function isZoomHost(host: string): boolean {
+  return /(^|\.)zoom\.us$/i.test(host);
+}
+
+const tooLarge = () => new ZoomApiError(413, null);
 
 export class ZoomClient implements ZoomApi {
   private accessToken: string | null = null;
@@ -45,6 +61,8 @@ export class ZoomClient implements ZoomApi {
     private readonly opts: { clientId: string; clientSecret: string; refreshToken: string; apiUrl?: string },
     /** Called with each new refresh token Zoom issues. A failure here is logged by the caller, not thrown. */
     private readonly onRotate: (refreshToken: string) => Promise<void> = async () => undefined,
+    /** How a redirect off Zoom is fetched; tests pass a stand-in. */
+    private readonly outsideGet: OutsideGet = (url, timeoutMs) => pinnedGet(url, timeoutMs),
   ) {
     this.api = apiBase(opts.apiUrl);
   }
@@ -85,27 +103,43 @@ export class ZoomClient implements ZoomApi {
 
   /**
    * A recording file's bytes from its download_url. The URL redirects to a signed copy elsewhere, so redirects
-   * are followed by hand: the access token goes only to Zoom's own hosts, never to wherever a redirect points.
+   * are followed by hand: the access token goes only to Zoom's own hosts, never to wherever a redirect points, and
+   * a hop off Zoom connects only to a public address (pinnedGet). The body is read up to maxBytes, then refused.
    */
-  async download(url: string): Promise<Buffer> {
+  async download(url: string, maxBytes = DOWNLOAD_MAX_BYTES): Promise<Buffer> {
     let target = new URL(url);
     for (let hops = 0; hops <= MAX_REDIRECTS; hops++) {
-      if (target.protocol !== "https:") throw new ZoomApiError(400, null);
-      const zoomHost = /(^|\.)zoom\.us$/.test(target.hostname);
-      const response = zoomHost
-        ? await this.send(target, { timeoutMs: 300_000 }, "manual")
-        : await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(300_000) });
-      const location = response.headers.get("location");
-      if (response.status >= 300 && response.status < 400 && location) {
-        await response.body?.cancel().catch(() => undefined);
+      if (target.protocol !== "https:" || target.username || target.password) throw new ZoomApiError(400, null);
+      if (isZoomHost(target.hostname)) {
+        const response = await this.send(target, { timeoutMs: DOWNLOAD_TIMEOUT_MS }, "manual");
+        const location = response.headers.get("location");
+        if (response.status >= 300 && response.status < 400 && location) {
+          await response.body?.cancel().catch(() => undefined);
+          target = new URL(location, target);
+          continue;
+        }
+        if (!response.ok || !response.body || Number(response.headers.get("content-length") ?? 0) > maxBytes) {
+          await response.body?.cancel().catch(() => undefined);
+          throw response.ok ? tooLarge() : new ZoomApiError(response.status, null);
+        }
+        const bytes = await readCapped(response.body, maxBytes);
+        if (!bytes) throw tooLarge();
+        return bytes;
+      }
+      const response = await this.outsideGet(target, DOWNLOAD_TIMEOUT_MS).catch(() => Promise.reject(new ZoomApiError(502, null)));
+      const location = response.headers.location;
+      if (response.status >= 300 && response.status < 400 && typeof location === "string" && location) {
+        response.destroy();
         target = new URL(location, target);
         continue;
       }
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new ZoomApiError(response.status, null);
+      if (response.status < 200 || response.status >= 300 || Number(response.headers["content-length"] ?? 0) > maxBytes) {
+        response.destroy();
+        throw response.status >= 200 && response.status < 300 ? tooLarge() : new ZoomApiError(response.status, null);
       }
-      return Buffer.from(await response.arrayBuffer());
+      const bytes = await readCapped(response.body, maxBytes).finally(() => response.destroy());
+      if (!bytes) throw tooLarge();
+      return bytes;
     }
     throw new ZoomApiError(310, null);
   }

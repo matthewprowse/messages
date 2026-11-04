@@ -26,6 +26,7 @@ from ...supabase import Supabase, missing_relation
 from ...vault import Vault
 from .credentials import OFFICIAL, kind_of
 from .official import OfficialSync
+from ..tempdirs import sweep_stale
 from .store import Store
 from .sync import AccountSync, Settings
 
@@ -38,7 +39,7 @@ RUNNING = ("connecting", "syncing", "connected")
 class Config:
     supabase_url: str
     service_role_key: str
-    encryption_key: str  # the sync worker's ENCRYPTION_KEY, for sign-ins and sessions
+    encryption_key: str  # the sync worker's old ENCRYPTION_KEY, only for "v1:" sign-ins and sessions not yet resealed; may be empty
     key_wrapping_key: str
     encrypt_content: bool
     encrypt_addresses: bool
@@ -64,7 +65,8 @@ def load() -> Config:
     return Config(
         supabase_url=required("SUPABASE_URL"),
         service_role_key=required("SUPABASE_SERVICE_ROLE_KEY"),
-        encryption_key=required("ENCRYPTION_KEY"),
+        # Optional: only reads sign-ins sealed before per-user keys. Unset once `pnpm --filter worker keys:readiness` reports none.
+        encryption_key=os.environ.get("ENCRYPTION_KEY", "").strip(),
         key_wrapping_key=wrapping_key,
         encrypt_content=flag_on("ENCRYPT_CONTENT"),
         encrypt_addresses=flag_on("ENCRYPT_ADDRESSES"),
@@ -158,16 +160,18 @@ class Accounts:
 def main() -> None:
     cfg = load()
     db = Supabase(cfg.supabase_url, cfg.service_role_key)
-    vault = Vault(db, cfg.key_wrapping_key, cfg.encrypt_content)
+    vault = Vault(db, cfg.key_wrapping_key, cfg.encrypt_content, encrypt_addresses=cfg.encrypt_addresses)
     store = Store(db, vault, encryption_key=cfg.encryption_key, key_wrapping_key=cfg.key_wrapping_key, encrypt_addresses=cfg.encrypt_addresses)
     accounts = Accounts(store, Settings(proxy=cfg.proxy, initial_sync_days=cfg.initial_sync_days))
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     log.info("instagram connector starting", proxy=bool(cfg.proxy), encrypt_content=cfg.encrypt_content, encrypt_addresses=cfg.encrypt_addresses)
+    sweep_stale("konva-ig-")  # outgoing files left by a run that was killed before it could tidy up
     try:
         while not stop.is_set():
             try:
                 accounts.reconcile()
+                store.clear_stale_codes()
             except Exception as err:
                 if missing_relation(err):  # the Instagram migration is not applied yet
                     log.warn("instagram tables missing", code=log.code_of(err))

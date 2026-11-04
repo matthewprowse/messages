@@ -6,6 +6,7 @@ import type { ImapFlow } from "imapflow";
 import type { Tables } from "@messages/db";
 import { db, must } from "../db";
 import { imapMove, type FolderPaths } from "../ingest/imap-place";
+import { keepIngestMeta } from "../ingest/ingest-meta";
 import { undoesNotJunk } from "../ingest/junk-undo";
 import { mapLimit, push } from "../util";
 
@@ -65,9 +66,13 @@ export async function applyMessageAction(client: ImapFlow, accountId: string, ro
         if (!moved) continue;
         await mapLimit(group, WRITE_AT_ONCE, async (m) => {
           const newUid = moved.uidMap?.get(m.meta.uid!);
-          const meta = newUid
-            ? { folder: to, uid: newUid, uid_validity: Number(moved.uidValidity ?? 0), ...(move.remember ? { from: folder } : {}) }
-            : { left: folder }; // the server did not say where it went: the next sync finds it
+          // Rebuilt for the new place, keeping what ingest read from the headers (ingest-meta.ts).
+          const meta = keepIngestMeta(
+            m.meta,
+            newUid
+              ? { folder: to, uid: newUid, uid_validity: Number(moved.uidValidity ?? 0), ...(move.remember ? { from: folder } : {}) }
+              : { left: folder }, // the server did not say where it went: the next sync finds it
+          );
           must(await db.from("messages").update({ provider_meta: meta }).eq("id", m.id), "save moved message");
         });
       } finally {

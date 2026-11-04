@@ -9,6 +9,15 @@ export function flagOn(value: string | undefined | null): boolean {
   return !(v === "false" || v === "0" || v === "off" || v === "no");
 }
 
+/**
+ * Whether a switch that defaults to off is turned on: only an explicit "true" (or "1", "on", "yes"). Used for the rollout
+ * switches of bound values (SEAL_BOUND_FIELDS, REQUIRE_BOUND_FIELDS), which must wait for every reader to be released.
+ */
+export function flagTrue(value: string | undefined | null): boolean {
+  const v = (value ?? "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "on" || v === "yes";
+}
+
 /** The flags that must not be off in production. */
 export const ENCRYPTION_FLAGS = ["ENCRYPT_CONTENT", "ENCRYPT_ADDRESSES"] as const;
 export const PUBLIC_ENCRYPTION_FLAGS = ["NEXT_PUBLIC_ENCRYPT_CONTENT", "NEXT_PUBLIC_ENCRYPT_ADDRESSES"] as const;

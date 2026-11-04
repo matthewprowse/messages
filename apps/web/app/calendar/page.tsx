@@ -26,7 +26,7 @@ import { DeleteEventDialog } from "@/components/delete-event-dialog";
 
 import { CalendarActions } from "@/components/calendar/calendar-actions";
 import { CalendarEmpty } from "@/components/calendar/calendar-empty";
-import { DAY_MIN, LABELS, View, byTime, rangeLabel } from "@/components/calendar/dates";
+import { DAY_MIN, LABELS, View, byTime, longDate, rangeLabel } from "@/components/calendar/dates";
 import { CopyFreeTimes } from "@/components/calendar/copy-free-times";
 import { EventDialog } from "@/components/calendar/event-details";
 import { EventList } from "@/components/calendar/event-list";
@@ -171,7 +171,7 @@ function CalendarPageContent() {
   const byWeek = view === "agenda" && !wide;
   const move = (n: number) => (timeGrid ? setAnchor(addDays(anchor, length * n)) : byWeek ? setAnchor(addDays(startOfWeek(gridAnchor), 7 * n)) : moveMonth(n));
   const label =
-    view === "day" ? anchor.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", ...(anchor.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) })
+    view === "day" ? longDate(anchor, today)
     : view === "week" ? rangeLabel(start, addDays(start, length), today)
     : (visibleKey ? fromKey(visibleKey) : anchor).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   const gridDays = useMemo(() => {

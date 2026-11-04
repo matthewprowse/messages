@@ -2,11 +2,13 @@
 
 // Settings, Profile: Active Sessions and Sign Out Everywhere. The list comes from list_my_sessions (the Auth API
 // has no list call), showing only a browser label and when each was last used. Sign Out Everywhere is Supabase's global sign
-// out: every refresh token for the account stops working, this device included.
+// out through lib/auth signOut: every refresh token for the account stops working, this device included, and this device's
+// push subscription and waiting invite go with it.
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
+import { signOut } from "@/lib/auth";
 import { relTime } from "@/lib/format";
 import { sessionLabel } from "@/lib/session-label";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +33,7 @@ export function SessionsSection() {
 
   async function signOutEverywhere() {
     setBusy(true);
-    const { error } = await supabase.auth.signOut({ scope: "global" });
+    const error = await signOut({ scope: "global" });
     setBusy(false);
     setAsking(false);
     if (error) toast.error("Could not sign you out everywhere. Try again.");

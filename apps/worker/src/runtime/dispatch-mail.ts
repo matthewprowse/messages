@@ -131,7 +131,7 @@ export async function dispatchOutbox(rows?: QueuedOutbox[]) {
   }
 }
 
-export type QueuedAction = Tables<"mail_actions"> & { threads?: { account_id: string } | null };
+export type QueuedAction = Tables<"mail_actions"> & { threads?: { account_id: string; user_id: string } | null };
 
 /** Actions left 'working' for over 10 minutes by a run that is gone (not one this worker is still applying) are queued again. */
 export function requeueStaleActions() {
@@ -146,7 +146,7 @@ export async function dispatchMailActions(rows?: QueuedAction[]) {
     rows ??
     (await readQueued(
       accountIds,
-      (slice) => db.from("mail_actions").select("*, threads!inner(account_id)").eq("status", "queued").in("threads.account_id", slice).order("created_at").limit(100),
+      (slice) => db.from("mail_actions").select("*, threads!inner(account_id, user_id)").eq("status", "queued").in("threads.account_id", slice).order("created_at").limit(100),
       "load mail actions",
       100,
     ));
@@ -156,14 +156,15 @@ export async function dispatchMailActions(rows?: QueuedAction[]) {
     await dispatchOnce(
       row.id,
       async () => {
-        const accountId =
+        const thread =
           queuedRow.threads !== undefined
-            ? queuedRow.threads?.account_id
-            : must(await db.from("threads").select("account_id").eq("id", row.thread_id).maybeSingle(), "load action thread")?.account_id;
-        const connector = accountId ? running.get(accountId)?.connector : undefined;
-        if (!connector?.applyAction) return null;
+            ? queuedRow.threads
+            : must(await db.from("threads").select("account_id, user_id").eq("id", row.thread_id).maybeSingle(), "load action thread");
+        const connector = thread ? running.get(thread.account_id)?.connector : undefined;
+        if (!thread || !connector?.applyAction) return null;
         const apply = connector.applyAction.bind(connector);
-        return () => applyClaimed(row.id, apply);
+        // Whose conversation it is goes with the claim: one that is not the action's person's is failed, not applied.
+        return () => applyClaimed(row.id, apply, { id: row.thread_id, user_id: thread.user_id });
       },
       (err) => log.error("mail action failed", { code: errorCode(err) }),
     );
@@ -181,6 +182,7 @@ export async function dispatchUnsubscribes(rows?: Tables<"unsubscribes">[]) {
     await dispatchOnce(
       row.id,
       async () => {
+        // The connector checks the request is its account's person's once it has claimed it (send/unsubscribe-flow.ts).
         const connector = running.get(row.account_id)?.connector;
         if (!connector?.unsubscribe) return null;
         const unsubscribe = connector.unsubscribe.bind(connector);

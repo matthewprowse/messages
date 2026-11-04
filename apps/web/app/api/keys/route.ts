@@ -10,10 +10,15 @@
 // until apps/worker/src/share/rotate.ts has re-sealed it, and a browser tries them in order. indexKey is the first
 // version's key, which the team's blind indexes always use (see TeamKeyring in packages/crypto/src/wrap.ts).
 // Asking also makes the next version first when a member has been removed since the current one was made.
+//
+// The user's own key comes the same way when it is being rotated (apps/worker/src/rekey): `key` is the current data key
+// (it seals), `older` the other keys still holding values (they only open, base64, may be empty), and `indexKey` the raw
+// index key their blind indexes keep, or null when `key` still makes them (packages/crypto deriveUserKeyring).
 
-import { activeWorkspaceId, dataKey, keysReady, teamKeys } from "@/lib/server/keys";
+import { zeroKeyring } from "@messages/crypto/wrap";
+import { activeWorkspaceId, keyring, keysReady, teamKeys } from "@/lib/server/keys";
 import { keyAccess, tokenAal } from "@/lib/server/key-policy";
-import { fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
+import { bearerToken, fail, foreignOrigin, limiter, noStore, signedInUser } from "@/lib/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,17 +31,27 @@ export async function POST(request: Request) {
   if (foreignOrigin(request)) return fail(403, "Not allowed from this site.");
   const user = await signedInUser(request);
   if (!user) return fail(401, "Sign in first.");
-  const wait = await overLimit(user.id);
-  if (wait > 0) return fail(429, "Too many requests. Try again shortly.", { "Retry-After": String(wait) });
   // A user with a verified second factor needs an aal2 session: a password or email link alone must not open their messages.
-  const access = keyAccess(user.factors, tokenAal(request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1] ?? ""));
+  // signedInUser already refuses such a session for every route; checked again here because this route hands out the key.
+  const access = keyAccess(user.factors, tokenAal(bearerToken(request)));
   if (!access.ok) return fail(access.status, access.message);
-  try {
-    const [key, team] = await Promise.all([dataKey(user.id), teamOf(user.id)]);
-    return Response.json({ key: Buffer.from(key).toString("base64"), team }, { headers: noStore });
-  } catch {
-    return fail(500, "Could not open your key.");
+  // The count runs beside the key reads rather than before them, saving a round trip, and is keyed by the verified id only:
+  // counting before getUser would mean trusting the token's unverified sub, so a forged token could use up someone
+  // else's allowance. Nothing is returned until the count has passed.
+  const [wait, keys] = await Promise.all([
+    overLimit(user.id),
+    Promise.all([keyring(user.id), teamOf(user.id)]).catch(() => null),
+  ]);
+  if (wait > 0) {
+    if (keys) zeroKeyring(keys[0]);
+    return fail(429, "Too many requests. Try again shortly.", { "Retry-After": String(wait) });
   }
+  if (!keys) return fail(500, "Could not open your key.");
+  const [ring, team] = keys;
+  const b64 = (k: Uint8Array) => Buffer.from(k).toString("base64");
+  const body = { key: b64(ring.current), older: ring.older.map(b64), indexKey: ring.indexKey ? b64(ring.indexKey) : null, team };
+  zeroKeyring(ring);
+  return Response.json(body, { headers: noStore });
 }
 
 // The caller's team keys, or null when they have no active team. A failure here (the workspaces tables not

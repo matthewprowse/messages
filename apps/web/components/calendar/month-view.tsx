@@ -5,6 +5,7 @@
 import { Circle, CircleCheck } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
 import { dayKey, fromKey } from "@/lib/dates";
+import { longDate } from "./dates";
 import { timeOf } from "@/lib/format";
 import { type DayTask } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -54,7 +55,7 @@ export function MonthView({
           const shown = events.slice(0, 3);
           const shownTasks = tasks.slice(0, Math.max(0, 3 - shown.length));
           const total = events.length + tasks.length;
-          const date = d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+          const date = longDate(d);
           const counted = [
             events.length && `${events.length} ${events.length === 1 ? "event" : "events"}`,
             tasks.length && `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}`,

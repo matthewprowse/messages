@@ -2,36 +2,23 @@
 
 // Runs the search index for the signed-in user: opens it with their key once the app is unlocked, keeps it in step with
 // the conversations, contacts and tasks the app already holds, pages through the rest of the history in the background
-// (feed.ts), and wipes it on sign-out. Mounted once, by the search palette, which loads when the page is idle.
+// (feed.ts). Mounted once, by the search palette, which loads when the page is idle. The wipe on sign-out is not here:
+// AuthProvider (lib/auth.tsx) runs it from app start, so it also happens when the palette never loaded.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth";
-import { supabase } from "../supabase";
 import { useApp } from "../store";
 import { userKeys } from "../vault";
-import { flushIndex, openIndex, removeDocs, upsertDocs, wipeIndex } from "./client";
+import { flushIndex, openIndex, removeDocs, upsertDocs } from "./client";
 import { contactDoc, taskDoc, threadDoc, type People } from "./docs";
 import { countMessages, indexEvents, indexMessages, indexNotes, indexTasks, rememberProgress, watchChanges, type FeedContext } from "./feed";
 import { NEW_SAVED, type Saved } from "./paging";
-import { bumpRev, resetProgress, setProgress } from "./status";
+import { bumpRev, setProgress } from "./status";
 import { planSync } from "./sync-plan";
 import type { Doc } from "./types";
 
 /** A tab that was hidden this long (ms) catches up on messages when it comes back, in case Realtime missed some. */
 const CATCH_UP_AFTER_MS = 2 * 60_000;
-
-// The index is a cache of the user's data: leaving it on disk after sign-out would leave their text readable to the next
-// person with the key. A module level listener, so it fires even as the palette that started the index unmounts.
-let watching = false;
-function wipeOnSignOut() {
-  if (watching) return;
-  watching = true;
-  supabase.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_OUT") {
-      void wipeIndex().finally(resetProgress);
-    }
-  });
-}
 
 function savedOf(meta: unknown): Saved {
   const m = (meta as { messages?: Saved } | null)?.messages;
@@ -39,7 +26,6 @@ function savedOf(meta: unknown): Saved {
 }
 
 export function useSearchIndexer() {
-  wipeOnSignOut();
   const { session } = useAuth();
   const userId = session?.user.id ?? null;
   const { threads, contacts, tasks, contactById, threadById } = useApp();

@@ -43,7 +43,8 @@ export function PersonView({ personId }: { personId: string }) {
   const messagesOf = useMemo(() => (id: string) => messagesByThread.get(id) ?? [], [messagesByThread]);
 
   // Reading their messages is a load from the database; it sends no read receipt (only markRead does, in an open conversation).
-  useEffect(() => { for (const id of idKey ? idKey.split(",") : []) prefetchMessages(id); }, [idKey, prefetchMessages]);
+  // All of them are on screen, so they load as opened ones: a guess may be skipped when the held list is full, these may not.
+  useEffect(() => { for (const id of idKey ? idKey.split(",") : []) void prefetchMessages(id, true); }, [idKey, prefetchMessages]);
   const opened = useRef(false);
   useEffect(() => {
     if (mine.length === 0 || opened.current) return;
@@ -67,7 +68,12 @@ export function PersonView({ personId }: { personId: string }) {
   const options = useMemo(() => replyOptions(mine, mine.find((t) => t.id === chosenId) ?? preferred), [mine, chosenId, preferred]);
   const target = mine.find((t) => t.id === chosenId) ?? preferred;
   const targetId = target?.id;
-  useEffect(() => { if (targetId && !messagesLoaded(targetId)) void loadMessages(targetId); }, [targetId, messagesLoaded, loadMessages]);
+  // The one replies go to is the open one, kept over the others when the held list is full.
+  useEffect(() => {
+    if (!targetId) return;
+    if (messagesLoaded(targetId)) void prefetchMessages(targetId, true);
+    else void loadMessages(targetId);
+  }, [targetId, messagesLoaded, loadMessages, prefetchMessages]);
 
   const allMessages = useMemo(() => blocks.flatMap((b) => b.entries.map((e) => e.message)), [blocks]);
   const { viewing, setViewing, viewerItems, viewerAt, viewerFile, viewerDetail } = useConversationFiles(allMessages, contactById);

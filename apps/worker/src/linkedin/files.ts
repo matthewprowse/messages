@@ -1,6 +1,6 @@
-// Files for the LinkedIn helper. It reads them from disk, on the same machine, and only from under the temp
-// folder, so each send gets a private folder (mode 0700) with the files in it (0600) that is removed
-// afterwards, sent or not.
+// Files for the LinkedIn helper. It reads them from disk, on the same machine, and only from the send's own
+// staging folder (named in the call as attachmentDir), so each send gets a private konva-linkedin-* folder
+// (mode 0700) directly in the temp folder with the files in it (0600), removed afterwards, sent or not.
 
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,11 +17,13 @@ export function helperKind(contentType: string): HelperAttachment["kind"] {
 
 export interface StagedFiles {
   files: HelperAttachment[];
+  /** The staging folder, passed to the helper as the only place it may read files from. Empty with no files. */
+  dir: string;
   /** Deletes the folder. Never throws. */
   cleanup(): Promise<void>;
 }
 
-export const NO_FILES: StagedFiles = { files: [], cleanup: async () => undefined };
+export const NO_FILES: StagedFiles = { files: [], dir: "", cleanup: async () => undefined };
 
 /** Writes the files to a new private folder under base, named by position so a file name is never a path. */
 export async function stageFiles(files: OutgoingAttachment[], base = tmpdir()): Promise<StagedFiles> {
@@ -35,7 +37,7 @@ export async function stageFiles(files: OutgoingAttachment[], base = tmpdir()): 
       await writeFile(path, f.content, { mode: 0o600 });
       staged.push({ path, name: f.filename, mime: f.contentType, kind: helperKind(f.contentType) });
     }
-    return { files: staged, cleanup };
+    return { files: staged, dir, cleanup };
   } catch (err) {
     await cleanup();
     throw err;

@@ -77,7 +77,7 @@ export function isCompanySender(c: SenderFacts): boolean {
   return BRAND_WORDS.test(c.name);
 }
 
-/** Marks an avatar path as a shared company logo, which lives in the "logos" bucket rather than "avatars". */
+/** Marks an avatar path as a shared company logo (lib/logo-paths.ts says which bucket), not a photo in "avatars". */
 export const LOGO_AVATAR = "logos:";
 
 /** A company's shared logo (organizations.logo_path) as an avatar path, or undefined while it has none. */

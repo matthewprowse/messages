@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from ...fields import BODY, FILENAME, PREVIEW, QUOTE
+from ...fields import BODY, FILENAME, NAME, PREVIEW, QUOTE
 
 SITE = "https://www.instagram.com"
 UNSUPPORTED = "This message type is not shown here. Open Instagram to see it."
@@ -323,6 +323,7 @@ class Sealer(Protocol):
     def address(self, value: str | None) -> str | None: ...
     def address_index(self, value: str) -> str: ...
     def chat_index(self, value: str) -> str: ...
+    def group_index(self, value: str) -> str: ...
 
 
 def person_json(s: Sealer, p: Person) -> dict[str, Any]:
@@ -333,8 +334,9 @@ def person_json(s: Sealer, p: Person) -> dict[str, Any]:
         "pk_index": s.address_index(p.pk),
         "username": s.address(username),
         "username_index": s.address_index(username) if username else None,
-        "display_name": p.full_name,
-        "handle": p.username,
+        # Sealed: the database ranks them by which one it was given (a full name beats a handle), never by reading them.
+        "display_name": s.seal(NAME, (p.full_name or "").strip() or None),
+        "handle": s.seal(NAME, (p.username or "").strip() or None),
     }
 
 
@@ -342,6 +344,7 @@ def payload(s: Sealer, t: Thread, item: Item, viewer_pk: str, *, live: bool, unr
     """One message for public.ingest_instagram: the sync worker's WhatsApp payload, with Instagram people."""
     from_me = item.sender_pk == viewer_pk
     sender = None if from_me else (t.person(item.sender_pk) or Person(item.sender_pk))
+    group = ((t.title or ", ".join(p.name for p in t.people)).strip() or None) if t.is_group else None
     preview = f"{sender.name}: {item.preview}" if t.is_group and sender else item.preview
     meta: dict[str, Any] = {
         "chat": s.address(t.id),
@@ -380,7 +383,8 @@ def payload(s: Sealer, t: Thread, item: Item, viewer_pk: str, *, live: bool, unr
         "chat_jid": s.address(t.id),
         "chat_index": s.chat_index(t.id),
         "is_group": t.is_group,
-        "group_name": (t.title or ", ".join(p.name for p in t.people)) if t.is_group else None,
+        "group_name": s.seal(NAME, group),
+        "group_name_index": s.group_index(group) if group else None,
         "status": "archived" if t.archived and not live else "inbox",
         "resurface": live and not from_me,
         "sent_at": item.sent_at.isoformat(),

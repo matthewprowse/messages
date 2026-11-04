@@ -67,8 +67,8 @@ export function CleanUp() {
                     <div className="truncate text-xs text-muted-foreground">{cleanUpLine(s)}{state ? `. ${state.status === "done" ? "Unsubscribed" : "Unsubscribing"}` : ""}</div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    {pending.length > 0 && <Button size="sm" variant="secondary" onClick={() => void unsubscribeFrom(pending)}><MailX />Unsubscribe</Button>}
-                    {!s.allJunk && !junked.has(s.key) && <Button size="sm" variant="ghost" onClick={() => markJunk(s)}><OctagonAlert />Mark as Junk</Button>}
+                    {pending.length > 0 && <Button variant="secondary" onClick={() => void unsubscribeFrom(pending)}><MailX />Unsubscribe</Button>}
+                    {!s.allJunk && !junked.has(s.key) && <Button variant="ghost" onClick={() => markJunk(s)}><OctagonAlert />Mark as Junk</Button>}
                   </div>
                 </div>
               </div>

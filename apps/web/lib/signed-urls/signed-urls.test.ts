@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FIELD } from "@messages/crypto/fields";
 import { fresh, keyOf, type Entry } from "./cache-rules";
-import { isNotePath, isTeamFilePath, sealedField } from "./sealed-paths";
+import { isBrowserSealedPath, isNotePath, isOutboxPath, isTeamFilePath, sealedField } from "./sealed-paths";
 import { headOf, joinChunks } from "./chunks";
 
 const entry = (over: Partial<Entry>): Entry => ({ url: Promise.resolve("u"), expires: 0, ...over });
@@ -36,6 +36,17 @@ test("note and team paths are told apart, and each has its sealing field", () =>
   assert.equal(isTeamFilePath("user/notes/n1/f1"), false);
   assert.equal(sealedField("user/notes/n1/f1"), FIELD.noteFileData);
   assert.equal(sealedField("user/thread/a1"), FIELD.attachmentData);
+});
+
+test("outgoing files are sealed by the browser under their own field, old named uploads included", () => {
+  assert.equal(isOutboxPath("user/outbox/f1/file"), true);
+  assert.equal(isOutboxPath("user/outbox/f1/Plan.pdf"), true);
+  assert.equal(isOutboxPath("user/notes/n1/f1"), false);
+  assert.equal(isBrowserSealedPath("user/outbox/f1/file"), true);
+  assert.equal(isBrowserSealedPath("user/notes/n1/f1"), true);
+  assert.equal(isBrowserSealedPath("user/thread/a1"), false);
+  assert.equal(isBrowserSealedPath(undefined), false);
+  assert.equal(sealedField("user/outbox/f1/file"), FIELD.outboxFileData);
 });
 
 test("the head spans pieces and stops at the asked size", () => {

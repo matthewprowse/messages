@@ -1,8 +1,10 @@
-// The Zoom client against a stand-in for fetch: token refresh and rotation, 429 back-off and file downloads.
+// The Zoom client against a stand-in for fetch: token refresh and rotation, 429 back-off and file downloads (the token
+// only to Zoom, hops off Zoom through the vetted getter, and a byte cap on every body).
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { ZoomApiError, ZoomClient, meetingUuidPath, retryAfterMs, signInRevoked } from "./client";
+import type { PinnedResponse } from "@messages/mail-servers/net";
+import { ZoomApiError, ZoomClient, isZoomHost, meetingUuidPath, retryAfterMs, signInRevoked, type OutsideGet } from "./client";
 import { TOKEN_URL, ZoomAuthError, apiBase, authUrl, grantedScopes } from "./oauth";
 
 const realFetch = globalThis.fetch;
@@ -81,20 +83,58 @@ test("fails a POST on a server error without trying it again", async () => {
   assert.equal(posts, 1);
 });
 
+/** A stand-in for pinnedGet: answers each URL from a table, and records what was asked. */
+function fakeOutside(replies: Record<string, { status: number; body?: string; headers?: Record<string, string> }>): { get: OutsideGet; asked: string[] } {
+  const asked: string[] = [];
+  const get: OutsideGet = async (url) => {
+    asked.push(url.toString());
+    const r = replies[url.toString()];
+    if (!r) throw new Error("not a public address");
+    const chunks = [Buffer.from(r.body ?? "")];
+    const res: PinnedResponse = { status: r.status, headers: r.headers ?? {}, body: (async function* () { yield* chunks; })(), destroy: () => undefined };
+    return res;
+  };
+  return { get, asked };
+}
+
+const CDN = "https://ssrweb.zoom-cdn.example.net/file.vtt?sig=1";
+
 test("downloads a recording through its redirect, sending the token only to Zoom", async () => {
   const calls = fakeFetch((url) => {
     if (url.toString() === TOKEN_URL) return token(1);
-    if (url.hostname === "zoom.us") return new Response(null, { status: 302, headers: { location: "https://ssrweb.zoom-cdn.example.net/file.vtt?sig=1" } });
-    return new Response("WEBVTT\n");
+    if (url.hostname === "zoom.us") return new Response(null, { status: 302, headers: { location: CDN } });
+    return new Response("not expected", { status: 500 });
   });
-  const client = new ZoomClient({ clientId: "c", clientSecret: "s", refreshToken: "r" });
+  const outside = fakeOutside({ [CDN]: { status: 200, body: "WEBVTT\n" } });
+  const client = new ZoomClient({ clientId: "c", clientSecret: "s", refreshToken: "r" }, undefined, outside.get);
   const bytes = await client.download("https://zoom.us/rec/download/abc");
   assert.equal(bytes.toString(), "WEBVTT\n");
-  const [, first, second] = calls;
+  const [, first] = calls;
   assert.equal(first.auth, "Bearer at-1");
   assert.equal(first.redirect, "manual");
-  assert.equal(second.url, "https://ssrweb.zoom-cdn.example.net/file.vtt?sig=1");
-  assert.equal(second.auth, null);
+  assert.equal(calls.length, 2, "the hop off Zoom never goes through fetch, so it cannot carry the token");
+  assert.deepEqual(outside.asked, [CDN]);
+});
+
+test("a download larger than its cap is refused, on Zoom or off it", async () => {
+  fakeFetch((url) => {
+    if (url.toString() === TOKEN_URL) return token(1);
+    if (url.pathname.endsWith("/big")) return new Response("x".repeat(100));
+    return new Response(null, { status: 302, headers: { location: CDN } });
+  });
+  const outside = fakeOutside({ [CDN]: { status: 200, body: "y".repeat(100) } });
+  const client = new ZoomClient({ clientId: "c", clientSecret: "s", refreshToken: "r" }, undefined, outside.get);
+  await assert.rejects(client.download("https://zoom.us/rec/download/big", 10), (err: unknown) => err instanceof ZoomApiError && err.status === 413);
+  await assert.rejects(client.download("https://zoom.us/rec/download/cdn", 10), (err: unknown) => err instanceof ZoomApiError && err.status === 413);
+  assert.equal((await client.download("https://zoom.us/rec/download/cdn", 100)).length, 100);
+});
+
+test("a redirect to a private or unreachable host fails the download", async () => {
+  fakeFetch((url) => (url.toString() === TOKEN_URL ? token(1) : new Response(null, { status: 302, headers: { location: "https://internal.example/x" } })));
+  const client = new ZoomClient({ clientId: "c", clientSecret: "s", refreshToken: "r" }, undefined, fakeOutside({}).get);
+  await assert.rejects(client.download("https://zoom.us/rec/download/abc"), (err: unknown) => err instanceof ZoomApiError && err.status === 502);
+  assert.ok(isZoomHost("us02web.zoom.us") && isZoomHost("zoom.us"));
+  assert.ok(!isZoomHost("zoom.us.evil.com") && !isZoomHost("notzoom.us"));
 });
 
 test("signs in with PKCE and reads what was granted", () => {

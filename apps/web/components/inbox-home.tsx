@@ -6,7 +6,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/lib/store";
+import { useAuth } from "@/lib/auth";
 import { dayKey } from "@/lib/calendar";
+import { cacheSentTimes, cachedSentTimes } from "@/lib/sent-times-cache";
 import { summarise } from "@/lib/summary";
 import { supabase } from "@/lib/supabase";
 import { inboxCounts } from "@/lib/thread-list";
@@ -26,27 +28,40 @@ const REFRESH_MS = 5 * 60_000;
 const SHADE: Record<SentDay["level"], string> = { 0: "bg-muted", 1: "bg-foreground/20", 2: "bg-foreground/40", 3: "bg-foreground/65", 4: "bg-foreground" };
 const DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
-/** When each of your sent messages in the heatmap's weeks went out, or null while loading. */
-function useSentTimes(): string[] | null {
-  const [times, setTimes] = useState<string[] | null>(null);
+/**
+ * When each of your sent messages in the heatmap's weeks went out, or null while loading. The read can be thousands of
+ * rows from far away, so the last one for this person and day shows at once and a fresh one replaces it underneath.
+ */
+function useSentTimes(day: string): string[] | null {
+  const userId = useAuth().session?.user.id;
+  const [times, setTimes] = useState<string[] | null>(() => cachedSentTimes(userId, day) ?? null);
   useEffect(() => {
+    if (!userId) return;
     let cancelled = false;
     const since = gridStart(new Date(), WEEKS).toISOString();
     void supabase.from("outbox").select("sent_at").eq("status", "sent").gte("sent_at", since).limit(20000)
-      .then(({ data }) => { if (!cancelled) setTimes((data ?? []).flatMap((r) => (r.sent_at ? [r.sent_at] : []))); });
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        // A failed read keeps what is showing; only a good one is remembered.
+        if (error) { setTimes((had) => had ?? []); return; }
+        const fresh = (data ?? []).flatMap((r) => (r.sent_at ? [r.sent_at] : []));
+        cacheSentTimes(userId, day, fresh);
+        setTimes(fresh);
+      });
     return () => { cancelled = true; };
-  }, []);
+  }, [userId, day]);
   return times;
 }
 
 export function InboxHome() {
   const { threads, loading, profile } = useApp();
   const signInName = useSignInName();
-  const { unread, attention } = inboxCounts(threads);
   const now = useNow(REFRESH_MS);
+  // Counted once per change to the list (or a tick of the clock, which ends an Urgent), not on every store update.
+  const { unread, attention } = useMemo(() => inboxCounts(threads, now.getTime()), [threads, now]);
   const { events } = useTodaysEvents(now);
   const sections = useMemo(() => summarise(threads, "none", now), [threads, now]);
-  const times = useSentTimes();
+  const times = useSentTimes(dayKey(now));
   const weeks = useMemo(() => sentWeeks(times ?? [], new Date(), WEEKS), [times]);
   const total = sentTotal(weeks);
   return (

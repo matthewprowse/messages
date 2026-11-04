@@ -49,7 +49,7 @@ export function Section({ title, count, separated = false, headerHeight, action,
           {title}
           {count !== undefined && <Badge variant="secondary">{count}</Badge>}
         </span>
-        {action && <Button asChild variant="ghost" size="sm"><Link href={action.href}>{action.label}</Link></Button>}
+        {action && <Button asChild variant="ghost"><Link href={action.href}>{action.label}</Link></Button>}
       </h2>
       <div className="pt-3">{children}</div>
     </section>

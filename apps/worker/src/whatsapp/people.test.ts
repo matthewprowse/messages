@@ -17,6 +17,15 @@ test("a saved name beats a pushed name, and neither is needed to find the number
   const p = await people.person("27821234567@s.whatsapp.net");
   assert.equal(p.jid, "27821234567@s.whatsapp.net");
   assert.equal(p.display_name, "Saved");
+  assert.equal(p.name_rank, 2); // a saved name: real, so it replaces a number or a profile name in the database
+});
+
+test("a profile name ranks below a saved one, and a bare number is a stand-in", async () => {
+  const people = new People(noSock);
+  const pushed = await people.person("27821111111@s.whatsapp.net", null, "Thandi");
+  assert.deepEqual([pushed.display_name, pushed.name_rank], ["Thandi", 1]);
+  const bare = await people.person("27822222222@s.whatsapp.net");
+  assert.deepEqual([bare.display_name, bare.name_rank], ["+27822222222", 0]);
 });
 
 test("a privacy ID alone is looked up once and a miss is remembered as null", async () => {

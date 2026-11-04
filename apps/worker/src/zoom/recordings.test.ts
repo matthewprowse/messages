@@ -120,7 +120,7 @@ test("stores Zoom's own transcript as segments, with the join link and participa
   assert.equal(row.transcript_source, "provider");
   assert.equal(row.provider_meeting_id, uuid);
   assert.equal(row.title, "sealed:meeting_title:Offer review");
-  assert.deepEqual(row.provider_meta, { uuid, meeting_id: 81234567890, join_url: "https://us02web.zoom.us/j/81234567890?pwd=abc" });
+  assert.deepEqual(row.provider_meta, { uuid, meeting_id: 81234567890, join_url: "sealed:event_link:https://us02web.zoom.us/j/81234567890?pwd=abc" });
   assert.ok(row.transcript!.startsWith("sealed:transcript:"));
   assert.deepEqual(JSON.parse(row.transcript!.slice("sealed:transcript:".length)), [
     { speaker: "Thandi Nkosi", start_ms: 1000, text: "Thanks for joining." },

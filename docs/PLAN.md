@@ -2651,6 +2651,58 @@ numbers below are estimates from the loop intervals.
 - A 5.6MB `simple-icons` chunk shows in the dev build with no import found; rebuild clean and look again.
 - Measure real per-job latency, cost and cache hit rate from the usage rows once Gemini is paid for.
 
+## Caching Pass for the PWA (3 November 2026)
+
+Measured from South Africa: every read from the browser to Supabase (AWS Ireland) costs about 250 ms, and the app page
+took 0.65 to 1.3 s to arrive because it was rendered per request with no-store. The owner wants the installed app to
+respond as fast as possible, so the app now keeps what it safely can on the device.
+
+- **Inbox copy on the device (owner's choice: device key).** After each full load the conversation list, the contacts it
+  names, saved tasks and the small tables (no message bodies) are sealed with AES-GCM under a key made on the device
+  (`extractable: false`, kept in IndexedDB as a key object) and stored in IndexedDB (`lib/local-copy/`). The next launch
+  shows it before any network trip; the full load then replaces it and the server wins. While the copy shows, nothing
+  that writes or marks read acts on it (`fromCopy`). If the first load fails the copy stays with a quiet toast and the load
+  retries. Sign-out deletes the copy and the key. Chosen over the account key, which would still wait about half a second
+  for /api/keys on every launch.
+- **App page kept by the service worker (owner's choice).** `public/sw.js` (rules in `public/sw-rules.js`) keeps the
+  signed-in app pages, which hold no user data, and the `/_next/static` files they need: stale-while-revalidate, keyed by
+  path, not shown when over 3 days old, pages from an older build dropped. It never stores `/api`, sign-in, marketing,
+  RSC or cross-origin responses. A stored page keeps its own CSP header, so one nonce is reused until it refreshes (a
+  small weakening of the nonce, accepted). Cleared on sign-out. Chosen over serving a static page from Vercel's edge,
+  which is still a network trip and does not work offline.
+- **The key arrives beside the first load.** `warmKeys()` starts /api/keys with the list queries instead of after them;
+  the route rate limits beside the key reads (after the caller is verified) and team key versions unwrap in parallel.
+- **Catching up on return.** Coming back to the app (visibility, pageshow, online) catches up at once instead of after the
+  next 10 s tick plus 3 s; one clock decides so two paths never fetch the same gap.
+- **Phones do not mount hidden panes** (the Conversations home and Your Day), and the sent-times chart is cached per day.
+- **Conversations load before they are opened:** on press, after a short hover, and the top five unread or needing a
+  reply once the app is idle (not with Save Data on). Prefetched ones are dropped first from the held list.
+- **Screens keep their last result in memory** (`lib/memory-cache.ts`): Contacts, a contact's page (two round trips instead
+  of four, drawn first from the store), Calendar ranges (realtime changes patched by id), the brief and Your Day, composer
+  settings and templates, linked notes. Promises no longer go stale after leaving their screens.
+- **Photos and logos are cached across launches.** Signed links are kept in localStorage per user for 24 hours (bearer
+  links to the user's own files, cleared on sign-out). Uploads carry Cache-Control: an hour for paths overwritten in place,
+  a day for files written once. Chosen company logos move to a public bucket, `company-logos`, under content-addressed
+  names with a year's cache (`20261124100000_public_company_logos`); review files stay private in `logos`. Release order:
+  migration, then web, then worker.
+- **Icons get a year's cache, and the six redirect-only pages became redirects** in `next.config.ts`.
+- **Not done:** the AI worker's own uploads (Instagram photos, brief audio) still set no Cache-Control; the search index
+  still reloads every event and task each session and keeps its own realtime channels.
+
+## Browser and Screen Tests (proposed, 3 November 2026)
+
+The owner wants every page and feature tested in a real browser on every kind of screen, without anything ever being
+sent without their permission. The full plan is in `docs/TESTING.md`. In short:
+- **Screen tests:** React Testing Library and happy-dom under the existing `node --test` runner.
+- **Browser tests:** Playwright on 9 screen setups (desktop, laptop, Safari, Firefox, iPad both ways, two iPhones,
+  Android), light and dark, with visual checks and an accessibility check on every page.
+- **Safety:** a separate test database with only made-up data and no connected accounts; no worker ever pointed at it
+  (tests check the queued row instead); a browser firewall that fails any request to a provider; never signed in to
+  production (opening a conversation sends read receipts); real sends only in a Live Checks suite the owner starts and
+  confirms by hand.
+- **Test database:** a cloud project, "Konva Test" (`ammzthqpycofwvxtpyhx`, eu-west-1, Free plan, created 3 November
+  2026). **Open:** whether to build Live Checks.
+
 ## Timeline
 
 Claude writes most of the code, so building the MVP list is about a month. What takes longer is
@@ -3430,3 +3482,79 @@ as an editable written summary, how much settings text to cut, and shell caching
 - Desktop and tablet keep 32px controls (`h-8`). Below `md` (phones), buttons, icon buttons, inputs, input groups, select
   triggers and toggles are 40px (`max-md:h-10`, set once in `components/ui`), so they are easier to tap. Small sizes (`sm`,
   `xs`) and the date picker's day grid keep their size.
+
+## Security Audit and Fixes (3 to 4 November 2026)
+
+A read-only audit by seven reviewers (`docs/security-audit-2026-11-03.md`) found 5 high and 10 medium issues. All are fixed
+in code, uncommitted, with migrations `20261124*` to `20261126*` written but not applied. Owner steps are in
+`docs/RUNBOOK.md`.
+
+### Decided (owner, 3 November 2026)
+
+- Generic IMAP accounts send only from their own address. Aliases are offered for Gmail, Outlook and iCloud only.
+- Only approved emails can create an account: an approved waitlist row or an open team invite, enforced by a trigger on
+  `auth.users`. Users added by hand must be approved or invited first.
+- Readable Bulk Email offers links only on the sender's own domain, and none for suspicious mail.
+
+### Decided (from the fixes)
+
+- **Outside senders:**
+  - WhatsApp files are fetched only from a checked `directPath` on a `whatsapp.net` host, never the sender's URL, capped at
+    the file limit.
+  - ffmpeg runs with `PATH` only, pipe-only input and a format forced from magic bytes.
+  - Automations never add an email or number to a contact found by a different one. A partial match becomes a new Lead plus
+    a merge suggestion. Starred and non-Lead contacts are never marked or linked by an automation.
+  - Learned style rules start tentative and go live on a second supporting pass. Rules holding an address, link, long
+    number, recipient or payment word are never stored.
+  - Header checks (display-name brand mismatch, Reply-To elsewhere, SPF/DKIM/DMARC failure) can raise the suspicious flag;
+    the model cannot lower it.
+  - Triage reads at most 40 messages per sender per day with the model; the rest get a neutral, visible verdict.
+  - Voice notes from people you never wrote to wait until you reply or tap Transcribe, capped at 20 per conversation a day,
+    billed to their own Voice Notes share.
+  - Pre-drafts that repeat a high-risk detail only the sender gave are held as `review` drafts beside the live draft.
+  - Similar replies and extra voice examples are left out of drafts for unknown senders and flagged mail.
+  - An email reusing a stored email's Message-ID with different content is dropped. Inbox mail from your own address counts
+    as received unless DMARC passed. `provider_meta.auth` holds SPF/DKIM/DMARC verdicts; `reply_to_domain` holds only a
+    differing Reply-To domain.
+  - Unsubscribe emails go to one address with subject and body "Unsubscribe".
+  - Notes hold only `attachment:` images. Meeting notes escape names and AI text.
+- **Accounts and teams:**
+  - Any verified second factor requires aal2 on every API route and for re-authentication. Cancelling a deletion needs the
+    same proof as requesting it.
+  - `APP_URL` is required in production; Vercel previews use their own Vercel address.
+  - Every work-chat assignment is logged (`thread_assignment_log`); the agent and earlier assignees are told when an owner or
+    admin takes a chat.
+  - Caps: 50 automation previews and 1000 email originals a day, 100 automations, 20 push devices per person.
+  - Web push goes only to FCM, Apple, Mozilla and WNS endpoints.
+- **Encryption:**
+  - Contact, company and group names are sealed (`name`), with `display_name_rank` deciding which name wins and
+    `threads.group_name_index` detecting renames. No server-side name search or sort.
+  - Calendar notes, calendar names, guests and join links are sealed; matching happens in the worker after opening.
+  - Outgoing attachments are sealed in the browser at `<user>/outbox/<uuid>/file` with a sealed filename. Sent files go after
+    24 hours, stuck and orphaned files after 7 days.
+  - `address_book_cards.card_key` is an HMAC under the user's index key.
+  - Short-lived sign-in handoffs are sealed under the user's own key, bound to their row and column or purpose.
+  - `ENCRYPTION_KEY` and `KEY_WRAPPING_KEY` are retired once `keys:readiness` exits 0. Every user's data key is then rotated
+    once with `keys:rekey`. Blind indexes keep the original index key.
+  - Vercel reaches KMS through Workload Identity Federation; the service-account JSON is deleted after the switch.
+  - Sealed values are bound to owner, kind and place: `e2:`/`t2:` carry `<table>.<column>` and the row id in an
+    authenticated header, and files are `e2b:`, bound to `<bucket>/<path>`. `e1:` is read until `fields:bind` (or
+    `keys:rekey`) moves it.
+  - Row binding where the app chooses the id before sealing: outbox, outbox attachments (outbox id plus path), calendar
+    queues, task updates and drafts. Ingest-made rows bind place only.
+  - Workers act only on values sealed for that row and column: plain text is refused while encryption is on, and legacy
+    values once `REQUIRE_BOUND_FIELDS` is on. A refused job fails with "could not be verified", never blank. The browser
+    shows "Unreadable" for prose that will not open.
+  - Rollout switches default off: `SEAL_BOUND_FIELDS`, `NEXT_PUBLIC_SEAL_BOUND_FIELDS`, `REQUIRE_BOUND_FIELDS`. Team values
+    stay `t1:` for now. The constraints requiring `e2:` on the action tables (`20261126100900`) are applied last, by hand.
+- **Infrastructure:**
+  - Workers VM: no public IP, its own network with Cloud NAT, SSH only through IAP with OS Login 2FA.
+  - Only the Compose bridges reach the metadata server. Each worker service gets its own allow-listed env file.
+  - Release images are built in CI from tags and deployed by digest once Artifact Registry is set up; `release.sh` needs
+    green CI. Logs ship through the Ops Agent. Health endpoints bind to loopback.
+
+### Not Done
+
+- Step-up proof on `/api/keys` for new devices or old sign-ins: designed, needs a re-auth dialog behind a flag.
+- Confidential Space (the only fix for insiders holding the service-role key).
+- Connectors still reach the metadata server until they get their own identity.

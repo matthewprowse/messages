@@ -9,9 +9,15 @@ import {
 import { mergeById, mergeLoaded } from "./merge-loaded";
 import { isTempTask } from "../tasks";
 import { mergeContactInto, patchContactIn, repointIds } from "./contact-patch";
+import type { CopyData } from "../local-copy/sealed-copy";
+import { withCopy } from "../local-copy/snapshot";
+import type { ShownColumns } from "./update-filter";
 
 export interface State {
+  /** True until the network load lands, even while the device copy is shown (see fromCopy). */
   loading: boolean;
+  /** The list on screen is the device copy (lib/local-copy), not yet checked against the server. Never act on it unasked. */
+  fromCopy: boolean;
   threads: Thread[];
   /** Loaded messages by conversation, oldest first. */
   byThread: Record<string, Message[]>;
@@ -26,9 +32,14 @@ export interface State {
 }
 
 export type Action =
-  /** A fetch applied on top of the state now; base is the state when the fetch began (see merge-loaded.ts). */
-  | { type: "merged"; base: State; data: Loaded }
+  /**
+   * A fetch applied on top of the state now; base is the state when the fetch began (see merge-loaded.ts). fresh marks
+   * the store's own full first load, the only fetch that ends showing the device copy (a catch-up may be partial).
+   */
+  | { type: "merged"; base: State; data: Loaded; fresh?: boolean }
   | { type: "clear" }
+  /** The device copy, shown while the first load runs. Ignored once that load has landed. */
+  | { type: "copied"; data: CopyData }
   | { type: "upsertThread"; thread: Thread }
   /** Tasks fetched again, applied on top of the ones held now; base is the list when the fetch began. */
   | { type: "tasksLoaded"; base: Task[]; tasks: Task[] }
@@ -43,11 +54,12 @@ export type Action =
   | { type: "mergeMessages"; threadId: string; messages: Message[] }
   | { type: "addMessage"; message: Message }
   | { type: "replaceMessage"; message: Message }
-  | { type: "patchMessage"; threadId: string; id: string; row: { provider_meta?: unknown; body_text?: string | null; transcript?: string | null } }
+  | { type: "patchMessage"; threadId: string; id: string; row: ShownColumns }
   | { type: "upsertAttachment"; row: Tables<"attachments"> }
   | { type: "removeAttachment"; id: string }
   | { type: "upsertContacts"; contacts: Contact[] }
   | { type: "setDraft"; id: string; draft?: Draft }
+  | { type: "setReviewDraft"; id: string; draft?: Draft }
   | { type: "feedback"; id: string; value: "important" | "not_important" }
   | { type: "upsertUnsubscribe"; unsubscribe: Unsubscribe }
   | { type: "removeUnsubscribe"; id: string }
@@ -68,6 +80,7 @@ export type Action =
 
 export const initial: State = {
   loading: true,
+  fromCopy: false,
   threads: [],
   byThread: {},
   contacts: [],
@@ -99,7 +112,7 @@ export function withThreads(list: Thread[], incoming: Thread[]): Thread[] {
   const byId = new Map(incoming.map((t) => [t.id, t]));
   const held = new Set(list.map((t) => t.id));
   const fresh = incoming.filter((t) => !held.has(t.id));
-  return [...fresh, ...list.map((t) => { const n = byId.get(t.id); return n ? { ...t, ...n, draft: t.draft, feedback: t.feedback } : t; })];
+  return [...fresh, ...list.map((t) => { const n = byId.get(t.id); return n ? { ...t, ...n, draft: t.draft, reviewDraft: t.reviewDraft, feedback: t.feedback } : t; })];
 }
 
 /** The list with these contacts added or updated. The same array when nothing changed, so lookups built on it stay stable. */
@@ -135,8 +148,14 @@ export function reducer(s: State, a: Action): State {
   switch (a.type) {
     case "merged": {
       const { contactsLoaded: _flag, contacts, ...rest } = a.data;
-      return { ...s, ...mergeLoaded(a.base, s, rest), contacts: withContacts(s.contacts, contacts), loading: false };
+      // Over the device copy a full contact list also drops the copy's people who are gone, as rows are dropped.
+      const merged = s.fromCopy && a.data.contactsLoaded ? mergeById(a.base.contacts, contacts, s.contacts) : withContacts(s.contacts, contacts);
+      // A catch-up while the copy shows is applied but leaves the copy mark: rows it did not cover are still the copy's.
+      const settled = !s.fromCopy || !!a.fresh;
+      return { ...s, ...mergeLoaded(a.base, s, rest), contacts: merged, loading: settled ? false : s.loading, fromCopy: !settled };
     }
+    case "copied":
+      return s.loading ? { ...s, ...withCopy(s, a.data, EMPTY_PROFILE), fromCopy: true } : s;
     case "clear":
       return { ...initial, loading: false };
     case "tasksLoaded":
@@ -154,7 +173,7 @@ export function reducer(s: State, a: Action): State {
       return {
         ...s,
         threads: exists
-          ? s.threads.map((t) => (t.id === a.thread.id ? { ...t, ...a.thread, draft: t.draft, feedback: t.feedback } : t))
+          ? s.threads.map((t) => (t.id === a.thread.id ? { ...t, ...a.thread, draft: t.draft, reviewDraft: t.reviewDraft, feedback: t.feedback } : t))
           : [a.thread, ...s.threads],
       };
     }
@@ -202,6 +221,8 @@ export function reducer(s: State, a: Action): State {
     }
     case "setDraft":
       return { ...s, threads: s.threads.map((t) => (t.id === a.id ? { ...t, draft: a.draft } : t)) };
+    case "setReviewDraft":
+      return { ...s, threads: s.threads.map((t) => (t.id === a.id ? { ...t, reviewDraft: a.draft } : t)) };
     case "feedback": {
       const priority: Priority = a.value === "important" ? "important" : "low";
       return { ...s, threads: s.threads.map((t) => (t.id === a.id ? { ...t, feedback: a.value, priority } : t)) };

@@ -14,6 +14,7 @@ import { describeWhen, readUndoSeconds, sendAfterIso } from "../send-schedule";
 import { restoreReply } from "../reply-restore";
 import { rememberDismissed } from "../outbox-load";
 import { sealAddress } from "../address-refs";
+import { outboxPlace } from "../outbox-places";
 import { track } from "../analytics";
 import type { Message, Thread } from "../types";
 import { ComposeStatus, NewEmail, PendingSend, attachToOutbox, composeStatusOf } from "./compose";
@@ -73,13 +74,6 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     // A reply that started as an AI draft keeps the link, so the AI can learn from what you changed.
     const draftId = standalone ? null : threadMapRef.current.get(threadId)?.draft?.id ?? null;
     const replyToId = standalone ? null : replyToRef.current[threadId]?.id ?? null;
-    const sealed = await seal(FIELD.body, body).catch(() => null);
-    // Addresses are sealed like the body: a failed key request is a failed send, not an unhandled rejection.
-    const addresses = sealed === null ? null : await Promise.all([
-      fromAddress ? sealAddress(fromAddress) : Promise.resolve(null),
-      copies ? Promise.all(copies.to.map((a) => sealAddress(a))) : Promise.resolve(null),
-      copies ? Promise.all(copies.cc.map((a) => sealAddress(a))) : Promise.resolve(null),
-    ]).catch(() => null);
     // The placeholder is in before the insert resolves: a fast worker can update the row first, and the outbox
     // handler (use-realtime.ts) only updates placeholders that already exist. Its id is chosen here for the same reason.
     // The id is kept for as long as the message is unsettled, so Send pressed again after a lost response inserts the same row.
@@ -90,6 +84,14 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     const key = sendKeysRef.current.begin(signature);
     if (key.busy) return false; // the same message is being queued already (a double click)
     const outboxId = key.id;
+    // Sealed for this row once its id is known, so the worker sends it only from here (outbox-places.ts). A failed key
+    // request is a failed send, not an unhandled rejection.
+    const sealed = await seal(FIELD.body, body, outboxPlace(outboxId, "body")).catch(() => null);
+    const addresses = sealed === null ? null : await Promise.all([
+      fromAddress ? sealAddress(fromAddress, outboxPlace(outboxId, "from_address")) : Promise.resolve(null),
+      copies ? Promise.all(copies.to.map((a) => sealAddress(a, outboxPlace(outboxId, "to_addresses")))) : Promise.resolve(null),
+      copies ? Promise.all(copies.cc.map((a) => sealAddress(a, outboxPlace(outboxId, "cc_addresses")))) : Promise.resolve(null),
+    ]).catch(() => null);
     const attachments = files.length ? pendingAttachments(files) : undefined;
     const dropPlaceholder = () => setPending((p) => p.filter((x) => x.id !== outboxId));
     if (sealed !== null && addresses !== null) setPending((p) => (p.some((x) => x.id === outboxId) ? p : [...p, { id: outboxId, threadId, body, createdAt: new Date().toISOString(), status: "queued", attachments, fromAddress, copies, fileCount: files.length, sendAfter }]));
@@ -136,6 +138,8 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     // The server's clock decides when the reply was made, as the imported copy is compared with it.
     setPending((p) => p.map((x) => (x.id === data.id ? { ...x, createdAt: data.created_at } : x)));
     if (draftId) rawDispatch({ type: "setDraft", id: threadId });
+    // A held draft that was used and sent is done with too, so it is not offered again.
+    if (draftId && threadMapRef.current.get(threadId)?.reviewDraft?.id === draftId) rawDispatch({ type: "setReviewDraft", id: threadId });
     if (replyToId) setReplyTo(threadId, null);
     if (sendAt) toast(`Scheduled for ${describeWhen(new Date(sendAt), new Date())}.`);
     else if (undoSeconds > 0) {
@@ -161,18 +165,19 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
   // A new email has no conversation yet. The worker sets thread_id once the sent copy is stored.
   const composeEmail = useCallback(async (email: NewEmail) => {
     const files = email.files ?? [];
-    // Sealing and address sealing can fail on a transient key error: that is a failed send, not a crash.
-    const sealed = await Promise.all([seal(FIELD.subject, email.subject.trim() || null), seal(FIELD.body, email.body)]).catch(() => null);
-    const addresses = sealed === null ? null : await Promise.all([
-      email.fromAddress ? sealAddress(email.fromAddress) : Promise.resolve(email.fromAddress),
-      Promise.all(email.to.map((a) => sealAddress(a))),
-      Promise.all((email.cc ?? []).map((a) => sealAddress(a))),
-      Promise.all((email.bcc ?? []).map((a) => sealAddress(a))),
-    ]).catch(() => null);
     // One id per unsettled email, so pressing Send again after a lost answer cannot queue it twice.
     const signature = sendSignature({ scope: `email ${email.accountId}${email.sendAt ? ` at ${email.sendAt}` : ""}`, body: email.body, from: email.fromAddress, to: email.to, cc: email.cc, bcc: email.bcc, subject: email.subject, files: files.length, draftId: email.draftId });
     const key = sendKeysRef.current.begin(signature);
     if (key.busy) return null;
+    // Sealed for this row (outbox-places.ts). Sealing can fail on a transient key error: that is a failed send, not a crash.
+    const at = (column: string) => outboxPlace(key.id, column);
+    const sealed = await Promise.all([seal(FIELD.subject, email.subject.trim() || null, at("subject")), seal(FIELD.body, email.body, at("body"))]).catch(() => null);
+    const addresses = sealed === null ? null : await Promise.all([
+      email.fromAddress ? sealAddress(email.fromAddress, at("from_address")) : Promise.resolve(email.fromAddress),
+      Promise.all(email.to.map((a) => sealAddress(a, at("to_addresses")))),
+      Promise.all((email.cc ?? []).map((a) => sealAddress(a, at("cc_addresses")))),
+      Promise.all((email.bcc ?? []).map((a) => sealAddress(a, at("bcc_addresses")))),
+    ]).catch(() => null);
     const sendAfter = email.sendAt ?? sendAfterIso(readUndoSeconds()) ?? undefined;
     const { data, error } = sealed === null || addresses === null ? { data: null, error: true } : await insertOnce<{ id: string }>(
       () => supabase.from("outbox")
@@ -207,11 +212,11 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
 
   // A new WhatsApp chat: one number, no subject or From address. The worker sets thread_id once it is sent.
   const composeWhatsApp = useCallback(async (accountId: string, to: string, body: string, draftId?: string, sendAt?: string) => {
-    const sealed = await seal(FIELD.body, body).catch(() => null);
-    const sealedTo = await sealAddress(to).catch(() => null);
     const signature = sendSignature({ scope: `whatsapp ${accountId}${sendAt ? ` at ${sendAt}` : ""}`, body, to: [to], draftId });
     const key = sendKeysRef.current.begin(signature);
     if (key.busy) return null;
+    const sealed = await seal(FIELD.body, body, outboxPlace(key.id, "body")).catch(() => null);
+    const sealedTo = await sealAddress(to, outboxPlace(key.id, "to_addresses")).catch(() => null);
     const sendAfter = sendAt ?? sendAfterIso(readUndoSeconds()) ?? undefined;
     const { data, error } = sealed === null || sealedTo === null ? { data: null, error: true } : await insertOnce<{ id: string }>(
       () => supabase.from("outbox")
@@ -238,7 +243,7 @@ export function useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, dra
     const before = stateRef.current.accounts.find((a) => a.id === accountId)?.sendAddresses ?? [];
     rawDispatch({ type: "patchAccount", id: accountId, patch: { sendAddresses: addresses } });
     const unique = [...new Set(addresses.map((a) => a.trim().toLowerCase()).filter(Boolean))];
-    const { error } = await supabase.from("accounts").update({ send_addresses: await Promise.all(unique.map((a) => sealAddress(a))) }).eq("id", accountId);
+    const { error } = await supabase.from("accounts").update({ send_addresses: await Promise.all(unique.map((a) => sealAddress(a, { place: "accounts.send_addresses", row: accountId }))) }).eq("id", accountId);
     if (error) {
       rawDispatch({ type: "patchAccount", id: accountId, patch: { sendAddresses: before } });
       saveFailed();

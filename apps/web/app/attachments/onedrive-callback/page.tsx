@@ -1,7 +1,8 @@
 "use client";
 
 // Where Microsoft sends the popup after the OneDrive sign-in (lib/cloud-pick/onedrive.ts). It hands the code to the
-// page that opened it, on this origin only, and leaves the popup open for the picker. It shows nothing else.
+// page that opened it, on this origin only, and leaves the popup open for the picker. It shows nothing else. It is the
+// one page served without Cross-Origin-Opener-Policy (next.config.ts), or window.opener would be null here.
 
 import { Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";

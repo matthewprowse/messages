@@ -41,7 +41,8 @@ export function SubscriptionRow({ sender, statuses, query, open, checked, select
   // address of the company waiting on it); one that can still be unsubscribed from offers that. Others,
   // already on their way or done, offer nothing.
   const manual = statuses.filter((u): u is Unsubscribe => u?.status === "manual");
-  const page = manual.find((u) => u.manualUrl)?.manualUrl;
+  // https only: the address comes from the sender's email (mapUnsubscribe also drops anything else).
+  const page = manual.map((u) => u.manualUrl).find((url) => !!url && /^https:\/\//i.test(url));
   const actions: { label: string; icon: LucideIcon; onClick: () => void }[] = selecting ? [] : manual.length > 0 ? [
     ...(page ? [{ label: "Open Their Page", icon: ExternalLink, onClick: () => window.open(page, "_blank", "noopener,noreferrer") }] : []),
     { label: "Mark as Unsubscribed", icon: Check, onClick: () => manual.forEach((u) => onConfirm(u.id)) },

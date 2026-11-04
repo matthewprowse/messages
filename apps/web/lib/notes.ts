@@ -10,10 +10,10 @@
 // application/octet-stream; the real content type is kept in the row and the bytes are opened when the
 // file is viewed or saved (lib/signed-urls.ts). Files uploaded before sealing began are still read as they are.
 
-import { decryptAny, encryptBytes, encryptField, isCiphertext } from "@messages/crypto";
+import { decryptAny, isCiphertext } from "@messages/crypto";
 import { FIELD, type Field } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
-import { open, openRows, teamKeys, userKeys } from "./vault";
+import { open, openRows, sealBytesWith, sealWith, teamKeys, userKeys } from "./vault";
 import { NoteConflict, type PersistOpts, type RemoteNote } from "./note-saver";
 import { noteExcerpt as excerptOf } from "./note-text";
 import { BUCKET, formatBytes, mimeOf, uploadFile, displayName } from "./outbox-files";
@@ -72,14 +72,17 @@ function mapFile(r: FileRow): NoteFile {
   return { id: r.id, noteId: r.note_id, path: r.storage_path, name: r.name || "Attachment", mimeType: r.mime_type, size: r.size_bytes };
 }
 
+/** The column each kind of note text is stored in, the place it is bound to once bound values are on. */
+const NOTE_PLACES: Partial<Record<Field, string>> = { note_title: "notes.title", note: "notes.body", note_excerpt: "notes.excerpt", note_file: "note_attachments.name" };
+
 /** Encrypts note text with the user's keys, always: the content-encryption switch does not apply to notes. */
 async function sealNote(field: Field, value: string): Promise<string> {
-  return encryptField(await userKeys(), field, value);
+  return sealWith(await userKeys(), field, value, { place: NOTE_PLACES[field] ?? "" });
 }
 
-/** A file's bytes sealed with the user's keys: a sealed-file header, a nonce, the ciphertext and its tag. */
-export async function sealNoteBytes(file: Blob): Promise<Blob> {
-  const sealed = await encryptBytes(await userKeys(), FIELD.noteFileData, new Uint8Array(await file.arrayBuffer()));
+/** A file's bytes sealed with the user's keys for its place in the attachments bucket: a sealed-file header, a nonce, the ciphertext and its tag. */
+export async function sealNoteBytes(file: Blob, path: string): Promise<Blob> {
+  const sealed = await sealBytesWith(await userKeys(), FIELD.noteFileData, new Uint8Array(await file.arrayBuffer()), `attachments/${path}`);
   return new Blob([sealed], { type: "application/octet-stream" });
 }
 
@@ -272,7 +275,7 @@ export async function uploadNoteFile(noteId: string, file: File, name: string, o
   if (!session) throw new Error("Sign in again to attach files.");
   const mimeType = mimeOf(name, file.type);
   const path = `${session.user.id}/notes/${noteId}/${crypto.randomUUID()}`;
-  const sealed = await sealNoteBytes(file);
+  const sealed = await sealNoteBytes(file, path);
   await uploadFile({
     base: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
     apiKey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "",

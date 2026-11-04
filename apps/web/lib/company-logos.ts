@@ -47,7 +47,7 @@ export interface CompanyLogo {
   manual: boolean;
   source: LogoSource | null;
   url: string | null;
-  /** The chosen logo in the "logos" bucket, or null when the building icon shows. */
+  /** The chosen logo (logo-paths.ts says which bucket), or null when the building icon shows. */
   path: string | null;
   changedAt: string | null;
   checkedAt: string | null;

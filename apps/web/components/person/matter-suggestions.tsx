@@ -27,8 +27,8 @@ export function MatterSuggestions({ suggestions, threads, onLink, onDismiss }: {
       <AlertDescription>
         <p className="truncate">{threadLabel(a)} and {threadLabel(b)} look like the same matter. Show them together?</p>
         <div className="mt-2 flex gap-2">
-          <Button size="sm" onClick={() => onLink(l)}>Link Them</Button>
-          <Button size="sm" variant="ghost" onClick={() => onDismiss(l)}>Not the Same</Button>
+          <Button onClick={() => onLink(l)}>Link Them</Button>
+          <Button variant="ghost" onClick={() => onDismiss(l)}>Not the Same</Button>
         </div>
       </AlertDescription>
     </Alert>

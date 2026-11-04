@@ -1,6 +1,6 @@
 // Works the shared company logo queue to the end, for the first backfill and for test runs, without
 // waiting on the running workers: the sync worker's steps here, and the Gemini steps by running the AI
-// worker's `python3 -m ai logos` in between. Writes the company_logos table and the "logos" bucket, then
+// worker's `python3 -m ai logos` in between. Writes the company_logos table and the logo buckets, then
 // points each company at its logo (organizations.logo_path), which is what the app shows.
 //
 //   npx tsx --env-file=.env scripts/company-logos.ts --from-orgs      every company in Konva

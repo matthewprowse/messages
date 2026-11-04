@@ -92,7 +92,7 @@ async function realDeps(): Promise<ShrinkDeps> {
     },
     async heldThreads(ids) {
       const pinned = must(await db.from("threads").select("id").in("id", ids).eq("pinned", true), "load pinned conversations");
-      const drafts = must(await db.from("drafts").select("thread_id").in("thread_id", ids).eq("status", "active"), "load conversations with drafts");
+      const drafts = must(await db.from("drafts").select("thread_id").in("thread_id", ids).in("status", ["active", "review"]), "load conversations with drafts");
       return new Set([...pinned.map((r) => r.id), ...drafts.map((r) => r.thread_id).filter((t): t is string => t !== null)]);
     },
     async writtenTo(userId, senderIndex) {

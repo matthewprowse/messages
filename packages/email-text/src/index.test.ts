@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bodySource, bulkPreview, cleanText, decodeEntities, emailParts, htmlToText, isBulkMail, linkParts, originalDoc, shortenUrl, siteOf, splitFooter, splitForward, splitQuoted, trimSignature, weakText } from "./index";
+import { bodySource, bulkPreview, cleanText, decodeEntities, emailParts, htmlToText, isBulkMail, isSafeUrlValue, linkParts, originalDoc, shortenUrl, unescapeCss, siteOf, splitFooter, splitForward, splitQuoted, trimSignature, weakText } from "./index";
 
 test("cleanText collapses blank runs and invisible padding", () => {
   const out = cleanText("Hi there\r\n\r\n\u00a0\r\n\u200b\u034f \r\n\r\nSecond line   \n\n\n\nThird");
@@ -92,6 +92,37 @@ test("originalDoc strips active content", () => {
   const { srcdoc } = originalDoc('<script>alert(1)</script><meta http-equiv="refresh" content="0;url=https://x"><a href="javascript:alert(1)" onclick="x()">a</a><iframe src="https://x"></iframe>', true);
   assert.doesNotMatch(srcdoc, /<script|alert|onclick|<iframe|refresh/i);
   assert.match(srcdoc, /^<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'/);
+});
+
+test("originalDoc drops links whose scheme hides behind entities, tabs or case", () => {
+  for (const href of ["java&#9;script:alert(1)", "&#106;avascript:alert(1)", "&#x6A;avascript:alert(1)", "&#106avascript:alert(1)", " JaVaScRiPt:alert(1)", "java\nscript:alert(1)", "javascript&colon;alert(1)", "vbscript:x", "data:text/html,<b>x</b>"]) {
+    const { srcdoc } = originalDoc(`<a href="${href}">a</a><svg><a xlink:href='${href}'>b</a></svg>`, true);
+    assert.doesNotMatch(srcdoc, /href="[^"]+"|href='[^']+'/, href);
+  }
+  assert.equal(isSafeUrlValue('"https://a.example/x?a=1&amp;b=2"', new Set(["https"])), true);
+  assert.equal(isSafeUrlValue("mailto:a@b.example", new Set(["mailto"])), true);
+  assert.equal(isSafeUrlValue("#top", new Set()), true);
+  assert.match(originalDoc('<a href="https://a.example/x">a</a><img src="cid:logo@x">', true).srcdoc, /href="https:\/\/a\.example\/x".*src="cid:logo@x"/);
+});
+
+test("originalDoc removes event handlers with no space before them", () => {
+  const { srcdoc } = originalDoc(`<img/onerror=alert(1) src=x><img src="x"onerror="alert(1)"><svg/onload=alert(1)><b title='x'ONMOUSEOVER='alert(1)'>t</b>`, true);
+  assert.doesNotMatch(srcdoc, /onerror|onload|onmouseover|alert/i);
+});
+
+test("originalDoc finds a remote url() written with CSS escapes or entities", () => {
+  const html = `<style>.a{background:u\\72l(https://t.example/a.png)} .b{background:\\75\\72\\6c(//t.example/b.png)}</style><div style="background:u&#114;l(https://t.example/c.png)">x</div><div style="background:\\75rl('https://t.example/d.png')">y</div>`;
+  const { srcdoc } = originalDoc(html, false);
+  assert.doesNotMatch(srcdoc, /t\.example/);
+  assert.match(originalDoc(html, true).srcdoc, /url\(https:\/\/t\.example\/a\.png\)/);
+  assert.equal(unescapeCss("content:'\\201C'"), "content:'\\201C'");
+});
+
+test("originalDoc links open with no opener and no referrer, whatever rel the email sets", () => {
+  const { srcdoc } = originalDoc('<a href="https://a.example" rel="opener">a</a><A HREF="https://b.example">b</A><abbr>c</abbr>', true);
+  assert.match(srcdoc, /<a rel="noopener noreferrer" href="https:\/\/a\.example" rel="opener">/);
+  assert.match(srcdoc, /<A rel="noopener noreferrer" HREF=/);
+  assert.match(srcdoc, /<abbr>c<\/abbr>/);
 });
 
 test("originalDoc counts only remote images it can load", () => {

@@ -75,8 +75,9 @@ export async function saveStored(userId: string, ids: { id: string; patch: Table
  */
 export async function storeChange(event: StoredCalendarEvent, change: Change, series: boolean, shift: SeriesShift | null) {
   try {
+    // Each occurrence's guests are merged with the change, so they are opened first (the asked one already is).
     const rows = series && event.series_id
-      ? must(await db.from("calendar_events").select("*").eq("account_id", event.account_id).eq("series_id", event.series_id), "load series to change")
+      ? await Promise.all(must(await db.from("calendar_events").select("*").eq("account_id", event.account_id).eq("series_id", event.series_id), "load series to change").map((r) => openEvent(r.user_id, r)))
       : [event];
     await saveStored(
       event.user_id,

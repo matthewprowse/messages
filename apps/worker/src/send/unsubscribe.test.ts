@@ -2,12 +2,20 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bodyUnsubscribeLink, isPrivateAddress, oneClickUnsubscribe, parseListUnsubscribe } from "./unsubscribe";
+import { bodyUnsubscribeLink, isPrivateAddress, oneClickUnsubscribe, parseListUnsubscribe, UNSUBSCRIBE_BODY, UNSUBSCRIBE_SUBJECT } from "./unsubscribe";
 
 test("reads https and mailto options", () => {
   const o = parseListUnsubscribe("<mailto:leave@list.example?subject=Remove%20me>, <https://list.example/u/abc>");
   assert.equal(o.https, "https://list.example/u/abc");
-  assert.deepEqual(o.mailto, { to: "leave@list.example", subject: "Remove me", body: "unsubscribe" });
+  assert.deepEqual(o.mailto, { to: "leave@list.example", subject: UNSUBSCRIBE_SUBJECT, body: UNSUBSCRIBE_BODY });
+});
+
+test("a mailto unsubscribe goes to exactly one address, with our own subject and body", () => {
+  const o = parseListUnsubscribe("<mailto:Leave-Token@list.example?subject=Wire%20money&body=Click%20this&cc=boss@x.com>");
+  assert.deepEqual(o.mailto, { to: "Leave-Token@list.example", subject: "Unsubscribe", body: "Unsubscribe" });
+  for (const bad of ["<mailto:a@x.com,b@x.com>", "<mailto:a@x.com%2Cb@x.com>", "<mailto:a@x.com;b@x.com>", "<mailto:%E0%A4%A>", `<mailto:${"a".repeat(250)}@x.com>`, "<mailto:a@x.com%0D%0ABcc:b@x.com>"]) {
+    assert.equal(parseListUnsubscribe(bad).mailto, null, bad);
+  }
 });
 
 test("ignores http and junk entries", () => {
@@ -35,6 +43,31 @@ test("finds an unsubscribe link in the text for you to open", () => {
   assert.equal(bodyUnsubscribeLink("Manage: https://news.example/unsubscribe?id=9 today"), "https://news.example/unsubscribe?id=9");
   assert.equal(bodyUnsubscribeLink("Unsubscribe: http://plain.example/u"), null);
   assert.equal(bodyUnsubscribeLink("Nothing here"), null);
+  assert.equal(bodyUnsubscribeLink("To unsubscribe,\nvisit https://news.example/x"), null);
+  assert.equal(bodyUnsubscribeLink(`Unsubscribe ${"x".repeat(41)} https://news.example/x`), null);
+  assert.equal(bodyUnsubscribeLink("Go to xhttps://a.example/unsubscribe/1 now"), "https://a.example/unsubscribe/1");
+  assert.equal(bodyUnsubscribeLink("Unsubscribe unsubscribe Unsubscribe: WWW.News.example/u"), "https://www.news.example/u");
+});
+
+test("a link at the very end of a long email is still found", () => {
+  assert.equal(bodyUnsubscribeLink(`${"Hello there. ".repeat(20_000)}Unsubscribe: https://news.example/u`), "https://news.example/u");
+});
+
+test("pathological text is scanned in linear time", () => {
+  const inputs = [
+    "https://" + "www.".repeat(250_000),
+    "www." + "https://".repeat(120_000),
+    "https://" + "unsubscribe".repeat(90_000),
+    "unsubscribe".repeat(90_000),
+    "unsubscribe ".repeat(80_000) + "www.".repeat(50_000),
+    ("www.x" + "a".repeat(30) + " ").repeat(25_000),
+  ];
+  for (const text of inputs) {
+    const started = performance.now();
+    bodyUnsubscribeLink(text);
+    const ms = performance.now() - started;
+    assert.ok(ms < 250, `${text.slice(0, 20)}... took ${Math.round(ms)} ms`);
+  }
 });
 
 test("one-click connects to the pinned address, not a second lookup", async () => {

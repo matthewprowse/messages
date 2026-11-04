@@ -29,6 +29,7 @@ import { useTasks } from "./app-store/use-tasks";
 import { useThreadActions } from "./app-store/use-thread-actions";
 import { useThreadLoading } from "./app-store/use-thread-loading";
 import { useUnsubscribes } from "./app-store/use-unsubscribes";
+import { useLocalCopy } from "./local-copy/use-local-copy";
 
 export type { DraftPhase } from "./app-store/context";
 export type { ComposeDraft, ComposeDraftRequest, ComposeStatus, NewEmail } from "./app-store/compose";
@@ -84,6 +85,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   threadMapRef.current = threadMap;
 
   const { requestAutoDraft, schedulePreDraft } = usePreDraft({ userId, threadMapRef, stateRef });
+  const { showCopy } = useLocalCopy({ userId, state, rawDispatch });
 
   useEffect(() => { setHydrated(true); }, []);
 
@@ -111,10 +113,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     // Applied on top of whatever Realtime delivered while this loaded, with the state as it is now as the base for what changed meanwhile.
     const base = stateRef.current;
-    loadEverything()
-      .then((data) => {
+    // The copy kept on this device shows at once, and this load then wins over it, retried while the copy shows (lib/local-copy).
+    const copy = showCopy(userId, base, loadEverything);
+    copy.landed
+      .then(({ data, base: over }) => {
         if (cancelled) return;
-        rawDispatch({ type: "merged", base, data });
+        rawDispatch({ type: "merged", base: over, data, fresh: true });
         if (data.contactsLoaded) { contactsForRef.current = userId; setContactsReady(true); }
         // Replies still queued or failed come back after a reload. Not required: the inbox works without them.
         loadOutbox().then((rows) => { if (!cancelled) setPending((p) => mergePending(p, rows)); }).catch(() => undefined);
@@ -124,7 +128,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         rawDispatch({ type: "clear" });
         toast("Could not load your conversations.");
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; copy.cancel(); };
   }, [ready, userId]);
 
   // The list arrives with every contact. Only when that part failed are they loaded here, with retries.

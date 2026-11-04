@@ -5,6 +5,7 @@
 
 import type { CalendarEvent } from "@/lib/calendar";
 import { dayKey, fromKey } from "@/lib/dates";
+import { longDate } from "./dates";
 import type { DayTask } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +26,7 @@ export function WeekStrip({ days, byDay, tasksByDay, today, selectedKey, onSelec
       {days.map((key) => {
         const d = fromKey(key);
         const total = (byDay.get(key)?.length ?? 0) + (tasksByDay.get(key)?.length ?? 0);
-        const date = d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+        const date = longDate(d);
         return (
           <button
             key={key}

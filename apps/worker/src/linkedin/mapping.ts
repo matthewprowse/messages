@@ -5,6 +5,7 @@
 
 import { FIELD, type Field } from "@messages/crypto/fields";
 import { oneLine } from "../whatsapp/normalize";
+import { REAL_NAME, STAND_IN, type NameRank } from "../contacts/name-rank";
 import type { LinkedInConversation, LinkedInFile, LinkedInMessage, LinkedInPerson } from "./helper";
 
 export const DELETED_TEXT = "This message was deleted.";
@@ -16,6 +17,8 @@ export interface Sealer {
   address(value: string | null): Promise<string | null>;
   addressIndex(value: string): Promise<string>;
   chatIndex(value: string): Promise<string>;
+  /** A group's name index (threads.group_name_index). */
+  groupIndex(value: string): Promise<string>;
 }
 
 export function personName(p: LinkedInPerson): string {
@@ -101,8 +104,18 @@ export function previewOf(text: string, m: LinkedInMessage, conv: LinkedInConver
   return oneLine(fromSomeoneInGroup ? `${personName(m.sender!)}: ${said}` : said);
 }
 
+/** The kind of name personName gives (contacts.display_name_rank): a member's or page's name, or the stand-in. */
+export function personNameRank(p: LinkedInPerson): NameRank {
+  return personName(p) === PLACEHOLDER_NAME ? STAND_IN : REAL_NAME;
+}
+
 async function personJson(p: LinkedInPerson, seal: Sealer) {
-  return { urn: await seal.address(p.urn), urn_index: await seal.addressIndex(p.urn), display_name: personName(p) };
+  return {
+    urn: await seal.address(p.urn),
+    urn_index: await seal.addressIndex(p.urn),
+    display_name: await seal.text(FIELD.name, personName(p)),
+    name_rank: personNameRank(p),
+  };
 }
 
 /**
@@ -123,6 +136,7 @@ export async function ingestPayload(
   const unread = opts.unread && !fromMe;
   const group = isGroup(conv, meId);
   const chat = conv.urn || m.conversationUrn;
+  const groupName = group ? conv.title?.trim() || null : null;
   const meta: Record<string, string | boolean | null> = { chat: await seal.address(chat), from_me: fromMe, type: (m.format ?? "DEFAULT").toLowerCase() };
   if (unread) meta.receipt = "pending"; // LinkedIn hears it was read only when you open it in the app
   if (said.deleted) meta.deleted = true;
@@ -131,7 +145,8 @@ export async function ingestPayload(
     chat_id: await seal.address(chat),
     chat_index: await seal.chatIndex(chat),
     is_group: group,
-    group_name: group ? conv.title?.trim() || null : null,
+    group_name: await seal.text(FIELD.name, groupName),
+    group_name_index: groupName ? await seal.groupIndex(groupName) : null,
     status: conv.categories?.includes("ARCHIVE") && !opts.live ? "archived" : "inbox",
     resurface: opts.live && !fromMe,
     sent_at: new Date(m.deliveredAt || Date.now()).toISOString(),

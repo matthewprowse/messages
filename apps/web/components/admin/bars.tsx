@@ -66,7 +66,8 @@ export function Bars({ data, format = num, label }: { data: { label: string; val
           <span>{data.at(-1)?.label}</span>
         </div>
       </div>
-      {/* The hiding sits on a wrapper: browsers ignore sr-only's clip on a table, so its caption painted over the page. */}
+      {/* The hiding sits on a wrapper: browsers ignore sr-only's clip on a table, so its caption painted over the page. The Card is
+          relative, so this stays inside the scrolling column instead of stretching the whole page (a second scrollbar). */}
       <div className="sr-only">
         <table>
           <caption>{label}</caption>

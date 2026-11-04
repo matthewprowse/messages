@@ -6,7 +6,12 @@ them, and one retry is made at a lower temperature. Placeholders such as [Name],
 Deterministic and pure: no model, no network, no database. A miss is a prompt to look, never a block: the person
 reads the draft and decides. Matching is by a normal form (R 4 500 and R4,500 are the same amount, 2pm and 14:00
 the same time), and a date only counts as found when the same day and month are in the context, so "Friday" in a
-draft needs "Friday" (or a calendar event on a Friday) somewhere in what the model was given."""
+draft needs "Friday" (or a calendar event on a Friday) somewhere in what the model was given.
+
+The newest messages from the other side (and the one-tap decision worded from them) are their text, not evidence. A
+detail that is risky to repeat (an amount, an account or long number, a phone number, an email or web address) and is
+found only there is reported as not found and "echoed": the chips ask the person to check it, no retry is made (it is
+in the conversation, so asking again would only drop it), and a pre-draft carrying one is held for review."""
 
 from __future__ import annotations
 
@@ -29,6 +34,7 @@ MONTHS = {
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _MONTH = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
 
+IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?\b")
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 URL = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.I)
 PHONE = re.compile(r"(?<![\w.])\+?\d[\d ()\-]{7,}\d(?!\w)")
@@ -52,9 +58,13 @@ PLACEHOLDERS = (
 _DIGITS_ONLY = re.compile(r"^\[\s*\d+\s*\]$")
 
 
+HIGH_RISK = {"amount", "account", "phone", "email", "url"}  # what a payment redirect or phishing reply would repeat
+LONG_NUMBER = 8  # digits: a plain number this long reads as an account or reference number
+
+
 @dataclass
 class Fact:
-    kind: str  # amount, number, date, weekday, time, phone, email, url
+    kind: str  # amount, number, account, date, weekday, time, phone, email, url
     text: str  # as written in the draft
     keys: tuple[str, ...]  # normal forms; found when any is in the context
     found: bool = False
@@ -108,6 +118,7 @@ def extract(text: str) -> list[Fact]:
             facts.append(made)
             work = _blank(work, m.span())
 
+    take(IBAN, lambda m: Fact("account", m.group(0), ("acct:" + m.group(0).replace(" ", "").upper(),)))
     take(EMAIL, lambda m: Fact("email", m.group(0), ("email:" + m.group(0).lower(),)))
     take(URL, lambda m: Fact("url", m.group(0).rstrip(".,;:!?)"), (_url_key(m.group(0)),)))
     take(PHONE, lambda m: Fact("phone", m.group(0).strip(), ("tel:" + re.sub(r"\D", "", m.group(0))[-9:],)) if 9 <= len(re.sub(r"\D", "", m.group(0))) <= 15 else None)
@@ -164,31 +175,58 @@ def context_keys(texts: list[str]) -> set[str]:
     return keys
 
 
-def check(draft: str, texts: list[str]) -> dict[str, Any]:
+def high_risk(f: Fact) -> bool:
+    """A detail a fraudster would want a reply to repeat: money, an account, a way to contact or pay someone."""
+    return f.kind in HIGH_RISK or (f.kind == "number" and len(re.sub(r"\D", "", f.text)) >= LONG_NUMBER)
+
+
+def check(draft: str, texts: list[str], untrusted: list[str] | None = None) -> dict[str, Any]:
     """The report for a draft: its checkable details with whether each is in the context, and its placeholders.
-    {"facts": [{"kind", "text", "found"}], "placeholders": [...], "missing": n}."""
+    texts are what the draft may rightly state; untrusted is the other side's newest text, which backs a low-risk
+    detail (a day, a time) but never a high-risk one. {"facts": [{"kind", "text", "found", "echoed"?}],
+    "placeholders": [...], "missing": n, "echoed": n, "review": n}: echoed counts high-risk details found only in
+    untrusted, review every high-risk detail not found."""
     have = context_keys(texts)
+    theirs = context_keys(untrusted or [])
     seen: set[str] = set()
     facts: list[dict[str, Any]] = []
     for f in extract(draft):
         if f.text.lower() in seen:
             continue
         seen.add(f.text.lower())
-        facts.append({"kind": f.kind, "text": f.text[:60], "found": any(k in have for k in f.keys)})
+        found = any(k in have for k in f.keys)
+        risky = high_risk(f)
+        echoed = not found and risky and any(k in theirs for k in f.keys)
+        found = found or (not risky and any(k in theirs for k in f.keys))
+        facts.append({"kind": f.kind, "text": f.text[:60], "found": found, **({"echoed": True} if echoed else {}), **({"risky": True} if risky and not found else {})})
     facts = facts[:MAX_FACTS]
     holes = placeholders(draft)
-    return {"facts": facts, "placeholders": holes, "missing": sum(1 for f in facts if not f["found"]) + len(holes)}
+    review = sum(1 for f in facts if f.pop("risky", False))
+    return {
+        "facts": facts,
+        "placeholders": holes,
+        "missing": sum(1 for f in facts if not f["found"]) + len(holes),
+        "echoed": sum(1 for f in facts if f.get("echoed")),
+        "review": review,
+    }
 
 
 def needs_retry(report: dict[str, Any]) -> bool:
-    """True when something in the draft is not in the context or a placeholder was left: ask again, colder."""
-    return bool(report.get("missing"))
+    """True when something in the draft is in nothing it was written from, or a placeholder was left: ask again,
+    colder. A detail echoed from the other side's message is in the conversation, so asking again would not help."""
+    return int(report.get("missing") or 0) - int(report.get("echoed") or 0) > 0
+
+
+def held_for_review(report: dict[str, Any] | None) -> bool:
+    """True when the draft states a high-risk detail (an amount, account, phone, address or link) that nothing the
+    person wrote or keeps supports: a pre-draft like this is stored but not put in front of them unasked."""
+    return bool(report and report.get("review"))
 
 
 def retry_note(report: dict[str, Any]) -> str:
     """Appended to the prompt for the second try. The details are the model's own earlier output, listed so it
-    can leave them out; it is told to ask rather than guess."""
-    bad = [f["text"] for f in report.get("facts", []) if not f["found"]] + list(report.get("placeholders", []))
+    can leave them out; it is told to ask rather than guess. Details echoed from the conversation are not listed."""
+    bad = [f["text"] for f in report.get("facts", []) if not f["found"] and not f.get("echoed")] + list(report.get("placeholders", []))
     return (
         "\nA first draft contained details that are not in the conversation, the instruction or the saved facts above: "
         + "; ".join(bad[:8])

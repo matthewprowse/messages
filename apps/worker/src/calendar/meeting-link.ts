@@ -3,11 +3,23 @@
 // otherwise the first Zoom, Meet, Teams or Webex address in the notes or location is used, because most Zoom and
 // Teams invitations only put the link in the text. Pure.
 
-const MEETING_LINK = /https:\/\/(?:[\w-]+\.)?(?:zoom\.us|zoom\.com|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|webex\.com)\/[^\s<>"')]+/i;
+// Call services by host name: the host itself or any subdomain of it (us02web.zoom.us). Matched on the parsed host,
+// never on the text, so "https://evil.example/?u=https://zoom.us/j/1" is not a meeting.
+const MEETING_HOSTS = ["zoom.us", "zoom.com", "zoomgov.com", "meet.google.com", "teams.microsoft.com", "teams.live.com", "webex.com"];
+const HTTPS_LINK = /https:\/\/[^\s<>"')]+/gi;
 
-/** True for an https address of a known video-call service. */
+/** True for an https address of a known video-call service, with a path (a bare home page is not a call). */
 export function isMeetingUrl(url: string | null | undefined): url is string {
-  return !!url && /^https:\/\//i.test(url.trim()) && MEETING_LINK.test(url);
+  if (!url) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.pathname.length < 2) return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  return MEETING_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
 }
 
 /**
@@ -18,8 +30,11 @@ export function isMeetingUrl(url: string | null | undefined): url is string {
 export function findMeetingLink(own: (string | null | undefined)[], texts: (string | null | undefined)[]): string | null {
   const direct = own.find(isMeetingUrl);
   if (direct) return direct.trim();
-  const found = MEETING_LINK.exec(texts.map((t) => t ?? "").join("\n"))?.[0];
-  return found ? found.replace(/[.,;]+$/, "") : null;
+  for (const match of texts.map((t) => t ?? "").join("\n").matchAll(HTTPS_LINK)) {
+    const link = match[0].replace(/[.,;]+$/, "");
+    if (isMeetingUrl(link)) return link;
+  }
+  return null;
 }
 
 /**

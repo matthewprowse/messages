@@ -3,7 +3,9 @@
 // who write from that domain. Reads go through the signed-in browser client, so row-level security limits
 // them to the user's own rows.
 
+import { FIELD } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
+import { seal } from "./vault";
 import { openAddresses, openNestedThreads, openOrganizations } from "./open-rows";
 import { allRows, identities, isUuid } from "./contacts";
 import type { Provider } from "./types";
@@ -13,7 +15,7 @@ export interface CompanySummary {
   name: string;
   domain: string;
   summary: string | null;
-  /** The company's shared logo in the "logos" bucket; none shows a building icon. */
+  /** The company's shared logo (lib/logo-paths.ts says which bucket); none shows a building icon. */
   logoPath?: string;
   people: number;
   addresses: number;
@@ -104,9 +106,9 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
   return { id: o.id, name: o.name, domain: o.domain, summary: o.summary, logoPath: o.logo_path ?? undefined, people, conversations: sorted, lastAt: sorted[0]?.lastAt ?? null };
 }
 
-/** Row-level security lets you change only the name. */
+/** Row-level security lets you change only the name, which is sealed like every company name. */
 export async function renameCompany(id: string, name: string): Promise<void> {
-  const { data, error } = await supabase.from("organizations").update({ name }).eq("id", id).select("id");
+  const { data, error } = await supabase.from("organizations").update({ name: await seal(FIELD.name, name) }).eq("id", id).select("id");
   if (error) throw new Error(`Rename company failed (${error.code})`);
   if (data.length === 0) throw new Error("Rename company failed (no row)");
 }

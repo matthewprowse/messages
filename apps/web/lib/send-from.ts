@@ -3,9 +3,18 @@
 
 import type { Account, Channel, Contact, Message } from "./types";
 
+// The providers whose other addresses (aliases) can be the From, as the sync worker allows (apps/worker/src/send/from-address.ts,
+// sendableAliases). A generic IMAP account sends only from its own address: its SMTP server may accept any From, so an
+// address typed in could be someone else's (docs/PLAN.md, "Own address only").
+const ALIAS_PROVIDERS: ReadonlySet<string> = new Set(["gmail", "outlook", "icloud"]);
+
+/** True when accounts of this provider can send from addresses other than their own. */
+export const sendsFromAliases = (provider: string) => ALIAS_PROVIDERS.has(provider);
+
 /** Every address this account can send from, its own address first. Lowercase, no repeats. */
-export function sendAddressesOf(account: Pick<Account, "detail" | "sendAddresses">): string[] {
-  return [...new Set([account.detail, ...account.sendAddresses].map((a) => a.trim().toLowerCase()).filter(Boolean))];
+export function sendAddressesOf(account: Pick<Account, "provider" | "detail" | "sendAddresses">): string[] {
+  const aliases = sendsFromAliases(account.provider) ? account.sendAddresses : [];
+  return [...new Set([account.detail, ...aliases].map((a) => a.trim().toLowerCase()).filter(Boolean))];
 }
 
 /**
@@ -13,7 +22,7 @@ export function sendAddressesOf(account: Pick<Account, "detail" | "sendAddresses
  * conversation you started with no answer yet, the address your latest email went from. Else the default
  * you set for the account in Settings (preferred, when it is still one of its addresses), else its own address.
  */
-export function defaultFrom(account: Pick<Account, "detail" | "sendAddresses">, msgs: Message[], preferred?: string): string {
+export function defaultFrom(account: Pick<Account, "provider" | "detail" | "sendAddresses">, msgs: Message[], preferred?: string): string {
   const own = sendAddressesOf(account);
   // Newest first, skipping replies still sending: the latest email from someone else, else your latest.
   let latest: Message | undefined;

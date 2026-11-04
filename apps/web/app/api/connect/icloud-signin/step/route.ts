@@ -3,7 +3,7 @@
 // Instead, and, once the connector has made the app-specific password, checks it with iCloud and saves Mail, Calendar
 // and Reminders exactly as a pasted password and the Reminders sign-in are saved. The row is deleted once used.
 
-import { accountsReady, openJson, sealJson } from "@/lib/server/accounts";
+import { accountsReady, openRowJson, sealRowJson } from "@/lib/server/accounts";
 import { checkCalendar, checkMail, saveMailAndCalendar, startReminders } from "@/lib/server/icloud";
 import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
 import { untaken, type ICloudService, type SetupState } from "@/lib/icloud-signin";
@@ -54,9 +54,15 @@ export async function POST(request: Request) {
       if (!CODE.test(answer)) return fail(400, "Enter the 6-digit code from Apple.");
     }
     // Only if the step is still the one the person saw, so an answer never lands on a newer prompt.
+    let sealed: string;
+    try {
+      sealed = await sealRowJson(user.id, { table: "icloud_setups", column: "code" }, row.id, answer);
+    } catch {
+      return fail(500, "That could not be sent. Try again.");
+    }
     const { data: saved, error: saveError } = await admin
       .from("icloud_setups")
-      .update({ code: sealJson(answer) })
+      .update({ code: sealed })
       .eq("id", row.id)
       .eq("step", row.step)
       .eq("attempts", row.attempts)
@@ -96,8 +102,8 @@ async function finish(userId: string, setupId: string): Promise<SetupState> {
   let signIn: SignIn;
   let result: Result;
   try {
-    signIn = openJson<SignIn>(row.sign_in);
-    result = openJson<Result>(row.result);
+    signIn = await openRowJson<SignIn>(userId, { table: "icloud_setups", column: "sign_in" }, setupId, row.sign_in);
+    result = await openRowJson<Result>(userId, { table: "icloud_setups", column: "result" }, setupId, row.result);
   } catch {
     return end({ status: "failed", error: "The sign-in could not be read. Connect again." });
   }

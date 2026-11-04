@@ -125,6 +125,7 @@ export const SIGN_IN_FAILED = "Signing in to LinkedIn did not work. Try again.";
 export const SIGN_IN_EXPIRED = "That sign-in took too long. Sign in to LinkedIn again.";
 export const APP_EXPIRED = "The sign-in was not approved in the LinkedIn app in time. Try again.";
 export const CODE_TIMED_OUT = "The code was not entered in time. Try again.";
+export const SIGN_IN_PROXY = "Konva could not use that proxy. Check its address, or remove it, and sign in again.";
 
 /** What the sign-in form says when the sign-in ended for good. err is what the helper reported (or a timeout). */
 export function signInFailure(err: unknown): string {

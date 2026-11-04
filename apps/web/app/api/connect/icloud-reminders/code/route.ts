@@ -6,7 +6,7 @@
 //   step code, method app         Advanced Data Protection: action "continue" once Access iCloud Data on the Web
 //                                 is on, so the connector asks the person's device to approve
 
-import { accountsReady, sealJson } from "@/lib/server/accounts";
+import { accountsReady, sealRowJson } from "@/lib/server/accounts";
 import { admin, fail, foreignOrigin, limiter, noStore, readJson, signedInUser, textField } from "@/lib/server/request";
 
 export const runtime = "nodejs";
@@ -58,10 +58,17 @@ export async function POST(request: Request) {
     answer = (code ?? "").replace(/[\s-]/g, "");
     if (!CODE.test(answer)) return fail(400, "Enter the 6-digit code from Apple.");
   }
+  // Sealed under the person's own key and bound to this row's code (lib/server/handoff.ts); the connector opens it.
+  let sealed: string;
+  try {
+    sealed = await sealRowJson(user.id, { table: "instagram_sign_ins", column: "code" }, row.account_id, answer);
+  } catch {
+    return fail(500, "That could not be saved. Try again.");
+  }
   // Only if the step is still the one the person saw, so an answer never lands on a newer prompt.
   const { data: saved, error: saveError } = await admin
     .from("instagram_sign_ins")
-    .update({ code: sealJson(answer) })
+    .update({ code: sealed })
     .eq("account_id", row.account_id)
     .eq("user_id", user.id)
     .eq("step", row.step)

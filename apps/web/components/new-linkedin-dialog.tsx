@@ -12,6 +12,7 @@ import { markSubmitted } from "@/lib/analytics";
 import { supabase } from "@/lib/supabase";
 import { seal } from "@/lib/vault";
 import { sealAddress } from "@/lib/address-refs";
+import { outboxPlace } from "@/lib/outbox-places";
 import { useApp } from "@/lib/store";
 import { existingLinkedInChat, LINKEDIN_HINT, linkedinAccounts, parseLinkedInProfile, searchLinkedInContacts } from "@/lib/new-linkedin";
 import { ContactAvatar } from "@/components/primitives";
@@ -31,10 +32,12 @@ const ITEM = "p-2 [&>svg:last-child]:hidden";
  * links the new conversation to the row.
  */
 export async function queueLinkedIn(accountId: string, to: string, body: string, draftId?: string): Promise<string | null> {
-  const sealed = await seal(FIELD.body, body).catch(() => null);
-  const sealedTo = await sealAddress(to).catch(() => null);
+  // The id is chosen here so the body and recipient are sealed for this row alone (outbox-places.ts).
+  const id = crypto.randomUUID();
+  const sealed = await seal(FIELD.body, body, outboxPlace(id, "body")).catch(() => null);
+  const sealedTo = await sealAddress(to, outboxPlace(id, "to_addresses")).catch(() => null);
   const { data, error } = sealed === null || sealedTo === null ? { data: null, error: true } : await supabase.from("outbox")
-    .insert({ account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0, draft_id: draftId ?? null })
+    .insert({ id, account_id: accountId, to_addresses: [sealedTo], body: sealed, attachment_count: 0, draft_id: draftId ?? null })
     .select("id").single();
   if (error || !data) {
     toast("Could not send. Your message is still in the box.");

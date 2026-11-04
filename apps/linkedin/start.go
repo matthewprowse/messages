@@ -43,8 +43,10 @@ type startArgs struct {
 	Profile string `json:"profile"`
 	Text    string `json:"text"`
 	Token   string `json:"token"`
-	// Attachments are files the worker wrote under the temp folder. With them the text is optional.
-	Attachments []attachmentArg `json:"attachments,omitempty"`
+	// Attachments are files the worker wrote in AttachmentDir, its staging folder for this send. With them the
+	// text is optional.
+	Attachments   []attachmentArg `json:"attachments,omitempty"`
+	AttachmentDir string          `json:"attachmentDir,omitempty"`
 }
 
 // session is what a login was given, kept so a request the library does not offer can be made the way it
@@ -297,8 +299,11 @@ func (h *Helper) start(ctx context.Context, id int64, args startArgs) Response {
 	}
 	var files []attachment
 	if len(args.Attachments) > 0 {
-		var bad *Error
-		if files, bad = checkAttachments(args.Attachments, os.TempDir()); bad != nil {
+		root, bad := stagingRoot(args.AttachmentDir, os.TempDir())
+		if bad != nil {
+			return Fail(id, bad)
+		}
+		if files, bad = checkAttachments(args.Attachments, root); bad != nil {
 			return Fail(id, bad)
 		}
 		defer closeAttachments(files)
