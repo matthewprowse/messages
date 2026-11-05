@@ -36,8 +36,9 @@ else
     exit 1
   fi
   repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+  # Only GitHub Actions' own runs count: any installed app with checks:write could post a run with the right name.
   if ! passed="$(gh api "repos/$repo/commits/$commit/check-runs?per_page=100" \
-    --jq '[.check_runs[] | select(.status == "completed" and .conclusion == "success") | .name] | join(",")')"; then
+    --jq '[.check_runs[] | select(.status == "completed" and .conclusion == "success" and .app.slug == "github-actions") | .name] | join(",")')"; then
     echo "Could not read CI results for $commit from GitHub; not releasing." >&2
     exit 1
   fi
@@ -47,6 +48,11 @@ else
       *) echo "CI job \"$check\" has not passed on $commit; not releasing. Push it and wait for CI." >&2; exit 1 ;;
     esac
   done
+  # And main holds it: a green run on a branch nobody merged is not a release.
+  if ! git merge-base --is-ancestor "$commit" origin/main; then
+    echo "$commit is not on origin/main; not releasing. Merge it first." >&2
+    exit 1
+  fi
 fi
 
 # Images CI built, pinned by digest. Every image is resolved, so a connector turned on later on the VM is covered too.

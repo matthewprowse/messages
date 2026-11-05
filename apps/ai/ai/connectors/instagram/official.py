@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ... import log
+from ...ops.errors import trail
 from .backoff import Backoff, official_poll_wait, trouble
 from .hints import has_news, human_agent_on, safety_wait, webhooks_on
 from .graph import Graph, GraphError
@@ -162,7 +163,8 @@ class OfficialSync:
                     next_poll = self.clock() + wait(self.clock() - quiet_since, self.rand)
             except Exception as err:
                 t = trouble(err)
-                log.warn("instagram request failed", account=self.id, kind=t.kind, code=log.code_of(err))
+                # An unexpected error (a bug or an instagrapi change) gets its frames, so the line says where it broke.
+                log.warn("instagram request failed", account=self.id, kind=t.kind, code=log.code_of(err), **({"frames": trail(err)} if t.kind == "other" else {}))
                 self.store.emit(self.user_id, "sync_error", provider="instagram", code=t.kind)
                 if t.stop:
                     self.store.set_status(self.account, "error", t.detail)

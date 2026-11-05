@@ -41,8 +41,9 @@ export function rememberNoteMime(path: string, mime: string) {
 /**
  * An opened note file: the link to show or save it, and whether it is a blob made here (and so revoked when done).
  * tooLarge means a sealed file over this device's limit (open-limits.ts) was not downloaded, and there is no link.
+ * blob is the decrypted file behind a sealed one's link, for readers that must not depend on the link staying alive.
  */
-export type OpenedNoteFile = { url: string; sealed: boolean; tooLarge?: true };
+export type OpenedNoteFile = { url: string; sealed: boolean; tooLarge?: true; blob?: Blob };
 
 const OPEN_PARALLEL = 4;
 let opening = 0;
@@ -89,7 +90,8 @@ async function openNoteFile(path: string): Promise<OpenedNoteFile | null> {
   const joined = joinChunks(chunks, length);
   chunks.length = 0; // the pieces are not needed once joined; dropping them keeps the peak at two copies, not three
   const plain = await openSealed(path, joined);
-  return { url: URL.createObjectURL(new Blob([plain], { type: noteMimes.get(path) || "application/octet-stream" })), sealed: true };
+  const blob = new Blob([plain], { type: noteMimes.get(path) || "application/octet-stream" });
+  return { url: URL.createObjectURL(blob), sealed: true, blob };
 }
 
 async function openLimited(path: string): Promise<OpenedNoteFile | null> {

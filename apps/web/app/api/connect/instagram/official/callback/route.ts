@@ -46,7 +46,7 @@ async function readSignIn(request: Request): Promise<InstagramSignIn | null> {
   const raw = request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${INSTAGRAM_COOKIE}=`))?.slice(INSTAGRAM_COOKIE.length + 1);
   if (!raw) return null;
   try {
-    return await openHandoff<InstagramSignIn>(raw, "instagram_connect");
+    return await openHandoff<InstagramSignIn>(raw, "instagram_connect", request);
   } catch {
     return null;
   }

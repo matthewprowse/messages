@@ -131,7 +131,7 @@ def _two_factor(api: Any, waiter: CodeWait) -> None:
                     continue
                 except Exception as err:
                     if kind_of(err) == "network":
-                        raise failed_from(err) from None
+                        raise failed_from(err) from err
             note = "texts"
             continue
         if not answer.isdigit():
@@ -141,7 +141,7 @@ def _two_factor(api: Any, waiter: CodeWait) -> None:
         except SignInStopped:
             raise
         except Exception as err:
-            raise failed_from(err) from None
+            raise failed_from(err) from err
         if ok or getattr(api, "is_trusted_session", False):
             return
         wrong += 1
@@ -185,7 +185,7 @@ def sign_in(api: Any, codes: Codes, stop: threading.Event, **wait: Any) -> CodeW
         except (SignInFailed, SignInStopped):
             raise
         except Exception as err:
-            raise failed_from(err) from None
+            raise failed_from(err) from err
     except (SignInFailed, SignInStopped):
         codes.done()
         raise

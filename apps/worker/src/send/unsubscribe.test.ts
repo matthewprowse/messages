@@ -98,3 +98,14 @@ test("one-click does not follow redirects and counts 3xx as done", async () => {
   assert.equal((await oneClickUnsubscribe("https://list.example/u", { resolve: async () => "8.8.8.8", post: async () => 302 })).ok, true);
   assert.equal((await oneClickUnsubscribe("https://list.example/u", { resolve: async () => "8.8.8.8", post: async () => 500 })).ok, false);
 });
+
+test("one-click runs only on the https port", async () => {
+  const posts: string[] = [];
+  const post = async (target: URL) => {
+    posts.push(target.toString());
+    return 200;
+  };
+  assert.equal((await oneClickUnsubscribe("https://list.example:8443/u", { resolve: async () => "8.8.8.8", post })).reason, "not port 443");
+  assert.equal((await oneClickUnsubscribe("https://list.example:443/u", { resolve: async () => "8.8.8.8", post })).ok, true);
+  assert.equal(posts.length, 1);
+});

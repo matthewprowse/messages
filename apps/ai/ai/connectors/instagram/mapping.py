@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from ... import places
 from ...fields import BODY, FILENAME, NAME, PREVIEW, QUOTE
 
 SITE = "https://www.instagram.com"
@@ -335,8 +336,8 @@ def person_json(s: Sealer, p: Person) -> dict[str, Any]:
         "username": s.address(username),
         "username_index": s.address_index(username) if username else None,
         # Sealed: the database ranks them by which one it was given (a full name beats a handle), never by reading them.
-        "display_name": s.seal(NAME, (p.full_name or "").strip() or None),
-        "handle": s.seal(NAME, (p.username or "").strip() or None),
+        "display_name": s.seal(NAME, (p.full_name or "").strip() or None, places.CONTACT_NAME),
+        "handle": s.seal(NAME, (p.username or "").strip() or None, places.CONTACT_HANDLE),
     }
 
 
@@ -383,7 +384,7 @@ def payload(s: Sealer, t: Thread, item: Item, viewer_pk: str, *, live: bool, unr
         "chat_jid": s.address(t.id),
         "chat_index": s.chat_index(t.id),
         "is_group": t.is_group,
-        "group_name": s.seal(NAME, group),
+        "group_name": s.seal(NAME, group, places.THREAD_GROUP_NAME),
         "group_name_index": s.group_index(group) if group else None,
         "status": "archived" if t.archived and not live else "inbox",
         "resurface": live and not from_me,
@@ -394,10 +395,10 @@ def payload(s: Sealer, t: Thread, item: Item, viewer_pk: str, *, live: bool, unr
         "sender_address": s.address(sender.pk) if sender else None,
         "sender_index": s.address_index(sender.pk) if sender else None,
         "participants": [] if t.is_group else [person_json(s, p) for p in t.people],
-        "preview": s.seal(PREVIEW, one_line(preview)),
-        "body_text": s.seal(BODY, item.text or None),
+        "preview": s.seal(PREVIEW, one_line(preview), places.MESSAGE_PREVIEW),
+        "body_text": s.seal(BODY, item.text or None, places.MESSAGE_BODY),
         "provider_meta": meta,
-        "attachments": [{"filename": s.seal(FILENAME, item.media.filename), "mime_type": item.media.mime_type, "kind": item.media.kind, "size_bytes": None}] if item.media else [],
+        "attachments": [{"filename": s.seal(FILENAME, item.media.filename, places.ATTACHMENT_FILENAME), "mime_type": item.media.mime_type, "kind": item.media.kind, "size_bytes": None}] if item.media else [],
     }
 
 

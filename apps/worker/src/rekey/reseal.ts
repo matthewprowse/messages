@@ -36,6 +36,8 @@ export interface RekeyRing {
 
 /** The base64 of the sealed-file header ("e1b:" 00 FF "KN"): the first 10 characters are the same for every sealed file. */
 export const SEALED_B64_PREFIX = "ZTFiOgD/S0";
+/** How a bound sealed file ("e2b:") starts once base64 encoded, as rekey_page matches it (20261127130200). */
+export const SEALED_BOUND_B64_PREFIX = "ZTJiOg";
 
 /** What happened to the values a call looked at. */
 export interface Tally {
@@ -161,7 +163,7 @@ export function contextsFor(table: string, column: string, key: Record<string, u
 }
 
 /** Whether a string is sealed in a way this job handles. */
-export const looksSealed = (v: string) => v.startsWith(PREFIX) || v.startsWith(BOUND_PREFIX) || v.startsWith(CREDENTIAL_PREFIX) || v.startsWith(SEALED_B64_PREFIX);
+export const looksSealed = (v: string) => v.startsWith(PREFIX) || v.startsWith(BOUND_PREFIX) || v.startsWith(CREDENTIAL_PREFIX) || v.startsWith(SEALED_B64_PREFIX) || v.startsWith(SEALED_BOUND_B64_PREFIX);
 
 /**
  * The re-sealed version of one column's value (text, an array or JSON), and what happened to each sealed string in it.

@@ -32,3 +32,10 @@ export function encryptionOffError(env: Record<string, string | undefined>, name
   if (off.length === 0) return null;
   return `${off.join(" and ")} ${off.length === 1 ? "is" : "are"} set to false in production. Konva will not run with encryption off. Remove the setting (it defaults to on) or set it to true.`;
 }
+
+/**
+ * How long the browser holds the keys it fetched before the next use fetches them again (apps/web/lib/vault.ts).
+ * The team key rotation retires an old version only after at least this long (apps/worker/src/share/rotate.ts), so
+ * a tab that fetched keys just before a rotation cannot seal a value nobody can open.
+ */
+export const BROWSER_KEY_HOLD_MS = 10 * 60_000;

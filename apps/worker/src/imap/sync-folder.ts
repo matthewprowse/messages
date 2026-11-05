@@ -10,6 +10,7 @@ import { log } from "../log";
 import { saveFilesQuietly } from "../ingest/attachment-files";
 import { isFailure } from "../ingest/batch-rpc";
 import { parseEmail, type NormalizedEmail } from "../ingest/normalize-email";
+import { type AuthservTrust } from "../ingest/email-auth";
 import { storeEmails, type FolderRole } from "../ingest/store-email";
 import { oversizeSource, sizeRuns } from "./message-size";
 
@@ -26,6 +27,8 @@ export interface SyncCtx {
   account: AccountRow;
   tag: string;
   selfAddresses(): Set<string>;
+  /** Which Authentication-Results servers count for this account (ingest/email-auth.ts authservTrust). */
+  trustAuth: AuthservTrust;
   folderState(path: string): Promise<{ uid_validity: number | null; last_uid: number | null } | null>;
   saveFolderState(path: string, uidValidity: number, lastUid: number): Promise<void>;
   placeThreads(threadIds: string[], untrash?: boolean): Promise<number>;
@@ -118,7 +121,7 @@ export async function syncFolder(ctx: SyncCtx, client: ImapFlow, folder: Folder)
         const raw = run.big ? msg.headers && oversizeSource(msg.headers) : msg.source;
         if (!raw) continue;
         if (run.big) oversize++;
-        const mail = await parseEmail(raw, `${folder.path}:${uidValidity}:${msg.uid}`);
+        const mail = await parseEmail(raw, `${folder.path}:${uidValidity}:${msg.uid}`, ctx.trustAuth);
         pending.push({ uid: msg.uid, mail, seen: msg.flags?.has("\\Seen") ?? false });
         seenCount++;
         pendingBytes += mail.attachments.reduce((n, a) => n + a.content.length, 0);

@@ -7,8 +7,10 @@
 //   { workspaceId, key, version, versions: [{ version, key }], indexKey }
 // key and version are the current team key (what new values are sealed with). versions lists every version still
 // holding values, newest first (current included): a value sealed before the last rotation opens with an older one
-// until apps/worker/src/share/rotate.ts has re-sealed it, and a browser tries them in order. indexKey is the first
-// version's key, which the team's blind indexes always use (see TeamKeyring in packages/crypto/src/wrap.ts).
+// until apps/worker/src/share/rotate.ts has re-sealed it, and a browser tries them in order. indexHmacKey is the team's
+// index key itself, stored apart (team_keys.index_wrapped_key), used as it is; until the worker has stored it, indexKey
+// is the first version's data key instead and the browser derives the index key from it (TeamKeyring in
+// packages/crypto/src/wrap.ts). Exactly one of the two is set.
 // Asking also makes the next version first when a member has been removed since the current one was made.
 //
 // The user's own key comes the same way when it is being rotated (apps/worker/src/rekey): `key` is the current data key
@@ -62,7 +64,8 @@ interface TeamReply {
   key: string;
   version: number;
   versions: { version: number; key: string }[];
-  indexKey: string;
+  indexKey: string | null;
+  indexHmacKey: string | null;
 }
 
 async function teamOf(userId: string): Promise<TeamReply | null> {
@@ -76,7 +79,8 @@ async function teamOf(userId: string): Promise<TeamReply | null> {
       key: b64(ring.current.key),
       version: ring.current.version,
       versions: ring.all.map((k) => ({ version: k.version, key: b64(k.key) })),
-      indexKey: b64(ring.indexRoot.key),
+      indexKey: ring.indexRoot.derived ? null : b64(ring.indexRoot.key),
+      indexHmacKey: ring.indexRoot.derived ? b64(ring.indexRoot.key) : null,
     };
   } catch (err) {
     // Code only: the message could carry a row. The browser asks again on its next load.

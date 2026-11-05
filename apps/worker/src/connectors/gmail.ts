@@ -28,6 +28,11 @@ import { claimReady, composeOutgoing, linkNewEmails, linkThread, markFailed, set
 import { finishAction, NotReady } from "../send/actions";
 import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe-flow";
 import { normAddresses } from "../send/from-address";
+import { rememberSendable } from "../send/verified-aliases";
+import { authservTrust } from "../ingest/email-auth";
+
+// Only Google's own Authentication-Results count for a Gmail account (ingest/email-auth.ts).
+const TRUST_GOOGLE = authservTrust("gmail");
 import { GoogleApiError, signInRevoked, type GoogleClient } from "../google/client";
 import { GMAIL_UPLOAD_SEND, UPLOAD_TIMEOUT_MS, gmailUploadRequest } from "../google/gmail-upload";
 import { GMAIL_SCOPE, GoogleAuthError } from "../google/oauth";
@@ -172,6 +177,7 @@ export class GmailConnector {
       const stored = await Promise.all(sendable.map((a) => sealAddress(this.account.user_id, a)));
       must(await db.from("accounts").update({ send_addresses: stored }).eq("id", this.id), "save send addresses");
     }
+    rememberSendable(this.id, sendable); // what a send may use as From (send/verified-aliases.ts)
     this.selfAddresses = new Set([...sendable, ...normAddresses(entries.map((e) => e.sendAsEmail))]);
     log.info("gmail connected", { account: this.id, addresses: this.selfAddresses.size });
 
@@ -506,7 +512,7 @@ export class GmailConnector {
 
   private parse = async (msg: RawMessage): Promise<NormalizedEmail> => {
     const parsed = await simpleParser(Buffer.from(msg.raw ?? "", "base64url"), { skipImageLinks: true, skipTextToHtml: true });
-    const mail = normalizeEmail(parsed, `gmail:${msg.id}`);
+    const mail = normalizeEmail(parsed, `gmail:${msg.id}`, TRUST_GOOGLE);
     if (!parsed.date && msg.internalDate) mail.sentAt = new Date(Number(msg.internalDate));
     return mail;
   };

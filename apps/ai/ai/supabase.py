@@ -34,7 +34,7 @@ class Supabase:
             headers["Prefer"] = prefer
         data = json.dumps(body).encode() if body is not None else None
         res = POOL.request(method, url, data, headers, timeout=30)
-        if res.status >= 400:
+        if res.status >= 300:  # PostgREST answers an ambiguous embed with 300 and an error body, not rows
             code = None
             try:
                 code = json.loads(res.body or b"{}").get("code")

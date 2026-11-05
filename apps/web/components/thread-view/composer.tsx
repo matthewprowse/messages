@@ -48,7 +48,9 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
   const replyFrom = useReplyFrom(thread, msgs);
   // A lead from a portal enquiry is answered at their own address, never the portal's no-reply one.
   const replyAll = useReplyAll(thread, msgs, replyFrom, thread.draft?.replyTo);
-  const { contactById, profile } = useApp();
+  const { contactById, profile, draftText } = useApp();
+  // The draft as far as the AI has written it, shown read-only until the finished one replaces it.
+  const streamed = phase === "streaming" ? draftText[thread.id] : undefined;
   // Variables in templates and snippets come from the person you write to (not a group) and your own name.
   const vars = useMemo(() => varsFor(thread.isGroup ? undefined : contactById(thread.participantIds[0]), profile.name), [thread.isGroup, thread.participantIds, contactById, profile.name]);
   const snippets = useUserTemplates().items.filter((t) => t.kind === "snippet");
@@ -235,7 +237,7 @@ export function Composer({ thread, msgs, phase, onDraft, onDiscardDraft, onSend 
           ) : (
             <Textarea
               ref={ref}
-              value={text}
+              value={streamed ?? text}
               readOnly={phase === "streaming"}
               onChange={(e) => typeWithSnippets(e.target.value, e.target.selectionStart)}
               onPaste={files.onPaste}

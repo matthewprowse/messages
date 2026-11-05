@@ -12,9 +12,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from ai.connectors.icloud_reminders import backoff, mapping, signin
-from ai.connectors.icloud_reminders.run import Accounts
+from ai.connectors.icloud_reminders.run import Accounts, Running, accounts_to_wake
 from ai.connectors.icloud_reminders.session import SessionDir, _stem
 from ai.connectors.icloud_reminders.store import SignInRow, Store
+from ai.connectors.icloud_reminders import sync as sync_module
 from ai.connectors.icloud_reminders.sync import REASONS, AccountSync, update_failure
 from ai.connectors.instagram.sealing import open_json, seal_json
 from ai.fields import TASK_LIST, TASK_NOTES, TASK_TITLE
@@ -444,7 +445,7 @@ class FakeDb:
 
 
 class FakeVault:
-    def seal(self, user_id, field, value):
+    def seal(self, user_id, field, value, place="", row=None):
         return None if value is None else f"sealed:{field}:{value}"
 
     def credential_key_for(self, user_id):
@@ -516,12 +517,13 @@ class Storing(unittest.TestCase):
         self.assertEqual([c[:2] for c in db.calls], [("delete", "tasks"), ("update", "task_updates")])
         self.assertEqual(db.calls[0][2], {"id": "eq.t", "user_id": "eq.u"})
 
-    def test_a_create_names_the_task_it_made_and_an_edit_settles_alone(self):
+    def test_a_create_settles_without_a_task_id_and_an_edit_settles_alone(self):
+        # task_updates_target_check: a create's row must keep task_id empty, or the database refuses the update.
         db = FakeDb()
         store = real_store(db)
-        store.finish_update({"id": "up", "user_id": "u", "task_id": None, "action": "create"}, task_id="t9")
+        store.finish_update({"id": "up", "user_id": "u", "task_id": None, "action": "create"})
         store.finish_update({"id": "up2", "user_id": "u", "task_id": "t", "action": "update"})
-        self.assertEqual(db.calls[0][3], {"status": "done", "error": None, "task_id": "t9"})
+        self.assertEqual(db.calls[0][3], {"status": "done", "error": None})
         self.assertEqual([c[:2] for c in db.calls], [("update", "task_updates"), ("update", "task_updates")])
 
     def test_claimed_changes_are_merged_oldest_first_and_text_opens(self):
@@ -641,7 +643,6 @@ class FakeStore:
         self.updates = list(updates)
         self.finished = []
         self.superseded = []
-        self.made = {}
         self.statuses = []
         self.details = []
 
@@ -677,10 +678,8 @@ class FakeStore:
     def task_id_of(self, account_id, provider_id):
         return f"task-of-{provider_id}"
 
-    def finish_update(self, row, error=None, code=None, *, task_id=None):
+    def finish_update(self, row, error=None, code=None):
         self.finished.append((row["id"], error, code))
-        if task_id:
-            self.made[row["id"]] = task_id
 
     def finish_superseded(self, row):
         self.superseded.append(row["id"])
@@ -704,6 +703,20 @@ class Clock:
 
     def __call__(self):
         return self.t
+
+
+class QuickStop(threading.Event):
+    """A stop event whose backoff waits (a minute or more) return at once and are recorded; short polls run as usual."""
+
+    def __init__(self):
+        super().__init__()
+        self.waits = []
+
+    def wait(self, timeout=None):
+        if timeout is not None and timeout >= 30:
+            self.waits.append(timeout)
+            return self.is_set()
+        return super().wait(timeout)
 
 
 def account_sync(store, clock=None, **kw):
@@ -897,7 +910,7 @@ class Editing(unittest.TestCase):
         self.assertEqual((made.list_id, made.title, made.desc, made.priority, made.all_day, made.time_zone), ("List/2", "Pay rent", "Landlord", 1, True, None))
         self.assertEqual(made.due_date, datetime(2026, 10, 30, tzinfo=timezone.utc))
         self.assertEqual(store.upserts, [["Reminder/new1"]])
-        self.assertEqual((store.finished, store.made), ([("up1", None, None)], {"up1": "task-of-Reminder/new1"}))
+        self.assertEqual(store.finished, [("up1", None, None)], "settled without a task id, which the database refuses on a create")
 
     def test_a_new_task_without_a_reminders_list_goes_in_the_first_and_a_timed_due_is_an_instant(self):
         service = FakeReminders(lists=[list_("List/1", "Work")])
@@ -1027,6 +1040,38 @@ class Connecting(unittest.TestCase):
         self.assertEqual((store.saved, moved), ([], []))
         sync.dir.close()
 
+    def test_an_unreachable_icloud_is_tried_again_before_asking(self):
+        api = FakeApi(valid=["123456"])
+        failures = [PyiCloudConnectionException("Request failed to iCloud"), PyiCloudConnectionException("Request failed to iCloud")]
+        api.authenticate = lambda: failures and (_ for _ in ()).throw(failures.pop(0))
+        sync, store, _, made = self.sync({"kind": "web", "appleId": "a@b.com", "password": "pw"}, api=api)
+        store.db = FakeDb(first={"code": seal_json("123456", KEY)})
+        store.encryption_key = KEY
+        sync.stop = QuickStop()
+        self.assertEqual(sync.connect(), (api, "service"))
+        self.assertEqual(len(made), 3, "a fresh client for each try")
+        self.assertEqual(len(sync.stop.waits), 2)
+        self.assertNotIn("error", [status for status, _ in store.statuses])
+        self.assertEqual(sync.backoff.failures, 0)
+        sync.dir.close()
+
+    def test_icloud_never_answering_gives_up_after_a_few_tries(self):
+        api = FakeApi(login_error=PyiCloudConnectionException("Request failed to iCloud"))
+        sync, store, _, made = self.sync({"kind": "web", "appleId": "a@b.com", "password": "pw"}, api=api)
+        sync.stop = QuickStop()
+        self.assertIsNone(sync.connect())
+        self.assertEqual(len(made), sync_module.UNREACHABLE_TRIES)
+        self.assertEqual(store.statuses[-1], ("error", signin.FAILED["network"]))
+        sync.dir.close()
+
+    def test_a_refused_password_is_not_tried_again(self):
+        api = FakeApi(login_error=PyiCloudFailedLoginException("bad"))
+        sync, store, _, made = self.sync({"kind": "web", "appleId": "a@b.com", "password": "pw"}, api=api)
+        sync.stop = QuickStop()
+        self.assertIsNone(sync.connect())
+        self.assertEqual((len(made), sync.stop.waits), (1, []))
+        sync.dir.close()
+
     def test_a_saved_session_is_picked_up_with_no_password(self):
         api = FakeApi()
         api.requires_2fa, api.is_trusted_session = False, True
@@ -1098,3 +1143,40 @@ class LoopWait(unittest.TestCase):
         self.assertEqual(loop_wait(2 * IDLE_AFTER), SLOW_S)
         self.assertEqual(loop_wait(1000), SLOW_S)
         self.assertEqual(loop_wait(0), LOOP_S)  # a claimed row sets the count back to 0
+
+
+class Waking(unittest.TestCase):
+    """A change the sync worker claims wakes its account at once, instead of waiting up to 30 seconds."""
+
+    RUNNING = {"acc1": "u1", "acc2": "u1", "acc3": "u2"}
+
+    def test_a_new_task_wakes_its_account(self):
+        self.assertEqual(accounts_to_wake([{"account_id": "acc3", "user_id": "u2", "tasks": None}], self.RUNNING), {"acc3"})
+
+    def test_a_change_to_a_task_wakes_the_task_account(self):
+        self.assertEqual(accounts_to_wake([{"account_id": None, "user_id": "u1", "tasks": {"account_id": "acc2"}}], self.RUNNING), {"acc2"})
+
+    def test_a_change_whose_task_is_gone_wakes_every_account_of_its_user(self):
+        self.assertEqual(accounts_to_wake([{"account_id": None, "user_id": "u1", "tasks": None}], self.RUNNING), {"acc1", "acc2"})
+
+    def test_another_provider_s_change_wakes_nothing(self):
+        self.assertEqual(accounts_to_wake([{"account_id": "google-tasks", "user_id": "u1", "tasks": None}], self.RUNNING), set())
+        self.assertEqual(accounts_to_wake([{"account_id": None, "user_id": "u1", "tasks": {"account_id": "todo"}}], self.RUNNING), set())
+
+    def test_the_runner_sets_the_wake_of_the_account_with_a_claimed_change(self):
+        accounts = Accounts(SimpleNamespace(claimed_targets=lambda: [{"account_id": "acc1", "user_id": "u1", "tasks": None}]))
+        woken, idle = threading.Event(), threading.Event()
+        accounts.running = {
+            "acc1": Running(threading.Thread(), threading.Event(), "t", user_id="u1", wake=woken),
+            "acc2": Running(threading.Thread(), threading.Event(), "t", user_id="u1", wake=idle),
+        }
+        accounts.wake_claimed()
+        self.assertTrue(woken.is_set())
+        self.assertFalse(idle.is_set())
+
+    def test_stopping_an_account_wakes_it_so_it_stops_at_once(self):
+        accounts = Accounts(SimpleNamespace())
+        stop, wake = threading.Event(), threading.Event()
+        accounts.running = {"acc1": Running(threading.Thread(), stop, "t", user_id="u1", wake=wake)}
+        accounts.halt("acc1")
+        self.assertTrue(stop.is_set() and wake.is_set())

@@ -19,11 +19,14 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Document requests only: not static files, media, images, API routes (JSON), the manifest, or soft-navigation
-  // (RSC) fetches, which carry no HTML to put a nonce on.
+  // Document requests only: not the API routes (JSON), Next's own static files, the files in public/ and the
+  // generated ones (manifest, robots, sitemap, icons), or soft-navigation (RSC) fetches, which carry no HTML to put a
+  // nonce on. Named by path, never by a file-like ending: a dynamic page such as /inbox/<id> accepts any segment, so
+  // excluding "*.pdf" would have served that page with no policy at all (security audit 2026-11-04). Keep this list and
+  // lib/csp.ts STATIC_PATHS the same; csp.test.ts checks them against each other.
   matcher: [
     {
-      source: "/((?!api|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|xml|json|map|js|css|woff2?|ttf|m4a|mp3|mp4|wav|webm|ogg|pdf)$).*)",
+      source: "/((?!api/|_next/static/|_next/image|favicon\\.ico$|manifest\\.webmanifest$|robots\\.txt$|sitemap\\.xml$|og\\.png$|sw\\.js$|sw-rules\\.js$|icon\\.svg$|icon-192\\.png$|icon-512\\.png$|icon-maskable-192\\.png$|icon-maskable-512\\.png$|apple-touch-icon\\.png$|demo/|logos/|voices/).*)",
       missing: [
         { type: "header", key: "rsc" },
         { type: "header", key: "next-router-prefetch" },

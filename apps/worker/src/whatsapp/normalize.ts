@@ -26,8 +26,8 @@ export type Described =
       mentions: string[];
       /** A type not shown here yet: the text says to open WhatsApp. */
       unsupported?: boolean;
-      /** A call line from the call log; `missed` when nobody picked up. Shown as a line, not a bubble. */
-      call?: { video: boolean; missed: boolean };
+      /** A call line from the call log; `missed` when nobody picked up, `declined` when it was turned down, `seconds` how long an answered one lasted. Shown as a line, not a bubble. */
+      call?: CallInfo;
       /** A poll: its vote key (needed to read the votes that follow) and whether several options may be picked. */
       poll?: { secret: Uint8Array | null; multi: boolean };
     }
@@ -105,7 +105,7 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
   let preview = "";
   let media: MediaInfo | null = null;
   let unsupported = false;
-  let call: { video: boolean; missed: boolean } | undefined;
+  let call: CallInfo | undefined;
   let poll: { secret: Uint8Array | null; multi: boolean } | undefined;
   let context: proto.IContextInfo | null | undefined;
 
@@ -203,10 +203,14 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
       text = `Scheduled Call: ${content.scheduledCallCreationMessage?.title ?? ""}`;
       break;
     case "callLogMesssage": {
-      const video = !!content.callLogMesssage?.isVideo;
-      const missed = content.callLogMesssage?.callOutcome === CALL_MISSED;
-      text = missed ? (video ? "Missed Video Call" : "Missed Voice Call") : video ? "Video Call" : "Voice Call";
-      call = { video, missed };
+      const log = content.callLogMesssage!;
+      const video = !!log.isVideo;
+      const missed = log.callOutcome === CALL_MISSED;
+      const declined = log.callOutcome === CALL_DECLINED;
+      const seconds = Number(log.durationSecs ?? 0);
+      const kind = video ? "Video Call" : "Voice Call";
+      text = missed ? `Missed ${kind}` : declined ? `Declined ${kind}` : seconds > 0 ? `${kind}, ${callLength(seconds)}` : kind;
+      call = { video, missed, ...(declined ? { declined } : {}), ...(seconds > 0 ? { seconds } : {}) };
       break;
     }
     case "interactiveMessage":
@@ -281,6 +285,23 @@ export function describe(raw: proto.IMessage | null | undefined): Described {
 
 /** callLogMesssage.callOutcome for a call nobody answered (proto.Message.CallLogMessage.CallOutcome.MISSED). */
 export const CALL_MISSED = 1;
+/** callLogMesssage.callOutcome for a call turned down (proto.Message.CallLogMessage.CallOutcome.REJECTED). */
+export const CALL_DECLINED = 3;
+
+/** A call line as stored in provider_meta.call. */
+export interface CallInfo {
+  video: boolean;
+  missed: boolean;
+  declined?: boolean;
+  seconds?: number;
+}
+
+/** How long a call lasted, as the text kept for it: "45 Sec", "3 Min", "1 Hr 5 Min". */
+export function callLength(seconds: number): string {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} Sec`;
+  const min = Math.round(seconds / 60);
+  return min < 60 ? `${min} Min` : `${Math.floor(min / 60)} Hr${min % 60 ? ` ${min % 60} Min` : ""}`;
+}
 
 /** A poll as the text kept for it: the question, then one bullet per option. polls.ts reads it back. */
 export function pollText(name: string, options: string[]): string {

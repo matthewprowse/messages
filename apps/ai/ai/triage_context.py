@@ -174,7 +174,7 @@ class ContextMixin:
         try:
             heads = {
                 r["id"]: r
-                for r in self.db.select("messages", {"select": "id,auth:provider_meta->auth,reply_to_domain:provider_meta->>reply_to_domain", "id": in_list([m["id"] for m in emails])})
+                for r in self.db.select("messages", {"select": "id,auth:provider_meta->auth,reply_to_domain:provider_meta->>reply_to_domain,name_mismatch:provider_meta->name_mismatch", "id": in_list([m["id"] for m in emails])})
                 if isinstance(r, dict) and r.get("id")
             }
             contact_ids = sorted({m["sender_contact_id"] for m in emails if m.get("sender_contact_id")})
@@ -187,7 +187,7 @@ class ContextMixin:
             head = heads.get(m["id"]) or {}
             name = self.vault.open(m["user_id"], NAME, names.get(m.get("sender_contact_id"))) or ""
             reply_to_domain = head.get("reply_to_domain") if isinstance(head.get("reply_to_domain"), str) else None
-            kind = header_suspicion(name, m.get("sender_address"), head.get("auth"), reply_to_domain)
+            kind = header_suspicion(name, m.get("sender_address"), head.get("auth"), reply_to_domain, head.get("name_mismatch"))
             if kind:
                 out[m["id"]] = kind
         return out

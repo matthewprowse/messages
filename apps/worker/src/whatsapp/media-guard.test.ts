@@ -105,3 +105,8 @@ test("a web stream past the cap is cancelled", async () => {
   assert.equal(await readCapped(body, 25), null);
   assert.equal(cancelled, true);
 });
+
+test("a path starting with two slashes is refused: it is another host to a URL parser", () => {
+  assert.equal(safeDirectPath("//evil.com/x"), null);
+  assert.equal(safeDirectPath("//v/t62.7118-24/x_n.enc"), null);
+});

@@ -347,7 +347,8 @@ class Store:
         return self.db.select(
             "outbox",
             {
-                "select": "id,user_id,body,attachment_count,thread_id,threads!inner(account_id,channel,user_id,provider_thread_id,is_group,group_name)",
+                # outbox has two links to threads (thread_id and for_thread_id), so the embed names the one it means.
+                "select": "id,user_id,body,attachment_count,thread_id,threads!outbox_thread_id_fkey!inner(account_id,channel,user_id,provider_thread_id,is_group,group_name)",
                 "status": "eq.queued",
                 "threads.account_id": f"eq.{account_id}",
                 "threads.channel": "eq.instagram",

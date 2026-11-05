@@ -9,6 +9,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from . import log
 from .gemini_estimate import read_usage
 from .gemini_types import BATCH_DISCOUNT, BATCH_ENDPOINT, OPERATION_ENDPOINT, GeminiError, Usage, UsageContext
 from .http import POOL
@@ -70,8 +71,10 @@ class BatchMixin:
             return "running", {}
         state = str((data.get("metadata") or {}).get("state") or "")
         if "FAILED" in state or "CANCELLED" in state:
+            self.batch_delete(job)
             return "failed", {}
         if "EXPIRED" in state:
+            self.batch_delete(job)
             return "expired", {}
         if not data.get("done") and "SUCCEEDED" not in state:
             return "running", {}
@@ -82,7 +85,22 @@ class BatchMixin:
             key = str(((row or {}).get("metadata") or {}).get("key") or "")
             if key:
                 out[key] = row.get("response") or {}
+        self.batch_delete(job)
         return "done", out
+
+    def batch_delete(self, job: str) -> bool:
+        """Deletes a finished batch job, so the message text it was sent with and the answers do not stay on Google's
+        side for the job's retention period. Best effort: a job that could not be deleted expires on its own, and the
+        answers were already read. True when the job is gone."""
+        try:
+            res = POOL.request("DELETE", OPERATION_ENDPOINT.format(name=job), None, {"x-goog-api-key": self._key}, timeout=30)
+        except (OSError, http.client.HTTPException) as err:
+            log.warn("batch not deleted", code=log.code_of(err))
+            return False
+        if res.status >= 300 and res.status != 404:
+            log.warn("batch not deleted", code=f"http_{res.status}")
+            return False
+        return True
 
     def batch_settle(self, model: str, ctx: UsageContext, answer: dict[str, Any]) -> Usage:
         """Records a batch answer's usage at the batch price (half) and returns it."""

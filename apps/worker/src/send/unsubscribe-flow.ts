@@ -53,9 +53,11 @@ export async function carryOutUnsubscribe(
       return;
     }
     // Their mail is found by the sender's index: the database matches on that, not the address.
-    senderIndex = row.sender_index ?? (await addressIndex(await keysFor(row.user_id), (await open(row.user_id, FIELD.address, row.sender_address)) ?? ""));
-    // The From line can be forged, so of their latest emails, the newest one their own domain vouched for (DMARC or
-    // DKIM pass) is trusted first.
+    const senderAddress = (await open(row.user_id, FIELD.address, row.sender_address)) ?? "";
+    senderIndex = row.sender_index ?? (await addressIndex(await keysFor(row.user_id), senderAddress));
+    // The From line can be forged, so of their latest emails, the newest one their own domain vouched for (DMARC, or
+    // DKIM signed by the From domain's own organisation) is trusted first.
+    const senderDomain = senderAddress.includes("@") ? senderAddress.slice(senderAddress.lastIndexOf("@") + 1) : null;
     const latest = pickUnsubscribeSource(
       must(
         await db
@@ -68,6 +70,7 @@ export async function carryOutUnsubscribe(
           .limit(UNSUBSCRIBE_SOURCES),
         "load unsubscribe header",
       ),
+      senderDomain,
     );
     const options = parseListUnsubscribe(await open(row.user_id, FIELD.unsubscribe, latest?.list_unsubscribe));
 

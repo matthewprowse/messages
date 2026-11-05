@@ -1,9 +1,10 @@
 """The cost and safety layer around Triage.run_once, kept out of triage.py: claims, persisted back-off and the Batch API
-for the first sort of a newly connected account. A mixin of Triage (db, gemini, model, _backoff and _ask_model are there).
+for old mail. A mixin of Triage (db, gemini, model, _backoff and _ask_model are there).
 
 - Claims: the messages a run will pay the model for are claimed first (claims.py), so a second AI worker skips them.
 - Persisted back-off: a message the model keeps refusing stays backed off across restarts (retry_store.py).
-- Batch: old mail of someone still in the setup allowance is sent as one half price batch instead of live calls. Such
+- Batch: mail over OLD_S old (the first sort of a new account, or a backlog after the worker was down) is sent as one
+  half price batch instead of live calls, whoever it belongs to: nobody is waiting on mail that old to be sorted. Such
   messages are held out of the next looks with messages.triage_hold_until (a database filter, so thousands can wait
   without a long URL), and their answers are served by _ask when they come back. Anything that cannot be batched, or
   whose batch fails, is asked the ordinary way. Live mail is never batched."""
@@ -89,9 +90,6 @@ class BatchTriageMixin:
 
     def _batch_defer(self, ctx: Any, chunk: list[dict[str, Any]]) -> bool:
         if self.batches is None or getattr(self, "_backfilling", False) or not all(old_enough(m.get("sent_at")) for m in chunk):
-            return False
-        in_setup = getattr(self.gemini, "in_setup", None)
-        if in_setup is None or not in_setup(chunk[0]["user_id"]):
             return False
         self._batch_pending.append((ctx, chunk))
         return True

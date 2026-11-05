@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from ... import log
+from ... import log, places
 from ...analytics import Analytics, event
 from ...fields import TASK_LIST, TASK_NOTES, TASK_TITLE
 from ...supabase import Supabase, SupabaseError, in_list
@@ -128,9 +128,9 @@ class Store:
                 **row,
                 "user_id": user,
                 "account_id": account["id"],
-                "title": self.vault.seal(user, TASK_TITLE, row["title"]) or "",
-                "notes": self.vault.seal(user, TASK_NOTES, row["notes"]),
-                "list_name": self.vault.seal(user, TASK_LIST, row["list_name"]),
+                "title": self.vault.seal(user, TASK_TITLE, row["title"], places.TASK_TITLE) or "",
+                "notes": self.vault.seal(user, TASK_NOTES, row["notes"], places.TASK_NOTES),
+                "list_name": self.vault.seal(user, TASK_LIST, row["list_name"], places.TASK_LIST_NAME),
             }
             for row in rows
         ]
@@ -157,6 +157,12 @@ class Store:
             self.db.delete("tasks", {"account_id": f"eq.{account_id}", "list_id": in_list(list_ids)})
 
     # -- ticks ------------------------------------------------------------------------------------------
+
+    def claimed_targets(self) -> list[dict[str, Any]]:
+        """Every change the sync worker has claimed and not settled, by its account, its task's account and its user.
+        One small read for the whole process, which the runner makes every second and a half to wake the accounts
+        that have one waiting (Accounts.wake_claimed), so a change is made in seconds rather than at the next pass."""
+        return self.db.select("task_updates", {"select": "account_id,user_id,tasks(account_id)", "status": "eq.updating", "limit": "200"})
 
     def claimed_updates(self, account_id: str, user_id: str) -> list[dict[str, Any]]:
         """This account's changes the sync worker has claimed ("updating"), oldest first, so they reach iCloud
@@ -192,10 +198,11 @@ class Store:
         row = self.db.first("tasks", {"select": "id", "account_id": f"eq.{account_id}", "provider_task_id": f"eq.{provider_id}"})
         return (row or {}).get("id")
 
-    def finish_update(self, row: dict[str, Any], error: str | None = None, code: str | None = None, *, task_id: str | None = None) -> None:
+    def finish_update(self, row: dict[str, Any], error: str | None = None, code: str | None = None) -> None:
         """Settles a claimed change: done, or failed with a reason fit to show in the app. A tick writes its
         task's status and completed_at first, so the app has the new status by the time it hears the row
-        settle; a delete removes its task row first; a create names the task it made (task_id). The text
+        settle; a delete removes its task row first. A create's row keeps task_id empty, as the database
+        requires (task_updates_target_check): the task it made is already stored as a synced one. The text
         of an edit was stored by the connector already. A row already settled is left alone."""
         mine = {"id": f"eq.{row['id']}", "status": "eq.updating"}
         if error is not None:
@@ -213,8 +220,6 @@ class Store:
             )
         elif row["action"] == "delete" and row.get("task_id"):
             self.db.delete("tasks", {"id": f"eq.{row['task_id']}", "user_id": f"eq.{row['user_id']}"})
-        elif row["action"] == "create" and task_id:
-            patch["task_id"] = task_id
         if self.db.update("task_updates", mine, patch):
             self.emit(row["user_id"], "task_update", provider=PROVIDER, action=row["action"], outcome="done")
 

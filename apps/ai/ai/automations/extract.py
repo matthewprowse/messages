@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from ..gemini import Gemini
 from ..gemini_types import UsageContext
@@ -66,8 +67,27 @@ def check(raw: Any, fields: tuple[tuple[str, str], ...], mail: str) -> dict[str,
             if not phone or phone[-9:] not in digits:
                 continue
             value = phone
+        elif URL_RE.search(value):
+            # A link lands in the person's task list, so it must be one the email itself carried, over https, to a
+            # named host: never one the model made up or a bare address.
+            found = URL_RE.search(value)
+            link = found.group(0) if found else ""
+            if link not in mail or not acceptable_link(link):
+                continue
+            value = link
         out[key] = value
     return out or None
+
+
+URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
+
+
+def acceptable_link(link: str) -> bool:
+    """https, a host with a dot and no sign-in part or port, so a link cannot smuggle credentials or point into a
+    network by number."""
+    parsed = urlparse(link)
+    host = parsed.hostname or ""
+    return parsed.scheme == "https" and "." in host and not re.fullmatch(r"[\d.]+|\[.*\]", host) and parsed.username is None and parsed.port is None
 
 
 def extract(gemini: Gemini, model: str, usage: UsageContext, fields: tuple[tuple[str, str], ...], sender: str | None, subject: str | None, body: str) -> dict[str, str] | None:

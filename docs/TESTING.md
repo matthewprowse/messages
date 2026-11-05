@@ -1,7 +1,7 @@
 # Browser and Screen Tests
 
 The plan for testing every page and feature of Konva in a real browser, on every kind of screen, without anything ever
-leaving for a real person. Written 3 November 2026. Status: agreed in part; one open decision is at the end.
+leaving for a real person. Written 3 November 2026. Status: agreed; Phases 0, 1 and 2 done. Phase 3 is incomplete and deferred to the week of 9 November 2026. One open decision is at the end.
 
 ## Where We Are
 
@@ -185,16 +185,175 @@ Estimated as Claude-built, with you reviewing.
 
 | Phase | What | Time |
 | --- | --- | --- |
-| 0 | Apply every migration to Konva Test, set its keys and settings, and seed a test user. | Half a day |
-| 1 | Safety harness first: the production guard, the browser firewall, the fake worker, fixtures and seeding. Then sign in, inbox and one conversation on the core three. | 1 day |
-| 2 | Screen tests: the setup and the fake store, then the 40 components that matter most (composer, thread row, filters, dialogs, pickers, calendar grid). | 1 to 2 days |
-| 3 | Browser tests for every area in the list above, on the core three. | 3 to 4 days |
+| 0 | Done 4 November 2026: see Konva Test Setup below. | Half a day |
+| 1 | Done 4 November 2026: see Phase 1 below. | 1 day |
+| 2 | Done 4 November 2026: see Phase 2 below. | 1 to 2 days |
+| 3 | Incomplete, deferred to the week of 9 November 2026: see Phase 3 below. | 3 to 4 days |
 | 4 | All screen sizes, light and dark, visual checks, accessibility and the text rules. | 1 to 2 days |
 | 5 | PWA, offline, realtime and the launch time budget. CI jobs and the nightly run. | 1 day |
 | 6 | Optional: Live Checks. A real test Gmail and WhatsApp that you own, sending only to each other, started only by you. | 1 day |
 
 After that, every new feature arrives with its screen tests and its browser test, the same way logic arrives with its
 unit tests today. This gets added to AGENTS.md.
+
+## Konva Test Setup
+
+Done 4 November 2026 (Phase 0).
+
+- **Project:** "Konva Test", `ammzthqpycofwvxtpyhx`, eu-west-1, Free plan.
+- **Schema:** the 201 committed migrations plus `20261124100000_public_company_logos`. That gives 117 tables, every one
+  with row-level security on, the five storage buckets, and the two nightly prune jobs. The 20 migrations another session
+  had not yet committed (from `20261124100100` on) are not applied; apply them once they are committed.
+- **Supabase's auto-RLS event trigger** (`rls_auto_enable`, which production had from its creation) was added by hand
+  before the migrations, as the second migration expects it.
+- **Settings:** `apps/web/.env.test.local` (gitignored, owner-only file mode). It holds the project address and keys, a
+  test-only `KEY_WRAPPING_KEY` (local:v1, never the production key) for the test users' data keys, the same encryption
+  flags as production, and the test user.
+- **Test user:** `konva-test-user@example.com`, created confirmed through the admin API (no email sent), with a random
+  password kept only in that file. Password sign-in and row-level security were checked. The user's data key is made on
+  their first sign-in through /api/keys.
+
+**The migrations do not replay cleanly from an empty database.** Production applied them one at a time over weeks, and
+three things differ from a fresh run. They were applied here with these adjustments, which give the same end state as
+production:
+- `20261022203000_junk_unsubscribe` creates `messages_sender_idx`, a name the first migration already used. Production
+  never built it (`20261024104000` says so), so index creation was applied as "if not exists".
+- `20261025100300_brief_parts_and_voice` runs `delete from public.briefs;` and `20261119150000_document_cards` runs an
+  `update public.ai_budget ... ;` without a WHERE. Supabase's API guard refuses both, so they got `where true`, which
+  changes nothing.
+
+Any new environment (a staging project, a local Supabase) needs the same adjustments until those migrations are fixed.
+
+**Port 3100 (agreed 4 November 2026).** The browser tests build the app with the test settings into `.next-e2e` and start it
+on port 3100 only while they run (`apps/web/e2e/support/serve.ts`). The owner's dev server on 3000 is never touched.
+
+**Brought up to date 4 November 2026** with the migrations committed in v0.0.24: 224 of 225 are applied. The one left,
+`20261126100900_require_bound_values`, refuses to run until `SEAL_BOUND_FIELDS` is on, by design.
+
+**Two migrations share a version,** `20261028110700` (`draft_context` and `outbox_voice_notes`). Anything that records
+migrations by version (the Supabase CLI, the script used here) applies only the first. `outbox_voice_notes` was applied
+to Konva Test by hand. A new environment needs the same, until one of them is renamed.
+
+## Phase 1 (done 4 November 2026)
+
+`pnpm e2e` runs 34 tests on Desktop, iPhone and Android in about 70 seconds, build included.
+- **Safety** (`e2e/safety.spec.ts`):
+  - settings point only at Konva Test;
+  - the server never sees `.env.local`, and the build holds no production reference or secret;
+  - the firewall blocks provider requests and websockets, and fails any test that hits an undeclared one;
+  - the sign-in code request never reaches the mailer;
+  - WebKit runs with service workers blocked;
+  - a queued row stays unclaimed (no worker);
+  - the seeded data is made up.
+- **Seed** (`e2e/support/seed.ts`):
+  - the test user's data key, made the way /api/keys makes it;
+  - one IMAP account with no stored sign-in;
+  - ten conversations (four unread) and 20 messages, written through the real `ingest_email` function, which made 6
+    contacts and 3 companies.
+- **Flows:**
+  - sign in with a password;
+  - a wrong password;
+  - the inbox lists the conversations;
+  - opening one shows its messages and queues its read receipt.
+- **Known gaps:**
+  - The seed seals as `e1:`; it should switch to `e2:` when bound sealing is turned on.
+  - Failure traces in `test-results/` (gitignored) hold the test user's password as typed.
+
+## Phase 2 (done 4 November 2026)
+
+`pnpm test` now runs 272 screen tests over 40 components beside the logic tests; the web tests take about 26 seconds.
+- **Setup** (`apps/web/test/`):
+  - happy-dom for the page;
+  - `tsconfig.test.json` turns on JSX for tests only;
+  - a network guard fails any test that tries fetch, XMLHttpRequest, WebSocket, EventSource, sendBeacon or Node's
+    http, even when the component swallows the error;
+  - a fake Supabase client that records calls;
+  - a fake store whose every action is a recorded spy;
+  - `renderScreen`, which supplies the router, auth and toasts.
+- **Covered:**
+  - Conversations: composer, list, rows, filters, selection, snooze, Send Later, header, bubbles, reply choices with
+    Add to Calendar.
+  - Labels.
+  - Calendar: New Event including From and Until, delete, new task, month view, week strip.
+  - Settings list and search; Summary filter; Your Day.
+  - Contacts: list, controls, new, edit, merge.
+  - Notes.
+  - Attachments filter and delete.
+  - New Email and New WhatsApp (Undo Send, Send Later, Cc).
+- **Text rules:** no em or en dashes in 24 rendered scenes; Title Case on buttons, menu items and dialog titles.
+- **Not covered yet:**
+  - week view;
+  - editing a repeating event;
+  - date picker cells;
+  - uploading a reply's files;
+  - swipes;
+  - By Person and Subscriptions rows;
+  - the AI draft panel in New Email.
+
+## Phase 3 (incomplete, deferred to the week of 9 November 2026)
+
+**Status on 5 November 2026.** The owner deferred Phase 3 to the week of 9 November 2026. Part 3a was being built (on
+Sonnet) and was stopped part way. Its work is kept as it was left, uncommitted, under `apps/web/e2e/`:
+- **Specs:** `actions`, `composer`, `conversations-list`, `new-email`, `phones`, `realtime` and `summary` (new); `inbox`,
+  `safety` and `sign-in` (changed).
+- **Support:**
+  - new: `fake-chats`, `fake-extras`, `fake-incoming`, `reads`, `seal`, `seed-email`, `seed-extras`,
+    `seed-whatsapp`, `session`, `time`, `ui`, `users`, `world`;
+  - changed: `admin`, `fake-data`, `fake-worker`, `fixtures`, `global-setup`, `seed`, `serve`, `sign-in`.
+- **Cache:** `e2e/.cache/` (gitignored by its own `.gitignore`).
+
+It is not finished and not trusted:
+- **The last run was failing:** the agent's final note was that it took about 10 minutes with many failures. Treat
+  `pnpm e2e` as broken until 3a is finished. The Phase 1 tests may be among the failures, since their support files
+  changed.
+- **Lint and typecheck pass.** One unused import was removed from `actions.spec.ts` so `pnpm lint` passes for the whole
+  repo; nothing else was touched.
+- **Not yet checked:** whether the richer seed matches what the workers really write, and whether per-project test users
+  work.
+
+**To continue:**
+1. Get the existing 3a work passing, Phase 1's tests included.
+2. Then finish the rest of the 3a brief below.
+3. Then 3b and 3c, one at a time on Sonnet, reviewed and run by the main session.
+4. Apply any migrations committed since 4 November to Konva Test first (see Konva Test Setup).
+
+The brief as written on 4 November follows.
+
+
+Split into three parts run one after another, since they share the test server on port 3100 and the Konva Test data.
+Paused by the owner during 3a, before any file was written; nothing to undo. To continue, start 3a again with this brief.
+
+- **3a: data, Conversations and Summary.**
+  - **Seed:**
+    - Make it richer through the real database functions and the workers' exact sealed formats (apps/worker/src, the
+      worker vault's sealAddress and sealName, packages/crypto).
+    - Add WhatsApp and group chats; triage fields (Urgent, Needs Reply, junk, summaries, reply choices with a calendar
+      plan, one suspicious mail); labels; a draft; snoozed, archived and sent conversations; tasks, events and today's
+      brief.
+  - **Isolation:** one test user per project (Desktop, iPhone, Android), with passwords kept only in
+    `apps/web/.env.test.local`.
+  - **Fake worker:**
+    - outbox to sent or failed;
+    - mail_actions to done;
+    - drafts filled;
+    - a new incoming message, for realtime.
+  - **Conversations tests:**
+    - the list: views, filters, By Person, search;
+    - read receipts queued;
+    - sending: Send, Undo Send, Send Later, a failed send's Retry;
+    - a live draft;
+    - reply choices with Add to Calendar;
+    - labels, snooze, archive, delete and restore;
+    - bulk Mark Read, Clean Up, the person view, New Email;
+    - tags and the suspicious warning;
+    - realtime arrival;
+    - offline and back.
+  - **Summary tests:** Filter, search, Your Day, the brief player, Promises.
+  - **Phones:** list and conversation as separate screens, back navigation, the bottom bar.
+- **3b:** Calendar, Contacts, Notes, Attachments.
+- **3c:** Settings (every page; the connect pages up to the blocked provider address), Admin and the Updates editor (and
+  a normal user turned away), the website and Request Access, invite links, MFA, account deletion on a throwaway user,
+  and sign-out clearing local data.
 
 ## Decisions for You
 

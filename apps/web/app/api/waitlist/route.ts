@@ -5,7 +5,7 @@
 // email down first cannot lock out that person's real team request (the email is not verified, so the latest one wins).
 
 import { checkRequest } from "@/lib/waitlist";
-import { admin, clientAddress, fail, foreignOrigin, limiter, noStore } from "@/lib/server/request";
+import { admin, fail, foreignOrigin, limitedAddress, limiter, noStore, readCapped } from "@/lib/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,12 +16,16 @@ const overLimit = limiter(5, 60_000, { name: "waitlist", fallbackToMemory: true 
 export async function POST(request: Request) {
   if (!admin) return fail(503, "Requests are not set up.");
   if (foreignOrigin(request)) return fail(403, "Not allowed from this site.");
-  const wait = await overLimit(clientAddress(request));
+  const address = limitedAddress(request);
+  if (!address) return fail(403, "Not allowed from here.");
+  const wait = await overLimit(address);
   if (wait > 0) return fail(429, "Too many requests. Try again shortly.", { "Retry-After": String(wait) });
 
   let body: unknown;
   try {
-    body = await request.json();
+    const text = await readCapped(request, 16 * 1024); // bytes: a request is a name, an email and a few words
+    if (text === null) return fail(413, "That is too long.");
+    body = JSON.parse(text);
   } catch {
     return fail(400, "Enter a valid email address.");
   }

@@ -11,7 +11,7 @@ import { openCredential, sealCredential } from "@messages/crypto/wrap";
 import type { TablesInsert } from "@messages/db";
 import { cookieUser, openCookie, openRowHandoff, sealCookie, sealRowHandoff, type HandoffColumn, type HandoffPurpose } from "./handoff";
 import { credentialKey, credentialKeys, keysReady, userKeys } from "./keys";
-import { admin } from "./request";
+import { admin, limiter } from "./request";
 
 export type { HandoffPurpose } from "./handoff";
 
@@ -49,9 +49,12 @@ export async function sealHandoff(value: { userId: string }, purpose: HandoffPur
  * Opens an OAuth sign-in cookie for this purpose with the key of the user it names. The callback has no session, so the
  * key is only read, never made: a cookie naming someone without a key fails (no_key), as does any change to it.
  */
-export async function openHandoff<T extends { userId: string }>(payload: string, purpose: HandoffPurpose): Promise<T> {
+export async function openHandoff<T extends { userId: string }>(payload: string, purpose: HandoffPurpose, request?: Request): Promise<T> {
   const user = cookieUser(payload);
   if (!user) throw Object.assign(new Error("Unknown handoff format."), { code: "handoff_format" });
+  // The user id rides in the clear and opening needs a KMS unwrap of their key, so a forged cookie naming a guessed id
+  // would cost a KMS call each: counted per named user and per address first, far above what one sign-in takes.
+  if ((await overHandoffLimit(user, request)) > 0) throw Object.assign(new Error("Too many sign-in attempts."), { code: "handoff_limited" });
   const keys = await credentialKeys(user, { existing: true });
   try {
     return await openCookie<T>(keys, payload, purpose);
@@ -59,6 +62,9 @@ export async function openHandoff<T extends { userId: string }>(payload: string,
     for (const k of keys) k.fill(0);
   }
 }
+
+// 12 callbacks per named user in 10 minutes, and 60 per address: a person connecting four providers needs a handful.
+const overHandoffLimit = limiter(12, 10 * 60_000, { name: "handoff", perAddress: 60 });
 
 /** Seals a handoff to store in one column of one row (a sign-in code, an iCloud setup) under the user's own key. */
 export async function sealRowJson(userId: string, where: HandoffColumn, rowId: string, value: unknown): Promise<string> {

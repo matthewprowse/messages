@@ -19,13 +19,26 @@ RULE_CHARS = 200  # a style rule is one short sentence; anything longer is not o
 
 # A rule is learned from text other people can shape (their mail quoted in a reply, drafts written from it) and then goes
 # into every draft. So a rule may only describe style: one carrying an address, a link, a long number or a word about
-# recipients or payment ("always CC x", "bank details are ...") is dropped, whatever the model meant by it.
-_ADDRESS = re.compile(r"@")
-_LINK = re.compile(r"https?://|www\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b", re.I)
+# recipients or payment ("always CC x", "bank details are ...") is dropped, whatever the model meant by it. Addresses
+# and links are also caught spelled out ("accounts at konva-pay dot co dot za", "[at]", "(dot)"), numbers written as
+# words count as digits, and the payment and recipient words cover Afrikaans and South African banks: this is the
+# filter between a sender's mail and every future draft, and it is applied again when rules are read, so a rule
+# stored before a word was on the list is caught then.
+_ADDRESS = re.compile(r"@|\b(?:at|by)\b\s*[\[(]?\s*\w[\w-]*\s*[\])]?\s*[\[(]?\s*dot\s*[\])]?\s*\w", re.I)
+_LINK = re.compile(
+    r"https?://|www\.|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b"
+    r"|\[(?:at|dot)\]|\((?:at|dot)\)|\b\w[\w-]*\s+dot\s+(?:co\s+za|com|org|net|za|io|me|africa)\b",
+    re.I,
+)
 _DIGITS = re.compile(r"(?:\d[\s.\-/]?){6,}")  # a phone, account or reference number, with or without spaces
+_NUMBER_WORDS = re.compile(r"\b(?:(?:zero|one|two|three|four|five|six|seven|eight|nine|nul|een|twee|drie|vier|vyf|ses|sewe|agt|nege)[\s,-]*){6,}\b", re.I)
 _PLANTED = re.compile(
-    r"\b(?:b?cc|iban|swift|bank(?:ing)?|account (?:number|no|details)|password|passcode|otp|wire|crypto|bitcoin|"
-    r"gift ?cards?|payment details)\b",
+    r"\b(?:b?cc|iban|swift|bank(?:ing)?|account (?:number|no|details|holder)|password|passcode|otp|wire|crypto|bitcoin|"
+    r"gift ?cards?|payment details|proof of payment|pop|eft|branch code|sort code|routing|beneficiary|"
+    r"reply(?:-| )to (?:\S+ ){0,3}(?:address|mailbox|e-?mail|inbox)|copy in|forward (?:it|this|them|everything|all|mail|emails?) to|send (?:it|them|this|everything|all|mail|emails?) to|new (?:email |e-mail )?address|"
+    r"bankbesonderhede|bank ?besonderhede|rekening(?:nommer|besonderhede)?|betaal|betaling|takkode|begunstigde|"
+    r"stuur (?:dit |hulle )?(?:aan|na)|nuwe (?:e-?pos)?adres|"
+    r"capitec|fnb|first national bank|absa|nedbank|standard bank|investec|discovery bank|tymebank|african bank|bidvest bank)\b",
     re.I,
 )
 
@@ -42,7 +55,7 @@ def tidy_rule(text: str) -> str:
 def safe_rule(text: str) -> bool:
     """False for a rule that carries an address, a link or domain, a long digit run, or a word about recipients or
     payment: those are never style, and are how a sender would plant an instruction in every future draft."""
-    return not (_ADDRESS.search(text) or _LINK.search(text) or _DIGITS.search(text) or _PLANTED.search(text))
+    return not (_ADDRESS.search(text) or _LINK.search(text) or _DIGITS.search(text) or _NUMBER_WORDS.search(text) or _PLANTED.search(text))
 
 
 def learnable(text: str) -> bool:

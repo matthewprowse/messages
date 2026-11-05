@@ -15,6 +15,9 @@ import type { MediaType } from "./normalize";
  * What is needed to fetch a file again later: WhatsApp's encrypted copy, its key, and the message key so
  * the phone can be asked to upload it again once the link has expired. Kept in messages.provider_meta.
  * `url` is always null now: the sender writes it, so it is never stored or used. Older rows may still have one.
+ * The path, key and hashes are stored sealed under the owner's key (`sealed`, media-ref.ts): whoever holds them can
+ * fetch and decrypt the file from WhatsApp's own servers while the link lives, so they are no more readable in the
+ * database than the file itself. Rows written before that hold them plain; openMediaRef reads both.
  */
 export interface StoredMedia {
   type: MediaType;
@@ -24,6 +27,20 @@ export interface StoredMedia {
   file_enc_sha256: string | null;
   file_sha256: string | null;
   mimetype: string | null;
+  sealed?: string | null;
+}
+
+/** How long one file fetch may take in all, headers and body: a stalled connection must not hold the account's media pass. */
+const MEDIA_TIMEOUT_MS = 60_000;
+
+/** The stream's chunks, with the stream destroyed once the deadline passes so the read ends with an error. */
+async function* until(stream: AsyncIterable<Uint8Array> & { destroy?: (err?: Error) => void }, deadline: number): AsyncIterable<Uint8Array> {
+  const timer = setTimeout(() => stream.destroy?.(Object.assign(new Error("MEDIA_TIMEOUT"), { code: "MEDIA_TIMEOUT" })), Math.max(1, deadline - Date.now()));
+  try {
+    for await (const chunk of stream) yield chunk;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const b64 = (v: Uint8Array | null | undefined) => (v ? Buffer.from(v).toString("base64") : null);
@@ -72,8 +89,12 @@ const refused = (code: Refusal) => Object.assign(new Error(code), { code });
 async function fetchChecked(sock: WASocket, msg: WAMessage): Promise<Buffer> {
   const file = downloadable(msg.message);
   if (!file) throw refused("MEDIA_REJECTED");
-  const stream = await downloadContentFromMessage({ mediaKey: file.mediaKey, directPath: file.directPath }, file.type, { host: mediaHost(sock.getMediaHost?.()) });
-  const bytes = await readCapped(stream, MAX_FILE_BYTES);
+  const deadline = Date.now() + MEDIA_TIMEOUT_MS;
+  const stream = await Promise.race([
+    downloadContentFromMessage({ mediaKey: file.mediaKey, directPath: file.directPath }, file.type, { host: mediaHost(sock.getMediaHost?.()) }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(Object.assign(new Error("MEDIA_TIMEOUT"), { code: "MEDIA_TIMEOUT" })), MEDIA_TIMEOUT_MS).unref()),
+  ]);
+  const bytes = await readCapped(until(stream, deadline), MAX_FILE_BYTES);
   if (!bytes) throw refused("MEDIA_TOO_LARGE");
   return bytes;
 }

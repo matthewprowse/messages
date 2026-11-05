@@ -12,6 +12,10 @@
 importScripts("/sw-rules.js");
 const R = self.konvaSw;
 
+// The dev server registers /sw.js?dev=1 (lib/service-worker.ts): push only, no caching. Turbopack's dev chunks keep
+// their names across restarts while their content changes, so a cached copy boots old code beside new code.
+const CACHING = !new URL(self.location.href).searchParams.has("dev");
+
 // The app's pages are keyed by path alone, not by section: Next renders the page tree of the address it served, so the
 // /inbox document shown at /inbox/<id> would show the empty Inbox (and seed the router with the wrong tree).
 // Stored pages are dropped on sign-out; `generation` stops a fetch that was already running from storing one after.
@@ -22,13 +26,14 @@ let lastPrune = 0;
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil((async () => {
   // A new version's rules may not suit what an older one stored, so its caches go.
-  const mine = [R.PAGE_CACHE, R.STATIC_CACHE];
+  const mine = CACHING ? [R.PAGE_CACHE, R.STATIC_CACHE] : [];
   for (const name of await caches.keys()) if (name.startsWith(R.CACHE_PREFIX) && !mine.includes(name)) await caches.delete(name);
   await self.clients.claim();
-  await prune(true);
+  if (CACHING) await prune(true);
 })()));
 
 self.addEventListener("fetch", (event) => {
+  if (!CACHING) return;
   const req = event.request;
   const url = new URL(req.url);
   const kind = R.requestKind({ url, method: req.method, mode: req.mode, headers: req.headers }, self.location.origin);
@@ -174,7 +179,7 @@ self.addEventListener("message", (event) => {
   if (msg.type === R.MESSAGES.clearPages) {
     generation++;
     event.waitUntil(caches.delete(R.PAGE_CACHE));
-  } else if (msg.type === R.MESSAGES.warmPage && typeof msg.path === "string") {
+  } else if (CACHING && msg.type === R.MESSAGES.warmPage && typeof msg.path === "string") {
     const url = new URL(msg.path, self.location.origin);
     const key = url.origin === self.location.origin && R.pageKey(url);
     if (!key) return;

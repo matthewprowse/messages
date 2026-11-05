@@ -6,6 +6,7 @@ import { buildNewEmail, buildReply, newMessageId, type OutgoingAttachment, type 
 import type { AttachmentProvider } from "./attachment-rules";
 import { loadAttachmentFiles, waitForAttachments } from "./outbox-attachments";
 import { chooseFrom, fromCandidates, outgoingRecipients, replyToChosen, replyToParticipants, sendableAliases } from "./from-address";
+import { verifiedSendable } from "./verified-aliases";
 import { identitiesMergedFromElsewhere } from "../contacts/merged-identities";
 import { FIELD } from "@messages/crypto/fields";
 import { open, openAddresses, openBound } from "../vault";
@@ -271,8 +272,14 @@ export type SendAccount = Awaited<ReturnType<typeof freshAccount>>;
  */
 function resolveFrom(row: OutboxRow, account: SendAccount, inboundTo: string[], via: ReplyFor): { address: string } | { error: string } {
   if (!mayUseAccount(account.user_id, row.user_id, via)) return { error: OTHER_ACCOUNT };
-  // Only aliases the provider vouches for: the list is typed in the app for some providers (from-address.ts).
-  return chooseFrom({ requested: row.from_address, accountAddress: account.address, sendAddresses: sendableAliases(account.provider, account.send_addresses), inboundTo });
+  // Only aliases the provider vouches for: Gmail and Outlook from what the connector read at connect, iCloud from the
+  // list typed in the app (from-address.ts, verified-aliases.ts). The stored column alone is never enough.
+  return chooseFrom({
+    requested: row.from_address,
+    accountAddress: account.address,
+    sendAddresses: sendableAliases(account.provider, account.send_addresses, verifiedSendable(account.id)),
+    inboundTo,
+  });
 }
 
 const OTHER_ACCOUNT = "This email belongs to another account.";

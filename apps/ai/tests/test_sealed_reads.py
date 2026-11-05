@@ -279,7 +279,7 @@ class InstagramFiles(unittest.TestCase):
 
         from ai.connectors.instagram import mapping
 
-        self.assertIn("s.seal(FILENAME, item.media.filename)", inspect.getsource(mapping))
+        self.assertIn("s.seal(FILENAME, item.media.filename, places.ATTACHMENT_FILENAME)", inspect.getsource(mapping))
 
 
 if __name__ == "__main__":

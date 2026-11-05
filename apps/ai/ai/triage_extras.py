@@ -68,15 +68,20 @@ def auth_failed(auth: Any) -> bool:
     return verdict("dmarc") == "fail" or (verdict("spf") != _PASS and verdict("dkim") != _PASS)
 
 
-def header_suspicion(name: str | None, sender: str | None, auth: Any = None, reply_to_domain: str | None = None) -> str | None:
+def header_suspicion(name: str | None, sender: str | None, auth: Any = None, reply_to_domain: str | None = None, name_mismatch: Any = None) -> str | None:
     """impersonation when the headers say the sender is not who the mail claims, else None. Checked in code, so nothing
     in the email can argue it away: a display name that carries an email address or a domain of another brand than the
     sender's ("PayPal Support <x@evil.biz>", "billing@acme.com <x@gmail.com>"), a Reply-To at another brand, or failed
-    authentication. sender is the From address; name its display name; auth is provider_meta.auth; reply_to_domain is
-    provider_meta.reply_to_domain (the worker keeps only the domain, and only when it is not the From address's)."""
+    authentication. sender is the From address; name is the display name the contact is stored under; auth is
+    provider_meta.auth; reply_to_domain is provider_meta.reply_to_domain (the worker keeps only the domain, and only
+    when it is not the From address's); name_mismatch is provider_meta.name_mismatch, which the worker sets when the
+    message's own From display name named another brand (the stored contact name may be the person's real one, which
+    would hide that)."""
     domain = _domain(sender)
     if not domain:
         return None
+    if name_mismatch is True:
+        return "impersonation"
     mine = brand_of(domain)
     shown = name or ""
     for found in _EMAIL_IN.findall(shown) + [m for m in _DOMAIN_IN.findall(shown) if "@" not in m]:

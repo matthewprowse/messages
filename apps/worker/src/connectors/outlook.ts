@@ -30,6 +30,11 @@ import type { OutgoingAttachment } from "../send/compose";
 import { finishAction, NotReady } from "../send/actions";
 import { carryOutUnsubscribe, type MailtoUnsubscribe } from "../send/unsubscribe-flow";
 import { normAddresses } from "../send/from-address";
+import { rememberSendable } from "../send/verified-aliases";
+import { authservTrust } from "../ingest/email-auth";
+
+// Only Microsoft's own Authentication-Results count for an Outlook account (ingest/email-auth.ts).
+const TRUST_MICROSOFT = authservTrust("outlook");
 import { undoesNotJunk } from "../ingest/junk-undo";
 import { sealAddress } from "../vault";
 import { GraphApiError, putChunk, signInRevoked, type GraphClient } from "../microsoft/client";
@@ -207,6 +212,7 @@ export class OutlookConnector {
       const stored = await Promise.all(sendable.map((a) => sealAddress(this.account.user_id, a)));
       must(await db.from("accounts").update({ send_addresses: stored }).eq("id", this.id), "save send addresses");
     }
+    rememberSendable(this.id, sendable); // what a send may use as From (send/verified-aliases.ts)
     this.selfAddresses = new Set([...sendable, ...others]);
     log.info("outlook connected", { account: this.id, addresses: this.selfAddresses.size, archive: this.hasArchive });
 
@@ -529,7 +535,7 @@ export class OutlookConnector {
 
   private async parse(graphId: string, raw: Buffer, receivedAt: string | null): Promise<NormalizedEmail> {
     const parsed = await simpleParser(raw, { skipImageLinks: true, skipTextToHtml: true });
-    const mail = normalizeEmail(parsed, `outlook:${graphId}`);
+    const mail = normalizeEmail(parsed, `outlook:${graphId}`, TRUST_MICROSOFT);
     if (!parsed.date && receivedAt) mail.sentAt = new Date(receivedAt);
     return mail;
   }

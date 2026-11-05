@@ -64,6 +64,8 @@ test("a missed call and a poll with votes come through provider_meta", () => {
   assert.deepEqual(x.call, { video: true, missed: true });
   assert.deepEqual(x.poll, { multi: true, votes: { a: [0, 1] } });
   assert.equal(whatsappExtras({}).call, undefined);
+  assert.deepEqual(whatsappExtras({ call: { video: false, missed: false, seconds: 192 } }).call, { video: false, missed: false, seconds: 192 });
+  assert.deepEqual(whatsappExtras({ call: { video: false, missed: false, declined: true } }).call, { video: false, missed: false, declined: true });
   assert.equal(whatsappExtras({}).poll, undefined);
 });
 

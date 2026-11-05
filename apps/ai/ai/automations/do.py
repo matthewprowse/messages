@@ -227,8 +227,13 @@ class Doer:
 
     def _urgent(self, user: str, message: dict[str, Any], out: Outcome) -> None:
         thread = message["thread_id"]
-        before = self.db.first("threads", {"select": "priority,junk,needs_reply", "id": f"eq.{thread}", "user_id": f"eq.{user}"})
+        before = self.db.first("threads", {"select": "priority,junk,needs_reply,suspicious", "id": f"eq.{thread}", "user_id": f"eq.{user}"})
         if before is None:
+            return
+        if before.get("suspicious"):
+            # Triage flagged this conversation (phishing, impersonation, a changed payment detail) on this or an earlier
+            # message. An automation never clears junk or raises priority on it: that is what the flag is for.
+            out.effects["urgent_skipped"] = "suspicious"
             return
         out.effects["thread_before"] = {k: before.get(k) for k in ("priority", "junk", "needs_reply")}
         now_urgent = {"priority": "urgent", "junk": False, "needs_reply": True}

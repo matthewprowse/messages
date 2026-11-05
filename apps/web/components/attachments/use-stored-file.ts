@@ -10,19 +10,22 @@ import { acquireNoteFile, isBrowserSealedPath, mimeFor, rememberNoteMime, signed
 import { ATTACHMENT_BUCKET as BUCKET, VIEW_MIN_LEFT_MS, downloadLink } from "@/lib/attachment-view";
 import type { Attachment } from "@/lib/types";
 
-// sealed: a note file opened in the browser, so view and download are blob links rather than signed ones.
-export type StoredFile = { id: string; state: "loading" } | { id: string; state: "missing" } | { id: string; state: "too_large" } | { id: string; state: "ready"; path: string; view: string; download: string; sealed: boolean };
+import { releasedFile, shownFile, type HeldFile, type StoredFile } from "./stored-file";
+
+export type { StoredFile };
 
 // Asked for again on each open (usually from cache), so a link kept from an earlier open has time left.
 export function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
-  const [file, setFile] = useState<StoredFile | null>(null);
+  const [file, setFile] = useState<HeldFile | null>(null);
   // Keyed on the fields used, so a store refresh that rebuilds the attachment object does not reload it.
   const { id, path: knownPath, name, kind, sealed: knownSealed } = a;
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     let release: (() => void) | undefined;
-    setFile((f) => (f?.id === id && f.state === "ready" ? f : { id, state: "loading" }));
+    // A signed link is kept while the file is opened again, so nothing flickers. A sealed file's blob link is not: it is
+    // revoked a few seconds after the viewer closed, and handing it to pdf.js again fails ("Unexpected server response (0)").
+    setFile((f) => (f?.id === id && f.state === "ready" && !f.sealed ? f : { id, state: "loading" }));
     (async (): Promise<StoredFile> => {
       let path = knownPath;
       let sealed = !!knownSealed;
@@ -40,14 +43,18 @@ export function useStoredFile(a: Attachment, open: boolean): StoredFile | null {
         const opened = await handle.promise;
         if (!opened) return { id, state: "missing" };
         if (opened.tooLarge) return { id, state: "too_large" };
-        return { id, state: "ready", path, view: opened.url, download: opened.sealed ? opened.url : downloadLink(opened.url, name), sealed: opened.sealed };
+        return { id, state: "ready", path, view: opened.url, download: opened.sealed ? opened.url : downloadLink(opened.url, name), sealed: opened.sealed, blob: opened.blob };
       }
       const view = path ? await signedUrl(BUCKET, path, VIEW_MIN_LEFT_MS) : null;
       return path && view ? { id, state: "ready", path, view, download: downloadLink(view, name), sealed: false } : { id, state: "missing" };
     })()
       .then((next) => { if (!cancelled) setFile(next); })
       .catch(() => { if (!cancelled) setFile({ id, state: "missing" }); });
-    return () => { cancelled = true; release?.(); };
+    return () => {
+      cancelled = true;
+      release?.();
+      setFile(releasedFile);
+    };
   }, [id, knownPath, name, kind, knownSealed, open]);
-  return file?.id === id ? file : null;
+  return shownFile(file, id, open);
 }

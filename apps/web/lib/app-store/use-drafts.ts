@@ -21,12 +21,13 @@ export interface DraftDeps {
   draftWaitRef: React.MutableRefObject<Record<string, string | undefined>>;
   composeWaitRef: React.MutableRefObject<Set<string>>;
   setDrafting: React.Dispatch<React.SetStateAction<Record<string, DraftPhase | undefined>>>;
+  setDraftText: React.Dispatch<React.SetStateAction<Record<string, string | undefined>>>;
   setComposeDrafts: React.Dispatch<React.SetStateAction<Record<string, ComposeDraft | undefined>>>;
   saveFailed: () => void;
 }
 
 /** The drafting actions of the context. */
-export function useDrafts({ userId, rawDispatch, threadMapRef, draftAskRef, draftWaitRef, composeWaitRef, setDrafting, setComposeDrafts, saveFailed }: DraftDeps) {
+export function useDrafts({ userId, rawDispatch, threadMapRef, draftAskRef, draftWaitRef, composeWaitRef, setDrafting, setDraftText, setComposeDrafts, saveFailed }: DraftDeps) {
   // The AI worker writes the draft; it arrives through Realtime, usually within a few seconds. One that
   // has not arrived after DRAFT_TIMEOUT_MS is given up on, so the composer never waits forever.
   const generateDraft = useCallback(async (threadId: string, tone: Draft["tone"] = "default", instruction?: string, decision?: Decision, source?: string, audio?: Blob) => {
@@ -35,6 +36,7 @@ export function useDrafts({ userId, rawDispatch, threadMapRef, draftAskRef, draf
     draftAskRef.current[threadId] = (draftAskRef.current[threadId] ?? 0) + 1;
     if (asking) track("draft_requested", { tone, source: decision ? "choice" : "manual", channel: asking.channel, has_instruction: !!instruction?.trim() || !!audio, revises: source !== undefined, via: audio ? "voice" : instruction?.trim() ? "typed" : undefined });
     setDrafting((d) => ({ ...d, [threadId]: "thinking" }));
+    setDraftText((t) => ({ ...t, [threadId]: undefined }));
     // A recording goes up sealed with your key first; the worker deletes it once the draft is written.
     const audioPath = audio ? await uploadRecording(userId, audio) : undefined;
     if (audio && !audioPath) {

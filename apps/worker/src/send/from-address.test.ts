@@ -19,7 +19,8 @@ test("a chosen From the account cannot send from fails", () => {
 });
 
 test("only providers that check send addresses themselves may send from a listed alias", () => {
-  for (const provider of ["gmail", "outlook", "icloud"]) assert.deepEqual(sendableAliases(provider, account.sendAddresses), account.sendAddresses, provider);
+  for (const provider of ["gmail", "outlook"]) assert.deepEqual(sendableAliases(provider, [], account.sendAddresses), account.sendAddresses, provider);
+  assert.deepEqual(sendableAliases("icloud", account.sendAddresses), account.sendAddresses);
   const imap = { accountAddress: account.accountAddress, sendAddresses: sendableAliases("imap", account.sendAddresses) };
   assert.deepEqual(chooseFrom({ ...imap, requested: "hello@prowse.co.za", inboundTo: [] }), { error: FROM_NOT_ALLOWED });
   assert.deepEqual(chooseFrom({ ...imap, requested: null, inboundTo: ["hello@prowse.co.za"] }), { address: "matthew@prowse.co.za" });
@@ -117,4 +118,13 @@ test("someone on two lines is kept on the first, and a bad or unreadable address
 test("line breaks are stripped from addresses before they are checked", () => {
   assert.deepEqual(outgoingRecipients({ ...none, to_addresses: ["a@x.com\r\nBcc: evil@x.com"] }, false), { error: BAD_RECIPIENTS });
   assert.deepEqual(outgoingRecipients({ ...none, to_addresses: ["a@x\r\n.com"] }, false), { to: ["a@x.com"], cc: [], bcc: [], explicit: false });
+});
+
+test("Gmail and Outlook may send only from what the provider itself listed, iCloud from the stored list, IMAP from nothing beyond its own", () => {
+  const stored = ["me@gmail.com", "attacker-chosen@gmail.com"];
+  assert.deepEqual(sendableAliases("gmail", stored, null), [], "nothing before the connector read the provider's list");
+  assert.deepEqual(sendableAliases("gmail", stored, ["me@gmail.com", "alias@gmail.com"]), ["me@gmail.com", "alias@gmail.com"]);
+  assert.deepEqual(sendableAliases("outlook", stored, ["me@outlook.com"]), ["me@outlook.com"]);
+  assert.deepEqual(sendableAliases("icloud", ["me@icloud.com", "alias@me.com"], null), ["me@icloud.com", "alias@me.com"]);
+  assert.deepEqual(sendableAliases("imap", stored, ["x@y.example"]), []);
 });

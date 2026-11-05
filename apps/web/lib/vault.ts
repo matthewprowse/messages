@@ -14,7 +14,8 @@
 // NEXT_PUBLIC_SEAL_BOUND_FIELDS is on, and the legacy "e1:" until then. A value that will not open reads as UNREADABLE.
 
 import { flagOn, flagTrue } from "@messages/crypto/flags";
-import { decryptAny, deriveTeamKeys, deriveUserKeyring, encryptAt, encryptBytes, encryptBytesAt, encryptField, isCiphertext, type Place, type TeamKeys, type UserKeys } from "@messages/crypto";
+import { decryptAny, deriveTeamKeys, deriveUserKeyring, encryptAt, encryptBytes, encryptBytesAt, encryptField, importIndexKey, isCiphertext, type Place, type TeamKeys, type UserKeys } from "@messages/crypto";
+import { BROWSER_KEY_HOLD_MS } from "@messages/crypto/flags";
 import type { Field } from "@messages/crypto/fields";
 import { supabase } from "./supabase";
 
@@ -27,7 +28,7 @@ let keysFor: string | null = null;
 let fetchedAt = 0;
 
 /** How old held keys may get before the next use fetches them again. The re-seal job waits longer than this. */
-const KEY_REFRESH_MS = 10 * 60_000;
+const KEY_REFRESH_MS = BROWSER_KEY_HOLD_MS;
 
 /** The user's keys, fetching them on first use. Rejects when signed out or the key service is down. */
 export async function userKeys(): Promise<UserKeys> {
@@ -86,7 +87,7 @@ async function fetchKeys(): Promise<Held> {
     key: string;
     older?: string[];
     indexKey?: string | null;
-    team?: { workspaceId: string; key: string; version?: number; versions?: { version: number; key: string }[]; indexKey?: string } | null;
+    team?: { workspaceId: string; key: string; version?: number; versions?: { version: number; key: string }[]; indexKey?: string | null; indexHmacKey?: string | null } | null;
   };
   const bytes = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const raw = bytes(key);
@@ -97,8 +98,9 @@ async function fetchKeys(): Promise<Held> {
   let derivedTeam: TeamKeys | null = null;
   const teamOlds: TeamKeys[] = [];
   if (team) {
-    // Each version seals with its own key, but the blind index always comes from the first version's (indexKey).
-    const root = team.indexKey ? await deriveTeamKeys(bytes(team.indexKey)) : null;
+    // Each version seals with its own key, but the blind index always comes from the first version's: the index key
+    // itself when the server hands it out (indexHmacKey), else derived from the first data key (indexKey).
+    const root = team.indexHmacKey ? { index: await importIndexKey(bytes(team.indexHmacKey)) } : team.indexKey ? await deriveTeamKeys(bytes(team.indexKey)) : null;
     const derive = async (b64: string): Promise<TeamKeys> => {
       const raw = bytes(b64);
       const t = await deriveTeamKeys(raw, team.workspaceId);

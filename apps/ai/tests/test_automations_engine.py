@@ -405,5 +405,47 @@ class Preview(unittest.TestCase):
         self.assertLessEqual(IDLE_S, 5)  # the Turn On dialog waits for it; 30s idle left most of that wait in the back-off
 
 
+
+class Trust(unittest.TestCase):
+    """A forged or flagged enquiry drives nothing (security audit 2026-11-04, Medium 2)."""
+
+    def test_a_message_triage_flagged_runs_no_automation(self):
+        db = FakeDb([auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None})
+        self.assertEqual(build(db).after_triage([message()], {MESSAGE: {"suspicious": "impersonation", "needs_reply": True}}), 0)
+        self.assertEqual(db.inserts, [], "no lead, task, draft or run")
+
+    def test_a_message_whose_authentication_failed_runs_no_automation(self):
+        db = FakeDb([auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None, "auth": {"spf": "fail", "dkim": "none", "dmarc": "fail"}})
+        self.assertEqual(build(db).after_triage([message()], {MESSAGE: {"suspicious": None}}), 0)
+        self.assertEqual(db.inserts, [])
+
+    def test_a_clean_verdict_and_passing_headers_still_run(self):
+        db = FakeDb([auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None, "auth": {"spf": "pass", "dkim": "pass", "dmarc": "pass"}})
+        self.assertEqual(build(db).after_triage([message()], {MESSAGE: {"suspicious": None, "needs_reply": True}}), 1)
+        self.assertTrue(db.of("contacts"))
+
+    def test_when_the_headers_cannot_be_read_nothing_runs(self):
+        class Unreadable(FakeDb):
+            def select(self, table, params):
+                if table == "messages" and "auth" in params.get("select", ""):
+                    raise RuntimeError("down")
+                return super().select(table, params)
+
+        db = Unreadable([auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None})
+        self.assertEqual(build(db).after_triage([message()]), 0)
+        self.assertEqual(db.inserts, [])
+
+    def test_urgent_never_clears_junk_on_a_flagged_conversation(self):
+        class Flagged(FakeDb):
+            def first(self, table, params):
+                if table == "threads":
+                    return {"priority": "normal", "junk": True, "needs_reply": False, "suspicious": "payment_change"}
+                return super().first(table, params)
+
+        db = Flagged([auto(P24_SPEC)], {"id": MESSAGE, "body_text": fx.P24_PLAIN, "body_html": None})
+        self.assertEqual(build(db).after_triage([message()]), 1)
+        self.assertEqual([u for u in db.updates if u[0] in ("threads", "message_ai")], [], "the flag stands")
+        self.assertEqual(db.run_patch()["effects"].get("urgent_skipped"), "suspicious")
+
 if __name__ == "__main__":
     unittest.main()

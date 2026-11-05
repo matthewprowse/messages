@@ -5,9 +5,10 @@ import type { WAMessage } from "baileys";
 import { db, must } from "../db";
 import { env } from "../env";
 import { MAX_FILE_BYTES } from "../file-store";
-import { openAddresses } from "../vault";
+import { open, openAddresses, seal } from "../vault";
 import type { BoundedMap } from "./bounded-map";
 import { messageFromRef, type MediaRow } from "./media";
+import { openMediaRef } from "./media-ref";
 import type { AccountCtx, StoredMeta } from "./person";
 
 const STICKER_PASS_IDLE_MS = 60 * 60_000; // old stickers are looked for this rarely once a pass finds none missing
@@ -57,7 +58,7 @@ export async function missingMediaJobs(ctx: AccountCtx, fileTries: BoundedMap<st
     if (!meta?.media) continue;
     const key = { remoteJid: meta.chat, fromMe: meta.from_me, id: r.messages.provider_message_id, participant: meta.participant ?? undefined };
     jobs.push({
-      msg: messageFromRef(key, meta.media),
+      msg: messageFromRef(key, await openMediaRef({ seal, open }, ctx.userId, meta.media)),
       row: { messageId: r.message_id, attachmentId: r.id, mimeType: r.mime_type ?? "application/octet-stream", kind: r.kind, filename: r.filename, sizeBytes: r.size_bytes },
     });
   }

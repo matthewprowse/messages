@@ -24,5 +24,7 @@ The Next.js app (App Router, React 19, Tailwind 4, shadcn/ui). Read `../../AGENT
 - Anything that touches an encrypted column goes through `vault.ts` / `open-rows.ts`. Never write plaintext message text.
 - A change the user makes shows at once (optimistic) and is saved after; on failure put it back and show a toast.
 - Track usage with `track()` from `lib/analytics.ts`, with counts and enums only, never content.
-- Logic worth testing goes in `lib/*.ts` with a `*.test.ts` beside it. `pnpm --filter web test` runs `lib/**/*.test.ts`.
+- Logic worth testing goes in `lib/*.ts` with a `*.test.ts` beside it. A component gets screen tests in a `*.test.tsx` beside it,
+  rendered with `renderScreen` (`test/render.tsx`) over the fake store and fake Supabase client, with the network blocked.
+  `pnpm --filter web test` runs both (`test:logic`, then `test:screens`).
 - Do not run `next build` while the user's dev server is running: both write to `.next`. Use `pnpm typecheck` and the dev server.

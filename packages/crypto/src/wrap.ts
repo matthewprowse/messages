@@ -19,7 +19,7 @@
 // (being made ready, opens only) or the previous one (being re-sealed away from, opens only), and the index key their
 // blind indexes are made with (wrapped with "user_index_keys:<user id>"). userKeyringFor reads all of them.
 
-import { deriveIndexKey, newDataKey } from "./index";
+import { deriveIndexKey, deriveTeamIndexKey, newDataKey } from "./index";
 import { googleAccessToken, KMS_TIMEOUT_MS } from "./google-token";
 
 export { googleAccessToken, KMS_TIMEOUT_MS, usesWorkloadIdentity, vercelOidcToken, type TokenOptions } from "./google-token";
@@ -28,7 +28,7 @@ export { googleAccessToken, KMS_TIMEOUT_MS, usesWorkloadIdentity, vercelOidcToke
  * Whose key it is: a user's (user_keys), a workspace's (team_keys), or a user's index key kept after a rotation
  * (user_keys.index_wrapped_key). Part of the additional data, so one can never be passed off as another.
  */
-export type KeyScope = "user" | "team" | "user_index";
+export type KeyScope = "user" | "team" | "user_index" | "team_index";
 
 /** The wrapped_by of the retired local wrapper: rows it made open only while KEY_WRAPPING_KEY is still set. */
 export const LOCAL_WRAPPER = "local:v1";
@@ -170,6 +170,11 @@ type Env = Record<string, string | undefined>;
 export async function wrappersFromEnv(env: Env = process.env): Promise<KeyWrapper[]> {
   const out: KeyWrapper[] = [];
   if (env.KMS_KEY_NAME) out.push(kmsWrapper({ keyName: env.KMS_KEY_NAME, token: googleAccessToken(env) }));
+  // In production the static key may only open rows made before the move, never wrap a new key: a container or
+  // deployment missing KMS_KEY_NAME must fail to start rather than quietly put new users under the key being retired.
+  if (!env.KMS_KEY_NAME && env.NODE_ENV === "production") {
+    throw Object.assign(new Error("KMS_KEY_NAME is required in production: KEY_WRAPPING_KEY only opens rows made before the move to KMS."), { code: "no_kms_wrapper" });
+  }
   if (env.KEY_WRAPPING_KEY) out.push(await localWrapper(env.KEY_WRAPPING_KEY));
   if (!out.length) throw Object.assign(new Error("Set KMS_KEY_NAME (or, until it is retired, KEY_WRAPPING_KEY)."), { code: "no_key_wrapper" });
   return out;
@@ -290,6 +295,12 @@ export interface TeamKeyRow {
   wrapped_by: string;
   /** Set once no value is left sealed under this version (apps/worker/src/share/rotate.ts). */
   retired_at?: string | null;
+  /**
+   * On the first version only: the team's derived index key, wrapped (20261127130000_team_index_key.sql). Written by
+   * the sync worker the first time it opens the ring; until then the first data key stands in for it.
+   */
+  index_wrapped_key?: string | null;
+  index_wrapped_by?: string | null;
 }
 
 /** The rows a team key store reads and writes: team_keys, through whichever database client the caller has. */
@@ -300,6 +311,8 @@ export interface TeamKeyStore {
   insertVersion(row: TeamKeyRow & { workspace_id: string }): Promise<void>;
   /** Whether someone has been removed from the workspace since its current key was made (team_key_rotation_due). */
   rotationDue(workspaceId: string): Promise<boolean>;
+  /** Stores the wrapped index key on this version's row unless one is there. Stores that cannot write leave it out. */
+  saveIndexKey?(workspaceId: string, keyVersion: number, wrappedKey: string, wrappedBy: string): Promise<void>;
 }
 
 /**
@@ -374,7 +387,12 @@ export function zeroKeyring(ring: UserKeyring): void {
 export interface TeamKeyring {
   current: { version: number; key: Uint8Array<ArrayBuffer> };
   all: { version: number; key: Uint8Array<ArrayBuffer> }[];
-  indexRoot: { version: number; key: Uint8Array<ArrayBuffer> };
+  /**
+   * What the team's blind indexes are made with. `derived` true: `key` is the index key itself (HKDF of the first data
+   * key, stored wrapped on the first version), to be used as it is. `derived` false: `key` is the first data key, from
+   * before the index key was stored apart, and the index key is derived from it (deriveTeamKeys).
+   */
+  indexRoot: { version: number; key: Uint8Array<ArrayBuffer>; derived: boolean };
 }
 
 /**
@@ -397,25 +415,44 @@ export async function teamKeyring(store: TeamKeyStore, wrappers: KeyWrapper[], w
   const sorted = [...rows].sort((a, b) => b.key_version - a.key_version);
   const newest = sorted[0];
   const first = sorted[sorted.length - 1];
-  const wanted = sorted.filter((row) => !row.retired_at || row === first); // nothing is sealed under a retired one any more
+  // The index key stored apart (20261127130000): once it is there, a retired first version is not opened at all.
+  const indexed = first.index_wrapped_key && first.index_wrapped_by ? first : null;
+  const wanted = sorted.filter((row) => !row.retired_at || (row === first && !indexed)); // nothing is sealed under a retired one any more
   // Unwrapped at once (each can be a KMS call), then read in version order, so the outcome and the error thrown are
   // what one at a time would give.
-  const opened = await Promise.allSettled(wanted.map(async (row) => {
-    return wrapperFor(wrappers, row.wrapped_by).unwrap(row.wrapped_key, workspaceId, "team");
-  }));
+  const opened = await Promise.allSettled([
+    ...wanted.map(async (row) => wrapperFor(wrappers, row.wrapped_by).unwrap(row.wrapped_key, workspaceId, "team")),
+    ...(indexed ? [wrapperFor(wrappers, indexed.index_wrapped_by!).unwrap(indexed.index_wrapped_key!, workspaceId, "team_index")] : []),
+  ]);
   const all: TeamKeyring["all"] = [];
   let indexRoot: TeamKeyring["indexRoot"] | undefined;
   wanted.forEach((row, i) => {
     const result = opened[i];
     // The current key and the index root are needed; another version is not.
     if (result.status === "rejected") {
-      if (row === newest || row === first) throw result.reason;
+      if (row === newest || (row === first && !indexed)) throw result.reason;
       return;
     }
     const key = result.value;
     if (!row.retired_at) all.push({ version: row.key_version, key });
-    if (row === first) indexRoot = { version: row.key_version, key: key.slice() };
+    if (row === first && !indexed) indexRoot = { version: row.key_version, key: key.slice(), derived: false };
   });
+  if (indexed) {
+    const result = opened[wanted.length];
+    if (result.status === "rejected") throw result.reason;
+    indexRoot = { version: first.key_version, key: result.value, derived: true };
+  } else if (indexRoot && store.saveIndexKey) {
+    // First opened by a store that can write: the derived index key goes on the first version's row, and from now on
+    // nobody is handed the first data key for indexing. The bytes are what every member already derived for themselves.
+    try {
+      const index = await deriveTeamIndexKey(indexRoot.key);
+      await store.saveIndexKey(workspaceId, first.key_version, await wrappers[0].wrap(index, workspaceId, "team_index"), wrappers[0].id);
+      indexRoot.key.fill(0);
+      indexRoot = { version: first.key_version, key: index, derived: true };
+    } catch {
+      // Stored next time; the first data key stands in for it as before.
+    }
+  }
   if (!all.length || !indexRoot) throw new Error("Could not open the team key.");
   return { current: all[0], all, indexRoot };
 }

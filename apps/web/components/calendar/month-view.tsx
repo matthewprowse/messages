@@ -1,6 +1,7 @@
 "use client";
 
-// The calendar page's month grid. It only draws the days it is given; the page owns the events, tasks and selected date.
+// The calendar page's month grid: each day a white card on the grey, the selected one grey. It only draws the days it is
+// given; the page owns the events, tasks and selected date.
 
 import { Circle, CircleCheck } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
@@ -40,12 +41,12 @@ export function MonthView({
   // On a phone the grid stays on screen above the list, so its rows are as short as a date and its dots allow.
   return (
     <div className="flex flex-col md:h-full">
-      <div className="grid shrink-0 grid-cols-7 border-b">
-        {weekdays.map((w) => <span key={w} className="px-2 py-1 text-right text-xs text-muted-foreground md:py-2">{w}</span>)}
+      <div className="grid shrink-0 grid-cols-7 gap-1">
+        {weekdays.map((w) => <span key={w} className="px-2 pb-1 text-right text-xs text-muted-foreground">{w}</span>)}
       </div>
       {/* A container query, not the screen width: the grid is narrower beside the list, and titles fit once a cell does. */}
-      <div className="@container grid grid-cols-7 grid-rows-6 md:min-h-0 md:flex-1">
-        {days.map((key, i) => {
+      <div className="@container grid grid-cols-7 grid-rows-6 gap-1 md:min-h-0 md:flex-1">
+        {days.map((key) => {
           const d = fromKey(key);
           const events = byDay.get(key) ?? [];
           const tasks = dayTasks.get(key) ?? [];
@@ -69,8 +70,8 @@ export function MonthView({
               aria-label={counted ? `${date}, ${counted}` : date}
               aria-pressed={isSelected}
               className={cn(
-                "flex h-10 min-h-0 min-w-0 flex-col gap-0.5 overflow-hidden border-b px-1 py-0.5 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset md:h-auto md:p-1",
-                i % 7 !== 0 && "border-l",
+                "flex h-10 min-h-0 min-w-0 flex-col gap-0.5 overflow-hidden rounded-lg border bg-background px-1 py-0.5 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 md:h-auto md:p-1",
+                outside && "bg-background/60",
                 isSelected && "bg-muted hover:bg-muted",
               )}
             >

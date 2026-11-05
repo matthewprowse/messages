@@ -19,6 +19,11 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // The browser tests build into their own folder (.next-e2e, e2e/support/serve.ts), so a test build never touches the
+  // .next that the dev server on localhost:3000 is using. Such a build reads tsconfig.e2e.json, which already lists the
+  // folder's types, so Next has no reason to rewrite tsconfig.json; pnpm typecheck checks the types, so the build does not.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
+  ...(process.env.NEXT_DIST_DIR ? { typescript: { tsconfigPath: "tsconfig.e2e.json", ignoreBuildErrors: true } } : {}),
   poweredByHeader: false,
   // Pages are driven from the in-memory store, so a cached page payload carries no data: keep visited pages for 30 s
   // in the router cache instead of fetching them from the server on every rail click.

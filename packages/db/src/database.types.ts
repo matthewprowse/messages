@@ -3547,6 +3547,8 @@ export type Database = {
       team_keys: {
         Row: {
           created_at: string
+          index_wrapped_by: string | null
+          index_wrapped_key: string | null
           key_version: number
           retired_at: string | null
           workspace_id: string
@@ -3555,6 +3557,8 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          index_wrapped_by?: string | null
+          index_wrapped_key?: string | null
           key_version?: number
           retired_at?: string | null
           workspace_id: string
@@ -3563,6 +3567,8 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          index_wrapped_by?: string | null
+          index_wrapped_key?: string | null
           key_version?: number
           retired_at?: string | null
           workspace_id?: string
@@ -4177,6 +4183,9 @@ export type Database = {
           next_wrapped_key: string | null
           previous_wrapped_by: string | null
           previous_wrapped_key: string | null
+          retired_at: string | null
+          retired_wrapped_by: string | null
+          retired_wrapped_key: string | null
           rotated_at: string | null
           user_id: string
           wrapped_by: string
@@ -4190,6 +4199,9 @@ export type Database = {
           next_wrapped_key?: string | null
           previous_wrapped_by?: string | null
           previous_wrapped_key?: string | null
+          retired_at?: string | null
+          retired_wrapped_by?: string | null
+          retired_wrapped_key?: string | null
           rotated_at?: string | null
           user_id: string
           wrapped_by: string
@@ -4203,6 +4215,9 @@ export type Database = {
           next_wrapped_key?: string | null
           previous_wrapped_by?: string | null
           previous_wrapped_key?: string | null
+          retired_at?: string | null
+          retired_wrapped_by?: string | null
+          retired_wrapped_key?: string | null
           rotated_at?: string | null
           user_id?: string
           wrapped_by?: string
@@ -4535,6 +4550,56 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "workspace_cover_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      workspace_cover_log: {
+        Row: {
+          absent_id: string
+          actor_id: string | null
+          cover_id: string
+          cover_period_id: string
+          ends_at: string
+          event: string
+          id: number
+          logged_at: string
+          self_granted: boolean
+          starts_at: string
+          workspace_id: string
+        }
+        Insert: {
+          absent_id: string
+          actor_id?: string | null
+          cover_id: string
+          cover_period_id: string
+          ends_at: string
+          event: string
+          id?: never
+          logged_at?: string
+          self_granted?: boolean
+          starts_at: string
+          workspace_id: string
+        }
+        Update: {
+          absent_id?: string
+          actor_id?: string | null
+          cover_id?: string
+          cover_period_id?: string
+          ends_at?: string
+          event?: string
+          id?: never
+          logged_at?: string
+          self_granted?: boolean
+          starts_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_cover_log_workspace_id_fkey"
             columns: ["workspace_id"]
             isOneToOne: false
             referencedRelation: "workspaces"
@@ -5425,6 +5490,10 @@ export type Database = {
       refresh_thread_last_sender: {
         Args: { p_thread_id: string }
         Returns: undefined
+      }
+      queue_auto_draft: {
+        Args: { p_thread: string; p_user: string }
+        Returns: string
       }
       request_auto_draft: {
         Args: { p_thread: string }

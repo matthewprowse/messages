@@ -18,9 +18,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ... import log
-from .backoff import STOPS, Backoff, kind_of, poll_wait, trouble
+from .backoff import STOPS, WAITS, Backoff, kind_of, poll_wait, trouble
 from .mapping import apple_due, apple_priority, priority, task_row, wanted_lists
 from .session import SessionDir
+from .setup import why
 from .signin import SignInFailed, SignInStopped, open_reminders, sign_in
 from .store import PROVIDER, SignInRow, Store
 
@@ -31,6 +32,7 @@ SLOW_S = 30.0
 FULL_EVERY = timedelta(hours=6)  # a full read at least this often, which catches anything the changes missed
 SESSION_SAVE_S = 600.0
 RELOGIN = "Connect iCloud Reminders again in Settings."
+UNREACHABLE_TRIES = 5  # sign-ins in a row that iCloud never answered (about 15 minutes of waits) before giving up"
 
 REASONS = {
     "gone": "This reminder was deleted in iCloud Reminders.",
@@ -59,6 +61,25 @@ def loop_wait(empty: int) -> float:
     changes are coming, then 15 s, then 30 s, so an idle account costs a few queries a minute. Finding a change
     (or the sync worker claiming one) sets the count back to 0."""
     return LOOP_S if empty < IDLE_AFTER else MID_S if empty < 2 * IDLE_AFTER else SLOW_S
+
+
+def apple_error(err: BaseException) -> str | None:
+    """CloudKit's own error code and reason for a refused request (BAD_REQUEST, ZONE_NOT_FOUND and the like), for the
+    log. They describe the request, not the person's reminders; the reason is cut short in case it ever quotes more."""
+    current: BaseException | None = err
+    for _ in range(6):
+        if current is None:
+            break
+        text = getattr(current, "reason", None) or getattr(getattr(current, "response", None), "text", None)
+        if isinstance(text, str) and text.lstrip().startswith("{"):
+            try:
+                body = json.loads(text)
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and (body.get("serverErrorCode") or body.get("reason")):
+                return f"{body.get('serverErrorCode', '')}: {str(body.get('reason', ''))[:80]}".strip(": ")
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def update_failure(err: BaseException) -> tuple[str, str]:
@@ -102,6 +123,8 @@ class AccountSync:
         self.clock = clock
         self.now = now
         self.backoff = Backoff(rand)
+        self.step = "start"  # the iCloud call running, named when one is refused
+        self.wake = threading.Event()  # set by the runner when the sync worker has claimed a change for this account
         self.apple_id = ""
         self.dir: SessionDir | None = None
         self.saved_session = ""
@@ -152,25 +175,41 @@ class AccountSync:
         password = creds.get("password")
         api = self.api_for(self.apple_id, str(password) if password else None)
         if password:
-            return self.sign_in(api)
+            return self.sign_in(api, str(password))
         if not same:
             self.store.set_status(self.account, "error", RELOGIN)
             return None
         return self.resume(api)
 
-    def sign_in(self, api: Any) -> tuple[Any, Any] | None:
+    def sign_in(self, api: Any, password: str) -> tuple[Any, Any] | None:
         self.store.set_status(self.account, "connecting", "Signing in to iCloud.")
         codes = SignInRow(self.store, self.account)
+        unreached = 0
         try:
-            waiter = sign_in(api, codes, self.stop)
-            reminders = open_reminders(api, codes, waiter)
-        except SignInFailed as failed:
-            log.warn("icloud reminders sign-in failed", account=self.id, code=failed.code)
-            self.store.emit(self.user_id, "account_connect", provider=PROVIDER, step="sign_in", outcome="failed", code=failed.code)
-            self.store.set_status(self.account, "error", failed.detail)
-            return None
+            while True:
+                try:
+                    waiter = sign_in(api, codes, self.stop)
+                    reminders = open_reminders(api, codes, waiter)
+                    break
+                except SignInFailed as failed:
+                    # No answer at all says nothing about the password (pyicloud's PyiCloudConnectionException):
+                    # wait and sign in again with a fresh client, a few times, before asking the person.
+                    unreached = unreached + 1 if failed.code == "network" else 0
+                    if 0 < unreached < UNREACHABLE_TRIES and not self.stop.is_set():
+                        log.warn("icloud reminders sign-in unreachable", account=self.id, attempt=unreached, **why(failed))
+                        self.store.set_detail(self.id, WAITS["network"].detail)
+                        self.stop.wait(self.backoff.next(WAITS["network"]))
+                        if self.stop.is_set():
+                            return None
+                        api = self.api_for(self.apple_id, password)
+                        continue
+                    log.warn("icloud reminders sign-in failed", account=self.id, code=failed.code, **why(failed))
+                    self.store.emit(self.user_id, "account_connect", provider=PROVIDER, step="sign_in", outcome="failed", code=failed.code)
+                    self.store.set_status(self.account, "error", failed.detail)
+                    return None
         finally:
             codes.done()
+        self.backoff.reset()
         self.save_session(force=True)
         self.on_credentials(self.store.forget_password(self.id, self.apple_id))
         self.store.signed_in(self.account)
@@ -243,7 +282,7 @@ class AccountSync:
                         continue
                     except Exception as again:
                         t = trouble(again)
-                log.warn("icloud reminders request failed", account=self.id, kind=t.kind, code=log.code_of(err))
+                log.warn("icloud reminders request failed", account=self.id, kind=t.kind, code=log.code_of(err), step=self.step, apple=apple_error(err), **why(err))
                 self.store.emit(self.user_id, "sync_error", provider=PROVIDER, code=t.kind)
                 if t.stop:
                     self.save_session(force=True)
@@ -253,7 +292,10 @@ class AccountSync:
                 next_sync = self.paused_until = self.clock() + wait
                 self.store.set_detail(self.id, t.detail)
                 log.info("icloud reminders backing off", account=self.id, kind=t.kind, inS=round(wait))
-            self.stop.wait(loop_wait(empty))
+            # A claimed change wakes the loop at once (Accounts.wake_claimed); otherwise it looks again after loop_wait.
+            if self.wake.wait(loop_wait(empty)):
+                self.wake.clear()
+                empty = 0
 
     # -- reading ----------------------------------------------------------------------------------------
 
@@ -264,8 +306,11 @@ class AccountSync:
         token, full_at = self.store.sync_state(self.id)
         last_full = _parse(full_at)
         full = token is None or self.names is None or last_full is None or self.now() - last_full > FULL_EVERY
+        self.step = "cursor"
         cursor = reminders.sync_cursor()  # taken first, so a change made while reading is read again next time
+        self.step = "lists"
         names, gone = wanted_lists(list(reminders.lists()))
+        self.step = "changes"
         if self.names is not None and names != self.names:
             full = True
         try:
@@ -416,8 +461,8 @@ class AccountSync:
             all_day=all_day,
             time_zone=zone,
         )
-        task_id = self.keep(reminders, created)
-        self.store.finish_update(row, task_id=task_id)
+        self.keep(reminders, created)
+        self.store.finish_update(row)
         log.info("icloud reminders task created", account=self.id, update=row["id"])
 
     def edit(self, reminders: Any, row: dict[str, Any], reminder_id: str | None) -> None:

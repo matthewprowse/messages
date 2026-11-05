@@ -111,7 +111,7 @@ def raw_thread(items, users=(ANA,), **extra):
 class FakeSealer:
     """Readable stand-ins for sealing and indexes, so payloads can be checked by eye."""
 
-    def seal(self, field, value):
+    def seal(self, field, value, place=""):
         return None if value is None else f"[{field}]{value}"
 
     def address(self, value):

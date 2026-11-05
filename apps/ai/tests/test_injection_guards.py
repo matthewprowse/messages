@@ -319,7 +319,7 @@ class HeaderChecks(unittest.TestCase):
     def test_triage_reads_only_the_stored_reply_to_domain(self):
         db, selects = self.triage_with_headers({"auth": {"spf": "pass", "dkim": "pass", "dmarc": "pass"}, "reply_to_domain": "evil.biz"})
         self.assertEqual(db.upserts[0][1][0]["suspicious"], "impersonation")
-        self.assertEqual(selects, ["id,auth:provider_meta->auth,reply_to_domain:provider_meta->>reply_to_domain"])
+        self.assertEqual(selects, ["id,auth:provider_meta->auth,reply_to_domain:provider_meta->>reply_to_domain,name_mismatch:provider_meta->name_mismatch"])
         db, _ = self.triage_with_headers({"auth": {"spf": "pass", "dkim": "pass", "dmarc": "pass"}, "reply_to_domain": "mail.acme.com"})
         self.assertIsNone(db.upserts[0][1][0]["suspicious"])
 
@@ -332,6 +332,15 @@ class MeetingTranscript(unittest.TestCase):
         self.assertIn("clearly agreed", SUMMARY_SYSTEM)
         self.assertNotIn("—", SUMMARY_SYSTEM)
 
+
+
+class FromNameMismatch(unittest.TestCase):
+    def test_the_workers_from_name_check_flags_impersonation_whatever_the_stored_name(self):
+        # The contact is stored under their real name ("Sam"), so the name check alone passes; the worker saw the
+        # message's own From name claim another brand and said so in provider_meta.name_mismatch.
+        self.assertIsNone(header_suspicion("Sam", "sam@gmail.com"))
+        self.assertEqual(header_suspicion("Sam", "sam@gmail.com", name_mismatch=True), "impersonation")
+        self.assertIsNone(header_suspicion("Sam", "sam@gmail.com", name_mismatch="yes"), "only the worker's boolean counts")
 
 if __name__ == "__main__":
     unittest.main()

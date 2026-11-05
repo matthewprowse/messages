@@ -41,6 +41,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const userId = session?.user.id ?? null;
   const [state, rawDispatch] = useReducer(reducer, initial);
   const [drafting, setDrafting] = useState<Record<string, DraftPhase | undefined>>({});
+  // A draft's text while the AI worker is still writing it, by conversation (shown read-only in the reply box).
+  const [draftText, setDraftText] = useState<Record<string, string | undefined>>({});
   const [composeDrafts, setComposeDrafts] = useState<Record<string, ComposeDraft | undefined>>({});
   // New messages' drafts asked for here and still awaited; others (another tab) are not this tab's.
   const composeWaitRef = useRef(new Set<string>());
@@ -155,7 +157,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const { evictHeld, loadMessages, loadOlderMessages, hasOlder, prefetchMessages, ensureThread } = useThreadLoading({ rawDispatch, stateRef, threadMapRef, loadedRef, loadingRef, moreRef, olderRef, heldRef, openRef, setLoadedThreadIds, setFailedThreadIds });
   // Live updates: see app-store/use-realtime.ts.
-  useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, heldRef, openRef, evictHeld, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending });
+  useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, heldRef, openRef, evictHeld, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setDraftText, setPending });
 
   const { dispatch } = useProfileDispatch({ userId, rawDispatch, stateRef, saveFailed });
 
@@ -187,7 +189,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const labels = useLabels({ userId, notify, saveFailed });
   const { markRead, pin, archive, unarchive, trash, restore, snooze, unsnooze, react, setJunk, giveFeedback } = useThreadActions({ userId, rawDispatch, stateRef, threadMapRef, notify, saveFailed });
   const { removePending, replyTo, setReplyTo, send, cancelScheduled, sendScheduledNow, retryPending, composeEmail, composeWhatsApp, refreshCompose, saveSendAddresses } = useOutbox({ rawDispatch, stateRef, threadMapRef, pendingRef, draftAskRef, setPending, setComposed, saveFailed });
-  const { generateDraft, generateComposeDraft, discardComposeDraft, discardDraft } = useDrafts({ userId, rawDispatch, threadMapRef, draftAskRef, draftWaitRef, composeWaitRef, setDrafting, setComposeDrafts, saveFailed });
+  const { generateDraft, generateComposeDraft, discardComposeDraft, discardDraft } = useDrafts({ userId, rawDispatch, threadMapRef, draftAskRef, draftWaitRef, composeWaitRef, setDrafting, setDraftText, setComposeDrafts, saveFailed });
   const { unsubscribe, confirmUnsubscribe } = useUnsubscribes({ rawDispatch, stateRef });
   const { refreshContacts, undoMerge, mergeContacts, splitContact, patchContact, removeContact, contactChanges, contactsRefreshed } = useContactMerging({ rawDispatch, stateRef, loadedRef, notify, setContactsReady, setContactsVersion, setMergedInto });
   const { tasks, tickTask, createTask, editTask, deleteTask } = useTasks({ userId, stored: state.tasks, rawDispatch, stateRef, saveFailed });
@@ -196,12 +198,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<Ctx>(() => ({
     ...listState(state), dispatch, contactById, threadById, get messages() { return flatMessages(state.byThread); }, messagesByThread, messagesFor, messagesLoaded, messagesFailed,loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
     listThreads, notify, markRead, archive, unarchive, trash, restore, snooze, unsnooze, snoozeClock, labels, pin, send, cancelScheduled, sendScheduledNow, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
-    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
+    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, draftText, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   }), [
     state, dispatch, contactById, threadById, flatMessages, messagesByThread, messagesFor, messagesLoaded, messagesFailed, loadMessages, loadOlderMessages, hasOlder, removePending, retryPending, prefetchMessages,
     listThreads, notify, markRead, archive, unarchive, trash, restore, snooze, unsnooze, snoozeClock, labels, pin, send, cancelScheduled, sendScheduledNow, replyTo, setReplyTo, react, composeEmail, composeWhatsApp, composed, refreshCompose, ensureThread,
-    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
+    saveSendAddresses, generateDraft, discardDraft, requestAutoDraft, generateComposeDraft, composeDrafts, discardComposeDraft, setJunk, unsubscribe, confirmUnsubscribe, drafting, draftText, hydrated, giveFeedback, mergeContacts, splitContact, undoMerge, refreshContacts, patchContact, removeContact, contactChanges, contactsRefreshed,
     contactsVersion, contactsReady, tasks, tickTask, createTask, editTask, deleteTask,
   ]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -1,6 +1,6 @@
 // Which tables with a user_id column Download My Data covers, and why each of the rest is left out. export-coverage.test.ts
 // reads the migrations and fails when a table is in neither list, so a feature that stores something of the person's cannot
-// ship without either exporting it or saying why not. (There is no matters table: matters have not been built.)
+// ship without either exporting it or saying why not.
 
 /** Tables whose rows are in the zip, with the file or files that carry them. */
 export const EXPORTED_TABLES: Record<string, string> = {

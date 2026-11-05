@@ -5,7 +5,9 @@ import base64
 import json
 import os
 import threading
+import time
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -35,6 +37,10 @@ class FakeKms:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 outer.calls.append((self.path, self.headers.get("Authorization")))
+                if self.headers.get("Authorization") == "Bearer expired":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
                 aad = base64.b64decode(body.get("additionalAuthenticatedData", ""))
                 try:
                     if self.path.endswith(":encrypt"):
@@ -177,15 +183,62 @@ class KmsTests(unittest.TestCase):
         private.public_key().verify(base64.urlsafe_b64decode(pad(signature)), f"{header}.{claims}".encode(), padding.PKCS1v15(), hashes.SHA256())
 
 
+class TokenExpiryTests(unittest.TestCase):
+    def test_an_expired_token_is_dropped_and_the_call_tried_again(self):
+        fake = FakeKms()
+        self.addCleanup(fake.close)
+        tokens = ["expired", "fresh"]
+        token = lambda: tokens[0]
+        token.forget = lambda: tokens.pop(0)  # type: ignore[attr-defined]
+        kms = Kms(KEY_NAME, token=token, endpoint=fake.url)
+        key = os.urandom(32)
+        self.assertEqual(kms.unwrap(kms.wrap(key, "user-1"), "user-1"), key)
+        self.assertEqual([auth for _, auth in fake.calls], ["Bearer expired", "Bearer fresh", "Bearer fresh"])
+
+    def test_a_token_refused_twice_fails_without_looping(self):
+        fake = FakeKms()
+        self.addCleanup(fake.close)
+        token = lambda: "expired"
+        token.forget = lambda: None  # type: ignore[attr-defined]
+        kms = Kms(KEY_NAME, token=token, endpoint=fake.url)
+        with self.assertRaisesRegex(RuntimeError, "401"):
+            kms.wrap(os.urandom(32), "user-1")
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_the_token_expires_by_the_wall_clock(self):
+        # On a Mac the monotonic clock stops during sleep; the token's real expiry must still be noticed.
+        fetched = []
+
+        class Meta(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                fetched.append(1)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"access_token":"meta-token","expires_in":3599}')
+
+        server = HTTPServer(("127.0.0.1", 0), Meta)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        token = google_access_token({"GCE_METADATA_HOST": f"127.0.0.1:{server.server_port}"})
+        token()
+        with mock.patch("ai.keys.time.time", return_value=time.time() + 3600), mock.patch("ai.keys.time.monotonic", return_value=time.monotonic()):
+            token()
+        self.assertEqual(len(fetched), 2)
+
+
 class TeamRingTests(unittest.TestCase):
     def test_reads_versions_newest_first_and_the_first_as_index_root(self):
         master = base64.b64encode(os.urandom(32)).decode()
         k1, k2, k3 = os.urandom(32), os.urandom(32), os.urandom(32)
         row = lambda v, k, retired=None: {"key_version": v, "wrapped_key": keys_module.wrap_local(master, k, "w1", "team"), "wrapped_by": "local:v1", "retired_at": retired}
-        versions, root = unwrap_team_ring([row(2, k2, "x"), row(1, k1, "x"), row(3, k3)], master, "w1")
+        versions, root, derived = unwrap_team_ring([row(2, k2, "x"), row(1, k1, "x"), row(3, k3)], master, "w1")
         self.assertEqual([v for v, _ in versions], [3])  # 1 and 2 are retired
         self.assertEqual(root, k1)  # but the first stays as the index root
-        versions, root = unwrap_team_ring([row(1, k1), row(2, k2)], master, "w1")
+        versions, root, derived = unwrap_team_ring([row(1, k1), row(2, k2)], master, "w1")
         self.assertEqual([(v, k) for v, k in versions], [(2, k2), (1, k1)])
         self.assertEqual(root, k1)
         with self.assertRaises(Exception):  # a row moved to another workspace does not open

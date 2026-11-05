@@ -37,6 +37,7 @@ from .billing import is_billing_paused
 from .gemini import Gemini, GeminiError, UsageContext
 from .retry import Backoff, billing_paused, not_in
 from .supabase import Supabase, in_list
+from .triage_predraft import PreDrafts, candidates as pre_draft_candidates
 from .triage_extras import label_to_add, stronger_suspicion, twin_key, with_subject_summary
 from .text import clean
 from .triage_batch import BatchTriageMixin
@@ -103,6 +104,7 @@ class Triage(BatchTriageMixin, ContextMixin):
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="triage")
         self._users: dict[str, tuple[float, UserContext]] = {}  # user_id -> (read at, context)
         self._sender_caps = SenderCaps()  # one outside sender cannot spend your AI allowance by flooding you
+        self._pre_drafts = PreDrafts(db)  # a reply written ahead for new mail that needs one (triage_predraft.py)
 
     def _without_untranscribed(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Holds back a voice note until it is transcribed, so triage, the summary and the daily brief know
@@ -201,7 +203,7 @@ class Triage(BatchTriageMixin, ContextMixin):
         if ask:
             for answers in self._pool.map(lambda chunk: self._ask(contexts[chunk[0]["user_id"]], chunk), self._prepare(ask, contexts)):
                 results.update(answers)
-            results.update(self._batch_flush())  # old setup mail deferred by _ask goes as one half price batch
+            results.update(self._batch_flush())  # old mail deferred by _ask goes as one half price batch
         for m in copies:
             first = firsts[twin_key(m)]
             if first["id"] in results:
@@ -264,8 +266,10 @@ class Triage(BatchTriageMixin, ContextMixin):
         updates = [m for m in done if latest[m["id"]][0]]
         list(self._pool.map(lambda m: self._update_thread_safely(m, final[m["id"]], latest[m["id"]][1]), updates))
         self._label_threads(updates, final, contexts)
+        if not getattr(self, "_backfilling", False):
+            self._pre_drafts.queue(pre_draft_candidates(updates, final, {m["id"]: latest[m["id"]][1] for m in updates}))
         self._report(updates, final, stored)
-        self.automations.after_triage(done)  # lead capture etc. (automations/engine.py); logs its own failures, never raises
+        self.automations.after_triage(done, final)  # lead capture etc. (automations/engine.py); logs its own failures, never raises
         for m in done:
             self._backoff.succeeded(m["id"])
         self._batch_finish([m["id"] for m in done])
@@ -332,6 +336,7 @@ class Triage(BatchTriageMixin, ContextMixin):
                 usage,
                 thinking="minimal",
                 max_output=2048 + 256 * len(chunk),  # each answer is about 60 tokens; this only stops a runaway
+                share_system=True,  # the same instructions for everyone: from a cache once calls come often enough
             )
         except GeminiError as err:
             # Only an answer that was not usable (not JSON, blocked or empty, or the request refused) is worth asking

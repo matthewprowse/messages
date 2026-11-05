@@ -14,6 +14,16 @@ if ! command -v docker >/dev/null; then
     > /etc/apt/sources.list.d/docker.list
   apt-get update
   apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  # Docker's iptables integration explicitly on: the metadata guard below hooks into the DOCKER-USER chain, which only
+  # exists while Docker manages iptables. Merged into daemon.json so another setting there is kept.
+  python3 - <<'PY'
+import json, os
+path = "/etc/docker/daemon.json"
+conf = json.load(open(path)) if os.path.exists(path) else {}
+conf["iptables"] = True
+os.makedirs("/etc/docker", exist_ok=True)
+json.dump(conf, open(path, "w"), indent=2)
+PY
   systemctl enable --now docker
 fi
 

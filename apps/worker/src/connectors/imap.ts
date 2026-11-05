@@ -16,6 +16,7 @@ import { Backoff, SerialQueue, sleep, supervise } from "../backoff";
 import { db, getSyncState, loadCredentials, must, saveSyncState, setAccountStatus, touchAccount, type AccountRow } from "../db";
 import { errorCode, log } from "../log";
 import { parseEmail, type EmailAttachment } from "../ingest/normalize-email";
+import { authservTrust } from "../ingest/email-auth";
 import { applyReadState, storeEmail } from "../ingest/store-email";
 import { sideFolderDue, type FolderCheck, type FolderStatus } from "../ingest/folder-status";
 import { saveFilesQuietly } from "../ingest/attachment-files";
@@ -52,6 +53,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
   private readonly queue = new SerialQueue();
   private pollTimer: NodeJS.Timeout | null = null;
   private selfAddresses = new Set<string>();
+  private imapHost: string | null = null; // the mail host, for which Authentication-Results servers to trust
   private creds: C | null = null;
   private folders: Folder[] = [];
   /** Archive, Trash and Junk on this server, where it has them. */
@@ -121,8 +123,10 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
     this.lastReconcile = null;
     await this.refreshSelf(creds, { seed: true });
 
+    const imapSettings = await this.service.imap(creds);
+    this.imapHost = imapSettings.host ?? null;
     const client = new ImapFlow({
-      ...(await this.service.imap(creds)),
+      ...imapSettings,
       auth: { user: creds.username, pass: creds.password },
       logger: false, // its debug logs include message content
       maxIdleTime: 5 * 60_000,
@@ -255,6 +259,7 @@ export class ImapConnector<C extends MailCredentials = ImapCredentials> {
       account: this.account,
       tag: this.service.tag,
       selfAddresses: () => this.selfAddresses,
+      trustAuth: authservTrust(this.account.provider, this.imapHost),
       folderState: (path) => this.folderState(path),
       saveFolderState: (path, uidValidity, lastUid) => this.saveFolderState(path, uidValidity, lastUid),
       placeThreads: (ids, untrash) => this.placeThreads(ids, untrash),

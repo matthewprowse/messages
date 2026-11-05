@@ -4,6 +4,7 @@
 
 import { useState } from "react";
 import { track } from "@/lib/analytics";
+import { icloudPrefill } from "@/lib/icloud-mail";
 import { postAsUser } from "@/lib/onboarding";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,9 +15,8 @@ const APPLE_PASSWORDS = "https://account.apple.com/account/manage/section/securi
 
 /** Connects iCloud+ Mail, and iCloud Calendar with the same sign-in. The password is checked with iCloud before it is saved. */
 export function ICloudConnectForm({ defaultEmail = "", onConnected }: { defaultEmail?: string; onConnected: (result: { calendar: boolean }) => void }) {
-  const ownDomain = defaultEmail !== "" && !/@(icloud|me|mac)\.com$/i.test(defaultEmail);
-  const [username, setUsername] = useState(ownDomain ? "" : defaultEmail);
-  const [address, setAddress] = useState(ownDomain ? defaultEmail : "");
+  const [username, setUsername] = useState(() => icloudPrefill(defaultEmail).username);
+  const [address, setAddress] = useState(() => icloudPrefill(defaultEmail).address);
   const [password, setPassword] = useState("");
   const [calendar, setCalendar] = useState(true);
   const [busy, setBusy] = useState(false);

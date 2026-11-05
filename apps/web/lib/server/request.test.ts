@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appOrigin, clientAddress, foreignOrigin, isProduction, readCapped } from "./request";
+import { appOrigin, clientAddress, foreignOrigin, isProduction, limitedAddress, readCapped } from "./request";
 
 const dev = { NODE_ENV: "development" };
 const prod = { NODE_ENV: "production", APP_URL: "https://app.konva.example/" };
@@ -92,4 +92,12 @@ test("a streamed body with no length is cut off at the cap", async () => {
   const request = new Request("http://x/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
   assert.equal(await readCapped(request, 4096), null);
   assert.ok(pulled < 20);
+});
+
+test("a route limited by address alone refuses an unnamed caller in production and serves one locally", () => {
+  const prod = { NODE_ENV: "production", VERCEL_ENV: "production" } as NodeJS.ProcessEnv;
+  const dev = { NODE_ENV: "development" } as NodeJS.ProcessEnv;
+  assert.equal(limitedAddress(headed({ "x-vercel-forwarded-for": "1.2.3.4" }), prod), "1.2.3.4");
+  assert.equal(limitedAddress(headed({ "x-forwarded-for": "8.8.8.8" }), prod), null);
+  assert.equal(limitedAddress(headed({}), dev), "unknown");
 });

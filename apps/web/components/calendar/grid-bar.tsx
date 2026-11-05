@@ -1,6 +1,7 @@
 "use client";
 
-// The top of the calendar's grid card: the dates on show with Previous, Today and Next in a 40px row, and under it the
+// The header of the calendar's main section, on the grey above the grid card and built like the Conversations header's
+// title row: the dates on show as the title, Previous, Today and Next on the right. Under the card's top edge, the
 // one-line notes for a refresh that failed or days the worker has not read.
 
 import { ArrowLeft, ArrowRight } from "lucide-react";
@@ -11,8 +12,9 @@ import { IconAction, Tip } from "@/components/tip";
 /** `unit` names what the arrows move by ("Week", "Month") for their tooltips. */
 export function GridBar({ label, unit, onMove, onToday }: { label: string; unit: string; onMove: (n: number) => void; onToday: () => void }) {
   return (
-    <div className="flex h-10 shrink-0 items-center justify-between gap-2 pr-1 pl-3">
-      <h2 className="min-w-0 truncate text-sm font-medium tabular-nums">{label}</h2>
+    <div className="flex h-10 shrink-0 items-center justify-between gap-3">
+      {/* Title sized on the grey beside the list; on a phone it sits under the page title, so it stays small. */}
+      <h2 className="min-w-0 truncate text-sm font-medium md:text-xl">{label}</h2>
       <div className="flex shrink-0 items-center gap-1">
         <IconAction label={`Previous ${unit}`} icon={ArrowLeft} onClick={() => onMove(-1)} />
         <Tip label="Go to Today"><Button variant="ghost" onClick={onToday}>Today</Button></Tip>
@@ -26,7 +28,7 @@ export function GridBar({ label, unit, onMove, onToday }: { label: string; unit:
 export function GridNotes({ refreshFailed, notice, onRetry }: { refreshFailed: boolean; notice: SyncNotice; onRetry: () => void }) {
   if (!refreshFailed && !notice) return null;
   return (
-    <div className="flex shrink-0 flex-col border-t text-sm text-muted-foreground">
+    <div className="flex shrink-0 flex-col border-b text-sm text-muted-foreground">
       {refreshFailed && (
         <div className="flex h-10 items-center justify-between gap-3 pr-1 pl-3">
           <span className="min-w-0 truncate">Events did not refresh.</span>

@@ -232,11 +232,12 @@ function CalendarPageContent() {
     [wide, openKey, shownDetails, detailsFailed, pending.answer, accounts],
   );
 
-  // The same split as Conversations and Summary: the header and the list on the left, the grid in a white card on the
-  // grey beside it. Phones stack them, the grid between the header and the list. On a phone the agenda (and No Date)
+  // The same split as Conversations and Summary: the header and the list on the left (each day a card on the grey), the
+  // grid in a white card on the grey beside it under its own header. Phones stack them, the grid between the header and the list. On a phone the agenda (and No Date)
   // keeps the header and the week strip in place and scrolls only the list; the day and week views are taller than the
   // screen, so there the column scrolls as one.
   const pinned = view === "agenda" || undated;
+  const monthCards = view === "agenda" && wide;
   return (
     <Now.Provider value={now}>
     <Page.Provider value={context}>
@@ -259,8 +260,12 @@ function CalendarPageContent() {
 
         {/* The grid is too wide for a narrow column, so it keeps the wide side, whole in one card. No Date on a phone hides it. */}
         <div className={cn("min-w-0 shrink-0 md:col-start-2 md:row-span-2 md:row-start-1 md:flex md:min-h-0 md:flex-col md:bg-muted/50", undated && "max-md:hidden")}>
-          <div className="flex min-w-0 flex-col border-b md:m-3 md:min-h-0 md:flex-1 md:overflow-hidden md:rounded-lg md:border md:bg-background">
+          {/* The section's own header on the grey, level with the list's title row, as Conversations' header sits. */}
+          <div className="shrink-0 p-3 max-md:pt-0">
             <GridBar label={label} unit={unit} onMove={move} onToday={() => setAnchor(today)} />
+          </div>
+          {/* The month draws each day as its own card on the grey, so only the day and week grids sit in one white card. */}
+          <div className={cn("flex min-w-0 flex-col border-b md:mx-3 md:mb-3 md:min-h-0 md:flex-1 md:overflow-hidden", monthCards ? "md:border-b-0" : "md:rounded-lg md:border md:bg-background")}>
             {loadingOther && <div className="h-0.5 w-full shrink-0 animate-pulse bg-primary/50" role="progressbar" aria-label="Loading events" />}
             <GridNotes refreshFailed={refreshFailed} notice={notice} onRetry={() => setVersion((v) => v + 1)} />
             {/* On phones the page scrolls as one column, so the grid and the list keep their full height (shrink-0):

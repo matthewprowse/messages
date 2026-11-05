@@ -1,0 +1,6 @@
+// Screen tests only (TSX_TSCONFIG_PATH in the web "test" script): tsx compiles JSX itself, which tsconfig.json leaves
+// to Next ("preserve"). Everything else, the "@/..." paths included, comes from tsconfig.json.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "jsx": "react-jsx" }
+}

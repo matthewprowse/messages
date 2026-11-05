@@ -50,5 +50,23 @@ class Caps(unittest.TestCase):
         self.assertEqual((out["priority"], out["junk"], out["needs_reply"], out["summary"]), ("normal", False, False, "Hello 1"))
 
 
+
+class WiderCaps(unittest.TestCase):
+    def test_a_sender_changing_addresses_on_one_domain_shares_that_domains_cap(self):
+        caps = SenderCaps(cap=10, domain_cap=2, stranger_cap=100)
+        keep, over = caps.split([msg(i, sender=f"user{i}@spam.example") for i in range(4)], {"u1": UserContext()}, DAY)
+        self.assertEqual(([m["id"] for m in keep], [m["id"] for m in over]), (["m0", "m1"], ["m2", "m3"]))
+
+    def test_a_shared_mailbox_domain_has_no_domain_cap(self):
+        caps = SenderCaps(cap=10, domain_cap=1, stranger_cap=100)
+        keep, over = caps.split([msg(i, sender=f"person{i}@gmail.com") for i in range(3)], {"u1": UserContext()}, DAY)
+        self.assertEqual((len(keep), over), (3, []))
+
+    def test_strangers_share_one_cap_and_contacts_do_not(self):
+        caps = SenderCaps(cap=10, domain_cap=10, stranger_cap=2)
+        notes = [msg(i, sender=f"s{i}@d{i}.example") for i in range(3)] + [msg(10, sender="known@d9.example", sender_contact_id="c1")]
+        keep, over = caps.split(notes, {"u1": UserContext()}, DAY)
+        self.assertEqual(([m["id"] for m in keep], [m["id"] for m in over]), (["m0", "m1", "m10"], ["m2"]))
+
 if __name__ == "__main__":
     unittest.main()

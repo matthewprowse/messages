@@ -34,6 +34,7 @@ from .drafts_context import (
 )
 from .drafts_facts import CALENDAR_DAYS, calendar_lines
 from .drafts_prompt import build_prompt, is_adjust
+from .rules import safe_rule
 from .fields import (
     BODY,
     CHOICES,
@@ -395,7 +396,8 @@ class GatherMixin:
         recent = pick_voice([], first["recent"], limit=RECENT_VOICE)
         opened = lambda field, value: self.vault.open(user, field, value) or ""  # sealed or plain
         kept = self._channel_rules(user, channel, first["rules"]) if rules is None else rules
-        rules = [{**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in kept]
+        # safe_rule again on the way in: a rule stored before a word joined the filter (rules.py) still never reaches a draft.
+        rules = [r for r in ({**r, "rule": opened(STYLE_RULE, r.get("rule"))} for r in kept) if not r["rule"] or safe_rule(r["rule"])]
         return {
             **(self._composer(user) if composer is None else composer),
             "me": profile.get("display_name") or "",

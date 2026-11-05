@@ -35,10 +35,10 @@ import { errorCode, log } from "../log";
 import { MAX_FILE_BYTES } from "../file-store";
 import type { OutboxRow } from "../send/outbox";
 import { isLinked, useDbAuthState, type DbAuthState } from "../whatsapp/auth-state";
-import { silentLogger } from "../whatsapp/logger";
+import { linkLogger, silentLogger } from "../whatsapp/logger";
 import { BoundedMap } from "../whatsapp/bounded-map";
 import { messageFromRef, saveMedia, type MediaRow } from "../whatsapp/media";
-import { describe, e164, formatPairingCode, nameMentions, pairingDigits } from "../whatsapp/normalize";
+import { CALL_MISSED, describe, e164, formatPairingCode, nameMentions, pairingDigits } from "../whatsapp/normalize";
 import { quietSignalLogs } from "../whatsapp/quiet-signal";
 import { ingestWhatsApp, type WhatsAppStored } from "../whatsapp/ingest";
 import { retryStore } from "../whatsapp/retry";
@@ -46,7 +46,7 @@ import { decideClose, noCloses } from "../whatsapp/close-policy";
 import { ownsAccount } from "../shard";
 import { applyWhatsAppAction } from "../whatsapp/actions";
 import { isBusinessAccount } from "../whatsapp/business";
-import { missedCallMessage } from "../whatsapp/calls";
+import { callLogMessage, missedCallMessage } from "../whatsapp/calls";
 import { saveLabelAssociation, saveLabels } from "../whatsapp/labels";
 import { applyPollVote, voteOf } from "../whatsapp/poll-votes";
 import { Pacer, railsFromEnv } from "../whatsapp/send-rails";
@@ -188,7 +188,7 @@ export class WhatsAppConnector {
     const sock = makeWASocket({
       ...(latest?.isLatest ? { version: latest.version } : {}),
       auth: { creds: auth.state.creds, keys: makeCacheableSignalKeyStore(auth.state.keys, silentLogger) },
-      logger: silentLogger,
+      logger: linkLogger((record) => this.background(() => this.onCallLog(record))),
       // Baileys' default. A pairing code is refused for a desktop app client, so this links as Chrome on a Mac.
       browser: Browsers.macOS("Chrome"),
       markOnlineOnConnect: false, // so your phone keeps getting notifications
@@ -484,7 +484,7 @@ export class WhatsAppConnector {
       };
     }
     const chat = () => ({ chat: this.chats.get(chatJid) ?? (chatAlt ? this.chats.get(chatAlt) : undefined), groupSubject: this.groups.get(chatJid)?.subject });
-    const { payload, meta } = await buildPayload(this.ctx, { msg, key, remote, id, d, group, fromMe, sentAt, chatJid, chatAlt, sender, participants, quoted, body, live: opts.live, unread: opts.unread, known: chat });
+    const { payload, media } = await buildPayload(this.ctx, { msg, key, remote, id, d, group, fromMe, sentAt, chatJid, chatAlt, sender, participants, quoted, body, live: opts.live, unread: opts.unread, known: chat });
 
     const finish = (stored: WhatsAppStored): boolean => {
       if (stored.result !== "inserted" || !stored.message_id) return false;
@@ -496,7 +496,7 @@ export class WhatsAppConnector {
       const wanted = opts.live || recent || d.media?.type === "stickerMessage";
       if (d.media && attachmentId && wanted && (d.media.sizeBytes ?? 0) <= MAX_FILE_BYTES) {
         // The queued download keeps a small copy of what it needs, not the whole message.
-        const file = meta.media ? messageFromRef({ remoteJid: remote, fromMe, id, participant: key.participant ?? undefined }, meta.media) : msg;
+        const file = media ? messageFromRef({ remoteJid: remote, fromMe, id, participant: key.participant ?? undefined }, media) : msg;
         const row = { messageId: stored.message_id, attachmentId, mimeType: d.media.mimeType, kind: d.media.kind, filename: d.media.filename, sizeBytes: d.media.sizeBytes };
         this.fileTries.set(attachmentId, 1);
         this.downloadLater(() => this.fetchFile(file, row));
@@ -567,10 +567,15 @@ export class WhatsAppConnector {
     await saveLabelAssociation(this.ctx, event, alt);
   }
 
+  /** Your own JIDs on this link, phone number and privacy ID, normalized. */
+  private mine() {
+    const me = this.sock?.user;
+    return new Set([me?.id, me?.lid].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j)));
+  }
+
   /** A call that rang out unanswered is stored as a missed call line (../whatsapp/calls.ts). */
   private async onCalls(calls: WACallEvent[]) {
-    const me = this.sock?.user;
-    const mine = new Set([me?.id, me?.lid].filter((j): j is string => !!j).map((j) => jidNormalizedUser(j)));
+    const mine = this.mine();
     for (const call of calls) {
       const msg = missedCallMessage(call, mine.has(jidNormalizedUser(call.from)));
       if (!msg) continue;
@@ -579,6 +584,18 @@ export class WhatsAppConnector {
       } catch (err) {
         log.warn("whatsapp call failed", { account: this.id, code: errorCode(err) });
       }
+    }
+  }
+
+  /** A finished call from app state sync, made or taken on any device, is stored as a call line; only a missed one is unread. */
+  private async onCallLog(record: proto.ICallLogRecord) {
+    const msg = callLogMessage(record, this.mine());
+    if (!msg) return;
+    const missed = !msg.key.fromMe && msg.message?.callLogMesssage?.callOutcome === CALL_MISSED;
+    try {
+      await this.store(msg, { live: true, unread: missed });
+    } catch (err) {
+      log.warn("whatsapp call log failed", { account: this.id, code: errorCode(err) });
     }
   }
 

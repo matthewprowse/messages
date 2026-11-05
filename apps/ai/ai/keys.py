@@ -70,7 +70,7 @@ def _b64url(data: bytes) -> str:
 
 def google_access_token(env: dict[str, str] | None = None) -> Callable[[], str]:
     """A function that returns a bearer token for Google APIs, cached until a minute before it expires. See the
-    module docstring for where the token comes from."""
+    module docstring for where the token comes from. Its forget() drops the cached token, for one Google refused."""
     environ = env if env is not None else dict(os.environ)
     state: dict[str, Any] = {"token": None, "until": 0.0}
     lock = threading.Lock()
@@ -108,12 +108,19 @@ def google_access_token(env: dict[str, str] | None = None) -> Callable[[], str]:
 
     def token() -> str:
         with lock:
-            if state["token"] and state["until"] > time.monotonic():
+            # Wall clock, not monotonic: the token expires in real time, and on a Mac the monotonic clock stops while
+            # it sleeps, so after a sleep an expired token was kept and every unwrap failed for up to an hour.
+            if state["token"] and state["until"] > time.time():
                 return state["token"]
             value, ttl = fetch()
-            state["token"], state["until"] = value, time.monotonic() + max(0.0, ttl - 60)
+            state["token"], state["until"] = value, time.time() + max(0.0, ttl - 60)
             return value
 
+    def forget() -> None:
+        with lock:
+            state["token"] = None
+
+    token.forget = forget  # type: ignore[attr-defined]
     return token
 
 
@@ -130,7 +137,7 @@ class Kms:
         self._cache: dict[str, tuple[float, bytes]] = {}
         self._lock = threading.Lock()
 
-    def _call(self, op: str, body: dict[str, str]) -> dict[str, str]:
+    def _call(self, op: str, body: dict[str, str], retry: bool = True) -> dict[str, str]:
         req = urllib.request.Request(
             f"{self.endpoint}/v1/{self.key_name}:{op}",
             data=json.dumps(body).encode("utf-8"),
@@ -140,6 +147,10 @@ class Kms:
             with urllib.request.urlopen(req, timeout=10, context=CONTEXT) as res:
                 return json.loads(res.read())
         except urllib.error.HTTPError as err:
+            forget = getattr(self.token, "forget", None)
+            if err.code == 401 and retry and forget:
+                forget()  # the cached token expired or was revoked early: fetch a new one and try once more
+                return self._call(op, body, retry=False)
             # Only the status is reported: a response body could echo parts of a request.
             raise RuntimeError(f"KMS {op} failed ({err.code}).") from None
 
@@ -230,33 +241,39 @@ def unwrap_team(row: dict, master_key_b64: str, workspace_id: str, kms: Kms | No
     return _unwrap_row(row, master_key_b64, workspace_id, "team", kms)
 
 
-def unwrap_team_ring(rows: list[dict], master_key_b64: str, workspace_id: str, kms: Kms | None = None) -> tuple[list[tuple[int, bytes]], bytes]:
-    """Every readable version of a workspace's key, newest first as (version, key), and the index root (the first
-    version's key, which the team's blind indexes always use; see TeamKeyring in packages/crypto/src/wrap.ts).
-    A retired version (retired_at set) is left out of the list unless it is the first. A version this worker cannot
-    open is skipped, except the newest and the first, which raise."""
+def unwrap_team_ring(rows: list[dict], master_key_b64: str, workspace_id: str, kms: Kms | None = None) -> tuple[list[tuple[int, bytes]], bytes, bool]:
+    """Every readable version of a workspace's key, newest first as (version, key), the index root, and whether that
+    root is the index key itself. The team's blind indexes always use one key (see TeamKeyring in
+    packages/crypto/src/wrap.ts): the index key stored apart on the first version's row (index_wrapped_key, used as it
+    is: derived True) or, until the sync worker has stored it, the first version's data key, from which the caller
+    derives it (derived False). A retired version (retired_at set) is left out of the list, and the first is opened
+    only when it is needed as the root. A version this worker cannot open is skipped, except the newest and the root,
+    which raise."""
     ordered = sorted(rows, key=lambda r: int(r.get("key_version") or 1), reverse=True)
     if not ordered:
         raise ValueError("No team key.")
     newest, first = ordered[0], ordered[-1]
+    indexed = bool(first.get("index_wrapped_key")) and bool(first.get("index_wrapped_by"))
     keys: list[tuple[int, bytes]] = []
     root: bytes | None = None
     for row in ordered:
-        if row.get("retired_at") and row is not first:
+        if row.get("retired_at") and (row is not first or indexed):
             continue
         try:
             key = unwrap_team(row, master_key_b64, workspace_id, kms)
         except Exception:
-            if row is newest or row is first:
+            if row is newest or (row is first and not indexed):
                 raise
             continue
         if not row.get("retired_at"):
             keys.append((int(row.get("key_version") or 1), key))
-        if row is first:
+        if row is first and not indexed:
             root = key
+    if indexed:
+        root = _unwrap_row({"wrapped_key": first["index_wrapped_key"], "wrapped_by": first["index_wrapped_by"]}, master_key_b64, workspace_id, "team_index", kms)
     if not keys or root is None:
         raise ValueError("Could not open the team key.")
-    return keys, root
+    return keys, root, indexed
 
 
 def wrap_new(master_key_b64: str, data_key: bytes, owner_id: str, scope: str = "user", kms: Kms | None = None) -> tuple[str, str]:

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { decryptTeamField, deriveTeamKeys, encryptField, encryptTeamField, deriveUserKeys, type TeamKeys } from "@messages/crypto";
 import { FIELD } from "@messages/crypto/fields";
+import { BROWSER_KEY_HOLD_MS } from "@messages/crypto/flags";
 process.env.SUPABASE_URL ??= "http://localhost";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test";
 const { RETIRE_AFTER_MS, resealValue, resealWorkspace, rotateWorkspace } = await import("./rotate");
@@ -153,4 +154,8 @@ test("a row changed while the job read it is picked up on the next pass", async 
   const outcome = await resealWorkspace("w1", store, ring);
   assert.equal(outcome.state, "done");
   assert.equal(await decryptTeamField(k2, FIELD.subject, rows.messages[0].subject as string), "Edited meanwhile");
+});
+
+test("an old team key version outlives the browser's hold on it before it is retired", () => {
+  assert.ok(RETIRE_AFTER_MS >= BROWSER_KEY_HOLD_MS + 60_000, `${RETIRE_AFTER_MS} must cover ${BROWSER_KEY_HOLD_MS} plus a margin`);
 });

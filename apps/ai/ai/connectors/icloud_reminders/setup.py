@@ -27,6 +27,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from ... import log
 from ...supabase import Supabase, SupabaseError, missing_relation
@@ -185,18 +186,26 @@ STAGES = {
 
 
 def why(err: BaseException) -> dict[str, Any]:
-    """Where a sign-in failed, for the log: the step and Apple's HTTP status, never a message from Apple."""
+    """Where a sign-in failed, for the log: the step, Apple's HTTP status, the innermost error and the host it was
+    talking to. Never a message from Apple, a URL path or anything about the person."""
     found: dict[str, Any] = {}
     seen = 0
     current: BaseException | None = err
-    while current is not None and seen < 4:
+    while current is not None and seen < 8:
         stage = STAGES.get(str(current.args[0]) if current.args else "")
         if stage and "stage" not in found:
             found["stage"] = stage
-        status = getattr(getattr(current, "response", None), "status_code", None) or getattr(current, "code", None)
+        status = getattr(getattr(current, "response", None), "status_code", None) or getattr(current, "status", None) or getattr(current, "code", None)
         if isinstance(status, int) and "status" not in found:
             found["status"] = status
+        url = getattr(getattr(current, "request", None), "url", None)
+        if isinstance(url, str) and "host" not in found:
+            host = urlsplit(url).hostname
+            if host:
+                found["host"] = host
         found.setdefault("error", type(current).__name__)
+        if current is not err:
+            found["cause"] = type(current).__name__
         current = current.__cause__ or current.__context__
         seen += 1
     return found
@@ -213,6 +222,7 @@ def run_setup(setups: Setups, row: dict[str, Any], stop: threading.Event, *, mak
         setups.failed(row["id"], "The sign-in could not be read. Connect again.")
         return "failed"
     codes = setups.codes_for(row)
+    api: Any = None
     with SessionDir(apple_id) as folder:
         try:
             api = (make_api or make_account_api)(apple_id, password, folder.path)
@@ -229,8 +239,12 @@ def run_setup(setups: Setups, row: dict[str, Any], stop: threading.Event, *, mak
             setups.failed(row["id"], "The sign-in was stopped. Connect again.")
             return "stopped"
         except (SignInFailed, AppPasswordFailed) as err:
-            setups.failed(row["id"], err.detail)
-            log.warn("icloud setup failed", setup=row["id"], code=err.code, **why(err))
+            # sign_in takes any refused login for the password. When the account page refused the session after
+            # the password and code were accepted, that is what the person is told and the log records.
+            refused = getattr(api, "refused", None) if isinstance(err, SignInFailed) else None
+            failure = refused or err
+            setups.failed(row["id"], failure.detail)
+            log.warn("icloud setup failed", setup=row["id"], code=failure.code, **why(failure), **({"stage": "open"} if refused else {}))
             return "failed"
         except Exception as err:
             setups.failed(row["id"], "Apple did not let Konva sign in. Wait a while, then connect again.")

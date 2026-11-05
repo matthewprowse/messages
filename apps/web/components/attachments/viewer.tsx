@@ -160,7 +160,7 @@ function ViewerDialog({ attachment: a, open, detail, sender, sentAt, href, onClo
     body = <NoPreview attachment={a} message={notKeptMessage(a, notStored)} />;
   else if (file.state === "too_large")
     body = <NoPreview attachment={a} message="Too large to open on this device. Open it on a computer." />;
-  else if (a.kind === "pdf") body = <PdfViewer key={a.id} url={file.view} name={a.name} />;
+  else if (a.kind === "pdf") body = <PdfViewer key={a.id} url={file.view} data={file.blob} name={a.name} />;
   else if (a.kind === "image" && broken !== a.id) body = <ImageViewer key={a.id} url={file.view} name={a.name} preview={preview} onRatio={(ratio) => setHugging({ id: a.id, ratio })} onBroken={() => setBroken(a.id)} onSwipe={canStep ? step : undefined} />;
   else if (a.kind === "video") body = <VideoPlayer key={a.id} src={file.view} name={a.name} />;
   else if (a.kind === "audio") body = <div className="flex justify-center rounded-lg bg-muted/40 p-6"><VoiceNote attachment={{ ...a, path: file.path }} me={false} /></div>;

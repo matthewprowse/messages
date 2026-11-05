@@ -18,7 +18,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from . import log
 from .analytics import Analytics, event, prompt_id
@@ -37,6 +37,8 @@ from .gemini_estimate import (  # noqa: F401  re-exported: other modules and tes
     retry_wait,
 )
 from .gemini_files import FilesMixin
+from .gemini_shared_cache import SharedCacheMixin
+from .gemini_stream import StreamMixin
 from .gemini_types import (  # noqa: F401  re-exported: other modules and tests import these from here
     AUDIO_ATTEMPTS,
     AUDIO_BYTES_PER_SECOND,
@@ -69,7 +71,7 @@ from .pricing import SEARCH_QUERY_USD, cost_usd
 from .supabase import Supabase
 
 
-class Gemini(BudgetMixin, FilesMixin, BatchMixin):
+class Gemini(BudgetMixin, FilesMixin, BatchMixin, SharedCacheMixin, StreamMixin):
     def __init__(self, api_key: str, db: Supabase):
         self._key = api_key
         self._db = db
@@ -86,6 +88,9 @@ class Gemini(BudgetMixin, FilesMixin, BatchMixin):
         self._setups: dict[str, list[float]] = {}  # user -> [read at, setup dollars left]
         self._caches: dict[str, tuple[str, UsageContext, int, float, int]] = {}  # cache name -> (model, who, tokens, made at, ttl) until its storage is recorded
 
+
+    def _headers(self) -> dict[str, str]:
+        return {"Content-Type": "application/json", "x-goog-api-key": self._key}
 
     def billing_blocked(self) -> bool:
         """True while the billing breaker would refuse a call. Checked before a download or an upload so a paused
@@ -122,6 +127,8 @@ class Gemini(BudgetMixin, FilesMixin, BatchMixin):
         hold: Hold | None = None,
         cached: str | None = None,
         audio_seconds: float | None = None,
+        share_system: bool = False,
+        on_text: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """system goes first and should be the same text on every call of a kind, and prompt should put
         what changes least first: Gemini bills a repeated start of a request at the cached rate.
@@ -133,7 +140,10 @@ class Gemini(BudgetMixin, FilesMixin, BatchMixin):
         The call's estimated cost is held against the person's share while it runs (see _check_budget); hold is a
         job's reservation made ahead (Gemini.hold), in which case the call is not checked again. cached is the name
         of a cache made with cache_file, which carries the system text and the file: neither is sent again, and its
-        tokens are billed at the cached rate. audio_seconds is the length of a file, for the estimate."""
+        tokens are billed at the cached rate. audio_seconds is the length of a file, for the estimate. share_system is for a
+        system prompt many calls share (triage's): it is sent from a cache once calls come often enough for one to pay
+        (gemini_shared_cache.py). on_text, when given, is told the answer's text so far while it is written (gemini_stream.py),
+        for a draft shown as it comes; the answer returned is the same."""
         if thinking == "minimal" and model in self._no_minimal:
             thinking = "low"
         if audio and attempts > AUDIO_ATTEMPTS:
@@ -158,27 +168,50 @@ class Gemini(BudgetMixin, FilesMixin, BatchMixin):
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": config,
         }
-        if cached:  # the system text and the file are in the cache; a request that sets them again is refused
+        shared = self._shared_cache(model, system, usage) if share_system and not cached and not file else None
+        if cached or shared:  # the system text (and any file) are in the cache; a request that sets them again is refused
             del body["systemInstruction"]
-            body["cachedContent"] = cached
+            body["cachedContent"] = cached or shared
         if hold is not None:
             held = 0.0
         else:
             # A cached file is read at the cached rate, so only the text sent is estimated for the call itself.
             held = self._check_budget(usage, estimate_cost(model, body, max_output, None if cached else audio_seconds))
         try:
-            return self._send_json(model, body, config, thinking, usage, system, attempts, timeout, spent)
+            try:
+                return self._send_json(model, body, config, thinking, usage, system, attempts, timeout, spent, on_text)
+            except GeminiError as err:
+                if not shared or err.status not in (400, 403, 404):
+                    raise
+                # The shared cache went (expired early or deleted): the same call with the text, once.
+                self._drop_shared(model, system)
+                body["systemInstruction"] = {"parts": [{"text": system}]}
+                del body["cachedContent"]
+                return self._send_json(model, body, config, thinking, usage, system, attempts, timeout, spent, on_text)
         finally:
             self._release(usage, held)
 
     def _send_json(
-        self, model: str, body: dict[str, Any], config: dict[str, Any], thinking: str, usage: UsageContext, system: str, attempts: int, timeout: float, spent: list[Usage] | None
+        self,
+        model: str,
+        body: dict[str, Any],
+        config: dict[str, Any],
+        thinking: str,
+        usage: UsageContext,
+        system: str,
+        attempts: int,
+        timeout: float,
+        spent: list[Usage] | None,
+        on_text: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         started = time.monotonic()
         stats = {"attempts": 0}
         code = prompt_id(system)
         try:
-            data = self._call(model, body, attempts=attempts, timeout=timeout, stats=stats)
+            if on_text is not None:
+                data = self._call_streamed(model, body, on_text, attempts=attempts, timeout=timeout, stats=stats)
+            else:
+                data = self._call(model, body, attempts=attempts, timeout=timeout, stats=stats)
         except GeminiError as err:
             if not (thinking == "minimal" and err.status == 400 and "thinking" in err.detail.lower()):
                 self._lost(model, usage, body, stats)

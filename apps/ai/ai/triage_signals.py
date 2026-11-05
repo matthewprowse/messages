@@ -187,13 +187,37 @@ def pending_query(since: str, skip: list[str] | None = None) -> dict[str, str]:
 # Per-sender cap -----------------------------------------------------------------------------------
 # Anyone can write to you, so one outside sender must not be able to spend your AI allowance by sending hundreds of
 # messages. Past SENDER_DAILY_CAP model reads for one sender in a UTC day, their messages get capped_outcome instead.
+# A sender can change addresses, so the same cap applies to their domain, and strangers (senders who are nobody in
+# your contacts) share one bigger cap per user: past it the rest of the day's strangers are capped too, while the
+# people you know are read as before.
 SENDER_DAILY_CAP = 40  # model reads per sender per user per UTC day; a real correspondent stays far below it
+DOMAIN_DAILY_CAP = 40  # model reads per sender domain per user per UTC day; a mailbox provider's domain is exempt
+STRANGER_DAILY_CAP = 150  # model reads of mail from senders not in your contacts, per user per UTC day
+
+# Domains many unrelated people write from: a cap per domain would let one stranger cap them all.
+SHARED_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com", "icloud.com",
+    "me.com", "mac.com", "protonmail.com", "proton.me", "aol.com", "mail.com", "webmail.co.za", "mweb.co.za",
+    "telkomsa.net", "vodamail.co.za", "ymail.com", "gmx.com", "zoho.com",
+})
 
 
 def sender_key(m: dict[str, Any]) -> tuple[str, str]:
     """Who a message is from, per user: the blind index when there is one, else the opened address, else the conversation
     (a WhatsApp chat is one sender)."""
     return (m["user_id"], m.get("sender_index") or (m.get("sender_address") or "").lower() or f"thread:{m.get('thread_id')}")
+
+
+def domain_key(m: dict[str, Any]) -> tuple[str, str] | None:
+    """The sender's domain, per user, when the address is readable and the domain is not one everybody uses."""
+    address = (m.get("sender_address") or "").lower()
+    domain = address.rsplit("@", 1)[1] if "@" in address else ""
+    return (m["user_id"], f"domain:{domain}") if domain and domain not in SHARED_DOMAINS else None
+
+
+def stranger_key(m: dict[str, Any]) -> tuple[str, str] | None:
+    """One key for every sender who is not a contact of this user, or None for one who is."""
+    return None if m.get("sender_contact_id") else (m["user_id"], "strangers")
 
 
 def capped_outcome(m: dict[str, Any]) -> dict[str, Any]:
@@ -206,8 +230,8 @@ class SenderCaps:
     """Counts model reads per sender per UTC day, in memory: a restart starts the day's count again, which only ever
     lets a sender through sooner. Not thread safe on its own; triage calls it from its one loop thread."""
 
-    def __init__(self, cap: int = SENDER_DAILY_CAP):
-        self.cap = cap
+    def __init__(self, cap: int = SENDER_DAILY_CAP, domain_cap: int = DOMAIN_DAILY_CAP, stranger_cap: int = STRANGER_DAILY_CAP):
+        self.cap, self.domain_cap, self.stranger_cap = cap, domain_cap, stranger_cap
         self._day = ""
         self._counts: dict[tuple[str, str], int] = {}
 
@@ -224,10 +248,15 @@ class SenderCaps:
             if m.get("sender_contact_id") in c.vip_contacts or matches(m.get("sender_address") or "", c.always):
                 keep.append(m)
                 continue
-            key = sender_key(m)
-            if self._counts.get(key, 0) >= self.cap:
+            limits = [(sender_key(m), self.cap)]
+            if (domain := domain_key(m)) is not None:
+                limits.append((domain, self.domain_cap))
+            if (stranger := stranger_key(m)) is not None:
+                limits.append((stranger, self.stranger_cap))
+            if any(self._counts.get(key, 0) >= cap for key, cap in limits):
                 over.append(m)
             else:
-                self._counts[key] = self._counts.get(key, 0) + 1
+                for key, _ in limits:
+                    self._counts[key] = self._counts.get(key, 0) + 1
                 keep.append(m)
         return keep, over

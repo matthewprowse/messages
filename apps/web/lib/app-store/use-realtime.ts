@@ -48,11 +48,12 @@ export interface RealtimeDeps {
   setComposeDrafts: React.Dispatch<React.SetStateAction<Record<string, ComposeDraft | undefined>>>;
   setComposed: React.Dispatch<React.SetStateAction<Record<string, ComposeStatus | undefined>>>;
   setDrafting: React.Dispatch<React.SetStateAction<Record<string, DraftPhase | undefined>>>;
+  setDraftText: React.Dispatch<React.SetStateAction<Record<string, string | undefined>>>;
   setPending: React.Dispatch<React.SetStateAction<PendingSend[]>>;
 }
 
 /** Subscribes to the user's rows while signed in and keeps the store current. */
-export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, heldRef, openRef, evictHeld, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setPending }: RealtimeDeps) {
+export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRef, loadedRef, loadingRef, heldRef, openRef, evictHeld, moreRef, pendingRef, composedRef, threadMapRef, composeWaitRef, draftWaitRef, setComposeDrafts, setComposed, setDrafting, setDraftText, setPending }: RealtimeDeps) {
   // Live updates: the sync worker writes to Supabase and changes arrive here within a second or so.
   // Rows are built from the payload, so a change costs no extra request unless the payload is cut short.
   useEffect(() => {
@@ -304,6 +305,15 @@ export function useRealtimeSync({ userId, schedulePreDraft, rawDispatch, stateRe
         };
         (waited ? (key: string, rank: number, run: () => Promise<void>) => void run().catch(failWaiting) : queued)(`draft:${changed.id}`, 3, async () => {
           const [row] = await openDrafts([changed]);
+          if (row.status === "pending") {
+            // Part of a draft the AI worker is still writing (apps/ai drafts_stream.py), shown while it is the one asked for here.
+            if (row.body && draftWaitRef.current[threadId] === row.id) {
+              setDraftText((t) => ({ ...t, [threadId]: row.body ?? undefined }));
+              setDrafting((d) => (d[threadId] ? { ...d, [threadId]: "streaming" } : d));
+            }
+            return;
+          }
+          setDraftText((t) => (t[threadId] === undefined ? t : { ...t, [threadId]: undefined }));
           // A held pre-draft is offered beside the live draft, never as it: no "shown", nothing in the box.
           if (row.status !== REVIEW_STATUS && threadMapRef.current.get(threadId)?.reviewDraft?.id === row.id) rawDispatch({ type: "setReviewDraft", id: threadId });
           if (row.status === REVIEW_STATUS) {

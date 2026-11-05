@@ -13,6 +13,7 @@ import { OutlookCalendarConnector } from "../connectors/outlook-calendar";
 import { ICloudCalendarConnector } from "../connectors/icloud-calendar";
 import { GoogleTasksConnector } from "../connectors/google-tasks";
 import { MicrosoftTodoConnector } from "../connectors/microsoft-todo";
+import { ICloudRemindersConnector } from "../connectors/icloud-reminders";
 import { TeamsConnector } from "../connectors/teams";
 import { GoogleMeetConnector } from "../connectors/google-meet";
 import { ZoomConnector } from "../connectors/zoom";
@@ -29,6 +30,8 @@ export const CONNECTORS: Record<string, (account: AccountRow) => Connector> = {
   icloud_calendar: (account) => new ICloudCalendarConnector(account),
   google_tasks: (account) => new GoogleTasksConnector(account),
   microsoft_todo: (account) => new MicrosoftTodoConnector(account),
+  // Hands task changes to the AI worker's Reminders connector, which syncs the account (connectors/icloud-reminders.ts).
+  icloud_reminders: (account) => new ICloudRemindersConnector(account),
   teams: (account) => new TeamsConnector(account),
   google_meet: (account) => new GoogleMeetConnector(account),
   zoom: (account) => new ZoomConnector(account),

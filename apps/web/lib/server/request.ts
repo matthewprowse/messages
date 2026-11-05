@@ -110,6 +110,16 @@ export function clientAddress(request: Request, env: Env = process.env): string 
   return chain?.[chain.length - 1]?.trim() || "unknown";
 }
 
+/**
+ * The caller's address for a route whose only limit is per address (the waitlist, the Graph notification endpoint):
+ * null in production when Vercel did not say who is asking, so the route refuses rather than letting every unnamed
+ * caller share one bucket (one client could then use the whole allowance, or none could be told apart).
+ */
+export function limitedAddress(request: Request, env: Env = process.env): string | null {
+  const address = clientAddress(request, env);
+  return address === "unknown" && isProduction(env) ? null : address;
+}
+
 /** The in-memory fixed window: one counter per key for this server instance only. */
 function memoryLimiter(limit: number, windowMs: number) {
   const hits = new Map<string, { count: number; resetAt: number }>();

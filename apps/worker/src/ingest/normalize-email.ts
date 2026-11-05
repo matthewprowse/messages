@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
 import { hiddenReasonOf, type HiddenReason } from "./attachment-hidden";
-import { parseAuthResults, type EmailAuth } from "./email-auth";
+import { nameMismatch, parseAuthResults, type AuthservTrust, type EmailAuth } from "./email-auth";
 
 export interface EmailAddress {
   address: string; // lowercase
@@ -41,8 +41,10 @@ export interface NormalizedEmail {
   listUnsubscribe: string | null;
   /** True when the sender supports one-click unsubscribe (RFC 8058). */
   listUnsubscribePost: boolean;
-  /** The receiving server's SPF, DKIM and DMARC verdicts, or null when it gave none. */
+  /** The receiving server's SPF, DKIM and DMARC verdicts, or null when it gave none (or named a server that is not the provider). */
   auth: EmailAuth | null;
+  /** The From display name named an address or domain of another brand than the From address (email-auth.ts). */
+  nameMismatch: boolean;
   /**
    * The domain of a Reply-To address at another domain than the From address, lowercase, else null. Only the domain:
    * the AI worker's phishing check compares it with the sender's, and the address itself never needs to be stored.
@@ -82,7 +84,11 @@ function kindOf(mimeType: string): EmailAttachment["kind"] {
  * @param fallbackId used when a message has no Message-ID header (rare, but it happens),
  *                   so it still gets a stable identity for de-duplication.
  */
-export function normalizeEmail(parsed: ParsedMail, fallbackId: string): NormalizedEmail {
+/**
+ * @param trustAuth which Authentication-Results servers count (email-auth.ts authservTrust); without it the topmost
+ * header is taken as the provider's, as callers that only read a message's files or HTML do.
+ */
+export function normalizeEmail(parsed: ParsedMail, fallbackId: string, trustAuth?: AuthservTrust): NormalizedEmail {
   const providerMessageId = parsed.messageId?.trim() || fallbackId;
   const references = (Array.isArray(parsed.references) ? parsed.references : parsed.references ? [parsed.references] : [])
     .map((r) => r.trim())
@@ -107,7 +113,8 @@ export function normalizeEmail(parsed: ParsedMail, fallbackId: string): Normaliz
     preview: previewOf(text) ?? subject,
     listUnsubscribe: headerValue(parsed, "list-unsubscribe"),
     listUnsubscribePost: /List-Unsubscribe=One-Click/i.test(headerValue(parsed, "list-unsubscribe-post") ?? ""),
-    auth: parseAuthResults(headerValues(parsed, "authentication-results")),
+    auth: parseAuthResults(headerValues(parsed, "authentication-results"), trustAuth),
+    nameMismatch: nameMismatch(addresses(parsed.from)[0]?.name, addresses(parsed.from)[0]?.address),
     replyToDomain: replyToDomainOf(addresses(parsed.from)[0] ?? null, addresses(parsed.replyTo)),
     contentHash: contentHashOf(parsed, text, subject),
     // Inline parts referenced from the HTML (logos, signature images) are not real attachments.
@@ -203,6 +210,6 @@ export function nameFromAddress(address: string): string {
 }
 
 /** Parses raw email bytes and normalizes them. Links in images and HTML-from-text are skipped: never shown. */
-export async function parseEmail(raw: Buffer, fallbackId: string): Promise<NormalizedEmail> {
-  return normalizeEmail(await simpleParser(raw, { skipImageLinks: true, skipTextToHtml: true }), fallbackId);
+export async function parseEmail(raw: Buffer, fallbackId: string, trustAuth?: AuthservTrust): Promise<NormalizedEmail> {
+  return normalizeEmail(await simpleParser(raw, { skipImageLinks: true, skipTextToHtml: true }), fallbackId, trustAuth);
 }

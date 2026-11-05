@@ -149,12 +149,12 @@ class Vault:
                 return hit[1]
             if time.monotonic() < self._team_missing.get(workspace_id, 0.0):
                 return []
-        rows = self.db.select("team_keys", {"select": "key_version,wrapped_key,wrapped_by,retired_at", "workspace_id": f"eq.{workspace_id}"})
+        rows = self.db.select("team_keys", {"select": "key_version,wrapped_key,wrapped_by,retired_at,index_wrapped_key,index_wrapped_by", "workspace_id": f"eq.{workspace_id}"})
         ring: list[TeamKeys] = []
         if rows:
             try:
-                versions, root = unwrap_team_ring(rows, self.master_key_b64, workspace_id)
-                index = derive_team_keys(root).index
+                versions, root, derived = unwrap_team_ring(rows, self.master_key_b64, workspace_id)
+                index = root if derived else derive_team_keys(root).index
                 ring = [TeamKeys(enc=derive_team_keys(key).enc, index=index, owner=workspace_id) for _, key in versions]
             except Exception as err:
                 log.warn("team key could not be unwrapped", workspace=workspace_id, code=type(err).__name__)

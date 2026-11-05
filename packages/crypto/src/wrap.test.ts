@@ -2,15 +2,13 @@
 // the KMS call, and sealed credentials, against fakes of the key tables and Google's endpoints.
 
 import { test } from "node:test";
+import { deriveTeamIndexKey } from "./index";
 import assert from "node:assert/strict";
 import { createCipheriv, createDecipheriv, generateKeyPairSync, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import {
-  credentialKeysOf, dataKeyFor, deriveCredentialKey, googleAccessToken, handoffContext, indexKeyOf, kmsWrapper, localWrapper, openBound, openCredential, sealBound,
-  sealCredential, teamDataKeyFor, teamKeyring, userKeyringFor, wrappersFromEnv, type KeyStore, type TeamKeyRow, type TeamKeyStore, type UserKeyRow,
-} from "./wrap";
+import { credentialKeysOf, dataKeyFor, deriveCredentialKey, googleAccessToken, handoffContext, indexKeyOf, kmsWrapper, localWrapper, openBound, openCredential, sealBound, sealCredential, teamDataKeyFor, teamKeyring, userKeyringFor, wrappersFromEnv, type KeyStore, type TeamKeyRow, type TeamKeyStore, type UserKeyRow } from "./wrap";
 
 const vectors = JSON.parse(readFileSync(new URL("../vectors.json", import.meta.url), "utf8"));
 const credVectors = JSON.parse(readFileSync(new URL("../credential-vectors.json", import.meta.url), "utf8"));
@@ -72,6 +70,10 @@ function fakeTeamStore(): TeamKeyStore & { rows: Map<number, TeamKeyRow>; due: b
       store.due = false; // a version made after the removal answers it
     },
     rotationDue: async () => store.due,
+    saveIndexKey: async (_w: string, version: number, wrappedKey: string, wrappedBy: string) => {
+      const row = rows.get(version);
+      if (row && !row.index_wrapped_key) rows.set(version, { ...row, index_wrapped_key: wrappedKey, index_wrapped_by: wrappedBy });
+    },
   };
   return store;
 }
@@ -124,14 +126,14 @@ test("a retired version is left out of what readers try, but the first version s
   const third = await teamKeyring(store, [w], "w1");
   assert.deepEqual(third.all.map((k) => k.version), [3, 2, 1]);
   assert.equal(third.indexRoot.version, 1); // the index root does not move on a rotation
-  assert.deepEqual(third.indexRoot.key, first.current.key);
+  assert.deepEqual(third.indexRoot.key, await deriveTeamIndexKey(first.current.key)); // stored apart on the first open
   store.rows.get(1)!.retired_at = "2026-11-02T00:00:00Z";
   store.rows.get(2)!.retired_at = "2026-11-02T00:00:00Z";
   const ring = await teamKeyring(store, [w], "w1");
   assert.deepEqual(ring.all.map((k) => k.version), [3]);
   assert.equal(ring.current.version, 3);
   assert.equal(ring.indexRoot.version, 1);
-  assert.deepEqual(ring.indexRoot.key, first.current.key);
+  assert.deepEqual(ring.indexRoot.key, await deriveTeamIndexKey(first.current.key));
 });
 
 test("team key versions unwrap at once, a broken middle version is skipped, and a broken current one still throws", async () => {
@@ -154,7 +156,7 @@ test("team key versions unwrap at once, a broken middle version is skipped, and 
     },
   };
   const ring = await teamKeyring(store, [slow], "w1");
-  assert.equal(most, 3);
+  assert.equal(most, 4); // three versions and the stored index key
   assert.deepEqual(ring.all.map((k) => k.version), [3, 2, 1]);
   broken.add(2);
   const skipped = await teamKeyring(store, [slow], "w1");
@@ -445,4 +447,36 @@ test("a key wrapped by the retired local wrapper fails with legacy_wrapper_missi
   const store = fakeUserStore(new Map([["u", { wrapped_key: await w.wrap(Uint8Array.from({ length: 32 }, () => 1), "u"), wrapped_by: "local:v1" }]]));
   await assert.rejects(userKeyringFor(store, [kms], "u"), (err: { code?: string }) => err.code === "legacy_wrapper_missing");
   await assert.rejects(dataKeyFor(store, [kms], "u"), (err: { code?: string }) => err.code === "legacy_wrapper_missing");
+});
+
+test("the team index key is stored apart on first open and handed out derived, so a retired first key is never opened again", async () => {
+  const store = fakeTeamStore();
+  const w = await localWrapper(vectors.localWrap.masterKeyBase64);
+  const first = await teamKeyring(store, [w], "w1");
+  const v1 = first.all[0].key.slice();
+  // Stored by the first open through a store that can write, and equal to what members derived for themselves.
+  const row = store.rows.get(1)!;
+  assert.equal(row.index_wrapped_by, "local:v1");
+  assert.ok(row.index_wrapped_key);
+  assert.equal(first.indexRoot.derived, true);
+  assert.deepEqual(first.indexRoot.key, await deriveTeamIndexKey(v1));
+  // After a rotation and the retirement of version 1, the ring opens without version 1 at all.
+  store.due = true;
+  await teamKeyring(store, [w], "w1");
+  store.rows.set(1, { ...store.rows.get(1)!, retired_at: "2026-11-05T00:00:00Z", wrapped_key: "broken" });
+  const later = await teamKeyring(store, [w], "w1");
+  assert.deepEqual(later.all.map((k) => k.version), [2]);
+  assert.equal(later.indexRoot.derived, true);
+  assert.deepEqual(later.indexRoot.key, await deriveTeamIndexKey(v1));
+  // A store that cannot write (the web app) hands out the first data key with derived false, as before.
+  const readOnly = fakeTeamStore();
+  delete (readOnly as { saveIndexKey?: unknown }).saveIndexKey;
+  const legacy = await teamKeyring(readOnly, [w], "w2");
+  assert.equal(legacy.indexRoot.derived, false);
+  assert.deepEqual(legacy.indexRoot.key, legacy.all[0].key);
+});
+
+test("in production the static key never wraps a new key", async () => {
+  await assert.rejects(wrappersFromEnv({ KEY_WRAPPING_KEY: vectors.localWrap.masterKeyBase64, NODE_ENV: "production" } as NodeJS.ProcessEnv), /KMS_KEY_NAME is required/);
+  assert.equal((await wrappersFromEnv({ KEY_WRAPPING_KEY: vectors.localWrap.masterKeyBase64, NODE_ENV: "test" } as NodeJS.ProcessEnv)).length, 1);
 });

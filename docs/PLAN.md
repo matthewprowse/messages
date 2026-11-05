@@ -335,9 +335,9 @@ Meta verification a home page, Privacy Policy and Terms on our own domain. The f
 - Suppliers (Google, Supabase, Vercel) are named only in the Privacy Policy, where the law asks for them, not on the
   marketing pages.
 - Updates (3 November 2026): a public changelog at `/updates`, in the header and footer. It shows the entries the owner
-  publishes from the Updates tab in Admin (`public.updates`), newest release first, each with its date and version beside
+  publishes from Settings, Updates (`app/settings/updates`, `public.updates`), newest release first, each with its date and version beside
   it. The server reads published rows only, with the service role, cached for five minutes; drafts never leave the
-  database and no new read policy was needed. The old owner-only `/updates` route is gone (the editor is in Admin).
+  database and no new read policy was needed. The old owner-only `/updates` route is gone (the editor is in Settings).
   Publishing an entry now makes it public, so write each one for clients.
 
 ### Founder Hours and Support (2 November 2026)
@@ -357,10 +357,11 @@ steady growth. Check the employment contract for side business and IP clauses be
 
 ## Fair Usage and Storage
 
-Storage: 20 GB per seat approved 27 October 2026. Built so far: the Storage section in Settings, Usage,
-and the Storage Flags table in owner analytics (migration `20261031130000_storage_usage.sql`, needs applying).
-Not built yet: the cap itself (stopping new files at 100%) and the 80% email. The other open questions
-below are still to decide. AI fair usage is proposed at the end of this section and not approved.
+Storage: 20 GB per seat approved 27 October 2026. Built (checked 4 November 2026): the Storage section in Settings,
+Usage, the Storage Flags table (now in Admin, Flags), the cap itself (`apps/worker/src/storage-rules.ts`: 20 GB a seat,
+pooled for teams, a 110% grace band, then `not_kept = 'over_cap'`), the 80% notice and 100% text in Settings, hash dedupe
+and the 25 MB video link. Not built yet: the 80% email, the "over 100% for 30 days" email, the banner on the Attachments
+page, and counting a team's file copies in the meter. The other open questions below are still to decide. AI fair usage is proposed at the end of this section and not approved.
 
 **The problem.** Konva stores every attachment it syncs in the private attachments bucket. Today the only
 limit is 50 MB a file. Someone could WhatsApp themselves video and archives all day and use Konva as free
@@ -392,8 +393,8 @@ resumes on its own.
 **Limits that stay on.**
 - 50 MB a file stays (Supabase's default upload limit).
 - Same file, same account: store once, by content hash, so forwarding the same PDF costs one copy. (Built: `file-store.ts` keeps a keyed `content_hash` and points a repeat at the stored object, so several attachment rows can share one `storage_path`. Any delete feature must count references by `storage_path` before removing an object.)
-- Not built yet: Videos over a size to be set (suggest 25 MB) are kept as a link to the original, not copied, since
-  video is where almost all the bytes go.
+- Built: videos over 25 MB (`VIDEO_COPY_MAX_MB`) are kept as a link to the original (`not_kept = 'video_link'`), not
+  copied, since video is where almost all the bytes go.
 
 **Spotting abuse.** A clear sign is a WhatsApp chat with your own number, or a chat with one other person,
 that is mostly large files. Flag an account when over half its stored bytes come from its own chat, or it
@@ -480,6 +481,15 @@ Built: the `ai_budget` table and the allowance functions (`20261031140000_ai_bud
 - Not built: the first-import cap (the code imports 30 days, no conversation cap), the 20 GB storage cap and its
   80% and 100% behaviour and emails, hash dedupe and the 25 MB video link. Only the meter exists.
 
+Since fixed (checked 4 November 2026): the allowance fails closed and holds an estimated cost while a call runs
+(`gemini_budget.py`, `gemini.py`); the setup allowance is granted once per address and the app role can no longer
+insert accounts (`20261102100000_accounts_service_role_writes.sql`, `20261102100100_ai_setup_once_per_address.sql`);
+logo tries are capped (`20261102500100_logo_tries.sql`); lost and timed-out calls are recorded; audio is priced on its
+own (`pricing.py`, though the audio price is still a guess); voice notes have a length limit and strangers' notes wait
+(`20261124120000_voice_note_limits.sql`); compose drafts count toward the 20 pending cap
+(`20261108100300_drafts_pending_cap.sql`). The storage cap, dedupe and video link are built (see above). Still open:
+the first-import cap, a per hour limit on compose drafts, and the storage emails.
+
 The rest of this section is the original proposal.
 
 **The aim.** A normal person never notices a limit. The limit exists for the account that, say, uploads
@@ -549,16 +559,17 @@ meeting, speech and regenerate calls, the allowance line in Usage, the abuse fla
 
 The marketing page was removed on 28 October 2026 and comes back as the marketing site (3 November 2026, see Marketing
 Site): `/` is the public home page again, and its Request Access form will write to the `waitlist` table that `/admin`
-already reads. Until that form is built nothing writes to the table.
+already reads. The Request Access form writes to it (`app/api/waitlist/route.ts`).
 
 `/admin` is owner only, like Analytics, and sits above Settings in the navigation. It lists requests
 by status (Pending, Approved, Rejected), filters teams and individuals, and approves or rejects with
 Undo. The database lets only the owner read or change requests. Approving a team request also makes its
 team (see Teams) and shows an invite link for its owner, and Teams lists each team with its seats.
 
-Admin tabs (wave 3, 17 November 2026): AI Usage (the default), AI Budget, Teams and Updates. Requests are
-folded into Teams, above the team list. The changelog moved from the main rail into Admin (`/updates` is now the
-public changelog). AI Usage opens with the Gemini billing state, written to `ai_status` by the AI worker when its
+Admin views (as built, checked 4 November 2026): Overview (the default), Usage, AI, System, Flags, Teams, Audit and
+Logos (`components/admin/view-params.ts`). Analytics is part of Admin: `/analytics` and `/analytics/logos` redirect into
+it. Requests are folded into Teams, above the team list. The changelog editor is in Settings, Updates (`/updates` is the
+public changelog). The rest of this paragraph is from wave 3 (17 November 2026). AI Usage opens with the Gemini billing state, written to `ai_status` by the AI worker when its
 breaker trips or recovers, the month total with a projection, and who is flagged or paused. A team's percent
 and flag use its pooled spend over seats times the budget, as the pause does. AI Budget keeps edits across
 tabs, saves only if nobody else saved first, keeps share keys it has no row for, and asks before a share of 0%
@@ -573,16 +584,16 @@ pauses a feature for everyone. Changelog saves also check `updated_at`.
 | Calendar | Google Calendar | Built |
 | Calendar | Outlook Calendar through Microsoft Graph, read only | Built, not yet checked on a real account |
 | Calendar | iCloud Calendar through CalDAV, read and create events | Reading checked against a real account. Creating is unit tested only: no event has been made on a real calendar yet |
-| Calendar | Apple Calendar (CalDAV, app-specific password) | To do |
+| Calendar | Apple Calendar (CalDAV, app-specific password) | Same as iCloud Calendar above (`apps/worker/src/caldav`) |
 | WhatsApp | Personal and WhatsApp Business app numbers through Baileys | Built |
 | WhatsApp | Voice notes transcribed and summarised by Gemini (see below) | Built |
-| Mail | Any other IMAP and SMTP mailbox (Afrihost, Xneelo, Domains.co.za, cPanel hosts, Yahoo and others), with server settings found automatically. iCloud becomes one preset of the same connector | Building (agreed 26 October 2026) |
-| Meetings | Google Meet, Teams and Zoom transcripts, shown as a card in the attendee's conversation, on their contact page and on the calendar event (see Meeting Transcripts below) | Building. Zoom hidden from users (decided 27 October 2026) |
-| Meetings | Teams, Zoom and Google Chat conversations, read and reply, including the chat inside a meeting (see below) | Building. Zoom hidden from users |
-| Social | LinkedIn messages, signed in on the Konva page through mautrix-linkedin's password sign-in (see Social Messaging below) | Building (changed 27 October 2026) |
-| Social | Instagram DMs: Business and Creator accounts through the official Instagram Login, personal accounts through instagrapi. The user picks their account type first | Building (changed 27 October 2026) |
-| Tasks | Microsoft To Do, Google Tasks and iCloud Reminders, shown in Calendar on the day they are due and in the daily brief, ticked off from the app. iCloud Reminders through an iCloud.com sign-in on the Konva page, no Mac | Building (changed 27 October 2026) |
-| Privacy | Per-user encryption of stored data | In progress |
+| Mail | Any other IMAP and SMTP mailbox (Afrihost, Xneelo, Domains.co.za, cPanel hosts, Yahoo and others), with server settings found automatically. iCloud becomes one preset of the same connector | Built ("Other Email" in Accounts, `connectors/imap.ts`, `packages/mail-servers`) |
+| Meetings | Google Meet, Teams and Zoom transcripts, shown as a card in the attendee's conversation, on their contact page and on the calendar event (see Meeting Transcripts below) | Built for Meet and Teams, not yet checked on real accounts. Zoom hidden from users (decided 27 October 2026) |
+| Meetings | Teams, Zoom and Google Chat conversations, read and reply, including the chat inside a meeting (see below) | Built for Teams and Google Chat, not yet checked on real accounts. Zoom hidden from users |
+| Social | LinkedIn messages, signed in on the Konva page through mautrix-linkedin's password sign-in (see Social Messaging below) | Built (unofficial route; the Python helper is not finished) |
+| Social | Instagram DMs: Business and Creator accounts through the official Instagram Login, personal accounts through instagrapi. The user picks their account type first | Built (Meta App Review still to do) |
+| Tasks | Microsoft To Do, Google Tasks and iCloud Reminders, shown in Calendar on the day they are due and in the daily brief, ticked off from the app. iCloud Reminders through an iCloud.com sign-in on the Konva page, no Mac | Built |
+| Privacy | Per-user encryption of stored data | Built in code: per-user keys, KMS wrapping, sealed names and calendar text, bound values (switched off). Static keys not yet retired; Confidential Space later |
 | Email display | Bold, italics and the like in email and WhatsApp bubbles (see below) | Built, not yet checked on real mail |
 | Drafts | Guided drafting, What To Say (typed or spoken), Adjust, Edit Text, saved facts, follow-ups, drafting new emails and WhatsApp messages (see below) | Built; checked offline against 35 real replies and end to end on real conversations, not yet in the browser |
 | Brief | Spoken daily brief (see below) | Built |
@@ -590,8 +601,8 @@ pauses a feature for everyone. Changelog saves also check `updated_at`.
 | Media | Voice notes and audio play inside the conversation (speed 1x, 1.5x, 2x); videos play in the app's own player | Built |
 | Notes | Private notes with live markdown formatting and attachments, under Attachments in the rail (see below) | Built, not yet checked in the browser |
 | Clients | Client timeline across every channel, with matters (see Client Timeline and Matters, Wave 7) | Built, not yet checked in the browser |
-| Leads | Property24 and Private Property enquiry emails turned into clients, through Automations (see Full App Review, 2 November 2026) | To do |
-| Onboarding | Sign up, a setup dialog over the app (connect, about you, what Konva found, contacts, a practice reply). The page by page tour was removed on 2 November 2026 (see below) | Built on mock data for the findings, contacts and drafts; not yet checked end to end with a new account |
+| Leads | Property24 and Private Property enquiry emails turned into clients, through Automations (see Full App Review, 2 November 2026) | Built, written from the public layout and not yet tested on real enquiry emails |
+| Onboarding | Sign up, a setup dialog over the app (connect, about you, what Konva found, contacts, a practice reply). The page by page tour was removed on 2 November 2026 (see below) | Built. Counts, About You and Who Matters Most are real; the contacts to tidy, practice reply and How You Write are still examples. Not yet checked end to end with a new account |
 
 ## How the Key Features Work
 
@@ -645,9 +656,9 @@ When a draft is written:
 - While the app is open and in view: about 30 seconds after the last change to a conversation (so a
   burst of WhatsApp messages gets one draft), once triage has read it.
 - When the user opens a conversation that qualifies and has no draft yet.
-- Never while the app is closed. Most replies are still sent from the phone or Gmail (on the owner's
-  account 28 of 164 replies in two weeks went through the app), so drafts written then would mostly
-  go unseen.
+- Also while the app is closed, since 4 November 2026 (see Faster and Cheaper AI): triage asks for a pre-draft as
+  soon as it says fresh mail needs a reply (`apps/ai/ai/triage_predraft.py`, `20261126110000_worker_pre_drafts.sql`),
+  with the same checks and the same 15 a day. This replaces the 26 October rule "never while the app is closed".
 
 Which conversations qualify:
 
@@ -756,14 +767,15 @@ Speed:
 - The worker warms the Gemini connection while it reads the context (about 0.6s saved on a cold
   start), a model call with no answer after 4.5s is raced by a second one (8 to 10s calls were seen
   against a usual 2.6s), and the app shows a draft it is waiting for the moment it arrives.
-- Not done, by measurement: streaming (replies are short, it would save 0.2 to 0.6s), explicit
-  Gemini caching (the prompt is under the 1,024-token minimum), prompt trimming (under 0.1s).
+- Streaming and an explicit cache for triage's instructions were built on 4 November 2026 (see Faster and Cheaper AI).
+  Not done, by measurement: prompt trimming (under 0.1s), and an explicit cache for drafts (the prompt is under the
+  1,024-token minimum).
 
 Not built yet:
 
 - Draft versions (back and forward through earlier drafts) and showing what an edit changed.
-- Style rules tagged by channel (all 11 learned rules are email rules), and a profile "about" that
-  matches the user's real mail: both hurt drafts in the offline check.
+- A profile "about" that matches the user's real mail (it hurt drafts in the offline check). Style rules are now
+  tagged by channel (`learn.py`, `rule_channel`).
 - Waking the worker from Realtime instead of polling (about 0.75s), and running it next to the
   database (about 0.7s), with the planned Confidential Space move.
 
@@ -1003,6 +1015,13 @@ Decided 2 November 2026 (Wave 6). WhatsApp stays on Baileys; the official WhatsA
   "Edited" or "Deleted by Sender", and both open View Original. A message deleted before this change has no original to show.
 - **Business labels.** For a WhatsApp Business account, labels sync one way (WhatsApp to Konva) into Konva labels, with names sealed, and a label on a chat
   becomes the label on its conversation. Labels on single messages are not shown.
+- **Call history (4 November 2026).** Calls show in the chat as centred lines, not only missed ones: calls you make from your
+  phone ("Outgoing Voice Call · 3 Min", or "No Answer") and calls to you ("Incoming Video Call · 45 Sec", "Declined Voice Call",
+  "Missed Voice Call" in the warning colour). Konva still cannot place calls. They come from the call log WhatsApp syncs to
+  linked devices once a call ends; Baileys drops it, so the connector catches it from app state sync through its logger
+  (`apps/worker/src/whatsapp/calls.ts`, `logger.ts`). Only a missed call to you is unread. Call lines are left out of voice
+  learning and draft rewrites. Calls from before the link are not imported (history sync's call log is also dropped by
+  Baileys). Not yet seen against a real call: check that the length and start time read right on the first one.
 - **Missed calls and polls.** A missed WhatsApp call is stored as a "Missed Voice Call" or "Missed Video Call" line. A poll shows its options with vote
   counts, kept as positions per voter on the poll message; votes are read with the poll's own key, which is stored sealed.
 
@@ -1170,7 +1189,8 @@ Agreed 25 October 2026.
 - **Analytics:** `note_created`, `note_file_attached` (with the file kind) and `note_deleted`, as
   `feature_used`, with no content.
 - Markdown formatting is for notes only; the message composer is unchanged.
-- Not yet: notes in Cmd-K search, note files on the Attachments page, linking a note to a client.
+- Built since: notes in Cmd-K search (`components/search-command.tsx`) and linking a note to a client
+  (`20261118180000_note_links.sql`, `components/note-links.tsx`). Not yet: note files on the Attachments page.
 
 Build time, Claude-built: about 3 to 4 hours.
 
@@ -1237,10 +1257,10 @@ Build time, Claude-built: about 3 to 4 hours.
   - **Review page:** `/analytics/logos`, linked from Analytics. Reject re-queues without that candidate
     (it is never offered again); Use This saves a candidate by hand and rechecks leave it alone. Logos are
     rechecked after 90 days.
-  - **Fallback:** `CompanyAvatar` in `components/primitives.tsx`, the first letter on `bg-secondary`.
-  - **Rollout, not done yet:** `pnpm --filter worker company-logos --from-orgs`, then the app reads company
-    avatars from the `logos` bucket through `CompanyAvatar`, then `COMPANY_LOGOS=true` in both workers'
-    `.env` and a restart. Until then the per-user logos below stay as they are.
+  - **Fallback:** `CompanyAvatar` in `components/primitives.tsx`, a building icon (it was the first letter on
+    `bg-secondary`).
+  - **Rollout:** the code side is done (`CompanyAvatar` reads `logo_path` from the public `company-logos` bucket). It
+    needs `COMPANY_LOGOS=true` in both workers' `.env` in production, which the code cannot show.
 - **Where logos came from (first version):** the company's own site first: every icon its home page and web app
   manifest name (apple-touch-icon, manifest icons, SVG icons, favicons), then `/apple-touch-icon.png`
   and `/favicon.ico`. When none is sharp enough, Google's public favicon service
@@ -1290,14 +1310,13 @@ they left off:
 Steps 3 and 4 drop out when no account is connected.
 
 Part B, the page by page tour, was removed on 2 November 2026: the owner's rule is that onboarding shows value
-in dialogs, not a popover tour. Settings, General, Getting Started runs the whole setup again. The setup dialog now
+in dialogs, not a popover tour. Settings, Profile, Run Setup Again runs the whole setup again. The setup dialog now
 shows only real counts and contacts, labels its demo steps as examples, and saves nothing it made up.
 
-For now steps 2 to 5 run on mock data (`lib/onboarding-demo.ts`): the import counts, the profile the AI
-writes, the contact suggestions and the practice drafts. To make them real: the workers report import
-counts, the AI worker writes the first profile during setup, the contact linker reports its suggestions,
-and the practice reply calls the real drafting with a sample message. The profile photo is shown but not
-saved yet.
+Checked 4 November 2026: the import counts, About You and Who Matters Most are real (`lib/onboarding-findings.ts`).
+Still examples (`lib/onboarding-demo.ts`): the contact suggestions, the practice reply and How You Write. To make
+them real: the contact linker reports its suggestions and the practice reply calls the real drafting with a sample
+message. The profile photo is shown but not saved yet (it stays a blob URL).
 
 How it works:
 
@@ -1313,57 +1332,14 @@ How it works:
 - Brand logos (Google, Microsoft, iCloud, WhatsApp, Gmail, Outlook) are small SVG files in
   `apps/web/public/logos`, from the official artwork, with no icon package.
 
-#### Onboarding Flow: the /onboarding Page (28 October 2026)
+#### Onboarding Flow: the /onboarding Page (28 October 2026, removed)
 
-A page of its own for joining, as a mock for now (`app/onboarding/page.tsx`, `components/onboarding/flow.tsx`).
-It is one dialog on a `bg-secondary` page with nothing else on it: no close button, Escape and clicking outside
-do nothing, so the only way out is through. It sits outside the app shell (no navigation, no sign-in
-redirect) and everything on it is mock data that is saved nowhere.
+A separate `/onboarding` page was built as a mock on 28 October 2026 and deleted in v0.0.11
+(`app/onboarding/page.tsx` and `components/onboarding/flow.tsx` no longer exist). Its useful parts live in the setup
+dialog above (`components/onboarding/setup-dialog.tsx`). Still not built from it: Microsoft and Apple sign-in and
+passkeys on `/login`, and the Daily Brief step.
 
-Goal: from signing up to a useful Summary page in about three minutes, with every question either answered by
-the import or skippable.
-
-Six steps, each one screen (a Voice step was dropped on 28 October: Konva learns tone, length and sign-off
-from sent mail and from the edits people make, so asking up front added a step without adding accuracy):
-
-1. Welcome (join): no intro text. Continue With Google, Microsoft or Apple, or a name and email address with
-   a code. A Set Up a Passkey switch lets someone sign in with Face ID, Touch ID or a device PIN, so no code
-   is emailed each time. Mock for now: Microsoft and Apple sign-in and the passkey are still to build.
-2. Connect: Google, WhatsApp (QR code inline), iCloud, Microsoft. "Do This Later" shows only while nothing is
-   connected. "Skip, Do Later" shows only while nothing is connected. The first connection starts the import,
-   which keeps running behind every later step, shown as "Processing" beside the step count.
-3. About You: photo, what you do, anything else Konva should know. All optional.
-4. What Konva Found: the totals, shown within seconds (for example 10,000 emails), with an honest estimate
-   of how long reading them all takes (for example about 30 minutes). Nobody waits: Continue is always on,
-   the last 30 days are processed first so Summary and Inbox are useful in minutes, and Konva notifies them
-   when the rest is done and its profile (About You, How You Write, Who Matters Most) is ready to review in
-   Settings.
-5. Daily Brief: the brief time, spoken or not, and which notifications to get (urgent, midday digest).
-6. Ready: what was set up in plain lines, then Show Me Around (the tour) or Start Using Konva.
-
-Rules for every step:
-
-- Back is always at the far left, except on the first step. Nothing is lost going back. There is no
-  coloured footer bar: just the buttons.
-- One decision per screen. Defaults are already the likely answer, so Continue is always enough.
-- Without an account, step 4 says nothing is connected, and step 7 says what is missing.
-- No dashes in the copy and Title Case on labels, as everywhere else.
-
-Mock versus real, so that making it real touches only the data:
-
-| Step | Mock now | Real later |
-| --- | --- | --- |
-| Welcome | Google button fills a sample name and email | `/login` sign-up, then this page opens once per new user |
-| Connect | A timer marks the account connected | The existing `/api/connect/*` routes and WhatsApp link panel |
-| Found | Fixed totals that count up in 2.5 seconds | Provider totals read at connect time (Gmail reports its message count at once) and a time estimate from the workers' measured pace; the first profile is written when processing ends |
-| Brief | Local state | Profile and notification settings |
-
-To finish: send new users here from sign-up, save the step in the sign-in's `onboarding` metadata so it
-resumes on any device, record `onboarding_step` events, replace the two in-app flows (setup dialog and
-tour hand-off) with this one, and move Tidy Up Your Contacts and Try a Reply in as optional steps once the
-contact linker and drafting are connected. Estimated at one to two days of Claude-built work.
-
-To set up before it works for someone new: a Web application client in Google Cloud with the redirect URI
+To set up before onboarding works for someone new: a Web application client in Google Cloud with the redirect URI
 `<origin>/api/connect/google/callback`, the same client as the Google provider in Supabase Auth, `/login`
 in Supabase's allowed redirect URLs, `{{ .Token }}` in Supabase's magic link email template so the code
 shows, and custom SMTP in Supabase (its own mailer sends only a few emails an hour).
@@ -1417,7 +1393,8 @@ account.
 - An agent can move a chat back to personal at any time. The owner sees only that it happened, as a
   count ("Sipho moved 12 chats to personal this week"), never which chats or what was in them. A
   stricter setting for regulated firms keeps a work chat shared until the owner releases it. It is off
-  by default and switched on for FAIS and legal firms during onboarding.
+  by default and switched on for FAIS and legal firms during onboarding. (As built, the owner or an operator switches
+  it on by hand in Settings, Team or Admin, Teams; nothing reads the firm type.)
 - The strict setting also turns on a Compliance role, for the person who supervises client
   communication in a FAIS or legal firm. Compliance reads every work chat in the workspace, never a
   personal one. Agents are told about it, in plain words, before they join, and every chat Compliance
@@ -1696,7 +1673,12 @@ About 2 to 3 weeks in all; steps 1 to 5 are the launch set. Steps 1 and 2 can be
 Paystack billing is separate.
 
 Code check (4 November 2026): all six steps are written (`20261101100000_workspaces.sql` to `20261104100000_team_after_launch.sql`).
-None of the Teams migrations is applied to the live database yet, and nothing has run against real mail. Steps 3 to 6 need the
+Whether they are applied is unclear: the step headings above say "needs applying", but Migrations (28 October 2026) below
+says `team_owner_features`, `team_after_launch` and `team_review_fixes` were applied and checked live. Check the live
+database and correct this line. Nothing has run against real mail. Not built from Checks above: repeatable row level
+security tests and the two-users-in-one-workspace test (only the `t1:` crypto vectors exist). The Privacy Policy has a
+Teams bullet, but its sentence that shared conversations "are visible to its members" is wrong (only the agent,
+assignees and Compliance read them) and needs fixing. Steps 3 to 6 need the
 sync worker running to seal shared chats and fill the client list. The team key is rotated when a member is removed (Security
 and Cost Review, item 6).
 
@@ -1779,24 +1761,32 @@ Build Status in the Security and Cost Review section below. Nothing is live unti
 - **Stored HTML.** `messages.body_html` was never dropped. A one-off script
   (`drop-stored-html.ts --apply`) empties it, and existing rows keep their HTML until it is run.
 
+**Status, checked against the code on 4 November 2026.** Most of the list above is fixed in code: the flags default
+on and every `.env.example` sets `ENCRYPT_*=true` (`packages/crypto/src/flags.ts`); the readable fields are sealed,
+including names, calendar attendees and text, meeting participants and error codes
+(`20261125100000` to `20261125120000`, `apps/worker/src/backfill/fields.ts`); embeddings are sealed; connector
+sign-ins are per user `v2:` credentials (`apps/worker/src/vault.ts`); `kms:v1` exists (`packages/crypto/src/wrap.ts`,
+`apps/ai/ai/keys.py`); team keys rotate on member removal (`apps/worker/src/share/rotate.ts`). What the code cannot
+show: whether the rewrap and reseal scripts have run and `KEY_WRAPPING_KEY` is retired (RUNBOOK still lists them as to
+do). `push_subscriptions` stays readable because push needs the endpoint.
+
 ### Where It Stands
 
 - Message text, subjects, previews, summaries, drafts, quotes and the outbox are encrypted field by
-  field with AES-256-GCM, under a data key per user (stage 1, partly done: see the Code Check above
-  for what is missing and for the flags that default to off).
-- Each data key is stored wrapped in `user_keys`. For now the wrapping key is `KEY_WRAPPING_KEY` in
-  the workers' and web app's environment (`local:v1`), so whoever holds that key and the database can
-  still read everything. Cloud KMS and Confidential Space close that gap.
+  field with AES-256-GCM, under a data key per user (stage 1; the flags now default on, see the status note under
+  the Code Check above).
+- Each data key is stored wrapped in `user_keys`. Cloud KMS wrapping (`kms:v1`) is built; until the rewrap has run
+  and `KEY_WRAPPING_KEY` is deleted, keys wrapped with `local:v1` can still be opened by whoever holds that key and the
+  database. Confidential Space closes the rest of the gap.
 - New email HTML is kept encrypted for about an hour and then deleted, and View Original fetches it from Gmail or iCloud when opened. Older rows keep `messages.body_html` until `drop-stored-html.ts --apply` is run.
-- Accounts connected in the app send their sign-in through the web app's server once, where it is encrypted
-  with `ENCRYPTION_KEY` before it is stored (see Onboarding), the same footing as the key service.
+- Accounts connected in the app send their sign-in through the web app's server once, where it is sealed as a
+  per user `v2:` credential before it is stored (see Onboarding), the same footing as the key service.
 - Email addresses, phone numbers, WhatsApp chat IDs, company domains, reaction keys and outbox
-  recipients are encrypted when the flags are on, and the database matches on their blind indexes (stage 2, code written;
-  readable columns not dropped). `ENCRYPT_ADDRESSES` and `NEXT_PUBLIC_ENCRYPT_ADDRESSES` are on only in the owner's local env, and
-  default to off everywhere else.
-- Still readable, for a later stage: contact and company names (some are a number or an address,
-  because that was all that was known), the author names on WhatsApp quotes, calendar attendees,
-  email Message-IDs and References, and your own number while WhatsApp is linking.
+  recipients are encrypted (the flags default on), and the database matches on their blind indexes (stage 2; readable
+  columns not dropped, and ingest still matches readable values when no index is sent).
+- Contact and company names and calendar attendees are now sealed (`20261125100000` to `20261125110000`). Still
+  readable, for a later stage: email Message-IDs and References (not indexed), and your own number while WhatsApp is
+  linking.
 
 ### Stages
 
@@ -1828,8 +1818,8 @@ What gets an index and is encrypted:
   own domains out of companies.
 - Encrypted with no index, because nothing matches on them: contact and company names,
   `calendar_outbox.attendees`, outbox recipients, and the emails and numbers on address book cards.
-  `calendar_events.attendees` is planned for this list but is stored readable today (only the title and location are
-  sealed): the worker, the page and the update trigger read it as plain JSON. Sealing it is a stage of its own.
+  `calendar_events.attendees` is now sealed too, with event notes and links (`20261125110000_calendar_sealed_text.sql`,
+  `apps/worker/src/calendar/sealed.ts`).
 
 Code check (27 October 2026): no readable column was dropped. The index columns were added beside the
 readable ones, and the backfill script re-encrypts values in place and only runs when someone runs it with the
@@ -2100,7 +2090,7 @@ and there is one app open per session.
 - A lone lowercase word cannot be told from a code word by shape, so the free-form values (dialog names, field names, empty
   screen titles) are allow-listed in `packages/analytics/src/allowed.ts` and read "other" when not listed. Add a name there when a dialog or empty screen is added. A dot is only allowed between digits.
 - Events over the rate limit (50 a call, 120 a minute) are counted in `analytics_dropped` and shown on the Usage tab.
-- Not built: waitlist conversion, comparison by app version, copy as CSV, a custom date range, billing money metrics (billing is deferred). The storage flags table still sits on the Usage tab and belongs under Admin.
+- Not built: waitlist conversion, comparison by app version, copy as CSV, a custom date range, billing money metrics (billing is deferred). The storage flags table has moved to Admin, Flags.
 - Your own text (corrected labels, edited drafts) is not shown on the page yet. See Order Of Work.
 
 ### Order Of Work
@@ -2209,8 +2199,10 @@ Decided 28 October 2026, so the codebase stays easy to change by one person and 
   hand-formatted and a rewrite would touch 400 files. `pnpm check` runs lint, typecheck, every TypeScript test suite and
   the Python tests. GitHub Actions runs the same on every push and pull request.
 - **File size.** About 400 lines is the aim and 600 the limit. `lib/store.tsx` and the calendar page were split into
-  `lib/app-store/` and `components/calendar/` on this basis. The provider in `lib/store.tsx` is still the largest file and
-  the next candidate (its mail actions, tasks and contact merging can each become a hook).
+  `lib/app-store/` and `components/calendar/` on this basis; `lib/store.tsx` is now about 220 lines. Over the limit
+  (4 November 2026): `packages/email-text/src/index.ts` (1,140), the Outlook, Gmail, Teams, WhatsApp, LinkedIn and
+  Google Meet connectors (610 to 830), `apps/ai/ai/brief.py` (704) and two Instagram files (about 610). Split each the
+  next time it changes.
 - **Tests.** The web app's `lib` tests now run with `pnpm test` (they were not wired in before).
 
 ## Later
@@ -2273,15 +2265,17 @@ Built:
   by length, idle backoff in the AI worker, signals and chasers read only changed rows.
 - Sync: account heartbeat at most every 15 minutes, adaptive Gmail and queue polling, bounded missing-file retries, `ai_usage` rollup.
 
-Not built, or only partly:
+Not built, or only partly (status checked 4 November 2026 in brackets):
 - Confidential Space (stage 4): deliberately left until the first paying client.
-- Gemini Batch API: the client is in `gemini.py` and tested but not wired into triage or learning (needs a job table).
+- Gemini Batch API: (now wired: `20261119160000_ai_claims_and_batches.sql`, `BatchQueue` in the AI worker; see Faster
+  and Cheaper AI).
 - Cheaper transcription model: setting exists, default unchanged, because nothing shows the speaker-turn format survives.
-- Presence ping from the web app, so Gmail polling stays at 5 seconds while someone reads. Today only mail and queued work count as activity.
+- Presence ping from the web app, so Gmail polling stays at 5 seconds while someone reads. (Mostly moot: Gmail is now
+  push based, `apps/worker/src/google/pubsub.ts`, once Pub/Sub is set up.)
 - The 80% storage email, the 3-address-farming cap (many different addresses still each earn a setup allowance), and a team copy is not counted in the storage meter.
-- Deleting a single attachment or thread does not remove the team copy of a shared file (orphans possible). Deleting or removing an account does.
-- Zoom recording backfill, merging old duplicate files, `create_contact` and address book company values (still plain), short-lived calendar queue rows.
-- Names of contacts and companies are still the earlier stage 2 encryption only.
+- Deleting a single attachment or thread does not remove the team copy of a shared file (orphans possible). Deleting or removing an account does. (Single attachments fixed: `20261118160000_attachment_delete.sql`. Single threads not checked.)
+- Zoom recording backfill, merging old duplicate files. (`create_contact` names are now sealed, `20261125100300`; short-lived calendar queue rows are pruned after 30 days by the retention job.)
+- (Names of contacts and companies are now sealed: `20261125100000` to `20261125100300`.)
 - Dashboard work: Confirm Email on, no OAuth provider with unverified email, check the owner row in `analytics_config`.
 - The audio price in `pricing.py` (`AUDIO_INPUT_USD_PER_M`, 3.00) is a guess. At a $5 month a one-hour meeting is held at about $0.43 against a $0.75 transcribe share, so check it.
 - Not tested in a browser: `/summary` and `/inbox` with the new CSP (only `/login` was loaded), team file opening, sealed file previews.
@@ -2429,9 +2423,8 @@ workers running the same shard, and startup recovery of in-flight rows is limite
 shard count reassigns most accounts, so restart the workers close together. Deploying before the lease migration is safe: the
 worker warns and runs without a lease.
 
-The AI worker is separate and is not safe to run as several instances yet. Only the brief claims its rows. Drafts, triage and
-transcription would do the same work twice. The cheapest fix is one instance per job group behind the same lease, or a user-id
-filter per instance. Do this before adding a second AI worker.
+The AI worker is separate. Since November it claims its rows (`ai_claims` and `claim_ai_rows`, `apps/ai/ai/claims.py`), so
+drafts, triage and transcription are no longer done twice by a second instance. (Before that only the brief claimed its rows.)
 
 ### Decided (28 October 2026)
 
@@ -2443,7 +2436,8 @@ filter per instance. Do this before adding a second AI worker.
   other chat media stay copied at once, because WhatsApp media expires on its servers. Files already stored are not touched.
 - The server keeps asking Supabase Auth to check each login token. Checking locally would save a round trip but a revoked
   session would work for up to an hour.
-- No Batch API: the owner does not want results to arrive up to a day late. No static pages, because the per-request nonce
+- No Batch API: the owner does not want results to arrive up to a day late. (Reversed on 4 November 2026: mail over 6
+  hours old goes through the Batch API, see Faster and Cheaper AI.) No static pages, because the per-request nonce
   protects the decrypted data and keys that live in page memory.
 - Triage stays on `gemini-3.5-flash-lite`. There is no "Gemini 3 Flash Lite". `gemini-3.1-flash-lite` ($0.25 in, $1.50 out)
   would cut triage cost by about 30%, roughly 5% of total spend, but Google lists its earliest shutdown as 7 May 2027.
@@ -2453,8 +2447,9 @@ filter per instance. Do this before adding a second AI worker.
 
 ### Not Done
 
-- Binding each encrypted value to its row, retiring old team keys safely, and re-keying the contact card hash: each needs a data
-  migration and a design decision.
+- (Done since: binding values to rows, `packages/crypto/src/bound.ts` and `20261126100000_bound_values.sql`, switched
+  off until `SEAL_BOUND_FIELDS` is rolled out; retiring old team keys, `share/rotate.ts`; re-keying the contact card hash,
+  `contacts/card-row.ts`.)
 - Soft deletes. Realtime cannot filter deletions by user, so every delete is sent to every connected client. A `deleted_at`
   update that carries the user filter would fix it.
 - Opus or AAC for the spoken brief (about 12 times smaller than the uncompressed audio), and a raw-bytes brief format.
@@ -2536,10 +2531,11 @@ Decisions made while building the screens, so later work follows them:
 - **One header pattern.** Every list or page screen is built from `components/pane.tsx`, copied from the Inbox: a title row
   (h-8, at most one action on the right), one row of controls (views as text buttons, a small select), then the search in its
   own band. Buttons, selects and inputs are h-8. No outline buttons (date pickers are the one exception); the main action is
-  secondary, quiet actions are ghost. Dialogs show the stock X top right and have no Cancel (3 November 2026, replacing "no X, Cancel is ghost"); AlertDialog confirms keep Cancel; the main action is secondary.
+  secondary, quiet actions are ghost. Dialogs: superseded by the Full App Review rule (no corner X, a plain button row, as in AGENTS.md); the main action is
+  secondary. As of 4 November 2026 the code is mixed: 35 of 58 dialogs hide the X.
 - **Mobile bottom bar.** Summary, Calendar, Inbox, Contacts and More. More is its own screen (`/more`): New Email, WhatsApp,
-  LinkedIn and Instagram messages, New Event and New Task, then Notes and Attachments, then Analytics, Updates and Admin for the
-  owner, then Settings.
+  LinkedIn and Instagram messages, New Event and New Task, then Notes and Attachments, then Admin for the owner (Analytics is
+  part of Admin and Updates is in Settings since the Full App Review), then Settings.
 - **Usage ring (2 November 2026).** The last item in the desktop rail, below Settings, is a ring showing the limit closest to
   running out (AI this week, AI this month, or storage), since that is the one that pauses something first. Hovering shows
   every limit with its reset date and each AI feature's share (or Paused Until); a click opens Settings, Usage
@@ -2555,9 +2551,9 @@ Decisions made while building the screens, so later work follows them:
 - **Profile Photo.** A photo in Settings, General is used for "You" (`profiles.avatar_path`, stored at `<user id>/me`).
 - **Seen on Instagram and LinkedIn.** Their conversations show "Seen" under your last seen message; WhatsApp keeps its ticks.
 - **Archive view (28 October 2026).** The inbox views are All, Priority, Junk, Subscriptions and Archive. Archive lists archived
-  conversations (junk or not), the row action becomes Unarchive there, and Undo works both ways. A Deleted view came in Wave 4 (see below); it was agreed but
-  not built: trashed threads are not loaded, so it needs an on-demand load, Restore, Delete Forever and a 30 day auto-empty
-  (a `trashed_at` column and the retention job).
+  conversations (junk or not), the row action becomes Unarchive there, and Undo works both ways. A Deleted view came in Wave 4 (see below,
+  `components/thread-list/deleted-list.tsx`). Still not built: the 30 day auto-empty (a `trashed_at` column and the
+  retention job).
 - **Needs Reply sees the conversation (28 October 2026).** Triage judged only the newest incoming message with a one line
   definition, so "turns out there are student tickets" in a plan you had agreed missed Needs Reply. The model now also gets
   the last 4 earlier messages of the conversation (both directions, 300 characters each, none for bulk mail), and
@@ -2569,7 +2565,8 @@ Decisions made while building the screens, so later work follows them:
 - **What's New (Wave 7).** Any signed-in user reads published updates only (one select policy; `published_at` is set by a
   trigger when an entry is published). A What's New dialog opens once after sign-in, after setup, when the newest published
   entry went public after the one the user last saw (`whatsNewSeen` in the sign-in metadata; a new sign-up is compared with
-  the day they joined). It lists the changes under New, Improved, Fixed with See All Updates, a read-only `/whats-new` page.
+  the day they joined). It lists the changes under New, Improved, Fixed with See All Updates, which opens Settings, What's New (`/whats-new`
+  now redirects there).
   It is also in Settings and the mobile More screen. Owner helper: `pnpm updates:draft` prints a JSON skeleton from `git log`
   since the last `vX.Y.Z` commit; it calls no AI and writes nothing.
 
@@ -2609,6 +2606,11 @@ Before the private test:
 
 Core for the test: email, WhatsApp, calendar and tasks. Instagram and LinkedIn are labelled experimental.
 
+Status, 4 November 2026: 1 is not done (about 60 files untracked, see `docs/LAUNCH-CHECKLIST.md`); 3 is written
+(`deploy/`) but the VM is not created; 4 is not started; 5 has risk text for WhatsApp, LinkedIn and Instagram but no
+"experimental" label, and none for iCloud Reminders; 6 is the setup dialog; 7 is `app/(marketing)/privacy` (company details
+still to fill); 8 has account deletion and Download My Data, but no point in time recovery; 9 is not done.
+
 ## Speed and Efficiency Pass (29 October 2026)
 
 Found by reading the code, not by measuring. The Gemini account was in arrears, so nothing here was tried live; the
@@ -2637,9 +2639,8 @@ numbers below are estimates from the loop intervals.
 
 ### Not Done
 
-- Written but held back, because they sit in files with other work in progress (`store.tsx`, `__main__.py`,
-  `bulk_read.py`): the flattened `messages` array computed only when read, `listThreads` cached per view and filter
-  (`memo-last.ts`), the bulk read idle interval, and `tests/test_idle_polling.py`. They go in with that work.
+- (Done since: the flattened `messages` array computed only when read and `listThreads` cached per view, in
+  `lib/store.tsx`; the bulk read idle interval, `BULK_READ_IDLE_S = 30`; `tests/test_idle_polling.py`.)
 - Split the store context into state and actions (about 80 to 120 files use `useApp()`; 1 to 1.5 days). The biggest
   remaining web win, since any store change redraws every screen.
 - Realtime wakeups for drafts and bulk reads in the AI worker (needs a websocket client and the tables in the
@@ -2669,7 +2670,8 @@ respond as fast as possible, so the app now keeps what it safely can on the devi
   path, not shown when over 3 days old, pages from an older build dropped. It never stores `/api`, sign-in, marketing,
   RSC or cross-origin responses. A stored page keeps its own CSP header, so one nonce is reused until it refreshes (a
   small weakening of the nonce, accepted). Cleared on sign-out. Chosen over serving a static page from Vercel's edge,
-  which is still a network trip and does not work offline.
+  which is still a network trip and does not work offline. The dev server registers `/sw.js?dev=1`, which does push only
+  and caches nothing: Turbopack's dev chunks keep their names across restarts, so a cached copy broke the app.
 - **The key arrives beside the first load.** `warmKeys()` starts /api/keys with the list queries instead of after them;
   the route rate limits beside the key reads (after the caller is verified) and team key versions unwrap in parallel.
 - **Catching up on return.** Coming back to the app (visibility, pageshow, online) catches up at once instead of after the
@@ -2897,8 +2899,7 @@ after that. Automations are built so either can be added as one more "When" chan
   contact only when the run made them and nothing else has happened to them.
 - Web: Settings, Automations (template rows, Custom builder, run history with Undo); a contact shows its Lead Source; the
   Contacts Relationship filter lists Lead once anyone is one.
-- Not done: the reply box must offer `drafts.reply_to` as the recipient (it still replies to the conversation's sender, the
-  portal), so a draft for a portal lead must be addressed by hand until it does; a lead's listing is not attached to their
+- Done since: the reply box offers `drafts.reply_to` as the recipient (`components/reply-header.tsx`). Not done: a lead's listing is not attached to their
   timeline beyond the linked conversation; WhatsApp replies; SMS and the forwarding address (above).
 
 ### Build Order
@@ -3072,13 +3073,13 @@ Review "Do not add" list stands).
   find Zoom, Meet, Teams and Webex links the way iCloud does. Google's HTML notes are stored as text.
 - **Removed:** scroll to change day or week, and right click to create an event. Drag, double click, the New Event button
   and N remain. N is a new event and Shift N a new task.
-- **Not done:** sealing `calendar_events.attendees` (see the encryption section), choosing which calendar a new event goes in,
-  Outlook creating and changing events (the sign-in is read only).
+- **Done since:** sealing `calendar_events.attendees`, choosing which calendar a new event goes in, and Outlook creating and
+  changing events (Wave 4, `microsoft/calendar-write.ts`).
 
 ## Web push and PWA, Wave 4 (2 November 2026)
 
 - **Push is real.** `apps/web/public/sw.js` (registered from the app shell by `PwaBoot`) shows a push and opens `/inbox/<id>` on
-  click. It has no fetch handler and no cache, so it can never store an authenticated page or API response. Settings,
+  click. It had no fetch handler at first; the Caching Pass (3 November 2026) added one that caches pages (see that section). Settings,
   Notifications saves the subscription to `push_subscriptions` (`lib/use-push.ts`); iPhone and iPad must add Konva to the Home
   Screen first. Needs `NEXT_PUBLIC_VAPID_PUBLIC_KEY`; keys come from `pnpm --filter worker vapid:generate`.
 - **Sender:** `apps/worker/src/push` (primary shard, every 20 seconds; needs `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
@@ -3160,6 +3161,10 @@ Review "Do not add" list stands).
     in the header, 40px rows with channel badges, detail pages as cards (Contacts: number cards then Timeline and Overview),
     an empty pane of number cards and cards. Calendar's grid sits in one white card; No Date is a view; phones get a seven
     day strip over the agenda. Attachments keeps its grid of white tiles on grey, selecting in the views row's slot.
+  - **Calendar, 4 November 2026:** the list on the left stays as it is, like the Conversations list. The grey side has its
+    own header, built like the Conversations title row (the month or range as the title, Previous, Today and Next on the
+    right), and the month draws each day as its own white card on the grey. Day and Week keep one white card for the grid.
+    Calendar writes a day as "Tuesday, 10 November" (the year only when it is not this year) and a range as "2 to 8 November".
 - **Add to Calendar from a message (3 November 2026).** When triage offers reply choices for a message that proposes something
   with a date (a trip, a meeting, a booking), it also returns a plan: a short title, the first day (with a time when given), the
   last day or end time, and the place, sealed inside `reply_choices` with the choices (no extra call). The reply box shows Add to
@@ -3200,8 +3205,8 @@ Review "Do not add" list stands).
   Messages in a binned conversation that is not loaded are not yet left out. Search never reads the event `attendees` column
   through the address keys, so it uses it as stored (see the sealing item above).
 
-- **Not done:** sealing `calendar_events.attendees` (see the encryption section). Choosing a calendar and Outlook writes
-  came in Wave 4 below.
+- **Done since:** sealing `calendar_events.attendees` (`20261125110000_calendar_sealed_text.sql`). Choosing a calendar and
+  Outlook writes came in Wave 4 below.
 
 ## Calendar page, Wave 4 (2 November 2026)
 
@@ -3262,7 +3267,7 @@ Review "Do not add" list stands).
   From 0.68 a pair is borderline and goes to the model only through an injected `confirm`, at most 5 a run, billed under `learn`
   (which already pays for embeddings); with none supplied it is dropped. Rows go to `thread_links` as `suggested`
   (`20261119170000_thread_links.sql`, ids and a score only); Link Them makes them show together under a matter heading in the
-  person timeline, Not the Same stops the suggestion for good. Not wired yet: nothing calls `matter.suggest` on a schedule.
+  person timeline, Not the Same stops the suggestion for good. Wired since: `apps/ai/ai/matter_job.py` runs it on a schedule.
 
 ### Client Timeline and Matters (Wave 7)
 
@@ -3364,8 +3369,8 @@ Migration `20261119120000_triage_labels_reasons.sql` (applied).
   signatures (and default send-from), promises and automations with runs (already there), note links, linked chats, client cards,
   document cards and edited or deleted message versions. `export-coverage.ts` lists every table with a `user_id` column as exported
   or excluded with a reason, and its test reads the migrations, so a new table cannot be left out unnoticed. Known gaps, marked
-  "Not yet" in that file: unsent drafts, meetings (notes, summaries, transcripts) and the learned style rules. There is no
-  matters table, so nothing to export there.
+  "Not yet" in that file: unsent drafts, meetings (notes, summaries, transcripts) and the learned style rules. Matters
+  are exported in `tasks/matters.json` (they were built in Wave 7).
 - **No LinkedIn reactions from the app.** `lib/reactions.ts` is the one list of channels a reaction can be sent on (WhatsApp only).
   The react button, the reaction chips (shown but not tappable on other channels) and the store action all follow it. To switch
   LinkedIn on: add the `react` command to both LinkedIn helpers (Go bridge and `apps/ai` connector), then add "linkedin" to
@@ -3374,7 +3379,7 @@ Migration `20261119120000_triage_labels_reasons.sql` (applied).
   switch turns it on now, and Remove deletes it.
 - **Customer wording.** Time-out messages no longer tell people to check that a worker is running.
 
-### Built: Wave 7, Admin for an Owner-Operator (21 November 2026)
+### Built: Wave 7, Admin for an Owner-Operator (2 November 2026)
 
 Admin gained five sections beside AI Usage, AI Budget, Teams and Updates. All are owner only (`is_analytics_owner`), and
 all show counts, ages, codes and dollars: never message content, names or addresses, and never "view as user".
@@ -3424,7 +3429,7 @@ Migrations `20261121110000_feature_flags_audit.sql` and `20261121111000_admin_op
   | --- | --- | --- |
   | Machine, running all month | about $13.50 | about $27 |
   | 30 GB balanced disk | about $3.50 | about $3.50 |
-  | External IPv4 address | about $3.65 | about $3.65 |
+  | Cloud NAT instead of an external IPv4 (`create-vm.sh` uses `--no-address`); check its price | about $1 to $3 | about $1 to $3 |
   | Network out, one user | under $1 | under $1 |
   | KMS key (already paid) | $1 to $2.50 | $1 to $2.50 |
   | **Total** | **about $22** | **about $35** |
@@ -3444,6 +3449,7 @@ Migrations `20261121110000_feature_flags_audit.sql` and `20261121111000_admin_op
 The owner's iPhone feedback, with evidence per item, is in `docs/reviews/2026-11-02/mobile-feedback.md`. Decided and built:
 
 - **Dialogs:** stock X top right, no Cancel. AlertDialog confirms keep Cancel. The onboarding setup dialog stays without an X.
+  (Superseded by the Full App Review: no corner X, a plain button row, as AGENTS.md says. The code is mixed.)
 - **Fields are 14px everywhere.** iPhones get `maximumScale: 1` (set from the user agent in `app/layout.tsx`) so focus does
   not zoom; pinch zoom still works there. iPads report a Mac user agent and still zoom on focus.
 - **Status bar:** the shell pads `env(safe-area-inset-top)` on a solid background, so iOS has no see-through band over the top.
@@ -3472,12 +3478,15 @@ The owner's iPhone feedback, with evidence per item, is in `docs/reviews/2026-11
   each lead gets.
 - **Settings:** compact desktop nav like the rail; larger section headings; Usage shows AI before storage.
 - **Not server rendered, on purpose:** content is decrypted in the browser, so pages stay client rendered. Native feel comes from
-  shell caching, skeletons and gestures (proposed, not built).
+  shell caching, skeletons and gestures (shell caching built in the Caching Pass, `public/sw.js` and `lib/local-copy/`).
 
 Waiting on the owner: draft wording ("What Should This Say?"), automatic calendar availability in reply choices, the AI memory
-as an editable written summary, how much settings text to cut, and shell caching.
+as an editable written summary, and how much settings text to cut. (Shell caching was built in the Caching Pass.)
 
 ## Control Sizes on Phones (3 November 2026)
+
+Reversed in v0.0.21: phones now use the same control sizes as desktop (Full App Review, "Same control sizes on phones");
+`max-md:h-10` is gone from `components/ui`. Kept below as history.
 
 - Desktop and tablet keep 32px controls (`h-8`). Below `md` (phones), buttons, icon buttons, inputs, input groups, select
   triggers and toggles are 40px (`max-md:h-10`, set once in `components/ui`), so they are easier to tap. Small sizes (`sm`,
@@ -3558,3 +3567,93 @@ in code, uncommitted, with migrations `20261124*` to `20261126*` written but not
 - Step-up proof on `/api/keys` for new devices or old sign-ins: designed, needs a re-auth dialog behind a flag.
 - Confidential Space (the only fix for insiders holding the service-role key).
 - Connectors still reach the metadata server until they get their own identity.
+
+## Security Assessment and Fixes, Second Pass (4 to 5 November 2026)
+
+A second audit (`docs/security-audit-2026-11-04.md`) re-checked the 3 November fixes in the working tree and the live
+environment, and found the gap to be deployment rather than code: the workers run on the owner's laptop (no VM exists; the
+Compute Engine API is off in `messages-keys`), the retired static keys and the KMS service-account file are still in Vercel
+(readable, Preview and Production), and the bound-field switches are off. Ten new Medium findings and the Low list are fixed
+in code, uncommitted, with migrations `20261127*` written but not applied. Owner steps are in `docs/RUNBOOK.md` under Owner
+Actions Still Open.
+
+### Decided (from the fixes)
+
+- **Outside senders:**
+  - Automations never run on a message triage flagged as suspicious or whose SPF, DKIM or DMARC failed, and never clear
+    junk or raise priority on a flagged conversation (`automations/trust.py`). A model-returned link is kept only when the
+    email itself carried it, over https, to a named host.
+  - No pre-draft for a message with a suspicious verdict (`queue_auto_draft`, `triage_predraft`).
+  - An email reusing a stored Message-ID is the same email only at the same provider place or with the same content; any
+    other is stored as its own message under the id plus its place, never dropped. The Date fallback is gone.
+  - Authentication-Results count only from the account's own provider (Gmail: google.com; Outlook: Microsoft's shape;
+    iCloud: Apple's hosts; IMAP: the mail host's organisation). A DKIM pass vouches for an unsubscribe only when the signing
+    domain is the From domain's organisation, and the signing domain is stored (`auth.dkim_domain`).
+  - The worker flags a From display name that names another brand at ingest (`provider_meta.name_mismatch`); triage reads
+    it as impersonation whatever name the contact is stored under.
+  - Triage model reads are also capped per sender domain (40 a day, mailbox providers exempt) and for strangers as one pool
+    (150 a day per user). Learned rules are refused when they spell out an address or domain, name a South African bank,
+    EFT or proof of payment in English or Afrikaans, or redirect correspondence; the filter runs again when rules are read.
+  - WhatsApp: a stored file reference keeps its path, key and hashes sealed under the owner's key (type and mime type
+    plain); a fetch has a 60 second deadline; a path starting "//" is refused; one-click unsubscribe uses port 443 only.
+- **Accounts and teams:**
+  - Calendar events publish the primary key only on delete; the calendar page acts on ids it holds.
+  - Every cover grant and early end is logged (`workspace_cover_log`), readable by the people involved and the owner, and
+    published to Realtime. Cover stays a record, not a gate.
+  - Transcribe requests are capped per caller (30 a day); document and bulk reads per user (500 and 300 a day). The app can
+    set an account's status only to `disconnected` or `connecting`.
+  - Gmail and Outlook send only from the alias list the connector read from the provider at connect, never from the
+    stored column; iCloud keeps the list typed in the app.
+  - OAuth callbacks are limited per named user (12 in 10 minutes) and per address before any key is unwrapped. The
+    waitlist and Meta webhook read capped bodies. A route limited by address alone refuses an unnamed caller in production.
+  - The policy applies to every document: the middleware excludes known static paths by name, never by file ending.
+- **Encryption:**
+  - A team's index key is stored apart (`team_keys.index_wrapped_key`), written by the sync worker the first time it opens
+    a team's keys and handed out as `indexHmacKey`; the first data key is no longer given to members once it is retired.
+  - An old team key version is retired only after the browser's key hold plus two minutes (`BROWSER_KEY_HOLD_MS`).
+  - In production the static wrapper never wraps a new key: a process without `KMS_KEY_NAME` refuses to start.
+  - A retired user data key is kept wrapped under `user_keys.retired_wrapped_key`; the re-key filters match bound sealed
+    bytes (`e2b:`) too.
+  - The privacy page says the data key is made for the user and used by Konva's servers.
+- **Infrastructure:**
+  - `push-web-env.sh` pushes an allow-list only, Production only, sensitive, and refuses the retired keys.
+  - The AI images install from hash locks (`requirements*.lock.txt`, uv universal resolution when Docker is absent);
+    CI runs `pip-audit` on them and `govulncheck` on the Go helper. `cryptography` is pinned at 50.0.2.
+  - `release.sh` counts only GitHub Actions' own check runs and only a commit on `origin/main`.
+  - Build contexts exclude key and capture files. Docker's iptables integration is set explicitly on the VM, and the
+    runbook's metadata check includes a build step.
+  - The runbook says plainly that losing the KMS key loses everything, with the lien, destruction window and alert to set.
+
+### Not Done
+
+- Everything under Owner Actions Still Open in the runbook: the VM (and enabling Compute Engine first), Workload Identity
+  Federation and deleting the service-account key, removing the retired keys from Vercel, branch protection, the HAR
+  captures, the KMS protections, Supabase dashboard settings, point in time recovery, two-step verification everywhere.
+- The bound-field rollout (flags, `fields:bind`, `REQUIRE_BOUND_FIELDS`, `20261126100900`), step-up on `/api/keys`,
+  Confidential Space, Google OAuth verification and the CASA assessment, Microsoft publisher verification.
+- Realtime still broadcasts the ids and timing of other tenants' deletions on every published table (default replica
+  identity carries the primary key only). Accepted for now; the fix is Broadcast from definer triggers.
+- The AI test suite ran against the locally installed `cryptography` 46.0.7; CI installs 50.0.2 from the lock.
+
+## Faster and Cheaper AI (4 November 2026)
+
+Agreed with the owner: all of the speed and cost recommendations from the draft latency work.
+
+- **Hedge on for drafts someone waits on.** A second request after 3.5s (the model's p85 on a draft; p50 2.5s, p90
+  4.9s, p95 6.3s), first answer used. About one draft in eight bills twice, about 1% of AI spend. Never for pre-drafts.
+  Replaces "hedged drafts off" from Wave 5. `DRAFT_HEDGE=false` turns it off.
+- **Pre-drafts from triage.** The AI worker asks for a pre-draft (`queue_auto_draft`) as soon as triage says fresh mail
+  needs a reply, not only the open app. Same checks and the same 15 a day, on the pre-draft model.
+- **Drafts stream into the reply box** while they are written; the checked draft still replaces the text. Measured gain
+  is small on short replies (text shows 0.2 to 0.6s before the finished draft, since most of the wait is the model
+  thinking); it helps long emails.
+- **Triage instructions from an explicit cache** once calls come often enough to pay (about 7 an hour on the fast
+  model). Implicit caching never hit at our volume: 993 cached tokens in a month.
+- **Old mail through the Batch API for everyone.** Mail over 6 hours old is batched at half price for every account,
+  not only during setup.
+- **Logos need nothing.** The $1.05 in October was a one-off backfill: all 186 companies done with one call each.
+- **Draft model unchanged.** Drafts are 9% of AI spend; a cheaper model is where quality would drop.
+- **Region, open.** Supabase is in eu-west-1 (Ireland) and the workers' VM in africa-south1 (Johannesburg), so every
+  read crosses continents (about 0.2s). Moving Supabase to af-south-1, or the workers next to it, is the remaining
+  speed win for every read; it needs the owner's call (data residency, KMS key location, a project move).
+

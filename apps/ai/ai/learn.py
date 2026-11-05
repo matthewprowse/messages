@@ -255,6 +255,7 @@ class Learn:
                 "select": "id,user_id,thread_id,body_text,body_html,sent_at",
                 "thread_id": in_list(thread_ids),
                 "direction": "eq.outbound",
+                "provider_meta->call": "is.null",  # a call you made is not a rewrite of a draft
                 "sent_at": f"gt.{earliest}",
                 "order": "sent_at",
                 "limit": "200",

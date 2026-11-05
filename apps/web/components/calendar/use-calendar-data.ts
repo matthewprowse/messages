@@ -166,7 +166,15 @@ export function useCalendarData({ userId, view, setAnchor, sized, startKey, leng
     };
     const channel = supabase
       .channel(`calendar-page-${userId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "calendar_events", filter: `user_id=eq.${userId}` }, onEvent)
+      // Realtime cannot filter deletions by user (the row is gone, and only its id is sent since 20261127100000), so
+      // every deletion by anyone arrives: only ids held here are acted on, as the inbox does for threads.
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "calendar_events" }, (payload) => {
+        const id = (payload.old as { id?: string } | null)?.id;
+        const key = range.current.cacheKey;
+        if (id && key && eventsCache.get(key)?.some((e) => e.id === id)) onEvent({ eventType: "DELETE", new: null, old: { id } });
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "calendar_events", filter: `user_id=eq.${userId}` }, onEvent)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "calendar_events", filter: `user_id=eq.${userId}` }, onEvent)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "calendar_outbox", filter: `user_id=eq.${userId}` }, (payload) => {
         const row = payload.new as { id?: string; status?: string };
         if (row.status !== "created") return;

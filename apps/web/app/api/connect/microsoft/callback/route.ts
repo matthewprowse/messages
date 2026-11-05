@@ -69,7 +69,7 @@ async function readSignIn(request: Request): Promise<MicrosoftSignIn | null> {
   const raw = readCookie(request.headers.get("cookie"), MICROSOFT_COOKIE);
   if (!raw) return null;
   try {
-    const signIn = await openHandoff<MicrosoftSignIn>(raw, "microsoft_connect");
+    const signIn = await openHandoff<MicrosoftSignIn>(raw, "microsoft_connect", request);
     return MICROSOFT_RETURNS.some((r) => r === signIn.back) ? signIn : null;
   } catch {
     return null;

@@ -6,10 +6,13 @@ export const SW_MESSAGES = { clearPages: "konva:clear-pages", warmPage: "konva:w
 
 const supported = () => typeof navigator !== "undefined" && "serviceWorker" in navigator;
 
+// The dev server's chunks change under the same names, so there the worker only does push (see public/sw.js).
+const SCRIPT = process.env.NODE_ENV === "development" ? "/sw.js?dev=1" : "/sw.js";
+
 /** Registers the service worker once (later calls return the same registration). Resolves null where unsupported. */
 export function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (!supported()) return Promise.resolve(null);
-  return navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => null);
+  return navigator.serviceWorker.register(SCRIPT, { scope: "/" }).catch(() => null);
 }
 
 /** Posts to the active worker, once there is one. Failures are ignored: the worker is a speed-up, not a dependency. */

@@ -316,15 +316,15 @@ class DraftLimitTest(unittest.TestCase):
         self.assertTrue(d._limited({"id": "d1", "user_id": "u", "thread_id": None, "auto": False}))
         self.assertEqual(db.updates[0]["status"], "failed")
 
-    def test_hedging_is_off_unless_asked_for(self):
+    def test_hedging_is_on_unless_turned_off(self):
         import os
         from ai.drafts import hedge_on
 
         os.environ.pop("DRAFT_HEDGE", None)
-        self.assertFalse(hedge_on())
-        os.environ["DRAFT_HEDGE"] = "true"
+        self.assertTrue(hedge_on())
+        os.environ["DRAFT_HEDGE"] = "false"
         try:
-            self.assertTrue(hedge_on())
+            self.assertFalse(hedge_on())
         finally:
             del os.environ["DRAFT_HEDGE"]
 

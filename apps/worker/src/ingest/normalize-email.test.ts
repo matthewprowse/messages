@@ -146,7 +146,7 @@ test("the receiving server's verdicts are read from its topmost Authentication-R
     "Authentication-Results: forged.example; dmarc=fail",
     original,
   ].join("\r\n");
-  assert.deepEqual(normalizeEmail(await simpleParser(raw), "x").auth, { spf: "pass", dkim: "pass", dmarc: "pass" });
+  assert.deepEqual(normalizeEmail(await simpleParser(raw), "x").auth, { spf: "pass", dkim: "pass", dmarc: "pass", dkim_domain: "hartleylaw.co.uk" });
   assert.equal(normalizeEmail(await simpleParser(original), "x").auth, null);
 });
 

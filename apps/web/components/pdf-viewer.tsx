@@ -90,7 +90,8 @@ const MAX_ZOOM = 4;
 const ZOOM_STEP = 1.25;
 
 /** A built-in PDF viewer: one page at a time, page thumbnails, zoom, fit to width and arrow keys. */
-export function PdfViewer({ url, name }: { url: string; name: string }) {
+/** data: the decrypted file of a sealed PDF, read instead of its blob link, which is revoked a few seconds after release. */
+export function PdfViewer({ url, data, name }: { url: string; data?: Blob; name: string }) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [failed, setFailed] = useState(false);
   const [page, setPage] = useState(1);
@@ -110,22 +111,23 @@ export function PdfViewer({ url, name }: { url: string; name: string }) {
     setFailed(false);
     setPage(1);
     setZoom(1);
-    openPdf(url).then(
+    openPdf(data ?? url).then(
       (d) => {
         opened = d;
         if (cancelled) void d.loadingTask.destroy();
         else setDoc(d);
       },
       (err) => {
+        if (cancelled) return; // a load given up on (the viewer moved on) is not an error
         console.error(err instanceof Error ? err.message : "The PDF could not be opened.");
-        if (!cancelled) setFailed(true);
+        setFailed(true);
       },
     );
     return () => {
       cancelled = true;
       if (opened) void opened.loadingTask.destroy();
     };
-  }, [url]);
+  }, [url, data]);
 
   useEffect(() => {
     const el = scroller.current;

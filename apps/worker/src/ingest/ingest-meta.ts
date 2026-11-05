@@ -6,14 +6,16 @@
 import type { Json } from "@messages/db";
 import type { NormalizedEmail } from "./normalize-email";
 
-/** The provider_meta keys set at ingest from the headers. Code words and a domain only, never an address or text. */
-export const INGEST_META_KEYS = ["auth", "reply_to_domain"] as const;
+/** The provider_meta keys set at ingest from the headers. Code words, a domain and a flag only, never an address or text. */
+export const INGEST_META_KEYS = ["auth", "reply_to_domain", "name_mismatch"] as const;
 
 /** The ingest keys for one email; a key is left out when the headers gave nothing. */
-export function ingestMeta(mail: Pick<NormalizedEmail, "auth" | "replyToDomain">): Record<string, Json> {
+export function ingestMeta(mail: Pick<NormalizedEmail, "auth" | "replyToDomain" | "nameMismatch">): Record<string, Json> {
   return {
     ...(mail.auth ? { auth: { ...mail.auth } } : {}),
     ...(mail.replyToDomain ? { reply_to_domain: mail.replyToDomain } : {}),
+    // The From display name named another brand than the From address (email-auth.ts nameMismatch).
+    ...(mail.nameMismatch ? { name_mismatch: true } : {}),
   };
 }
 

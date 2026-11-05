@@ -231,5 +231,25 @@ class GeminiAnswers(unittest.TestCase):
         self.assertIsNone(check(None, (("name", ""),), self.MAIL))
 
 
+
+class ModelLinks(unittest.TestCase):
+    """A link the model returns lands in the task list, so only one the email carried, over https to a named host, is kept."""
+
+    MAIL = "From: forms\nListing: https://www.example-agency.co.za/listing/12345 and also http://plain.example/x\nThanks"
+    FIELDS = (("name", "Their name"), ("listing_url", "Link to the listing"))
+
+    def test_a_link_from_the_email_over_https_is_kept(self):
+        got = check({"name": "Sam", "listing_url": "https://www.example-agency.co.za/listing/12345"}, self.FIELDS, self.MAIL)
+        self.assertEqual(got["listing_url"], "https://www.example-agency.co.za/listing/12345")
+
+    def test_a_link_the_email_never_carried_is_dropped(self):
+        got = check({"name": "Sam", "listing_url": "https://evil.example/phish"}, self.FIELDS, self.MAIL)
+        self.assertNotIn("listing_url", got)
+
+    def test_plain_http_addresses_by_number_and_sign_in_parts_are_dropped(self):
+        for link in ("http://plain.example/x", "https://10.0.0.1/x", "https://user@www.example-agency.co.za/listing/12345", "https://www.example-agency.co.za:8443/listing/12345"):
+            mail = self.MAIL + " " + link
+            self.assertNotIn("listing_url", check({"name": "Sam", "listing_url": link}, self.FIELDS, mail) or {}, link)
+
 if __name__ == "__main__":
     unittest.main()

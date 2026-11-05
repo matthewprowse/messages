@@ -23,10 +23,17 @@ export function loadPdfJs(): Promise<PdfJs> {
 // Destroying a document leaves a worker it was given running.
 let worker: InstanceType<PdfJs["PDFWorker"]> | null = null;
 
-/** Opens a PDF from a (signed) URL. Call loadingTask.destroy() on it when done. */
-export async function openPdf(url: string) {
+/**
+ * Opens a PDF from a (signed) URL, or from a decrypted file already in memory (a sealed one: its blob link is revoked a
+ * few seconds after release, and pdf.js read a revoked link as "Unexpected server response (0)"). Call
+ * loadingTask.destroy() on it when done.
+ */
+export async function openPdf(source: string | Blob) {
   const pdfjs = await loadPdfJs();
   if (!worker || worker.destroyed) worker = new pdfjs.PDFWorker();
+  // pdf.js takes the bytes over (the buffer moves to its worker), so each open reads its own copy.
+  if (typeof source !== "string") return pdfjs.getDocument({ data: new Uint8Array(await source.arrayBuffer()), worker }).promise;
+  const url = source;
   // Thumbnails and the first page only need the start of the file; the rest loads as pages are viewed.
   // pdf.js only stops prefetching when streaming is off too. Without range support it reads the whole file.
   // pdf.js 6 removed the isEvalSupported option (it no longer evaluates font code), so there is nothing to turn off.

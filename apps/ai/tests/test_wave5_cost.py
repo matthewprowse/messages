@@ -306,15 +306,18 @@ class SetupTriageBatch(unittest.TestCase):
         held = [p for table, p in db.updated if table == "messages"]
         self.assertTrue(held and held[0]["triage_hold_until"])
 
-    def test_new_mail_and_established_accounts_are_asked_live(self):
+    def test_new_mail_is_asked_live_and_old_mail_of_an_established_account_is_batched_too(self):
         t, _ = self.build(FakeGemini())
         with self.patched():
             t._ask({}, [msg("a", 1)])
         self.assertEqual(t.asked, [["a"]])
-        t2, _ = self.build(FakeGemini(), setup=False)
+        g = FakeGemini()
+        t2, _ = self.build(g, setup=False)
         with self.patched():
-            t2._ask({}, [msg("b", 48)])
-        self.assertEqual(t2.asked, [["b"]])
+            self.assertEqual(t2._ask({}, [msg("b", 48)]), {})
+            t2._batch_flush()
+        self.assertEqual(t2.asked, [])
+        self.assertEqual(len(g.submitted), 1)
 
     def test_a_refused_batch_is_asked_the_ordinary_way_in_the_same_run(self):
         t, _ = self.build(FakeGemini(submit_error=GeminiError(None, "budget_paused")))

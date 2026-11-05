@@ -15,7 +15,7 @@ export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reaction
     deleted?: boolean;
     edited?: boolean;
     receipt?: string;
-    call?: { video?: boolean; missed?: boolean };
+    call?: { video?: boolean; missed?: boolean; declined?: boolean; seconds?: number };
     poll?: { multi?: boolean };
     poll_votes?: Record<string, number[]>;
   };
@@ -25,7 +25,7 @@ export function whatsappExtras(meta: unknown): Pick<Message, "quote" | "reaction
     reactions: m.reactions && Object.keys(m.reactions).length ? m.reactions : undefined,
     deleted: m.deleted || undefined,
     edited: m.edited || undefined,
-    call: m.call ? { video: !!m.call.video, missed: !!m.call.missed } : undefined,
+    call: m.call ? { video: !!m.call.video, missed: !!m.call.missed, ...(m.call.declined ? { declined: true } : {}), ...(Number(m.call.seconds) > 0 ? { seconds: Number(m.call.seconds) } : {}) } : undefined,
     poll: m.poll ? { multi: !!m.poll.multi, votes: m.poll_votes ?? {} } : undefined,
     receipt: m.receipt === "sent" || m.receipt === "delivered" || m.receipt === "read" ? m.receipt : undefined,
   };

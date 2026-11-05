@@ -45,7 +45,7 @@ async function readSignIn(request: Request): Promise<ZoomSignIn | null> {
   const raw = request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${ZOOM_COOKIE}=`))?.slice(ZOOM_COOKIE.length + 1);
   if (!raw) return null;
   try {
-    return await openHandoff<ZoomSignIn>(raw, "zoom_connect");
+    return await openHandoff<ZoomSignIn>(raw, "zoom_connect", request);
   } catch {
     return null;
   }

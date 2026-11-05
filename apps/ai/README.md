@@ -31,7 +31,19 @@ Settings live in `apps/ai/.env` (see `.env.example`). It never logs message cont
   time as it or right after it (`ai/drafts_gather.py`), not one after another. The table is checked every
   1.5 seconds, and every half second for two minutes after a draft was asked for; up to 4 drafts are
   written at once, one at a time per conversation. The prompt starts with what is the same for all
-  your drafts, so asking again with another tone is mostly billed at Gemini's cached rate.
+  your drafts, so asking again with another tone is mostly billed at Gemini's cached rate. A draft you
+  are waiting on is streamed: its text so far goes into the pending row a few times a second and the app
+  shows it read-only until the checked draft replaces it (`ai/drafts_stream.py`, `ai/gemini_stream.py`).
+  If the model has not answered after 3.5s the same request is sent again and the first answer used
+  (`DRAFT_HEDGE`, on unless `false`; never for pre-drafts).
+- **Pre-drafts from triage.** When new mail (under 6 hours old) is the latest in its conversation and
+  triage says it needs a reply, triage asks for a pre-draft with `public.queue_auto_draft`, the same
+  checks the app's `request_auto_draft` makes (`ai/triage_predraft.py`). So the reply is usually written
+  before you open the conversation, app open or not, within the 15 a day.
+- **Shared instructions cache.** Triage's instructions (about 1,600 tokens, the same for everyone) are
+  sent from an explicit Gemini cache once there are enough calls an hour for one to cost less than
+  sending them (about 7 on the fast model); otherwise they are sent as text (`ai/gemini_shared_cache.py`).
+  Mail over 6 hours old is triaged through the half price Batch API for every account, not only new ones.
 - **Learning.** When a reply that started as a draft is sent, the draft and what you sent are stored
   in `draft_outcomes`. If you changed it by 10% or more, the model turns the changes into short
   style rules in `style_rules`. A rule seen again gains support, and the strongest are used first.

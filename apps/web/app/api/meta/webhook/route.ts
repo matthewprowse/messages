@@ -3,7 +3,7 @@
 // writes content-free hints (lib/meta-webhook.ts) that the Instagram connector in apps/ai turns into an immediate
 // read of that account's inbox. Nothing from the payload is kept or logged beyond the account ID and kind.
 
-import { admin, noStore } from "@/lib/server/request";
+import { admin, noStore, readCapped } from "@/lib/server/request";
 import { MAX_BODY_BYTES, hintsFromPayload, validSignature, verifyChallenge } from "@/lib/meta-webhook";
 
 export const runtime = "nodejs";
@@ -19,9 +19,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const secret = process.env.INSTAGRAM_APP_SECRET;
   if (!secret || !admin) return text("Not configured", 503);
-  if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) return text("Too large", 413);
-  const raw = await request.text();
-  if (raw.length > MAX_BODY_BYTES) return text("Too large", 413);
+  // Read up to the cap and no further: a chunked body without a Content-Length is cut off at the cap too.
+  const raw = await readCapped(request, MAX_BODY_BYTES);
+  if (raw === null) return text("Too large", 413);
   if (!validSignature(raw, request.headers.get("x-hub-signature-256"), secret)) return text("Forbidden", 403);
   let payload: unknown;
   try {

@@ -43,6 +43,11 @@ def frames_of(tb: object) -> list[dict]:
     return out
 
 
+def trail(err: BaseException) -> str:
+    """The frames newest first as one short line, for a log line that has no report of its own."""
+    return " < ".join(f'{f["fn"]}@{f["file"]}:{f["line"]}' for f in reversed(frames_of(err.__traceback__)))
+
+
 def describe(err: BaseException, where: str) -> dict:
     return {"code": safe_label(log.code_of(err)), "cls": safe_label(type(err).__name__), "where": safe_label(where), "frames": frames_of(err.__traceback__)}
 

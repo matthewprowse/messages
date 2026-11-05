@@ -27,6 +27,7 @@ from .messages import bodies, own_addresses
 from .previews import Previews
 from .read import fields_to_ask, parse_fixed, reachable, with_name, worth_asking
 from .spec import Spec, load_spec
+from .trust import untrusted
 
 RECENT = timedelta(days=3)  # older mail is a backlog, not a new enquiry
 GEMINI_DAILY_CAP = 30  # Gemini reads for one person in a UTC day; a fixed parser has no cap
@@ -61,10 +62,11 @@ class Automations:
         """The thread that answers preview requests (previews.py). Live runs are not here: triage calls after_triage."""
         self.previews.loop(stop)
 
-    def after_triage(self, messages: list[dict[str, Any]]) -> int:
-        """Runs the enabled automations of the people these messages belong to. Returns how many runs finished. Never raises."""
+    def after_triage(self, messages: list[dict[str, Any]], verdicts: dict[str, dict[str, Any]] | None = None) -> int:
+        """Runs the enabled automations of the people these messages belong to. verdicts is triage's final result by
+        message id: a message it flagged as suspicious never runs one. Returns how many runs finished. Never raises."""
         try:
-            return self._after(messages)
+            return self._after(messages, verdicts or {})
         except Exception as err:
             if not missing_relation(err):  # the migration is not applied yet: nothing to do, nothing to report
                 log.warn("automations failed", code=log.code_of(err))
@@ -80,7 +82,7 @@ class Automations:
                 log.warn("automation spec unreadable", automation=r["id"])
         return out
 
-    def _after(self, messages: list[dict[str, Any]]) -> int:
+    def _after(self, messages: list[dict[str, Any]], verdicts: dict[str, dict[str, Any]]) -> int:
         now = datetime.now(timezone.utc)
         mail = [
             m for m in messages
@@ -99,6 +101,7 @@ class Automations:
                     continue  # it arrived before the automation was turned on: the preview covered it, the run does not
                 if pre_matches(a.spec.when, account_id=m.get("account_id"), sender=m.get("sender_address"), subject=m.get("subject")):
                     candidates.append((m, a))
+        candidates = self._trusted(candidates, verdicts)
         done = 0
         for user in sorted({m["user_id"] for m, _ in candidates}):
             if getattr(self.vault, "encrypt", False) and self.vault.keys_for(user) is None:
@@ -114,6 +117,27 @@ class Automations:
         if done:
             log.info("automations ran", runs=done)
         return done
+
+    def _trusted(self, candidates: list[tuple[dict[str, Any], Auto]], verdicts: dict[str, dict[str, Any]]) -> list[tuple[dict[str, Any], Auto]]:
+        """candidates without the emails that may not drive an automation (trust.untrusted): flagged by triage, or
+        failing the receiving server's authentication, which the worker keeps in provider_meta.auth. When that read
+        fails, every candidate is left out: an automation that acts on a forged enquiry costs more than one that waits."""
+        if not candidates:
+            return []
+        ids = sorted({m["id"] for m, _ in candidates})
+        try:
+            auth = {r["id"]: r.get("auth") for r in self.db.select("messages", {"select": "id,auth:provider_meta->auth", "id": in_list(ids)}) if isinstance(r, dict) and r.get("id")}
+        except Exception as err:
+            log.warn("automations skipped", code="auth_unread", messages=len(ids), error=log.code_of(err))
+            return []
+        kept: list[tuple[dict[str, Any], Auto]] = []
+        for m, a in candidates:
+            why = untrusted(verdicts.get(m["id"]), auth.get(m["id"]))
+            if why:
+                log.info("automation skipped", code=why, automation=a.id)
+            else:
+                kept.append((m, a))
+        return kept
 
     def _gemini_left(self, user: str) -> bool:
         day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()

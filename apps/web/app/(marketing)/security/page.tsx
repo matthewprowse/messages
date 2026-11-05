@@ -11,12 +11,14 @@ import { ClosingCta } from "@/components/marketing/closing-cta";
 import { JsonLd, breadcrumbData, faqData } from "@/components/marketing/json-ld";
 import { Fill } from "@/components/marketing/legal";
 
-const DESCRIPTION = "How Konva protects your client conversations: encryption with a key per user, AI that never trains on your data, two-factor sign in and a POPIA aligned design.";
+const DESCRIPTION = "How Konva protects your client conversations: encryption with a key per user held in a hardware security module, AI that never trains on your data, two-factor sign in and a POPIA aligned design.";
 
 export const metadata: Metadata = pageMeta({ title: "Security", description: DESCRIPTION, path: "/security" });
 
 const TODAY = [
-  { icon: LockKeyhole, title: "Encrypted With Your Own Key", text: "Message text, subjects, previews, summaries, drafts and replies waiting to send are encrypted field by field with AES-256-GCM, under a data key unique to you and held under Google Cloud KMS. Konva's servers can use it to do their work, as the questions below explain." },
+  // Live since 4 November 2026: every data key is wrapped by the HSM key (keys:readiness reports nothing under the old
+  // software key), and names, addresses and numbers are sealed in every row (20261125100000 to 20261125120000, backfilled).
+  { icon: LockKeyhole, title: "Encrypted With Your Own Key", text: "Message text, subjects, previews, summaries, drafts, replies waiting to send, contact names, email addresses and phone numbers are encrypted field by field with AES-256-GCM, under a data key unique to you. That key is wrapped by a key held in a hardware security module in Johannesburg, never by a key on our servers. Search still works, through indexes that reveal nothing. Konva's servers can use your key to do their work, as the questions below explain." },
   { icon: Sparkles, title: "AI That Never Trains on Your Data", text: "Konva's AI runs on an enterprise service under terms that forbid using your data to train models. It sees only what a feature needs, when it needs it." },
   { icon: UserLock, title: "Users Kept Apart", text: "Every table in the database checks who is asking. One person's conversations are never returned to another, and a team sees only what was shared with it." },
   { icon: KeyRound, title: "Safe Sign In", text: "Add an authenticator app for two-factor sign in. Gmail and Outlook connect through their own sign in, so Konva never sees those passwords." },
@@ -25,9 +27,7 @@ const TODAY = [
 ];
 
 const NEXT = [
-  { title: "Keys in a Hardware Security Module", text: "Each person's data key wrapped by a key held in a hardware security module in Johannesburg, instead of a key on our servers." },
   { title: "Sealed Processing", text: "The services that read your mail and WhatsApp running in sealed, attested machines, so that nobody at Konva can read what they process." },
-  { title: "Names and Addresses Encrypted", text: "Contact names, email addresses and phone numbers encrypted like message text, with search that still works." },
   { title: "An Independent Security Assessment", text: "The independent assessment an app must pass before it may read Gmail for the public." },
 ];
 

@@ -114,17 +114,20 @@ from .gemini import Gemini, GeminiError, UsageContext
 from .poll import Backoff
 from .retry import billing_paused, not_in
 from .supabase import Supabase, in_list
+from .drafts_stream import Shown
 from .text import plain_dashes
 from .vault import Vault
 
 MAX_RUNNING = 4
 DRAFT_TEMPERATURE = 0.6  # a fresh draft; the fact guard asks again at drafts_facts.RETRY_TEMPERATURE when it finds unsupported details
-HEDGE_AFTER_S = 4.5  # past the model's p90 (about 3.3s on a draft): a second request is sent and the first answer used
+HEDGE_AFTER_S = 3.5  # past the model's p85 on a draft (p50 2.5s, p85 3.1s, p90 4.9s, p95 6.3s in November 2026): a second request is sent and the first answer used
 
 
 def hedge_on() -> bool:
-    """The hedged second request is off unless DRAFT_HEDGE is "true": about one draft in ten was billed twice for it."""
-    return os.environ.get("DRAFT_HEDGE", "").strip().lower() == "true"
+    """The hedged second request is on unless DRAFT_HEDGE is "false". About one draft in eight is billed twice for it,
+    about 1% more AI spend in all, and it takes the slow tail (5 to 10s calls) down to about 6s. Only drafts someone is
+    waiting on are hedged: never a pre-draft."""
+    return os.environ.get("DRAFT_HEDGE", "").strip().lower() != "false"
 POLL_IDLE_S = 1.5
 # A quiet worker looks every 1.5s, 2.25s, ... up to this. Nothing wakes the loop early, so a draft asked for after
 # a quiet spell waits up to this long: 10s, not 15s, keeps that worst case tolerable (about 6 looks a minute idle,
@@ -185,7 +188,8 @@ class Drafts(GatherMixin):
             self.db.update(
                 "drafts",
                 {"status": "eq.pending", "created_at": f"lt.{cutoff}"},
-                {"status": "failed", "error": "The draft took too long. Try again.", "updated_at": _now()},
+                # body too: a draft streamed into the row while it was written (drafts_stream.Shown) must not outlive it
+                {"status": "failed", "error": "The draft took too long. Try again.", "body": None, "updated_at": _now()},
                 minimal=True,
             )
         if time.monotonic() - self._audio_swept >= AUDIO_SWEEP_EVERY_S:
@@ -256,7 +260,9 @@ class Drafts(GatherMixin):
         return {"id": f"eq.{d['id']}", **({"user_id": f"eq.{d['user_id']}"} if d.get("user_id") else {}), **filters}
 
     def _fail(self, d: dict[str, Any], reason: str) -> None:
-        self.db.update("drafts", self._mine(d), {"status": "failed", "error": reason, "updated_at": _now()}, minimal=True)
+        # A draft shown while it was written leaves no half of it behind.
+        cleared = {"body": None} if d.get("_shown") else {}
+        self.db.update("drafts", self._mine(d), {"status": "failed", "error": reason, "updated_at": _now(), **cleared}, minimal=True)
 
     def _expire(self, d: dict[str, Any]) -> None:
         self.db.update("drafts", self._mine(d, status="eq.pending"), {"status": "expired", "updated_at": _now()}, minimal=True)
@@ -313,6 +319,11 @@ class Drafts(GatherMixin):
         if offer is not None:
             system += actions.ACTION_SYSTEM
 
+        # Someone waiting on a reply in a conversation sees it as it is written (drafts_stream.py): the first request of
+        # the first ask only, so a hedged second request or a second try does not write over it.
+        shown = Shown(self.db, self.vault, d, self._reads) if d.get("thread_id") and not d.get("auto") else None
+        streams = [shown] if shown else []
+
         def ask(text: str, temperature: float) -> dict[str, Any]:
             return self._hedged(lambda: self.gemini.json(
                 model,
@@ -328,7 +339,8 @@ class Drafts(GatherMixin):
                 timeout=60,
                 max_output=DRAFT_MAX_OUTPUT,
                 audio=audio,
-            ), hedge=audio is None and hedge_on())
+                on_text=streams.pop() if streams else None,
+            ), hedge=audio is None and not d.get("auto") and hedge_on())
 
         report: dict[str, Any] | None = None
         try:

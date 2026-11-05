@@ -566,5 +566,42 @@ class SealedFields(unittest.TestCase):
         self.assertEqual(uploads[0], (b"JPEGDATA", "image/jpeg"))
 
 
+
+class BatchCleanup(unittest.TestCase):
+    """A collected or failed batch is deleted, so its requests and answers do not stay on Google's side."""
+
+    def _poll(self, state, done):
+        calls = []
+
+        class Res:
+            status = 200
+            body = ('{"done": %s, "metadata": {"state": "%s"}, "response": {"inlinedResponses": {"inlinedResponses": []}}}' % (done, state)).encode()
+
+        def request(method, url, body, headers, timeout):
+            calls.append((method, url))
+            return Res()
+
+        g = Gemini("key", Db())
+        with mock.patch("ai.gemini.POOL.request", side_effect=request):
+            out = g.batch_poll("batches/b1")
+        return out, calls
+
+    def test_a_finished_batch_is_deleted_after_its_answers_are_read(self):
+        (state, _), calls = self._poll("BATCH_STATE_SUCCEEDED", "true")
+        self.assertEqual(state, "done")
+        self.assertEqual([m for m, _ in calls], ["GET", "DELETE"])
+        self.assertTrue(calls[1][1].endswith("batches/b1"))
+
+    def test_a_failed_batch_is_deleted_and_a_running_one_is_not(self):
+        (state, _), calls = self._poll("BATCH_STATE_FAILED", "true")
+        self.assertEqual((state, [m for m, _ in calls]), ("failed", ["GET", "DELETE"]))
+        (state, _), calls = self._poll("BATCH_STATE_RUNNING", "false")
+        self.assertEqual((state, [m for m, _ in calls]), ("running", ["GET"]))
+
+    def test_a_delete_that_fails_is_not_an_error(self):
+        g = Gemini("key", Db())
+        with mock.patch("ai.gemini.POOL.request", side_effect=OSError("down")):
+            self.assertFalse(g.batch_delete("batches/b1"))
+
 if __name__ == "__main__":
     unittest.main()

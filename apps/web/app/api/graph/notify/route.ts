@@ -7,7 +7,7 @@
 // per account: a replayed or flooded notification can only ask for a sync the worker would do anyway, and not often.
 
 import { accountsToHint } from "@/lib/server/graph-notify";
-import { admin, clientAddress, limiter, noStore, readCapped } from "@/lib/server/request";
+import { admin, limitedAddress, limiter, noStore, readCapped } from "@/lib/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +32,8 @@ export async function POST(request: Request) {
   const secret = process.env.GRAPH_NOTIFY_SECRET?.trim();
   if (!secret || !admin) return new Response(null, { status: 202, headers: noStore });
   try {
-    if ((await overAddressLimit(clientAddress(request))) > 0) return new Response(null, { status: 202, headers: noStore });
+    const address = limitedAddress(request);
+    if (!address || (await overAddressLimit(address)) > 0) return new Response(null, { status: 202, headers: noStore });
     const text = await readCapped(request, MAX_BODY_BYTES);
     if (text !== null) {
       const signed = accountsToHint(JSON.parse(text), secret);

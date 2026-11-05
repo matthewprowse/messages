@@ -72,7 +72,7 @@ async function readSignIn(request: Request): Promise<GoogleSignIn | null> {
   const raw = request.headers.get("cookie")?.split(/;\s*/).find((c) => c.startsWith(`${GOOGLE_COOKIE}=`))?.slice(GOOGLE_COOKIE.length + 1);
   if (!raw) return null;
   try {
-    const signIn = await openHandoff<GoogleSignIn>(raw, "google_connect");
+    const signIn = await openHandoff<GoogleSignIn>(raw, "google_connect", request);
     return GOOGLE_RETURNS.some((r) => r === signIn.back) ? signIn : null;
   } catch {
     return null;

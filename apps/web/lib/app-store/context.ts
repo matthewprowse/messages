@@ -106,6 +106,8 @@ export interface Ctx extends Omit<State, "byThread"> {
   /** Records that the person unsubscribed on the sender's own page, for a request left at manual. */
   confirmUnsubscribe: (id: string) => void;
   drafting: Record<string, DraftPhase | undefined>;
+  /** The text of a draft still being written, by conversation: the AI worker streams it into the pending row. */
+  draftText: Record<string, string | undefined>;
   hydrated: boolean;
   giveFeedback: (id: string, value: "important" | "not_important") => void;
   /** Merges mergeId into keepId, with an Undo toast. Resolves to the merge id, or null when it failed. */

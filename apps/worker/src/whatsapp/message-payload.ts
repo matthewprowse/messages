@@ -6,8 +6,9 @@ import type { WAMessage, WAMessageKey } from "baileys";
 import { FIELD } from "@messages/crypto/fields";
 import { addressIndex, chatIndex } from "@messages/crypto/addresses";
 import type { Json } from "@messages/db";
-import { groupNameJson, keysFor, seal, sealAddress } from "../vault";
-import { mediaRef } from "./media";
+import { groupNameJson, keysFor, open, seal, sealAddress } from "../vault";
+import { mediaRef, type StoredMedia } from "./media";
+import { sealMediaRef } from "./media-ref";
 import { mediaContent } from "./media-content";
 import type { describe } from "./normalize";
 import { oneLine } from "./normalize";
@@ -51,18 +52,19 @@ export interface PayloadInput {
   known: () => { chat: KnownChat | undefined; groupSubject: string | undefined };
 }
 
-/** The payload and the provider_meta it carries (the connector reads meta.media when it queues the file download). */
+/** The payload, the provider_meta it carries, and the file reference as it was before sealing (the connector queues the download from it). */
 export async function buildPayload(ctx: AccountCtx, p: PayloadInput) {
   const { msg, key, remote, d, group, fromMe, sender } = p;
   const preview = group && sender ? `${sender.display_name}: ${d.preview}` : d.preview;
 
   const content = msg.message ? mediaContent(msg.message, d.media?.type) : null;
+  const media: StoredMedia | null = d.media && content ? mediaRef(d.media.type, content) : null;
   const meta: StoredMeta & Record<string, unknown> = {
     chat: await sealAddress(ctx.userId, remote),
     from_me: fromMe,
     participant: await sealAddress(ctx.userId, key.participant ?? null),
     type: d.type,
-    ...(d.media && content ? { media: mediaRef(d.media.type, content) } : {}),
+    ...(media ? { media: await sealMediaRef({ seal, open }, ctx.userId, media) } : {}),
     ...(p.unread ? { receipt: "pending" } : {}),
     ...(p.quoted ? { quoted: p.quoted } : {}),
     ...(d.call ? { call: d.call } : {}),
@@ -99,5 +101,5 @@ export async function buildPayload(ctx: AccountCtx, p: PayloadInput) {
       ? [{ filename: (await seal(ctx.userId, FIELD.filename, d.media.filename, { place: "attachments.filename" }))!, mime_type: d.media.mimeType, kind: d.media.kind, size_bytes: d.media.sizeBytes }]
       : [],
   } satisfies Record<string, Json>;
-  return { payload, meta };
+  return { payload, meta, media };
 }

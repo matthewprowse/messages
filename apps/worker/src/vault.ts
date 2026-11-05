@@ -19,10 +19,7 @@
 // their caller names (`where`), and the legacy "e1:" otherwise. openBound is the strict read for columns that drive an
 // action: it never answers "" and refuses plain text, team values and values sealed for another place or row.
 
-import {
-  decryptAny, deriveTeamKeys, deriveUserKeyring, encryptAt, encryptBytes, encryptBytesAt, encryptField, isCiphertext, isTeamCiphertext, openExpected, openFileExpected,
-  type Expect, type KeySet, type Place, type TeamKeys, type UserKeys,
-} from "@messages/crypto";
+import { decryptAny, deriveTeamKeys, deriveUserKeyring, encryptAt, encryptBytes, encryptBytesAt, encryptField, importIndexKey, isCiphertext, isTeamCiphertext, openExpected, openFileExpected, type Expect, type KeySet, type Place, type TeamKeys, type UserKeys } from "@messages/crypto";
 import { groupNameIndex } from "@messages/crypto/addresses";
 import { FIELD, type Field } from "@messages/crypto/fields";
 import { credentialKeysOf, KEY_CACHE_MS, teamKeyring, userKeyringFor, wrappersFromEnv, zeroKeyring, type KeyStore, type KeyWrapper, type TeamKeyStore } from "@messages/crypto/wrap";
@@ -51,10 +48,13 @@ const store: KeyStore = {
 
 export const teamStore: TeamKeyStore = {
   async list(workspaceId) {
-    return must(await db.from("team_keys").select("key_version, wrapped_key, wrapped_by, retired_at").eq("workspace_id", workspaceId), "load team keys");
+    return must(await db.from("team_keys").select("key_version, wrapped_key, wrapped_by, retired_at, index_wrapped_key, index_wrapped_by").eq("workspace_id", workspaceId), "load team keys");
   },
   async insertVersion(row) {
     must(await db.from("team_keys").upsert(row, { onConflict: "workspace_id,key_version", ignoreDuplicates: true }), "create team key");
+  },
+  async saveIndexKey(workspaceId, keyVersion, wrappedKey, wrappedBy) {
+    must(await db.from("team_keys").update({ index_wrapped_key: wrappedKey, index_wrapped_by: wrappedBy }).eq("workspace_id", workspaceId).eq("key_version", keyVersion).is("index_wrapped_key", null), "store team index key");
   },
   async rotationDue(workspaceId) {
     const { data, error } = await db.rpc("team_key_rotation_due", { p_workspace: workspaceId });
@@ -122,8 +122,9 @@ export function teamRingFor(workspaceId: string): Promise<TeamRing> {
   const ring = keyWrappers()
     .then((w) => teamKeyring(teamStore, w, workspaceId))
     .then(async (r) => {
-      // Each version seals with its own key, but the blind index always comes from the first version's key (wrap.ts, TeamKeyring).
-      const root = await deriveTeamKeys(r.indexRoot.key);
+      // Each version seals with its own key, but the blind index always comes from the first version's (wrap.ts, TeamKeyring):
+      // the stored index key as it is, or derived from the first data key until the worker has stored it.
+      const root = r.indexRoot.derived ? { index: await importIndexKey(r.indexRoot.key) } : await deriveTeamKeys(r.indexRoot.key);
       const all = await Promise.all(r.all.map(async (k): Promise<TeamKeys> => ({ ...(await deriveTeamKeys(k.key, workspaceId)), index: root.index })));
       for (const k of [...r.all, r.indexRoot]) k.key.fill(0);
       return { current: all[0], version: r.current.version, all };

@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import { ingestMeta, keepIngestMeta } from "./ingest-meta";
 
 test("the ingest keys are set only when the headers gave them", () => {
-  assert.deepEqual(ingestMeta({ auth: null, replyToDomain: null }), {});
-  assert.deepEqual(ingestMeta({ auth: { dmarc: "fail" }, replyToDomain: "evil.biz" }), { auth: { dmarc: "fail" }, reply_to_domain: "evil.biz" });
+  assert.deepEqual(ingestMeta({ auth: null, replyToDomain: null, nameMismatch: false }), {});
+  assert.deepEqual(ingestMeta({ auth: { dmarc: "fail" }, replyToDomain: "evil.biz", nameMismatch: false }), { auth: { dmarc: "fail" }, reply_to_domain: "evil.biz" });
+  assert.deepEqual(ingestMeta({ auth: null, replyToDomain: null, nameMismatch: true }), { name_mismatch: true });
 });
 
 test("a rebuilt provider_meta keeps the ingest keys and nothing else of the old one", () => {

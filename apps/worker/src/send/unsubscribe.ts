@@ -144,7 +144,8 @@ function postPinned(target: URL, address: string, body: string): Promise<number>
     const req = request(
       {
         host: address,
-        port: target.port || 443,
+        port: 443, // oneClickUnsubscribe refuses any other port before resolving the host
+
         servername: isIP(target.hostname.replace(/^\[|\]$/g, "")) ? undefined : target.hostname,
         method: "POST",
         path: `${target.pathname}${target.search}`,
@@ -186,6 +187,8 @@ export async function oneClickUnsubscribe(url: string, deps: UnsubscribeDeps = {
     return { ok: false, reason: "bad url" };
   }
   if (target.protocol !== "https:") return { ok: false, reason: "not https" };
+  // Only the https port: a sender's URL must not make the worker knock on any other port of a public host.
+  if (target.port && target.port !== "443") return { ok: false, reason: "not port 443" };
   const host = target.hostname.replace(/^\[|\]$/g, "");
   const address = isIP(host) ? (isPublicAddress(host) ? host : null) : await (deps.resolve ?? publicAddress)(host);
   if (!address) return { ok: false, reason: "private or unknown address" };

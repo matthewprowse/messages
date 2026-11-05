@@ -8,7 +8,8 @@ import { extractMessageContent, getContentType, type MediaType as WAMediaType, t
 export const WA_MEDIA_HOST = "mmg.whatsapp.net";
 
 /** What a real direct path looks like ("/v/t62.7118-24/..._n.enc?ccb=11-4&oh=...&oe=...&_nc_sid=...&mms3=true"). */
-const DIRECT_PATH = /^\/[A-Za-z0-9/_\-.?=&%~]+$/;
+// One "/" to start, never two: "//evil.com/x" is a whole other host to a URL parser, which Baileys may use some day.
+const DIRECT_PATH = /^\/(?!\/)[A-Za-z0-9/_\-.?=&%~]+$/;
 const DIRECT_PATH_MAX = 4096; // characters; real ones are a few hundred
 
 /**

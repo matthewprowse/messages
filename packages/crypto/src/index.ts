@@ -115,6 +115,22 @@ export async function deriveUserKeyring(current: Uint8Array<ArrayBuffer>, older:
   return ring;
 }
 
+/**
+ * The raw index key of a team's data key: the same HMAC key deriveTeamKeys makes, as bytes, so a team's first data key
+ * can be put away and the index key stored (wrapped) in its place (wrap.ts teamKeyring, team_keys.index_wrapped_key).
+ */
+export async function deriveTeamIndexKey(dataKey: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  if (dataKey.length !== 32) throw new Error("A data key is 32 bytes.");
+  const base = await subtle.importKey("raw", dataKey, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await subtle.deriveBits(hkdf(TEAM_INDEX_INFO), base, 256));
+}
+
+/** A raw 32-byte index key (deriveIndexKey, deriveTeamIndexKey) as the key blind indexes are signed with. */
+export async function importIndexKey(raw: Uint8Array<ArrayBuffer>): Promise<Key> {
+  if (raw.length !== 32) throw new Error("An index key is 32 bytes.");
+  return subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256", length: 256 }, false, ["sign"]);
+}
+
 /** Derives a team's field and index keys from the workspace's 32-byte data key, for `workspaceId` when given. The keys cannot be exported. */
 export async function deriveTeamKeys(dataKey: Uint8Array<ArrayBuffer>, workspaceId?: string): Promise<TeamKeys> {
   const keys: TeamKeys = { ...(await derive(dataKey, TEAM_ENC_INFO, TEAM_INDEX_INFO)), team: true };

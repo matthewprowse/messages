@@ -7,7 +7,8 @@
   const DAY_MS = 24 * 60 * 60 * 1000;
 
   // Bump VERSION when the stored format or the rules change: activating a new version deletes every older cache.
-  const VERSION = "v1";
+  // v2: dev browsers held v1 caches of Turbopack chunks; bumping it clears them (and production's, once).
+  const VERSION = "v2";
 
   // The signed-in app's sections. Their documents are a shell with no user data (the AppShell renders an empty frame
   // until the browser has a session; every screen loads its data from Supabase in the browser).

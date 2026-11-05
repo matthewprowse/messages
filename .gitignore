@@ -25,3 +25,7 @@ captures/
 *.p12
 *.har
 *-keys.json
+# Browser tests (docs/TESTING.md): their own build of the web app, and Playwright's results and traces.
+.next-e2e
+test-results
+playwright-report

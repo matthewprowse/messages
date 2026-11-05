@@ -2,6 +2,7 @@
 // retired. The long comment further down explains the threat and what rotation does and does not protect.
 
 import { decryptTeamField, encryptTeamBytes, encryptTeamField, isTeamCiphertext, type TeamKeys } from "@messages/crypto";
+import { BROWSER_KEY_HOLD_MS } from "@messages/crypto/flags";
 import { FIELD, type Field } from "@messages/crypto/fields";
 import type { Json } from "@messages/db";
 import { db, must } from "../db";
@@ -60,8 +61,12 @@ const FILE_PAGE = 20;
 const MAX_PASSES = 4;
 /** The safety poll. A removal also runs a pass at once (a Realtime event on workspace_members), and one runs at startup. */
 const POLL_MS = 5 * 60_000;
-/** Longer than the workers' team key cache (TEAM_RECHECK_MS in vault.ts). */
-export const RETIRE_AFTER_MS = 90_000;
+/**
+ * Longer than anyone holds the old version: the workers' team key cache (TEAM_RECHECK_MS in vault.ts) and, above all,
+ * the browser, which keeps fetched keys for BROWSER_KEY_HOLD_MS and seals shared notes and lists with them. Retiring
+ * sooner would make a colleague's write in that window unreadable for good (security audit 2026-11-04, Medium 5).
+ */
+export const RETIRE_AFTER_MS = BROWSER_KEY_HOLD_MS + 2 * 60_000;
 
 /** The keys a pass works with: the current version and the older ones still holding values. */
 export interface Ring {

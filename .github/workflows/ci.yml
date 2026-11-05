@@ -48,6 +48,10 @@ jobs:
       # The hash lock when there is one (deploy/lock-ai-requirements.sh), as the image installs it.
       - run: if [ -f requirements.lock.txt ]; then pip install --require-hashes --no-deps -r requirements.lock.txt; else pip install -r requirements.txt; fi
       - run: python -m unittest discover -s tests -t .
+      # Every package the three images install, against the public advisory databases. The connectors' trees run with
+      # the service role key and KMS access, so a known hole in one of them fails the build.
+      - run: pip install "pip-audit>=2.9,<3"
+      - run: pip-audit --strict --progress-spinner off -r requirements.lock.txt -r requirements-instagram.lock.txt -r requirements-icloud-reminders.lock.txt
 
   go:
     runs-on: ubuntu-latest
@@ -62,6 +66,9 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
+      # Known vulnerabilities reachable from the helper's code (golang.org/x/vuln). Pinned to a release, like the actions.
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - run: govulncheck ./...
 
   # The images must build (nothing is pushed). Catches a lockfile that no longer matches, a missing file in the
   # build context and a broken base image pin. Release images are built from a tag by release-images.yml (docs/RUNBOOK.md).

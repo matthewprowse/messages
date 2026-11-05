@@ -55,7 +55,7 @@ export default function PrivacyPage() {
         </Clause>
 
         <Clause n={6} title="How We Protect It">
-          <p>Message text, subjects, summaries and drafts are encrypted field by field with AES-256-GCM under a data key that belongs to you. Access to data is limited by row level security, so one person&apos;s data is never returned to another. Connections are encrypted in transit, and you can add two-factor sign in. See <TextLink href="/security">Security</TextLink> for the details, including what we are still building.</p>
+          <p>Message text, subjects, summaries and drafts are encrypted field by field with AES-256-GCM under a data key made for you, which Konva's servers use to do their work. Access to data is limited by row level security, so one person&apos;s data is never returned to another. Connections are encrypted in transit, and you can add two-factor sign in. See <TextLink href="/security">Security</TextLink> for the details, including what we are still building.</p>
         </Clause>
 
         <Clause n={7} title="Who We Share It With">

@@ -44,10 +44,11 @@ FAILED = {
 
 
 class AppPasswordFailed(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, status: int | None = None):
         super().__init__(code)
         self.code = code  # a FAILED key, for logs and analytics
         self.detail = FAILED[code]
+        self.status = status  # Apple's HTTP status, for the log
 
 
 class Reply(Protocol):
@@ -119,7 +120,7 @@ class AccountSite:
             self.scnt = found.group(1)
         reply = self._call("GET", TOKEN_PATH)
         if reply.status_code != 200:
-            raise AppPasswordFailed("untrusted")
+            raise AppPasswordFailed("untrusted", reply.status_code)
 
     def make(self, password: str, label: str = LABEL) -> str:
         """A new app-specific password, labelled as it shows in the person's Apple Account. When Apple asks for
@@ -128,16 +129,16 @@ class AccountSite:
         if reply.status_code == PASSWORD_RECHECK:
             check = self._call("POST", RECHECK_PATH, {"password": password})
             if check.status_code not in (200, 204):
-                raise AppPasswordFailed("untrusted")
+                raise AppPasswordFailed("untrusted", check.status_code)
             reply = self._call("POST", PASSWORDS_PATH, {"description": label})
         if reply.status_code == NOT_ON_THE_WEB:
-            raise AppPasswordFailed("not_on_the_web")
+            raise AppPasswordFailed("not_on_the_web", reply.status_code)
         if reply.status_code in (401, 403):
-            raise AppPasswordFailed("untrusted")
+            raise AppPasswordFailed("untrusted", reply.status_code)
         if reply.status_code == 400:
-            raise AppPasswordFailed("no_app_passwords")
+            raise AppPasswordFailed("no_app_passwords", reply.status_code)
         if reply.status_code != 200:
-            raise AppPasswordFailed("other")
+            raise AppPasswordFailed("other", reply.status_code)
         try:
             data = reply.json()
         except Exception:
@@ -161,6 +162,9 @@ def make_account_api(apple_id: str, password: str, cookie_directory: str) -> Any
         this sign-in has no use for), opening the account page. Only these two points differ."""
 
         site: AccountSite | None = None
+        # Why the account page refused the session, once the password and code were taken. sign_in only sees
+        # pyicloud's failed login, which it reads as the password; run_setup reports this instead.
+        refused: AppPasswordFailed | None = None
         _srp_done = False
 
         def _setup_endpoints(self) -> None:
@@ -190,6 +194,7 @@ def make_account_api(apple_id: str, password: str, cookie_directory: str) -> Any
             try:
                 self.site.open()
             except AppPasswordFailed as err:
+                self.refused = err
                 raise PyiCloudFailedLoginException("Account page refused the sign-in") from err
             self.data = {"hsaTrustedBrowser": True, "dsInfo": {"hsaVersion": 2}}
 

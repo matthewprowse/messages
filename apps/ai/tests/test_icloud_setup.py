@@ -84,6 +84,7 @@ class AccountPage(unittest.TestCase):
         with self.assertRaises(AppPasswordFailed) as caught:
             account.open()
         self.assertEqual(caught.exception.code, "untrusted")
+        self.assertEqual(caught.exception.status, 401)
 
     def test_types_the_password_again_when_asked(self):
         account, send = site({MAKE: [Reply(451), Reply(200, {"password": "abcd-efgh-ijkl-mnop"})], RECHECK: [Reply(204)]})
@@ -276,6 +277,25 @@ class Running(unittest.TestCase):
         self.assertEqual(setup.run_setup(setups, row, threading.Event(), make_api=lambda *a: api), "failed")
         self.assertEqual(db.rows["s1"]["error"], account_site.FAILED["not_on_the_web"])
 
+    def test_the_account_page_refusing_after_the_code_is_not_called_a_wrong_password(self):
+        class PyiCloudFailedLoginException(Exception):
+            pass
+
+        api = FakeApi()
+
+        def refuse_on_trust(code):
+            api.refused = AppPasswordFailed("untrusted", 403)
+            raise PyiCloudFailedLoginException("Account page refused the sign-in")
+
+        api.validate_2fa_code = refuse_on_trust
+        db = FakeDb([queued()])
+        setups = setup.Setups(db, KEY)
+        row = setups.claim(AT)
+        typing = answer(db, "s1", "123456")
+        self.assertEqual(setup.run_setup(setups, row, threading.Event(), make_api=lambda *a: api, wait_s=2, poll_s=0.01), "failed")
+        typing.join()
+        self.assertEqual(db.rows["s1"]["error"], account_site.FAILED["untrusted"])
+
     def test_an_unreadable_sign_in(self):
         db = FakeDb([queued(sign_in="v1:junk")])
         setups = setup.Setups(db, KEY)
@@ -398,8 +418,30 @@ class Explaining(unittest.TestCase):
                 raise PyiCloudFailedLoginException("Failed to initiate srp authentication.", inner) from inner
         except PyiCloudFailedLoginException as err:
             found = setup.why(err)
-        self.assertEqual(found, {"stage": "init", "error": "PyiCloudFailedLoginException", "status": 401})
+        self.assertEqual(found, {"stage": "init", "error": "PyiCloudFailedLoginException", "status": 401, "cause": "PyiCloudAPIResponseException"})
         self.assertNotIn("Some Apple text", str(found))
+
+    def test_an_unreachable_host_is_named_without_its_path(self):
+        class ConnectionError(Exception):
+            pass
+
+        class PyiCloudConnectionException(Exception):
+            pass
+
+        try:
+            try:
+                err = ConnectionError("Max retries exceeded")
+                err.request = SimpleNamespace(url="https://p42-ckdatabasews.icloud.com/database/1/private?secret=1")
+                raise err
+            except ConnectionError as inner:
+                raise PyiCloudConnectionException("Request failed to iCloud") from inner
+        except PyiCloudConnectionException as outer:
+            found = setup.why(outer)
+        self.assertEqual(found, {"error": "PyiCloudConnectionException", "cause": "ConnectionError", "host": "p42-ckdatabasews.icloud.com"})
+
+    def test_an_account_page_refusal_gives_its_status(self):
+        self.assertEqual(setup.why(AppPasswordFailed("untrusted", 403)), {"error": "AppPasswordFailed", "status": 403})
+        self.assertEqual(setup.why(AppPasswordFailed("other")), {"error": "AppPasswordFailed"})
 
 
 if __name__ == "__main__":

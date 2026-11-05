@@ -22,6 +22,7 @@
     "ai": "cd apps/ai && python3 -m ai",
     "instagram": "cd apps/ai && python3 -m ai instagram",
     "test:ai": "cd apps/ai && python3 -m unittest discover -s tests -t .",
+    "e2e": "pnpm --filter web e2e",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:ai"
   },
   "devDependencies": {

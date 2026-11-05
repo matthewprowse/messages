@@ -52,6 +52,7 @@ Run from the repo root.
 | `pnpm test` | Node test runner in every package (web, worker, packages). |
 | `pnpm test:ai` | Python `unittest` for the AI worker. |
 | `pnpm check` | All of the above. Run it before saying work is done. |
+| `pnpm e2e` | Browser tests (Playwright) against the Konva Test database, on port 3100 (`docs/TESTING.md`). |
 | `pnpm --filter @messages/db gen:types` | Regenerate `database.types.ts` after a migration. |
 
 CI (`.github/workflows/ci.yml`) runs the same checks.
@@ -74,12 +75,15 @@ CI (`.github/workflows/ci.yml`) runs the same checks.
 - **Never send anything while testing.** No outgoing emails, WhatsApps or replies, and do not bulk-open chats (read
   receipts are on). Test email features against real mail read-only, and look at them rendered in a browser.
 - **Never kill processes by pattern.** No `pkill -f` or `killall`. Kill by exact PID only.
-- **Use the dev server on `localhost:3000`.** Do not start another one on a different port.
+- **Use the dev server on `localhost:3000`.** Do not start another one on a different port. The one exception: the browser
+  tests (`pnpm e2e`) build and start their own copy on port 3100 against the Konva Test database, only while they run.
 - **The Supabase project for this app is `bbfahndgnmdlehicmphe`.** The Marketing project is separate: never touch it.
-- **Privacy is architecture.** Message text and addresses are encrypted per user (`packages/crypto`). Names are being
-  moved over: contact, company and group names, calendar guests and outgoing attachments are not sealed yet, so seal
-  anything new you add and never assume a name column is encrypted. Analytics are content free: counts and screens,
-  never text. Never log message content, names or addresses.
+- **Privacy is architecture.** Message text and addresses are encrypted per user (`packages/crypto`). Contact, company and
+  group names, calendar guests and outgoing attachments are sealed too (`20261125100000` to `20261125120000`), and the
+  backfills have run: on 5 November 2026 production held no plain name, address or guest row. Readers still accept a
+  plain value where a legacy fallback exists, so seal anything new you add and never assume a column is encrypted
+  without checking. Analytics are content free: counts and screens, never text. Never log message content, names or
+  addresses.
 - **Connect accounts in the web page only.** No companion Mac apps, extensions or terminal-only flows for users.
 - **Keys and `.env` files are never committed.** `.env.example` documents each variable.
 

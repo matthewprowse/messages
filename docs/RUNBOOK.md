@@ -127,6 +127,9 @@ How the VM is hardened (`deploy/compose.yaml`, `deploy/vm-startup.sh`):
   which hands out the KMS token. Image builds and any other container are refused by the `KONVA-METADATA` iptables chain,
   which the `konva-metadata-guard` unit puts back each time Docker starts. Check it after a change:
   `sudo docker run --rm debian:12-slim sh -c 'apt-get -qq update >/dev/null && apt-get -qq install -y curl >/dev/null && curl -m 3 -sH "Metadata-Flavor: Google" http://169.254.169.254/'`
+  and the same from a build step, which runs on Docker's default bridge too and must be refused the same way:
+  `printf 'FROM debian:12-slim\nRUN apt-get -qq update >/dev/null && apt-get -qq install -y curl >/dev/null && curl -m 3 -sH "Metadata-Flavor: Google" http://169.254.169.254/ && exit 1 || true\n' | sudo docker build -q -f - .`
+  (the build must finish, which it only does when curl failed; a `--network=host` build would bypass the guard, so never pass that).
   must fail, while the workers still unwrap keys.
 - The connectors still reach the metadata server, because they open sealed sign-ins with KMS. Taking that away needs a
   separate identity for them (their own VM and service account).
@@ -368,6 +371,30 @@ client and test one restore into a scratch project.
 6. A deleted user's keys are gone on purpose (crypto-shredding). A restore that brings back their `user_keys` row brings back
    their data: re-run any account deletion that finished after the restore point.
 
+## If The KMS Key Is Lost
+
+Every user's data key is wrapped by one Cloud KMS key (`projects/messages-keys/locations/africa-south1/keyRings/messages/
+cryptoKeys/user-data-keys`). KMS keys cannot be exported. Destroying that key's version, the key ring or the `messages-keys`
+project makes every user's messages, every Supabase backup and every attachment unreadable, for good: there is no second
+copy anywhere, by design (the wrapped keys in `user_keys` are useless without it). Treat the project as the most
+important thing Konva owns.
+
+Protections, each an owner action in the console or with gcloud:
+
+1. A lien, so the project cannot be deleted without first removing it:
+   `gcloud alpha resource-manager liens create --project messages-keys --restrictions=resourcemanager.projects.delete --reason="holds the key that wraps every user's data key" --origin=konva`
+2. The longest scheduled-destruction window on the key, so a destroyed version can be restored for 120 days (the maximum)
+   instead of 30: `gcloud kms keys update user-data-keys --keyring messages --location africa-south1 --project messages-keys --destroy-scheduled-duration=120d`
+   (new versions only; check with `gcloud kms keys describe`).
+3. The alert under Alerts on `DestroyCryptoKeyVersion` and `SetIamPolicy` for the key, so a destruction or a new decrypter is
+   seen the hour it happens, inside the restore window.
+4. Owner on `messages-keys` for as few accounts as possible, each with two-step verification. Nobody needs Owner day to day:
+   the VM's service account holds Encrypter/Decrypter only.
+
+If a version is destroyed by mistake: restore it within the window (`gcloud kms keys versions restore`), then
+`gcloud kms keys versions enable`. If the project is deleted: it can be restored for 30 days from the console (IAM and
+Admin, Manage Resources, Deleted). After those windows the data is gone and the honest step is to tell every user.
+
 ## Alerts
 
 Alert on the worker log and health signals first. Every SQL check is read only and content free.
@@ -379,6 +406,8 @@ Policies to create in Cloud Monitoring (owner action, once the VM runs), each em
 - Metric absence: no `konva_containers` entries with `jsonPayload.msg="metrics"` for 10 minutes (the workers stopped moving).
 - Log-based alert on the audit log: `(protoPayload.methodName:"compute.firewalls" OR protoPayload.methodName:"setIamPolicy")`
   in project `messages-keys` (someone opened a port or changed who may decrypt).
+- Log-based alert on the audit log: `protoPayload.methodName:"DestroyCryptoKeyVersion" OR protoPayload.methodName:"UpdateCryptoKey"`
+  in project `messages-keys` (someone scheduled the key that wraps every user's data key for destruction, or changed it).
 - Host: memory above 90% for 10 minutes on `konva-workers` (Ops Agent metric `agent.googleapis.com/memory/percent_used`).
 
 | Alert | Means | Do |
@@ -430,5 +459,21 @@ These need the owner's accounts and cannot be done from code. Each is a dashboar
   `gcloud compute firewall-rules delete default-allow-ssh default-allow-rdp --project messages-keys` (check
   `gcloud compute firewall-rules list --project messages-keys` first). Give your account `roles/iap.tunnelResourceAccessor`
   and `roles/compute.osAdminLogin`, and turn on two-step verification on it.
-- **Images in CI and hash locks.** Set up the registry (Images Built In CI), and run `deploy/lock-ai-requirements.sh` and
-  commit the locks. Create the alert policies under Alerts.
+- **Images in CI.** Set up the registry (Images Built In CI). The hash locks exist (`apps/ai/requirements*.lock.txt`, written
+  with uv on 5 November 2026; run `deploy/lock-ai-requirements.sh` after moving any pin). Create the alert policies under Alerts.
+- **Enable Compute Engine first.** The API is off in `messages-keys` (checked 4 November 2026), so `deploy/create-vm.sh` cannot
+  run yet: `gcloud services enable compute.googleapis.com --project messages-keys`, then the VM steps under Production VM. Until
+  the VM runs, the workers run on the owner's laptop, which holds the service role key and the KMS credential.
+- **Vercel: remove the retired keys and the key file.** `vercel env rm KEY_WRAPPING_KEY production`, `vercel env rm ENCRYPTION_KEY
+  production`, and the same for `preview` (they were set for both). `keys:readiness` reported nothing needs either. Once
+  Workload Identity Federation is set (KMS Without A Key File), `vercel env rm GOOGLE_APPLICATION_CREDENTIALS_JSON production`
+  and delete the service account key in IAM (`gcloud iam service-accounts keys delete`). `deploy/push-web-env.sh` now sets
+  everything Production only and sensitive; variables made before it were created readable and for Preview too, so re-run it
+  once and delete the Preview copies by hand.
+- **Protect `main`.** Nothing stops a direct push today, and `deploy/release.sh` checks CI on the commit but not review:
+  `gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input - <<'JSON'`
+  `{"required_status_checks":{"strict":true,"contexts":["typescript","python","go","docker"]},"enforce_admins":true,"required_pull_request_reviews":null,"restrictions":null,"allow_force_pushes":false,"allow_deletions":false}`
+  `JSON` (owner and repo from `git remote -v`).
+- **Delete the LinkedIn captures.** `captures/linkedin/*.har` (400 MB, 0644) hold a password sign-in and a messaging session:
+  `rm -P captures/linkedin/*.har && chmod 700 captures`. They were only ever for building the bridge.
+- **KMS key protections.** The lien, the destruction window and the alert under If The KMS Key Is Lost.

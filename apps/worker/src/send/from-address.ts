@@ -16,16 +16,22 @@ export function normAddresses(list: readonly (string | null | undefined)[]): str
 }
 
 /**
- * Providers whose send addresses an email may go out from. Gmail and Outlook lists are written by the worker from the
- * provider's own list and cannot be edited in the app, and iCloud's mail server refuses a From that is not yours. A
- * generic IMAP and SMTP server can't list your addresses and may accept any From, so there the list typed in the app
- * is not trusted and only the account's own address is used.
+ * Providers whose send addresses an email may go out from. Gmail and Outlook lists come from the provider itself at
+ * connect (send/verified-aliases.ts): the stored column is also writable by the app, so it is never what a send
+ * trusts for them. iCloud's list is typed in the app and its mail server refuses a From that is not yours. A generic
+ * IMAP and SMTP server can't list your addresses and may accept any From, so there only the account's own address is
+ * used.
  */
-const ALIAS_PROVIDERS: ReadonlySet<string> = new Set(["gmail", "outlook", "icloud"]);
+const PROVIDER_LISTED: ReadonlySet<string> = new Set(["gmail", "outlook"]);
+const APP_LISTED: ReadonlySet<string> = new Set(["icloud"]);
 
-/** The send addresses an account of this provider may use as From: its whole list, or none beyond its own address. */
-export function sendableAliases(provider: string, sendAddresses: readonly string[]): string[] {
-  return ALIAS_PROVIDERS.has(provider) ? [...sendAddresses] : [];
+/**
+ * The send addresses an account of this provider may use as From: the provider's own list where it keeps one (none
+ * beyond the account's own address until the connector has read it), the stored list for iCloud, else none.
+ */
+export function sendableAliases(provider: string, sendAddresses: readonly string[], providerListed: readonly string[] | null = null): string[] {
+  if (PROVIDER_LISTED.has(provider)) return providerListed ? [...providerListed] : [];
+  return APP_LISTED.has(provider) ? [...sendAddresses] : [];
 }
 
 /**

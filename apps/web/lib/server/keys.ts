@@ -30,7 +30,7 @@ const store: KeyStore | null = db && {
 
 const teamStore: TeamKeyStore | null = db && {
   async list(workspaceId) {
-    const { data, error } = await db.from("team_keys").select("key_version, wrapped_key, wrapped_by, retired_at").eq("workspace_id", workspaceId);
+    const { data, error } = await db.from("team_keys").select("key_version, wrapped_key, wrapped_by, retired_at, index_wrapped_key, index_wrapped_by").eq("workspace_id", workspaceId);
     if (error) throw error;
     return data;
   },

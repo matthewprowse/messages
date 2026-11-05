@@ -3,7 +3,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildCsp, makeNonce } from "./csp";
+import { readFileSync } from "node:fs";
+import { buildCsp, isDocumentPath, makeNonce, STATIC_PATHS } from "./csp";
 
 test("scripts need the nonce and never allow unsafe-inline", () => {
   const csp = buildCsp("abc123", false, "https://proj.supabase.co");
@@ -45,4 +46,19 @@ test("the cloud pickers get named hosts only, in connect-src and frame-src", () 
   const csp = buildCsp("n", false, "https://proj.supabase.co");
   assert.match(csp, /frame-src 'self' https:\/\/docs\.google\.com /);
   assert.match(csp, /connect-src [^;]*https:\/\/graph\.microsoft\.com/);
+});
+
+test("the policy covers every document, including a dynamic page whose segment ends like a file", () => {
+  for (const path of ["inbox/anything.pdf", "contacts/x.png", "inbox", "settings/accounts", "login"]) assert.equal(isDocumentPath(path), true, path);
+  for (const path of ["api/keys", "_next/static/chunks/x.js", "sw.js", "favicon.ico", "logos/acme.png", "manifest.webmanifest"]) assert.equal(isDocumentPath(path), false, path);
+});
+
+test("the middleware matcher names the same paths as STATIC_PATHS, by path and never by file ending", () => {
+  const source = readFileSync(new URL("../middleware.ts", import.meta.url), "utf8");
+  const literal = /source: "([^"]+)"/.exec(source)?.[1].replace(/\\\\/g, "\\");
+  assert.ok(literal, "the matcher source string");
+  const matcher = new RegExp(`^${literal}$`);
+  assert.doesNotMatch(literal, /\.\*\\\.\(/, "no extension rule");
+  for (const p of STATIC_PATHS) assert.doesNotMatch(`/${p}${p.endsWith("/") ? "x" : ""}`, matcher, p);
+  for (const path of ["/inbox/anything.pdf", "/contacts/x.png", "/inbox", "/"]) assert.match(path, matcher, path);
 });

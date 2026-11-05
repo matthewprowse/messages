@@ -52,3 +52,18 @@ export function makeNonce(): string {
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary);
 }
+
+/**
+ * The request paths that are not documents and get no policy: the API, Next's own files, and what public/ and the
+ * generated routes serve. middleware.ts carries the same list as its matcher (Next needs a literal there); csp.test.ts
+ * checks the two agree. A prefix ends in "/"; anything else is a whole path.
+ */
+export const STATIC_PATHS = [
+  "api/", "_next/static/", "_next/image", "favicon.ico", "manifest.webmanifest", "robots.txt", "sitemap.xml", "og.png", "sw.js", "sw-rules.js",
+  "icon.svg", "icon-192.png", "icon-512.png", "icon-maskable-192.png", "icon-maskable-512.png", "apple-touch-icon.png", "demo/", "logos/", "voices/",
+] as const;
+
+/** Whether a request path (without the leading "/") is a document the policy applies to. */
+export function isDocumentPath(path: string): boolean {
+  return !STATIC_PATHS.some((p) => (p.endsWith("/") ? path.startsWith(p) : path === p));
+}

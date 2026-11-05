@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ... import log
+from ... import log, tls
 from ...config import _load_env_file, check_encryption, flag_on
 from ...supabase import Supabase, missing_relation
 from ...vault import Vault
@@ -28,6 +28,7 @@ from .sync import AccountSync
 
 RECONCILE_S = 60.0  # the first reconcile runs at once on start; accounts are connected or paused rarely
 RESTART_AFTER_S = 600.0  # an account whose thread died on its own is started again after this long
+CLAIMED_S = 1.5  # how often claimed changes are looked for, for every account in one read (like the AI worker's drafts)
 RUNNING = ("connecting", "syncing", "connected")
 
 
@@ -71,6 +72,24 @@ class Running:
     stop: threading.Event
     credentials_at: str
     ended_at: float | None = None
+    user_id: str = ""
+    wake: threading.Event | None = None
+
+
+def accounts_to_wake(claimed: list[dict[str, Any]], running: dict[str, str]) -> set[str]:
+    """The running accounts (id to user id) that a claimed change is waiting for: a new task names its account, a
+    change to a task names the task's account, and a change whose task is gone only its user, so every account of
+    that user is woken. Changes for other providers' accounts (Google Tasks, To Do) match nothing."""
+    wake: set[str] = set()
+    for row in claimed:
+        task = row.get("tasks") or {}
+        target = row.get("account_id") or (task.get("account_id") if isinstance(task, dict) else None)
+        if target:
+            if target in running:
+                wake.add(target)
+        else:
+            wake.update(aid for aid, user in running.items() if user == row.get("user_id"))
+    return wake
 
 
 class Accounts:
@@ -129,7 +148,7 @@ class Accounts:
         sync = AccountSync(self.store, account, stop, on_credentials=moved)
         thread = threading.Thread(target=sync.run, name=f"icloud-reminders-{account['id'][:8]}", daemon=True)
         with self.lock:
-            self.running[account["id"]] = Running(thread, stop, credentials_at)
+            self.running[account["id"]] = Running(thread, stop, credentials_at, user_id=str(account.get("user_id") or ""), wake=sync.wake)
         thread.start()
         log.info("icloud reminders account started", account=account["id"])
 
@@ -138,7 +157,21 @@ class Accounts:
             entry = self.running.pop(account_id, None)
         if entry:
             entry.stop.set()
+            if entry.wake:
+                entry.wake.set()  # out of its wait at once, to see the stop
             log.info("icloud reminders account stopped", account=account_id)
+
+    def wake_claimed(self) -> None:
+        """Wakes each running account that has a change the sync worker claimed for it."""
+        with self.lock:
+            running = {aid: entry.user_id for aid, entry in self.running.items() if entry.wake}
+        if not running:
+            return
+        for account_id in accounts_to_wake(self.store.claimed_targets(), running):
+            with self.lock:
+                entry = self.running.get(account_id)
+            if entry and entry.wake:
+                entry.wake.set()
 
     def halt_all(self) -> None:
         for account_id in list(self.running):
@@ -147,6 +180,9 @@ class Accounts:
 
 def main() -> None:
     cfg = load()
+    # pyicloud asks for the code over a socket of its own; without root certificates that fails as if iCloud were down.
+    if tls.default_for_libraries():
+        log.info("icloud reminders using the system certificates")
     db = Supabase(cfg.supabase_url, cfg.service_role_key)
     vault = Vault(db, cfg.key_wrapping_key, cfg.encrypt_content)
     accounts = Accounts(Store(db, vault, encryption_key=cfg.encryption_key))
@@ -155,6 +191,16 @@ def main() -> None:
     log.info("icloud reminders connector starting", encrypt_content=cfg.encrypt_content)
     sweep_stale("konva-icloud-")  # Apple session cookies left by a run that was killed before it could tidy up
     setups = SetupRunner(Setups(db, cfg.encryption_key, vault), stop)
+
+    def watch_claimed() -> None:
+        while not stop.wait(CLAIMED_S):
+            try:
+                accounts.wake_claimed()
+            except Exception as err:  # a missed look is only a slower change; the account's own pass still finds it
+                log.warn("icloud reminders claimed look failed", code=log.code_of(err))
+                stop.wait(30)
+
+    threading.Thread(target=watch_claimed, name="icloud-claimed", daemon=True).start()
     threading.Thread(target=setups.run, name="icloud-setups", daemon=True).start()
     try:
         while not stop.is_set():

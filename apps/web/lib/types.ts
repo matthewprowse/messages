@@ -108,8 +108,8 @@ export interface Message {
   deleted?: boolean;
   /** A WhatsApp message changed by its sender after it was sent. */
   edited?: boolean;
-  /** A WhatsApp call line (a missed call). Drawn as a line, not a bubble. */
-  call?: { video: boolean; missed: boolean };
+  /** A WhatsApp call line: missed, declined, or answered with how long it lasted. Who rang is `from`. Drawn as a line, not a bubble. */
+  call?: { video: boolean; missed: boolean; declined?: boolean; seconds?: number };
   /** A WhatsApp poll: who voted for which options (positions), by a content-free name. The options are in the body. */
   poll?: { votes: Record<string, number[]>; multi: boolean };
   /** A reply held back by a WhatsApp send limit: it goes by itself once the limit lifts. */

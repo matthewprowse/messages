@@ -234,7 +234,8 @@ class Voice:
             self._next[slot] = time.monotonic() + left
             self._keep.add(user_id)
             return False
-        sent_filter = {"user_id": f"eq.{user_id}", "account_id": in_list(account_ids), "direction": "eq.outbound"}
+        # A WhatsApp call you made is stored as an outbound line ("Voice Call, 3 Min"): it is not your writing, so it is left out.
+        sent_filter = {"user_id": f"eq.{user_id}", "account_id": in_list(account_ids), "direction": "eq.outbound", "provider_meta->call": "is.null"}
         outbound = self.db.count("messages", sent_filter)
         if not voice_due(outbound, int(profile.get(cols[1]) or 0), profile.get(cols[0])):
             return False

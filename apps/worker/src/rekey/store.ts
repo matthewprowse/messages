@@ -72,7 +72,11 @@ export const supabaseRekeyStore: RekeyStore = {
   },
 
   async retire(userId, previous) {
-    const done = must(await db.from("user_keys").update({ previous_wrapped_key: null, previous_wrapped_by: null }).eq("user_id", userId).eq("previous_wrapped_key", previous).select("user_id"), "retire user key");
+    // Kept, wrapped, under retired_*: nothing seals or opens with it by default, but a stray value sealed under it late can
+    // still be rescued by hand (20261127130100_user_keys_retired_wrapped_key.sql).
+    const row = must(await db.from("user_keys").select("previous_wrapped_by").eq("user_id", userId).eq("previous_wrapped_key", previous).maybeSingle(), "load retiring key");
+    if (!row) return false;
+    const done = must(await db.from("user_keys").update({ previous_wrapped_key: null, previous_wrapped_by: null, retired_wrapped_key: previous, retired_wrapped_by: row.previous_wrapped_by, retired_at: nowIso() }).eq("user_id", userId).eq("previous_wrapped_key", previous).select("user_id"), "retire user key");
     if (!done.length) return false;
     must(await db.from("user_key_rotations").update({ phase: "done", finished_at: nowIso(), cursor: {}, updated_at: nowIso() }).eq("user_id", userId).eq("phase", "switched"), "record key retired");
     return true;

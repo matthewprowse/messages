@@ -148,8 +148,10 @@ class UserSealer:
         self.user_id = user_id
         self.encrypt_addresses = encrypt_addresses
 
-    def seal(self, field: str, value: str | None) -> str | None:
-        return self.vault.seal(self.user_id, field, value)
+    def seal(self, field: str, value: str | None, place: str = "") -> str | None:
+        """Sealed for this user at place ("table.column", ai/places.py), so it is bound to where it is stored once
+        SEAL_BOUND_FIELDS is on, as the sync worker's ingest does."""
+        return self.vault.seal(self.user_id, field, value, place)
 
     def address(self, value: str | None) -> str | None:
         if value is None or not self.encrypt_addresses:

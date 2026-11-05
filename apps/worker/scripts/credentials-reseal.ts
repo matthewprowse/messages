@@ -51,13 +51,18 @@ for (const row of creds) {
     must(await db.from("account_credentials").update({ refreshed: sealed }).eq("account_id", row.account_id).eq("refreshed", row.refreshed!).select("account_id"), "reseal refreshed").length);
 }
 
+// The guard repeats the old value as a filter, which travels in the URL. Some app state keys run to tens of kilobytes, too
+// long for a URL, so for those the row is read again just before the write and compared here instead.
+const URL_SAFE_FILTER = 4000;
 const wa = await allRows((from, to) => db.from("whatsapp_auth_keys").select("account_id, key_type, key_id, ciphertext").order("account_id").order("key_type").order("key_id").range(from, to), "load whatsapp session");
 for (const row of wa) {
-  await reseal(row.account_id, row.ciphertext, async (sealed) =>
-    must(
-      await db.from("whatsapp_auth_keys").update({ ciphertext: sealed }).eq("account_id", row.account_id).eq("key_type", row.key_type).eq("key_id", row.key_id).eq("ciphertext", row.ciphertext).select("account_id"),
-      "reseal whatsapp key",
-    ).length);
+  await reseal(row.account_id, row.ciphertext, async (sealed) => {
+    const key = db.from("whatsapp_auth_keys").update({ ciphertext: sealed }).eq("account_id", row.account_id).eq("key_type", row.key_type).eq("key_id", row.key_id);
+    if (row.ciphertext.length <= URL_SAFE_FILTER) return must(await key.eq("ciphertext", row.ciphertext).select("account_id"), "reseal whatsapp key").length;
+    const now = must(await db.from("whatsapp_auth_keys").select("ciphertext").eq("account_id", row.account_id).eq("key_type", row.key_type).eq("key_id", row.key_id), "reread whatsapp key");
+    if (now[0]?.ciphertext !== row.ciphertext) return 0;
+    return must(await key.select("account_id"), "reseal whatsapp key").length;
+  });
 }
 
 console.log(`${apply ? "Resealed" : "Would reseal"} ${moved} values (${creds.length} account sign-ins, ${wa.length} WhatsApp keys), ${skipped} already v2 or empty, ${failed} failed.${apply ? "" : " Nothing was written. Run again with --apply."}`);
